@@ -355,6 +355,8 @@ class ResultFusion:
 
 ※時間ベースではなく、`memory_save` 呼び出し回数（例: 50回）の超過や、前回実行から一定時間経過（例: 1日）などを条件に非同期にジョブがトリガーされる。
 
+Lifecycle Manager は、`memory_save` 累積回数が **50 回** に達した場合、または前回クリーンアップから **1 日** 以上経過した場合に起動する。これらの閾値は実装計画ではなく `SPEC.md` を正本とし、保存回数ベース・経過時間ベースの両トリガーを併用する。
+
 ### 5.3 Decay Scorer
 
 ```python
@@ -382,10 +384,8 @@ lifecycle:
     archive_threshold: 0.05
   consolidation:
     similarity_threshold: 0.85
-    schedule: "weekly"
   purge:
     retention_days: 90
-    schedule: "weekly"
   # 将来の拡張: 概念ドリフト検出
   # concept_drift:
   #   enabled: false
@@ -585,7 +585,7 @@ class Orchestrator:
 | Neo4jドライバ | neo4j-python-driver (async) | 公式非同期ドライバ |
 | 日本語FTS | pg_bigm or pgroonga | PostgreSQLの日本語全文検索拡張 |
 | 埋め込み(ローカル) | sentence-transformers | Ruri v3-310m等のローカルモデル |
-| SQLite (ライトウェイト) | aiosqlite + sqlite-vec + FTS5 | ゼロコンフィグモード（デフォルト） |
+| ストレージ（ライトウェイト） | aiosqlite + sqlite-vec + FTS5 | ゼロコンフィグモード（デフォルト） |
 | 設定管理 | pydantic-settings | 型安全な設定 + .env サポート |
 | テスト | pytest + pytest-asyncio | 非同期テスト対応 |
 | コンテナ | Docker Compose | PostgreSQL / Neo4j / Redis の一括管理 |

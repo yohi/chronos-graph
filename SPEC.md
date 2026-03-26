@@ -106,7 +106,7 @@ class SourceType(str, Enum):
 | `source_metadata` | jsonb | ソース固有情報（agent名, URL, プロジェクトパス等） |
 | `embedding` | vector | 埋め込みベクトル（次元数はプロバイダー依存） |
 | `importance_score` | float | 重要度スコア（0.0 - 1.0） |
-| `semantic_relevance` | float | 最終検索時の文脈的関連度スコア（0.0 - 1.0, 初期値: 0.0） |
+| `semantic_relevance` | float | 最終検索時の文脈的関連度スコア（0.0 - 1.0, 初期値: 0.5） |
 | `access_count` | int | 検索で返却された回数 |
 | `last_accessed_at` | timestamp | 最終アクセス日時 |
 | `created_at` | timestamp | 作成日時 |
@@ -458,7 +458,7 @@ FastMCP を使用。重いモジュール（sentence-transformers 等）は**遅
 | `content` | str | ✅ | — | 記憶する内容 |
 | `source` | str | — | `"manual"` | `"conversation"` / `"manual"` / `"url"` |
 | `project` | str? | — | None | プロジェクトタグ |
-| `tags` | list[str] | — | [] | 追加タグ |
+| `tags` | list[str] | — | [] | 追加タグ（制約：要素最大長50、`^[a-zA-Z0-9_-]+$`） |
 | `importance` | float? | — | None | 重要度ヒント（None なら自動） |
 
 記憶種別（episodic/semantic/procedural）は自動分類される。
@@ -684,6 +684,10 @@ PRAGMA synchronous=NORMAL;         -- WAL モードでは NORMAL で十分な耐
 > **設計根拠**: 複数のエージェント（Claude Code + Gemini CLI 等）が同一 SQLite ファイルに
 > 同時接続する運用が想定される。デフォルトの rollback journal モードでは `SQLITE_BUSY` エラーが
 > 頻発するため、WAL モードへの切り替えは事実上必須。
+> 
+> **注意 (ファイルシステム制約)**: SQLite の WAL モードは同一マシン上のアクセスには対応しますが、NFS や CIFS などのネットワークファイルシステム上では正しく動作しません。
+> 
+> **セキュリティ制約 (パーミッション)**: 記憶データ（会話ログ等）を含むため、DB ファイル（`~/.context-store/memories.db`）の作成時にパーミッションを `0600`（所有者のみ読み書き可）に設定することを必須とします。
 
 #### SQLiteGraphAdapter のスキーマ
 
@@ -709,14 +713,14 @@ WITH RECURSIVE graph AS (
     UNION ALL
     SELECT e.to_id, e.edge_type, g.depth + 1
     FROM graph g JOIN memory_edges e ON g.to_id = e.from_id
-    WHERE g.depth < ?  -- デフォルト: 3, ハードリミット: 5
+    WHERE g.depth < ?  -- デフォルト: 2, ハードリミット: 5
 )
 SELECT DISTINCT to_id, edge_type, depth FROM graph;
 ```
 
 | パラメータ | デフォルト値 | 説明 |
 |---|---|---|
-| `max_depth` | 3 | トラバーサルの深さ |
+| `max_depth` | 2 | トラバーサルの深さ |
 | ハードリミット | 5 | クライアントが指定できる最大深さ（これを超える値は強制的に 5 に制限） |
 
 ### 8.5 ストレージ選択ロジック

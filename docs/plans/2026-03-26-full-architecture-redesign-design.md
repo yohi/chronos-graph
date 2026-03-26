@@ -97,6 +97,7 @@ class Memory:
     updated_at: datetime
     archived_at: datetime | None    # アーカイブ日時 (NoneならActive)
     tags: list[str]                 # プロジェクトタグ等
+    project: str | None             # プロジェクト識別子
 ```
 
 ### 2.2 グラフモデル（Neo4j）
@@ -342,15 +343,17 @@ class ResultFusion:
                    Purged     (物理削除)
 ```
 
-### 5.2 バックグラウンドジョブ
+### 5.2 イベント駆動型クリーンアップ
 
-| ジョブ | 実行頻度 | 処理内容 |
+| ジョブ | トリガー条件 | 処理内容 |
 |---|---|---|
-| Decay Scorer | 毎日 | 全Active記憶の複合スコアを再計算、閾値以下をマーク |
-| Auto Archiver | 毎日 | マークされた記憶をArchived状態に遷移 |
-| Consolidator | 週1回 | 統合候補の記憶群をマージ処理 |
-| Purger | 週1回 | Archived後N日経過した記憶を物理削除 |
-| Stats Collector | 毎日 | DB使用量・記憶数・平均スコアの統計記録 |
+| Decay Scorer | 初回起動時、または記憶保存時（条件付き） | 全Active記憶の複合スコアを再計算、閾値以下をマーク |
+| Auto Archiver | 同上 | マークされた記憶をArchived状態に遷移 |
+| Consolidator | 同上 | 統合候補の記憶群をマージ処理 |
+| Purger | 同上 | Archived後N日経過した記憶を物理削除 |
+| Stats Collector | 同上 | DB使用量・記憶数・平均スコアの統計記録 |
+
+※時間ベースではなく、`memory_save` 呼び出し回数（例: 50回）の超過や、前回実行から一定時間経過（例: 1日）などを条件に非同期にジョブがトリガーされる。
 
 ### 5.3 Decay Scorer
 
@@ -494,6 +497,7 @@ class StorageAdapter(Protocol):
     async def vector_search(self, embedding: list[float], top_k: int) -> list[ScoredMemory]: ...
     async def keyword_search(self, query: str, top_k: int) -> list[ScoredMemory]: ...
     async def list_by_filter(self, filters: MemoryFilters) -> list[Memory]: ...
+    async def get_vector_dimension(self) -> int | None: ...
     async def dispose(self) -> None: ...
 
 class GraphAdapter(Protocol):
@@ -507,6 +511,7 @@ class CacheAdapter(Protocol):
     async def get(self, key: str) -> Any | None: ...
     async def set(self, key: str, value: Any, ttl: int) -> None: ...
     async def invalidate(self, key: str) -> None: ...
+    async def invalidate_prefix(self, prefix: str) -> None: ...
     async def dispose(self) -> None: ...
 ```
 

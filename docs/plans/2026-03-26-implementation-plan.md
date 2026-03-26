@@ -366,6 +366,26 @@ git commit -m "feat: pydantic-settings による設定管理を実装"
 
 ---
 
+### Task 1.5: CI/CD パイプライン構築
+
+**Files:**
+- Create: `bitbucket-pipelines.yml` (または `.github/workflows/ci.yml`)
+
+**Step 1: 実装**
+
+- `ruff check`, `ruff format --check`
+- `mypy src/`
+- `pytest tests/unit`
+
+**Step 2: Commit**
+
+```bash
+git add bitbucket-pipelines.yml
+git commit -m "ci: CI/CD パイプラインを追加"
+```
+
+---
+
 ### Task 1.4: データモデル定義
 
 **Files:**
@@ -1697,11 +1717,32 @@ Expected: PASS（有効な JSON が出力される）
 
 ---
 
+### Task 9.4: パフォーマンスベンチマークスイート
+
+**Files:**
+- Create: `tests/benchmark/test_performance.py`
+
+**Step 1: 実装**
+
+- `pytest-benchmark` を導入
+- DBに 10,000 件ダミーデータを投入した状態での `memory_search` の P50/P95/P99 レイテンシ測定
+- `memory_save` のレイテンシ測定
+- 初期化（ハンドシェイク）レイテンシ測定
+
+**Step 2: Commit**
+
+```bash
+git add tests/benchmark/
+git commit -m "test: パフォーマンスベンチマークスイートを追加"
+```
+
+---
+
 ## Phase Summary
 
 | Phase | 内容 | Task数 |
 |---|---|---|
-| Phase 1 | プロジェクト基盤 | 4 |
+| Phase 1 | プロジェクト基盤 | 5 |
 | Phase 2 | Storage Layer | 8 |
 | Phase 3 | Embedding Provider | 4 |
 | Phase 4 | Ingestion Pipeline | 6 |
@@ -1710,5 +1751,5 @@ Expected: PASS（有効な JSON が出力される）
 | Phase 6 | Lifecycle Manager | 4 |
 | Phase 7 | RL 拡張ポイント | 1 |
 | Phase 8 | Orchestrator + MCP Server | 3 |
-| Phase 9 | 統合テスト + ドキュメント | 3 |
-| **合計** | | **41 Tasks** |
+| Phase 9 | 統合テスト + ドキュメント | 4 |
+| **合計** | | **43 Tasks** |

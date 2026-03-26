@@ -449,6 +449,7 @@ class Memory(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     archived_at: datetime | None = None
     tags: list[str] = Field(default_factory=list)
+    project: str | None = None
 
 
 class ScoredMemory(BaseModel):
@@ -766,11 +767,11 @@ git commit -m "feat: SQLite Storage Adapter (ライトウェイト版) を実装
 
 **Step 1: テストを書く**
 
-- `add_edge`: エッジの追加（重複時は無視または更新）
-- `get_edges`: 指定ノードのエッジ一覧取得
+- `create_edge`: エッジの追加（重複時は無視または更新）
 - `traverse`: 再帰的 CTE によるグラフトラバーサル（depth=1,2,3 で検証）
 - `traverse` の depth ハードリミット（depth > 5 は強制的に 5 に制限）
-- `remove_edge`: エッジの削除
+- `delete_node`: ノードと関連エッジの削除
+- `create_node`: ノードの作成（メタデータ付き）
 - GraphAdapter Protocol に完全準拠
 
 **Step 2: 実装**

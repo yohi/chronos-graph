@@ -113,6 +113,7 @@ class SourceType(str, Enum):
 | `updated_at` | timestamp | 更新日時 |
 | `archived_at` | timestamp? | アーカイブ日時（NULL = Active） |
 | `tags` | text[] | プロジェクトタグ等 |
+| `project` | text? | プロジェクト識別子（ツール引数の `project` を直接保存） |
 
 ### 3.2 インデックス
 
@@ -120,7 +121,7 @@ class SourceType(str, Enum):
 |---|---|---|
 | HNSW | ベクトル近傍探索 | `embedding` カラム |
 | pg_bigm / pgroonga | 日本語全文検索 | `content` カラム |
-| B-tree | フィルタ用 | `memory_type`, `source_type`, `archived_at`, `tags` |
+| B-tree | フィルタ用 | `memory_type`, `source_type`, `archived_at`, `tags`, `project` |
 
 ### 3.3 グラフモデル（Neo4j）
 
@@ -609,6 +610,7 @@ class StorageAdapter(Protocol):
     async def vector_search(self, embedding: list[float], top_k: int) -> list[ScoredMemory]: ...
     async def keyword_search(self, query: str, top_k: int) -> list[ScoredMemory]: ...
     async def list_by_filter(self, filters: MemoryFilters) -> list[Memory]: ...
+    async def get_vector_dimension(self) -> int | None: ...
     async def dispose(self) -> None: ...
 ```
 

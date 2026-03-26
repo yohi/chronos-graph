@@ -202,12 +202,12 @@ class SourceAdapter(Protocol):
 
 ```python
 class Deduplicator:
-    SIMILARITY_THRESHOLD = 0.90   # コサイン類似度がこれ以上なら重複 → 上書き
+    SIMILARITY_THRESHOLD = 0.90   # コサイン類似度がこれ以上なら重複 → Append-only 置換
     CONSOLIDATION_THRESHOLD = 0.85  # 統合候補の閾値
 
     def check(self, new_memory: Memory) -> DeduplicationResult:
         # 1. 新チャンクのベクトルで既存Top5を検索
-        # 2. 同一プロジェクト & 類似度 >= 0.90 → 上書き更新
+        # 2. 同一プロジェクト & 類似度 >= 0.90 → Append-only 置換（旧記憶をArchive、新規 INSERT、SUPERSEDESエッジ作成）
         # 3. 同一プロジェクト & 0.85 <= 類似度 < 0.90 → 統合候補としてマーク
         # 4. それ以外 → 新規挿入
 ```
@@ -218,7 +218,7 @@ class Deduplicator:
 
 - **SEMANTICALLY_RELATED**: ベクトル類似度 >= 0.70 の既存ノードとリンク
 - **TEMPORAL_NEXT/PREV**: 同一セッション・プロジェクトの記憶を時系列順にリンク
-- **SUPERSEDES**: Deduplicatorが上書き更新を行った場合にリンク
+- **SUPERSEDES**: DeduplicatorがAppend-only 置換を行った場合にリンク
 - **REFERENCES**: チャンク中の明示的参照（URL・ファイルパス等）からリンク
 - **CAUSED_BY/RESULTED_IN**: 将来のRL拡張ポイント（初期実装ではスキップ）
 
@@ -580,7 +580,7 @@ class Orchestrator:
 | Neo4jドライバ | neo4j-python-driver (async) | 公式非同期ドライバ |
 | 日本語FTS | pg_bigm or pgroonga | PostgreSQLの日本語全文検索拡張 |
 | 埋め込み(ローカル) | sentence-transformers | Ruri v3-310m等のローカルモデル |
-| スケジューラ | APScheduler | バックグラウンドジョブ (Lifecycle) |
+| SQLite (ライトウェイト) | aiosqlite + sqlite-vec + FTS5 | ゼロコンフィグモード（デフォルト） |
 | 設定管理 | pydantic-settings | 型安全な設定 + .env サポート |
 | テスト | pytest + pytest-asyncio | 非同期テスト対応 |
 | コンテナ | Docker Compose | PostgreSQL / Neo4j / Redis の一括管理 |

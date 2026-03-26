@@ -1327,6 +1327,21 @@ class Server:
 
 各ツールハンドラの冒頭で `await self._ensure_initialized()` を呼び出す。
 
+**URL 取得の並行制限要件（必須）:**
+
+`memory_save_url` は最大 30 秒の HTTP タイムアウトを持つため、
+同時多数の呼び出しで非同期ワーカーが枯渇するリスクがある。
+`asyncio.Semaphore` で同時実行数を制限する:
+
+```python
+_url_semaphore = asyncio.Semaphore(settings.URL_FETCH_CONCURRENCY)  # デフォルト: 3
+
+async def memory_save_url(url: str, ...):
+    async with _url_semaphore:
+        content = await fetch_url(url, timeout=30)
+        ...
+```
+
 **Step 2: Commit**
 
 ```bash
@@ -1406,6 +1421,15 @@ Docker 上の全バックエンドに接続して以下のフローを検証:
 - Neo4j: テスト毎に `MATCH (n) DETACH DELETE n` でクリア
 - Redis: テスト毎に `FLUSHDB` でクリア
 - SQLite: テスト毎に一時ファイルを新規作成
+
+**C) 並行書き込みストレステスト（SQLite）:**
+
+WAL モード + `busy_timeout=5000` の設定が実運用で十分かを検証:
+
+- 3〜5 プロセスから同時に `memory_save` を実行
+- `busy_timeout` 内でリトライが成功することを検証
+- `memory_search` が書き込み中にもブロックされないことを検証
+- `SQLITE_BUSY` エラーが 0 件であることを確認
 
 **Step 2: Commit**
 

@@ -97,7 +97,7 @@ class Memory:
     updated_at: datetime
     archived_at: datetime | None    # アーカイブ日時 (NoneならActive)
     tags: list[str]                 # プロジェクトタグ等
-    project: str | None             # プロジェクト識別子
+    project: str | None = None      # プロジェクト識別子
 ```
 
 ### 2.2 グラフモデル（Neo4j）
@@ -514,6 +514,30 @@ class CacheAdapter(Protocol):
     async def invalidate_prefix(self, prefix: str) -> None: ...
     async def dispose(self) -> None: ...
 ```
+
+#### invalidate_prefix 実装注記
+
+- Redis: `KEYS` コマンドは使用禁止。`SCAN` + batched `DELETE` でブロッキング回避（SPEC.md §8.3 参照）
+- InMemory: プレフィックス一致での安全なループ削除（`asyncio.Lock` で排他制御）
+- 原子性: 個別キー削除はベストエフォート。全削除完了までに一貫性違反が発生する可能性あり
+- 計算量: O(n)（n = プレフィックス一致キー数）
+
+#### get_vector_dimension() のバックエンド別実装方針
+
+**PostgreSQL:**
+- `pg_typeof(embedding)` で列型を確認し、`array_length(embedding, 1)` で次元数を取得
+- 例: `SELECT array_length(embedding, 1) FROM memories LIMIT 1`
+- 列が存在しない、または NULL のみの場合は `None` を返す
+
+**SQLite:**
+- 専用メタデータテーブル `vectors_metadata` を参照
+- 例: `SELECT dimension FROM vectors_metadata WHERE table_name = 'memories'`
+- メタテーブル未存在・不整合の場合は `None` を返す（初期化時に警告ログ）
+
+**Orchestrator フェイルファスト:**
+- 初期化時に `storage.get_vector_dimension()` と `embedding_provider.dimension` を比較
+- `stored_dim is not None and stored_dim != current_dim` の場合 `ConfigurationError` を発生
+- 詳細は SPEC.md §9.1 参照
 
 初期実装: PostgresStorageAdapter, Neo4jGraphAdapter, RedisCacheAdapter
 

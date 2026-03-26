@@ -844,6 +844,17 @@ git commit -m "feat: Embedding Provider ファクトリを実装"
 - RawContent データクラスの定義
 - HTMLからMarkdownへの変換（httpxでフェッチ、簡易パーサー）
 
+**URLAdapter の DNS リバインディング対策（必須）:**
+
+SSRF の DNS リバインディング攻撃を防ぐため、以下のフローで HTTP リクエストを発行:
+
+1. URL のホスト名を DNS 解決し、IP アドレスを取得
+2. 取得した IP がプライベート IP 空間に該当しないことを検証
+3. 検証済み IP に直接接続（`Host` ヘッダーは元のホスト名を設定）
+4. リダイレクト発生時は遷移先 URL に対して手順 1-3 を再実行
+
+`httpx` のカスタム Transport で DNS 解決と IP 検証を接続前に強制実行する。
+
 **Step 3: Commit**
 
 ```bash
@@ -1430,6 +1441,9 @@ WAL モード + `busy_timeout=5000` の設定が実運用で十分かを検証:
 - `busy_timeout` 内でリトライが成功することを検証
 - `memory_search` が書き込み中にもブロックされないことを検証
 - `SQLITE_BUSY` エラーが 0 件であることを確認
+- Lifecycle Manager のクリーンアップ（大量 UPDATE/DELETE）をバックグラウンドで同時実行
+- 再帰的 CTE（グラフ検索）実行中の DELETE 競合がデッドロックしないことを検証
+- テスト末尾で `PRAGMA integrity_check` による DB 整合性検証を実行
 
 **Step 2: Commit**
 

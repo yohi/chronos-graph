@@ -354,6 +354,17 @@ FastMCP を使用。重いモジュール（sentence-transformers 等）は**遅
 
 - 起動時: MCP ハンドシェイクのみ（軽量）
 - 初回ツール呼び出し時: Orchestrator / Storage / Embedding の初期化
+- 排他制御: 複数ツールの同時非同期呼び出しに備え、`asyncio.Lock` で初期化を排他制御する
+
+### 7.1.1 トランスポート
+
+初期実装は `stdio`（標準入出力）モードのみサポートする。
+
+将来の拡張として以下を計画（v2.1 以降）:
+
+- HTTP/SSE トランスポート（`uvicorn` ベース、`--transport sse` オプション）
+- 認証層（Bearer Token / MCP 標準認証準拠）
+- 複数PC間での記憶共有（クラウドネイティブ構成）
 
 ### 7.2 ツール一覧
 
@@ -495,9 +506,32 @@ class CacheAdapter(Protocol):
 
 ### 8.4 初期実装
 
+**フルモード（PostgreSQL + Neo4j + Redis）:**
+
 - `PostgresStorageAdapter` — asyncpg ベース
 - `Neo4jGraphAdapter` — neo4j-python-driver (async) ベース
 - `RedisCacheAdapter` — redis-py (async) ベース
+
+**ライトウェイトモード（SQLite、ゼロコンフィグ）:**
+
+- `SQLiteStorageAdapter` — `sqlite-vec`（ベクトル検索）+ `FTS5`（全文検索）、単一ファイルで完結
+- `InMemoryCacheAdapter` — Python `dict` + `asyncio.Lock` による TTL 付きインメモリキャッシュ
+- グラフ無効化 — `GRAPH_ENABLED=false` 時、Graph Linker / Graph Traversal をスキップ
+
+ライトウェイトモードは `pip install` のみで動作し、Docker / 外部サービスを必要としない。
+`STORAGE_BACKEND` 環境変数で切り替える（デフォルト: `sqlite`）。
+
+### 8.5 ストレージ選択ロジック
+
+`config.py` の `STORAGE_BACKEND` / `GRAPH_ENABLED` / `CACHE_BACKEND` に応じて、
+ファクトリ関数が適切なアダプターインスタンスを返す:
+
+| 設定値 | StorageAdapter | GraphAdapter | CacheAdapter |
+|---|---|---|---|
+| `sqlite` (デフォルト) | SQLiteStorageAdapter | None (無効) | InMemoryCacheAdapter |
+| `postgres` | PostgresStorageAdapter | Neo4jGraphAdapter* | RedisCacheAdapter* |
+
+\* `GRAPH_ENABLED=false` の場合は GraphAdapter を None に、Redis 未接続時は InMemoryCacheAdapter にフォールバック。
 
 ---
 
@@ -593,9 +627,12 @@ context-store-mcp/
 │       ├── storage/               # Storage Layer
 │       │   ├── __init__.py
 │       │   ├── protocols.py
+│       │   ├── factory.py            # ストレージ選択ファクトリ
 │       │   ├── postgres.py
+│       │   ├── sqlite.py             # ライトウェイト版 (sqlite-vec + FTS5)
 │       │   ├── neo4j.py
-│       │   └── redis.py
+│       │   ├── redis.py
+│       │   └── inmemory.py           # InMemory Cache Adapter
 │       │
 │       ├── embedding/             # Embedding Provider
 │       │   ├── __init__.py
@@ -630,17 +667,25 @@ context-store-mcp/
 ## 12. 環境変数
 
 ```bash
-# === Core ===
+# === Storage Backend ===
+STORAGE_BACKEND=sqlite              # sqlite | postgres
+GRAPH_ENABLED=false                 # true | false (Neo4j の有効化)
+CACHE_BACKEND=inmemory              # inmemory | redis
+SQLITE_DB_PATH=~/.context-store/memories.db  # sqlite の場合
+
+# === PostgreSQL (STORAGE_BACKEND=postgres の場合) ===
 POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
 POSTGRES_DB=context_store
 POSTGRES_USER=context_store
 POSTGRES_PASSWORD=<secret>
 
+# === Neo4j (GRAPH_ENABLED=true の場合) ===
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=<secret>
 
+# === Redis (CACHE_BACKEND=redis の場合) ===
 REDIS_URL=redis://localhost:6379
 
 # === Embedding ===

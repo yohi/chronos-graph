@@ -121,7 +121,8 @@ class SourceType(str, Enum):
 |---|---|---|
 | HNSW | ベクトル近傍探索 | `embedding` カラム |
 | pg_bigm / pgroonga | 日本語全文検索 | `content` カラム |
-| B-tree | フィルタ用 | `memory_type`, `source_type`, `archived_at`, `tags`, `project` |
+| B-tree | フィルタ用 | `memory_type`, `source_type`, `archived_at`, `project` |
+| GIN | 配列検索用 | `tags` カラム |
 
 ### 3.3 グラフモデル（Neo4j）
 
@@ -488,7 +489,7 @@ FastMCP を使用。重いモジュール（sentence-transformers 等）は**遅
 |---|---|---|---|---|
 | `url` | str | ✅ | — | 取り込む URL |
 | `project` | str? | — | None | プロジェクトタグ |
-| `tags` | list[str] | — | [] | 追加タグ |
+| `tags` | list[str] | — | [] | 追加タグ（制約：要素最大長50、`^[a-zA-Z0-9_-]+$`） |
 
 URL のコンテンツを取得し、Markdown 変換後にチャンク分割して記憶として保存する。
 

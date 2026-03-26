@@ -657,9 +657,13 @@ context-store-mcp/
 │       │   ├── consolidator.py
 │       │   └── purger.py
 │       │
-│       ├── storage/               # Storage Layer
+│       ├── storage/               # Storage Layer (SQLite default)
 │       │   ├── __init__.py
 │       │   ├── protocols.py
+│       │   ├── factory.py
+│       │   ├── inmemory.py
+│       │   ├── sqlite.py
+│       │   ├── sqlite_graph.py
 │       │   ├── postgres.py
 │       │   ├── neo4j.py
 │       │   └── redis.py

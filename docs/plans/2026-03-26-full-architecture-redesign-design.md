@@ -552,10 +552,16 @@ class Orchestrator:
         ingestion: IngestionPipeline,
         retrieval: RetrievalPipeline,
         lifecycle: LifecycleManager,
-        action_logger: ActionLogger = NoOpActionLogger(),
-        reward_signal: RewardSignal = NoOpRewardSignal(),
-        policy_hook: PolicyHook = NoOpPolicyHook(),
-    ): ...
+        action_logger: ActionLogger | None = None,
+        reward_signal: RewardSignal | None = None,
+        policy_hook: PolicyHook | None = None,
+    ):
+        self.ingestion = ingestion
+        self.retrieval = retrieval
+        self.lifecycle = lifecycle
+        self.action_logger = action_logger or NoOpActionLogger()
+        self.reward_signal = reward_signal or NoOpRewardSignal()
+        self.policy_hook = policy_hook or NoOpPolicyHook()
 ```
 
 ---

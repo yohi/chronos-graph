@@ -77,7 +77,7 @@ python_version = "3.12"
 strict = true
 ```
 
-**Step 2: src/context_store/__init__.py を作成**
+**Step 2: `src/context_store/__init__.py` を作成**
 
 ```python
 """Context Store MCP - Long-term memory system for AI agents."""
@@ -469,7 +469,7 @@ class Edge(BaseModel):
     to_id: str
     edge_type: str
     properties: dict = Field(default_factory=dict)
-```
+
 
 class GraphResult(BaseModel):
     nodes: list[dict]

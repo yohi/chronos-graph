@@ -1111,7 +1111,7 @@ Expected: PASS
 
 - SEMANTICALLY_RELATED: 類似度 ≥ 0.70 で作成されること
 - TEMPORAL_NEXT/PREV: 同一セッションの記憶に対して作成されること
-- SUPERSEDES: 上書き更新時に作成されること
+- SUPERSEDES: Append-only 置換（新規 INSERT と旧ノードへ SUPERSEDES を付与）時に作成されること
 - REFERENCES: URL/ファイルパスの抽出
 
 **Step 2: 実装**
@@ -1605,7 +1605,7 @@ git commit -m "feat: MCP Server (FastMCP) を実装"
 - `settings.url_timeout_seconds` → `httpx` の HTTP timeout
 - `settings.url_max_redirects` → リダイレクト上限
 - URLAdapter が `Settings` インスタンスを受け取る初期化経路（コンストラクタ/工場関数等）を明確にする
-- SSRF 対策設定 (`settings.ALLOW_PRIVATE_URLS`, `settings.URL_MAX_RESPONSE_BYTES`, `settings.URL_ALLOWED_CONTENT_TYPES`) を必ず `URLAdapter` に伝播させる
+- SSRF 対策設定 (`settings.allow_private_urls`, `settings.url_max_response_bytes`, `settings.url_allowed_content_types`) を必ず `URLAdapter` に伝播させる
 - 全ツールハンドラの冒頭で `await self._ensure_initialized()` を呼び出し、安全に初期化された `URLAdapter` を利用する
 
 **Verification:**

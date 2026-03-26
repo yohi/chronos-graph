@@ -39,7 +39,6 @@ dependencies = [
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "httpx>=0.27.0",
-    "apscheduler>=3.10.0",
     "aiosqlite>=0.20.0",
     "sqlite-vec>=0.1.0",
 ]
@@ -693,7 +692,8 @@ git commit -m "feat: SQLite Storage Adapter (ライトウェイト版) を実装
 
 - InMemoryCacheAdapter: `dict` + `asyncio.Lock` + TTL 管理
 - StorageFactory: Settings に基づいて適切なアダプターを返すファクトリ関数
-  `create_storage(settings) -> tuple[StorageAdapter, GraphAdapter | None, CacheAdapter]`
+  `create_storage(settings) -> tuple[StorageAdapter, GraphAdapter, CacheAdapter]`
+  ※ `sqlite` モードでは GraphAdapter = SQLiteGraphAdapter（None ではない）
 
 **Step 3: テスト確認 & Commit**
 
@@ -1130,7 +1130,7 @@ git commit -m "feat: Decay Scorer (減衰スコア計算) を実装"
 **Step 1: テスト + 実装**
 
 - Archiver: スコアが閾値以下の記憶を Archived に遷移
-- Purger: Archived 後 N 日経過した記憶を物理削除（PostgreSQL + Neo4j 連動）
+- Purger: Archived 後 N 日経過した記憶を物理削除（Storage + Graph 連動）
 
 **Step 2: Commit**
 
@@ -1161,7 +1161,7 @@ git commit -m "feat: Consolidator (統合処理) を実装"
 
 ---
 
-### Task 6.4: Lifecycle Manager 統合
+### Task 6.4: Lifecycle Manager 統合（イベント駆動型）
 
 **Files:**
 - Create: `src/context_store/lifecycle/manager.py`
@@ -1169,13 +1169,18 @@ git commit -m "feat: Consolidator (統合処理) を実装"
 
 **Step 1: テスト + 実装**
 
-APScheduler で各ジョブ（Decay Scorer / Archiver / Consolidator / Purger / Stats Collector）
-をスケジューリング。開始・停止メソッドの提供。
+APScheduler の代わりにイベント駆動型のレイジークリーンアップを実装:
+
+- `on_memory_saved()`: 保存カウンターをインクリメント、閾値判定
+- `should_trigger_cleanup()`: 保存回数 ≥ 50 or 前回から 1日以上経過
+- `run_cleanup()`: Decay Scorer / Archiver / Consolidator / Purger / Stats Collector を順次実行
+- `last_cleanup_at` と `save_count` を **DB に永続化**（プロセス寿命が短いため）
+- クリーンアップは `asyncio.create_task()` で非同期実行し、ツール応答をブロックしない
 
 **Step 2: Commit**
 
 ```bash
-git commit -m "feat: Lifecycle Manager (ジョブスケジューラ統合) を実装"
+git commit -m "feat: Lifecycle Manager (イベント駆動型スケジューリング) を実装"
 ```
 
 ---

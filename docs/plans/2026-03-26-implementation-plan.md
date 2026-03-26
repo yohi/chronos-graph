@@ -409,6 +409,7 @@ class Memory(BaseModel):
     source_type: SourceType
     source_metadata: dict = Field(default_factory=dict)
     embedding: list[float] = Field(default_factory=list)
+    semantic_relevance: float = 0.0
     importance_score: float = 0.5
     access_count: int = 0
     last_accessed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

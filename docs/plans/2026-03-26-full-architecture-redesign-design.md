@@ -89,6 +89,7 @@ class Memory:
     source_type: SourceType
     source_metadata: dict           # ソース固有情報 (agent名, URL, プロジェクトパス等)
     embedding: Vector               # 埋め込みベクトル (次元数はプロバイダー依存)
+    semantic_relevance: float       # 文脈的関連度スコア (0.0 - 1.0)
     importance_score: float         # 重要度スコア (0.0 - 1.0)
     access_count: int               # アクセス回数
     last_accessed_at: datetime      # 最終アクセス日時

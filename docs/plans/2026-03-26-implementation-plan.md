@@ -1,0 +1,1298 @@
+# Context Store MCP v2.0 Implementation Plan
+
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** AIエージェント向けMCPベース長期記憶システムをPython + FastMCPで全面構築する
+
+**Architecture:** パイプライン指向アーキテクチャ。Ingestion / Retrieval / Lifecycle の3パイプラインを Orchestrator が統合。Storage Layer は Protocol ベースの抽象層を介して PostgreSQL + Neo4j + Redis に接続。
+
+**Tech Stack:** Python 3.12+, FastMCP, asyncpg, neo4j-python-driver, redis-py, sentence-transformers, pydantic-settings, APScheduler, pytest, Docker Compose
+
+**Spec:** `SPEC.md` (プロジェクトルート)
+
+---
+
+## Phase 1: プロジェクト基盤
+
+### Task 1.1: Python プロジェクト初期化
+
+**Files:**
+- Create: `pyproject.toml`
+- Create: `src/context_store/__init__.py`
+- Create: `.python-version`
+- Create: `.gitignore` (Python用に更新)
+
+**Step 1: pyproject.toml を作成**
+
+```toml
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "context-store-mcp"
+version = "2.0.0"
+description = "MCP-based long-term memory system for AI agents"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp[cli]>=1.0.0",
+    "asyncpg>=0.29.0",
+    "neo4j>=5.0.0",
+    "redis>=5.0.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "httpx>=0.27.0",
+    "apscheduler>=3.10.0",
+]
+
+[project.optional-dependencies]
+embedding-local = [
+    "sentence-transformers>=3.0.0",
+    "numpy>=1.26.0",
+]
+embedding-openai = [
+    "openai>=1.0.0",
+]
+embedding-litellm = [
+    "litellm>=1.0.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+```
+
+**Step 2: `src/context_store/__init__.py` を作成**
+
+```python
+"""Context Store MCP - Long-term memory system for AI agents."""
+
+__version__ = "2.0.0"
+```
+
+**Step 3: .python-version を作成**
+
+```text
+3.12
+```
+
+**Step 4: 依存パッケージのインストール確認**
+
+Run: `pip install -e ".[dev]"`
+Expected: 正常にインストールされること
+
+**Step 5: Commit**
+
+```bash
+git add pyproject.toml src/ .python-version
+git commit -m "feat: Python プロジェクト基盤を初期化"
+```
+
+---
+
+### Task 1.2: Docker Compose 環境構築
+
+**Files:**
+- Create: `docker-compose.yml`
+- Create: `docker/postgres/init.sql`
+
+**Step 1: docker-compose.yml を作成**
+
+PostgreSQL (pgvector + pg_bigm), Neo4j, Redis の3サービスを定義。
+
+```yaml
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: context_store
+      POSTGRES_USER: context_store
+      POSTGRES_PASSWORD: dev_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U context_store -d context_store"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  neo4j:
+    image: neo4j:5-community
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/dev_password
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p dev_password 'RETURN 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  neo4j_data:
+  redis_data:
+```
+
+**Step 2: docker/postgres/init.sql を作成**
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_bigm;
+```
+
+**Step 3: Docker起動確認**
+
+Run: `docker compose up -d`
+Run: `docker compose ps`
+Expected: 3サービスとも healthy / running
+
+**Step 4: Commit**
+
+```bash
+git add docker-compose.yml docker/
+git commit -m "feat: Docker Compose 環境を構築 (PostgreSQL + Neo4j + Redis)"
+```
+
+---
+
+### Task 1.3: 設定管理 (pydantic-settings)
+
+**Files:**
+- Create: `src/context_store/config.py`
+- Create: `.env.example`
+- Create: `tests/unit/test_config.py`
+
+**Step 1: テストを書く**
+
+```python
+# tests/unit/test_config.py
+import pytest
+from context_store.config import Settings
+
+def test_default_settings():
+    settings = Settings(
+        postgres_host="localhost",
+        postgres_password="test",
+        neo4j_password="test",
+    )
+    assert settings.postgres_port == 5432
+    assert settings.embedding_provider == "openai"
+    assert settings.decay_half_life_days == 30
+    assert settings.archive_threshold == 0.05
+    assert settings.similarity_threshold == 0.70
+    assert settings.dedup_threshold == 0.90
+
+def test_embedding_provider_validation():
+    settings = Settings(
+        postgres_host="localhost",
+        postgres_password="test",
+        neo4j_password="test",
+        embedding_provider="local-model",
+    )
+    assert settings.embedding_provider == "local-model"
+```
+
+**Step 2: テスト失敗確認**
+
+Run: `pytest tests/unit/test_config.py -v`
+Expected: FAIL (ModuleNotFoundError)
+
+**Step 3: config.py を実装**
+
+```python
+# src/context_store/config.py
+from __future__ import annotations
+
+from typing import Literal
+
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    """Application settings loaded from environment variables."""
+
+    model_config = {"env_prefix": "", "env_file": ".env", "extra": "ignore"}
+
+    # --- PostgreSQL ---
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
+    postgres_db: str = "context_store"
+    postgres_user: str = "context_store"
+    postgres_password: str
+
+    # --- Neo4j ---
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str
+
+    # --- Redis ---
+    redis_url: str = "redis://localhost:6379"
+
+    # --- Embedding ---
+    embedding_provider: Literal["openai", "local-model", "litellm", "custom-api"] = "openai"
+    openai_api_key: str = ""
+    local_model_name: str = "cl-nagoya/ruri-v3-310m"
+    litellm_api_base: str = "http://localhost:4000"
+    custom_api_endpoint: str = ""
+
+    # --- Lifecycle ---
+    decay_half_life_days: int = 30
+    archive_threshold: float = 0.05
+    consolidation_threshold: float = 0.85
+    purge_retention_days: int = 90
+
+    # --- Search ---
+    default_top_k: int = 10
+    similarity_threshold: float = 0.70
+    dedup_threshold: float = 0.90
+
+    @property
+    def postgres_dsn(self) -> str:
+        return (
+            f"postgresql://{self.postgres_user}:{self.postgres_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+```
+
+**Step 4: .env.example を作成**
+
+```bash
+# === Core ===
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=context_store
+POSTGRES_USER=context_store
+POSTGRES_PASSWORD=dev_password
+
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=dev_password
+
+REDIS_URL=redis://localhost:6379
+
+# === Embedding ===
+EMBEDDING_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+LOCAL_MODEL_NAME=cl-nagoya/ruri-v3-310m
+
+# === Lifecycle ===
+DECAY_HALF_LIFE_DAYS=30
+ARCHIVE_THRESHOLD=0.05
+PURGE_RETENTION_DAYS=90
+
+# === Search ===
+DEFAULT_TOP_K=10
+SIMILARITY_THRESHOLD=0.70
+DEDUP_THRESHOLD=0.90
+```
+
+**Step 5: テスト成功確認**
+
+Run: `pytest tests/unit/test_config.py -v`
+Expected: PASS
+
+**Step 6: Commit**
+
+```bash
+git add src/context_store/config.py .env.example tests/
+git commit -m "feat: pydantic-settings による設定管理を実装"
+```
+
+---
+
+### Task 1.4: データモデル定義
+
+**Files:**
+- Create: `src/context_store/models/__init__.py`
+- Create: `src/context_store/models/memory.py`
+- Create: `src/context_store/models/search.py`
+- Create: `src/context_store/models/graph.py`
+- Create: `tests/unit/test_models.py`
+
+**Step 1: テストを書く**
+
+```python
+# tests/unit/test_models.py
+from uuid import uuid4
+from datetime import datetime, timezone
+from context_store.models.memory import Memory, MemoryType, SourceType
+
+def test_memory_creation():
+    m = Memory(
+        id=uuid4(),
+        content="JWT認証をベースに統一する方針に決定",
+        memory_type=MemoryType.EPISODIC,
+        source_type=SourceType.CONVERSATION,
+        source_metadata={"agent": "claude-code", "project": "/my/project"},
+        embedding=[0.1] * 768,
+        importance_score=0.8,
+        tags=["auth", "backend"],
+    )
+    assert m.memory_type == MemoryType.EPISODIC
+    assert m.archived_at is None
+    assert m.access_count == 0
+
+def test_memory_type_enum():
+    assert MemoryType.EPISODIC.value == "episodic"
+    assert MemoryType.SEMANTIC.value == "semantic"
+    assert MemoryType.PROCEDURAL.value == "procedural"
+```
+
+**Step 2: テスト失敗確認**
+
+Run: `pytest tests/unit/test_models.py -v`
+Expected: FAIL
+
+**Step 3: models/memory.py を実装**
+
+```python
+# src/context_store/models/memory.py
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from enum import Enum
+from uuid import UUID, uuid4
+
+from pydantic import BaseModel, Field
+
+
+class MemoryType(str, Enum):
+    EPISODIC = "episodic"
+    SEMANTIC = "semantic"
+    PROCEDURAL = "procedural"
+
+
+class SourceType(str, Enum):
+    CONVERSATION = "conversation"
+    MANUAL = "manual"
+    URL = "url"
+
+
+class Memory(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    content: str
+    memory_type: MemoryType
+    source_type: SourceType
+    source_metadata: dict = Field(default_factory=dict)
+    embedding: list[float] = Field(default_factory=list)
+    semantic_relevance: float = 0.0
+    importance_score: float = 0.5
+    access_count: int = 0
+    last_accessed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    archived_at: datetime | None = None
+    tags: list[str] = Field(default_factory=list)
+
+
+class ScoredMemory(BaseModel):
+    memory: Memory
+    score: float
+    source: str = ""  # "vector" | "keyword" | "graph"
+```
+
+**Step 4: models/search.py, models/graph.py を実装**
+
+```python
+# src/context_store/models/search.py
+from __future__ import annotations
+
+from pydantic import BaseModel
+
+from context_store.models.memory import ScoredMemory
+
+
+class SearchStrategy(BaseModel):
+    vector_weight: float = 0.5
+    keyword_weight: float = 0.2
+    graph_weight: float = 0.3
+    graph_depth: int = 2
+    time_decay_enabled: bool = True
+
+
+class SearchFilters(BaseModel):
+    project: str | None = None
+    memory_type: str | None = None
+    top_k: int = 10
+    max_tokens: int | None = None
+
+
+class SearchResult(BaseModel):
+    results: list[ScoredMemory]
+    total_count: int
+    strategy_used: SearchStrategy
+```
+
+```python
+# src/context_store/models/graph.py
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
+
+
+class Edge(BaseModel):
+    from_id: str
+    to_id: str
+    edge_type: str
+    properties: dict = Field(default_factory=dict)
+
+
+class GraphResult(BaseModel):
+    nodes: list[dict]
+    edges: list[Edge]
+    traversal_depth: int
+```
+
+**Step 5: models/__init__.py を作成**
+
+```python
+# src/context_store/models/__init__.py
+from context_store.models.memory import Memory, MemoryType, SourceType, ScoredMemory
+from context_store.models.search import SearchStrategy, SearchFilters, SearchResult
+from context_store.models.graph import Edge, GraphResult
+
+__all__ = [
+    "Memory", "MemoryType", "SourceType", "ScoredMemory",
+    "SearchStrategy", "SearchFilters", "SearchResult",
+    "Edge", "GraphResult",
+]
+```
+
+**Step 6: テスト成功確認**
+
+Run: `pytest tests/unit/test_models.py -v`
+Expected: PASS
+
+**Step 7: Commit**
+
+```bash
+git add src/context_store/models/ tests/unit/test_models.py
+git commit -m "feat: データモデル (Memory, Search, Graph) を定義"
+```
+
+---
+
+## Phase 2: Storage Layer
+
+### Task 2.1: Storage Protocol 定義
+
+**Files:**
+- Create: `src/context_store/storage/__init__.py`
+- Create: `src/context_store/storage/protocols.py`
+
+**Step 1: Protocol を定義**
+
+SPEC.md §8 の StorageAdapter / GraphAdapter / CacheAdapter Protocol をそのまま実装。
+
+**Step 2: Commit**
+
+```bash
+git add src/context_store/storage/
+git commit -m "feat: Storage Layer の Protocol を定義"
+```
+
+---
+
+### Task 2.2: PostgreSQL Storage Adapter
+
+**Files:**
+- Create: `src/context_store/storage/postgres.py`
+- Create: `tests/unit/test_postgres_storage.py`
+- Create: `tests/integration/test_postgres_integration.py`
+
+**Step 1: ユニットテストを書く（モック利用）**
+
+PostgresStorageAdapter の各メソッドのテスト。asyncpg の Pool をモックして
+SQL クエリの組み立てロジックとレコードの変換ロジックを検証。
+
+**Step 2: 実装**
+
+- `asyncpg.create_pool()` で接続プール管理
+- `save_memory`: INSERT ... ON CONFLICT DO UPDATE
+- `vector_search`: `ORDER BY embedding <=> $1 LIMIT $2`
+- `keyword_search`: pg_bigm/pgroonga の全文検索クエリ
+- `dispose`: プールの close
+
+**Step 3: 統合テストを書く**
+
+Docker 上の PostgreSQL に接続して実際に CRUD + 検索を実行。
+`conftest.py` でテスト用 schema のセットアップ/ティアダウン。
+
+**Step 4: テスト確認 & Commit**
+
+```bash
+git commit -m "feat: PostgreSQL Storage Adapter を実装"
+```
+
+---
+
+### Task 2.3: Neo4j Graph Adapter
+
+**Files:**
+- Create: `src/context_store/storage/neo4j.py`
+- Create: `tests/unit/test_neo4j_storage.py`
+- Create: `tests/integration/test_neo4j_integration.py`
+
+**Step 1: テストを書く**
+
+create_node, create_edge, traverse, delete_node のテスト。
+
+**Step 2: 実装**
+
+- `neo4j.AsyncDriver` でセッション管理
+- `create_node`: Cypher `MERGE (:Memory {id: $id})`
+- `create_edge`: Cypher `MATCH ... CREATE (a)-[r:TYPE]->(b)`
+- `traverse`: 深さ可変の Cypher パス検索
+- Graceful Degradation: 接続失敗時に例外を投げずにログ出力
+
+**Step 3: テスト確認 & Commit**
+
+```bash
+git commit -m "feat: Neo4j Graph Adapter を実装"
+```
+
+---
+
+### Task 2.4: Redis Cache Adapter
+
+**Files:**
+- Create: `src/context_store/storage/redis.py`
+- Create: `tests/unit/test_redis_storage.py`
+
+**Step 1: テストを書く**
+
+get/set/invalidate のテスト。
+
+**Step 2: 実装**
+
+- `redis.asyncio.from_url()` で接続
+- JSON シリアライズ/デシリアライズ
+- TTL ベースのキャッシュ管理
+- 接続失敗時の Graceful Degradation
+
+**Step 3: テスト確認 & Commit**
+
+```bash
+git commit -m "feat: Redis Cache Adapter を実装"
+```
+
+---
+
+## Phase 3: Embedding Provider
+
+### Task 3.1: Embedding Protocol + OpenAI Provider
+
+**Files:**
+- Create: `src/context_store/embedding/__init__.py`
+- Create: `src/context_store/embedding/protocols.py`
+- Create: `src/context_store/embedding/openai.py`
+- Create: `tests/unit/test_embedding.py`
+
+**Step 1: Protocol 定義 + テスト**
+
+SPEC.md §9 の EmbeddingProvider Protocol を定義。
+OpenAIEmbeddingProvider のテスト（httpx モック）。
+
+**Step 2: 実装**
+
+- embed: 単一テキスト → ベクトル
+- embed_batch: バッチ処理
+- dimension プロパティ
+
+**Step 3: Commit**
+
+```bash
+git commit -m "feat: Embedding Provider Protocol + OpenAI 実装"
+```
+
+---
+
+### Task 3.2: Local Model Provider
+
+**Files:**
+- Create: `src/context_store/embedding/local_model.py`
+- Create: `tests/unit/test_embedding_local.py`
+
+**Step 1: テスト + 実装**
+
+- sentence-transformers の遅延ロード
+- `from __future__ import annotations` で型アノテーションの遅延評価
+- embed/embed_batch の実装
+
+**Step 2: Commit**
+
+```bash
+git commit -m "feat: ローカルモデル Embedding Provider を実装"
+```
+
+---
+
+### Task 3.3: LiteLLM + Custom API Provider
+
+**Files:**
+- Create: `src/context_store/embedding/litellm.py`
+- Create: `src/context_store/embedding/custom_api.py`
+- Create: `tests/unit/test_embedding_litellm.py`
+
+**Step 1: テスト + 実装**
+
+LiteLLM: litellm.aembedding() のラッパー
+Custom API: httpx で POST リクエスト
+
+**Step 2: Commit**
+
+```bash
+git commit -m "feat: LiteLLM + Custom API Embedding Provider を実装"
+```
+
+---
+
+### Task 3.4: Embedding Provider ファクトリ
+
+**Files:**
+- Modify: `src/context_store/embedding/__init__.py`
+- Create: `tests/unit/test_embedding_factory.py`
+
+**Step 1: テスト + 実装**
+
+Settings.embedding_provider の値に基づいて適切なプロバイダーインスタンスを返す
+ファクトリ関数 `create_embedding_provider(settings)` を実装。
+
+**Step 2: Commit**
+
+```bash
+git commit -m "feat: Embedding Provider ファクトリを実装"
+```
+
+---
+
+## Phase 4: Ingestion Pipeline
+
+### Task 4.1: Source Adapter (Conversation / Manual / URL)
+
+**Files:**
+- Create: `src/context_store/ingestion/__init__.py`
+- Create: `src/context_store/ingestion/adapters.py`
+- Create: `tests/unit/test_adapters.py`
+
+**Step 1: テストを書く**
+
+各アダプターに対するテスト:
+- ConversationAdapter: トランスクリプトテキスト → RawContent リスト
+- ManualAdapter: テキスト + メタデータ → RawContent
+- URLAdapter: URL → HTML取得（httpx モック）→ Markdown変換 → RawContent
+
+**Step 2: 実装**
+
+- SourceAdapter Protocol の定義
+- RawContent データクラスの定義
+- HTMLからMarkdownへの変換（httpxでフェッチ、簡易パーサー）
+
+**Step 3: Commit**
+
+```bash
+git commit -m "feat: Source Adapter (Conversation/Manual/URL) を実装"
+```
+
+---
+
+### Task 4.2: Chunker
+
+**Files:**
+- Create: `src/context_store/ingestion/chunker.py`
+- Create: `tests/unit/test_chunker.py`
+
+**Step 1: テストを書く**
+
+- 会話ログ: Q&Aペアに正しく分割されること
+- 手動入力: 短い入力はそのまま、長い入力はセクション分割
+- URL文書: Markdown見出しベースのセクション分割 + オーバーラップ
+
+**Step 2: 実装**
+
+SourceType に応じた分割戦略の選択と実行。
+
+**Step 3: Commit**
+
+```bash
+git commit -m "feat: Chunker (Q&A分割/セクション分割) を実装"
+```
+
+---
+
+### Task 4.3: Classifier（記憶種別の自動分類）
+
+**Files:**
+- Create: `src/context_store/ingestion/classifier.py`
+- Create: `tests/unit/test_classifier.py`
+
+**Step 1: テストを書く**
+
+- 「DBのマイグレーションを実行した」→ EPISODIC
+- 「JWTとはJSON Web Tokenの略で...」→ SEMANTIC
+- 「デプロイ手順: 1. docker compose up 2. ...」→ PROCEDURAL
+
+**Step 2: 実装**
+
+ルールベース分類: キーワードマッチ + 構文パターン。
+LLM は使用しない。
+
+**Step 3: Commit**
+
+```bash
+git commit -m "feat: 記憶種別の自動分類 (Classifier) を実装"
+```
+
+---
+
+### Task 4.4: Deduplicator（重複排除）
+
+**Files:**
+- Create: `src/context_store/ingestion/deduplicator.py`
+- Create: `tests/unit/test_deduplicator.py`
+
+**Step 1: テストを書く**
+
+- 類似度 ≥ 0.90: 上書き更新が選択されること
+- 0.85 ≤ 類似度 < 0.90: 統合候補としてマークされること
+- 類似度 < 0.85: 新規挿入が選択されること
+
+**Step 2: 実装**
+
+StorageAdapter.vector_search を使って既存 Top5 を取得し、判定ロジックを実行。
+
+**Step 3: Commit**
+
+```bash
+git commit -m "feat: Deduplicator (重複排除・統合候補マーク) を実装"
+```
+
+---
+
+### Task 4.5: Graph Linker
+
+**Files:**
+- Create: `src/context_store/ingestion/graph_linker.py`
+- Create: `tests/unit/test_graph_linker.py`
+
+**Step 1: テストを書く**
+
+- SEMANTICALLY_RELATED: 類似度 ≥ 0.70 で作成されること
+- TEMPORAL_NEXT/PREV: 同一セッションの記憶に対して作成されること
+- SUPERSEDES: 上書き更新時に作成されること
+- REFERENCES: URL/ファイルパスの抽出
+
+**Step 2: 実装**
+
+**Step 3: Commit**
+
+```bash
+git commit -m "feat: Graph Linker (リレーションシップ自動推定) を実装"
+```
+
+---
+
+### Task 4.6: Ingestion Pipeline 統合
+
+**Files:**
+- Create: `src/context_store/ingestion/pipeline.py`
+- Create: `tests/unit/test_ingestion_pipeline.py`
+
+**Step 1: テストを書く**
+
+Pipeline 全体のフロー: 入力 → Adapter → Chunker → Classifier → Embedding → Deduplicator → Graph Linker → 永続化
+
+**Step 2: 実装**
+
+各コンポーネントを順番に呼び出す IngestionPipeline クラス。
+
+**Step 3: Commit**
+
+```bash
+git commit -m "feat: Ingestion Pipeline を統合"
+```
+
+---
+
+## Phase 5: Retrieval Pipeline
+
+### Task 5.1: Query Analyzer
+
+**Files:**
+- Create: `src/context_store/retrieval/__init__.py`
+- Create: `src/context_store/retrieval/query_analyzer.py`
+- Create: `tests/unit/test_query_analyzer.py`
+
+**Step 1: テストを書く**
+
+- 固有名詞/コード片 → keyword_weight が高い
+- 「なぜ」「原因」 → graph_weight が高い
+- 一般的なクエリ → vector_weight が高い
+- 時間表現 → time_decay_enabled = True
+
+**Step 2: 実装**
+
+ルールベースのパターンマッチで SearchStrategy を決定。
+
+**Step 3: Commit**
+
+```bash
+git commit -m "feat: Query Analyzer (意図解析・戦略決定) を実装"
+```
+
+---
+
+### Task 5.2: Vector Search
+
+**Files:**
+- Create: `src/context_store/retrieval/vector_search.py`
+- Create: `tests/unit/test_vector_search.py`
+
+**Step 1: テスト + 実装**
+
+EmbeddingProvider でクエリをベクトル化し、StorageAdapter.vector_search を呼び出す。
+
+**Step 2: Commit**
+
+```bash
+git commit -m "feat: Vector Search を実装"
+```
+
+---
+
+### Task 5.3: Keyword Search
+
+**Files:**
+- Create: `src/context_store/retrieval/keyword_search.py`
+- Create: `tests/unit/test_keyword_search.py`
+
+**Step 1: テスト + 実装**
+
+StorageAdapter.keyword_search のラッパー。クエリの前処理（正規化等）を担当。
+
+**Step 2: Commit**
+
+```bash
+git commit -m "feat: Keyword Search を実装"
+```
+
+---
+
+### Task 5.4: Graph Traversal
+
+**Files:**
+- Create: `src/context_store/retrieval/graph_traversal.py`
+- Create: `tests/unit/test_graph_traversal.py`
+
+**Step 1: テスト + 実装**
+
+- Vector Search で取得した上位ノードを起点として Graph Adapter で traverse
+- SearchStrategy に基づくエッジタイプフィルタ
+- Neo4j 接続失敗時は空結果を返す（Graceful Degradation）
+
+**Step 2: Commit**
+
+```bash
+git commit -m "feat: Graph Traversal を実装"
+```
+
+---
+
+### Task 5.5: Result Fusion（RRF + 複合スコアリング）
+
+**Files:**
+- Create: `src/context_store/retrieval/result_fusion.py`
+- Create: `tests/unit/test_result_fusion.py`
+
+**Step 1: テストを書く**
+
+- RRF スコアの正しい計算
+- 時間減衰の適用（半減期 30 日）
+- 重要度スコアの反映
+- 複合スコアによるソート
+
+**Step 2: 実装**
+
+SPEC.md §5.4 の数式をそのまま実装。
+
+```python
+rrf_score = sum(weight * 1/(K + rank + 1) for ...)
+time_decay = 0.5 ** (days_since_access / half_life)
+final_score = 0.5 * rrf_score + 0.3 * time_decay + 0.2 * importance_score
+```
+
+**Step 3: Commit**
+
+```bash
+git commit -m "feat: Result Fusion (RRF + 時間減衰 + 複合スコアリング) を実装"
+```
+
+---
+
+### Task 5.6: Post Processor
+
+**Files:**
+- Create: `src/context_store/retrieval/post_processor.py`
+- Create: `tests/unit/test_post_processor.py`
+
+**Step 1: テスト + 実装**
+
+- プロジェクトフィルタ
+- 最大トークン制限
+- access_count / last_accessed_at の更新
+
+**Step 2: Commit**
+
+```bash
+git commit -m "feat: Post Processor (フィルタ・トークン制限・アクセス記録) を実装"
+```
+
+---
+
+### Task 5.7: Retrieval Pipeline 統合
+
+**Files:**
+- Create: `src/context_store/retrieval/pipeline.py`
+- Create: `tests/unit/test_retrieval_pipeline.py`
+
+**Step 1: テスト + 実装**
+
+Query Analyzer → 並列検索 → Result Fusion → Post Processor の全フロー統合。
+
+**Step 2: Commit**
+
+```bash
+git commit -m "feat: Retrieval Pipeline を統合"
+```
+
+---
+
+## Phase 6: Lifecycle Manager
+
+### Task 6.1: Decay Scorer
+
+**Files:**
+- Create: `src/context_store/lifecycle/__init__.py`
+- Create: `src/context_store/lifecycle/decay_scorer.py`
+- Create: `tests/unit/test_decay_scorer.py`
+
+**Step 1: テストを書く**
+
+- 作成直後の記憶: 高スコア
+- 30日経過: スコアが約半分
+- 90日経過: 閾値以下
+
+**Step 2: 実装**
+
+SPEC.md §6.3 の複合スコア計算式を実装。
+
+**Step 3: Commit**
+
+```bash
+git commit -m "feat: Decay Scorer (減衰スコア計算) を実装"
+```
+
+---
+
+### Task 6.2: Archiver + Purger
+
+**Files:**
+- Create: `src/context_store/lifecycle/archiver.py`
+- Create: `src/context_store/lifecycle/purger.py`
+- Create: `tests/unit/test_archiver.py`
+- Create: `tests/unit/test_purger.py`
+
+**Step 1: テスト + 実装**
+
+- Archiver: スコアが閾値以下の記憶を Archived に遷移
+- Purger: Archived 後 N 日経過した記憶を物理削除（PostgreSQL + Neo4j 連動）
+
+**Step 2: Commit**
+
+```bash
+git commit -m "feat: Archiver + Purger を実装"
+```
+
+---
+
+### Task 6.3: Consolidator
+
+**Files:**
+- Create: `src/context_store/lifecycle/consolidator.py`
+- Create: `tests/unit/test_consolidator.py`
+
+**Step 1: テスト + 実装**
+
+- 統合候補（Deduplicator がマーク済み）の記憶群を取得
+- 最新の記憶をベースに、古い記憶の情報をマージ
+- Neo4j で SUPERSEDES リレーションを作成
+- 埋め込みベクトルの再計算
+
+**Step 2: Commit**
+
+```bash
+git commit -m "feat: Consolidator (統合処理) を実装"
+```
+
+---
+
+### Task 6.4: Lifecycle Manager 統合
+
+**Files:**
+- Create: `src/context_store/lifecycle/manager.py`
+- Create: `tests/unit/test_lifecycle_manager.py`
+
+**Step 1: テスト + 実装**
+
+APScheduler で各ジョブ（Decay Scorer / Archiver / Consolidator / Purger / Stats Collector）
+をスケジューリング。開始・停止メソッドの提供。
+
+**Step 2: Commit**
+
+```bash
+git commit -m "feat: Lifecycle Manager (ジョブスケジューラ統合) を実装"
+```
+
+---
+
+## Phase 7: RL 拡張ポイント
+
+### Task 7.1: Extension Protocols + NoOp 実装
+
+**Files:**
+- Create: `src/context_store/extensions/__init__.py`
+- Create: `src/context_store/extensions/protocols.py`
+- Create: `src/context_store/extensions/noop.py`
+- Create: `tests/unit/test_extensions.py`
+
+**Step 1: テスト + 実装**
+
+SPEC.md §10 の ActionLogger / RewardSignal / PolicyHook Protocol を定義。
+NoOp 実装（何もしない）をデフォルトとして作成。
+
+**Step 2: Commit**
+
+```bash
+git commit -m "feat: RL 拡張ポイント (Protocol + NoOp) を実装"
+```
+
+---
+
+## Phase 8: Orchestrator + MCP Server
+
+### Task 8.1: Orchestrator
+
+**Files:**
+- Create: `src/context_store/orchestrator.py`
+- Create: `tests/unit/test_orchestrator.py`
+
+**Step 1: テスト + 実装**
+
+- Ingestion / Retrieval / Lifecycle の3パイプラインを保持
+- RL 拡張フック（ActionLogger / RewardSignal / PolicyHook）を注入
+- save / search / search_graph / delete / prune / stats の各操作を
+  適切なパイプラインに委譲
+
+**Step 2: Commit**
+
+```bash
+git commit -m "feat: Orchestrator を実装"
+```
+
+---
+
+### Task 8.2: MCP Server (FastMCP)
+
+**Files:**
+- Create: `src/context_store/server.py`
+- Create: `tests/unit/test_server.py`
+
+**Step 1: テスト + 実装**
+
+SPEC.md §7 の全7ツール + 2リソースを FastMCP で定義:
+- `memory_save`
+- `memory_save_url`
+- `memory_search`
+- `memory_search_graph`
+- `memory_delete`
+- `memory_prune`
+- `memory_stats`
+- Resource: `memory://stats`, `memory://projects`
+
+遅延ロード: 初回ツール呼び出し時に Orchestrator を初期化。
+
+**Step 2: Commit**
+
+```bash
+git commit -m "feat: MCP Server (FastMCP) を実装"
+```
+
+---
+
+### Task 8.3: エントリーポイント + 起動確認
+
+**Files:**
+- Modify: `pyproject.toml` (scripts セクション追加)
+- Create: `src/context_store/__main__.py`
+
+**Step 1: 実装**
+
+```python
+# src/context_store/__main__.py
+from context_store.server import server
+
+def main():
+    server.run()
+
+if __name__ == "__main__":
+    main()
+```
+
+pyproject.toml に `[project.scripts]` を追加:
+
+```toml
+[project.scripts]
+context-store = "context_store.__main__:main"
+```
+
+**Step 2: 起動確認**
+
+Run: `python -m context_store`
+Expected: MCP サーバーが stdio モードで起動
+
+**Step 3: Commit**
+
+```bash
+git commit -m "feat: エントリーポイントを追加"
+```
+
+---
+
+## Phase 9: 統合テスト + ドキュメント
+
+### Task 9.1: エンドツーエンド統合テスト
+
+**Files:**
+- Create: `tests/integration/test_e2e.py`
+- Create: `tests/conftest.py`
+
+**Step 1: テストを書く**
+
+Docker 上の全バックエンドに接続して以下のフローを検証:
+1. `memory_save` で記憶を保存
+2. `memory_search` でハイブリッド検索
+3. `memory_search_graph` でグラフトラバーサル
+4. `memory_save_url` で URL 取り込み
+5. `memory_stats` で統計確認
+6. `memory_prune` でクリーンアップ
+7. `memory_delete` で削除
+
+**Step 2: Commit**
+
+```bash
+git commit -m "test: エンドツーエンド統合テストを追加"
+```
+
+---
+
+### Task 9.2: README.md 更新
+
+**Files:**
+- Modify: `README.md`
+
+**Step 1: 実装**
+
+v2.0 の内容に全面更新:
+- 概要・特徴
+- クイックスタート（Docker Compose + pip install + MCP 設定）
+- 設定リファレンス
+- MCPツール一覧
+
+**Step 2: Commit**
+
+```bash
+git commit -m "docs: README.md を v2.0 に更新"
+```
+
+---
+
+### Task 9.3: MCP クライアント設定生成
+
+**Files:**
+- Create: `scripts/generate_config.py`
+
+**Step 1: 実装**
+
+Claude Desktop / Cursor / その他クライアント用の MCP 設定 JSON を生成するスクリプト。
+
+```json
+{
+  "mcpServers": {
+    "context-store": {
+      "command": "python",
+      "args": ["-m", "context_store"],
+      "env": {
+        "POSTGRES_PASSWORD": "...",
+        "NEO4J_PASSWORD": "..."
+      }
+    }
+  }
+}
+```
+
+**Step 2: Commit**
+
+```bash
+git commit -m "feat: MCP クライアント設定生成スクリプトを追加"
+```
+
+---
+
+## Phase Summary
+
+| Phase | 内容 | Task数 |
+|---|---|---|
+| Phase 1 | プロジェクト基盤 | 4 |
+| Phase 2 | Storage Layer | 4 |
+| Phase 3 | Embedding Provider | 4 |
+| Phase 4 | Ingestion Pipeline | 6 |
+| Phase 5 | Retrieval Pipeline | 7 |
+| Phase 6 | Lifecycle Manager | 4 |
+| Phase 7 | RL 拡張ポイント | 1 |
+| Phase 8 | Orchestrator + MCP Server | 3 |
+| Phase 9 | 統合テスト + ドキュメント | 3 |
+| **合計** | | **36 Tasks** |

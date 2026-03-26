@@ -417,16 +417,20 @@ async def memory_save(
     content: str,
     source: str = "manual",       # "conversation" | "manual" | "url"
     project: str | None = None,
-    tags: list[str] = [],
+    tags: list[str] | None = None,
     importance: float | None = None,
-) -> SaveResult: ...
+) -> SaveResult:
+    tags = tags or []
+    ...
 
 @server.tool()
 async def memory_save_url(
     url: str,
     project: str | None = None,
-    tags: list[str] = [],
-) -> SaveResult: ...
+    tags: list[str] | None = None,
+) -> SaveResult:
+    tags = tags or []
+    ...
 
 @server.tool()
 async def memory_search(

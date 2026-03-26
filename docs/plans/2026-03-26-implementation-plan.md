@@ -460,15 +460,15 @@ class SearchResult(BaseModel):
 # src/context_store/models/graph.py
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Edge(BaseModel):
     from_id: str
     to_id: str
     edge_type: str
-    properties: dict = {}
-
+    properties: dict = Field(default_factory=dict)
+```
 
 class GraphResult(BaseModel):
     nodes: list[dict]

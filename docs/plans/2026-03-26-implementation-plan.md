@@ -6,7 +6,7 @@
 
 **Architecture:** パイプライン指向アーキテクチャ。Ingestion / Retrieval / Lifecycle の3パイプラインを Orchestrator が統合。Storage Layer は Protocol ベースの抽象層を介して PostgreSQL + Neo4j + Redis に接続。
 
-**Tech Stack:** Python 3.12+, FastMCP, asyncpg, neo4j-python-driver, redis-py, sentence-transformers, pydantic-settings, pytest, Docker Compose
+**Tech Stack:** Python 3.12+, FastMCP, aiosqlite, sqlite-vec, FTS5, sentence-transformers, pydantic-settings, pytest, Docker Compose (Optional adapters: asyncpg, neo4j-python-driver, redis-py)
 
 **Spec:** `SPEC.md` (プロジェクトルート)
 
@@ -322,7 +322,7 @@ class Settings(BaseSettings):
     def validate_credentials(self) -> "Settings":
         if self.storage_backend == "postgres" and not self.postgres_password:
             raise ValueError("POSTGRES_PASSWORD は storage_backend=postgres の場合に必須です。")
-        if self.graph_enabled and not self.neo4j_password:
+        if self.storage_backend == "postgres" and self.graph_enabled and not self.neo4j_password:
             raise ValueError("NEO4J_PASSWORD は graph_enabled=true の場合に必須です。")
         return self
 ```

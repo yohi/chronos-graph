@@ -887,7 +887,7 @@ OpenAIEmbeddingProvider のテスト（httpx モック）。
 **Step 2: 実装**
 
 - embed: 単一テキスト → ベクトル
-- embed_batch: バッチ処理
+- embed_batch: バッチ処理。複数チャンク処理時の外部 API レートリミット (TPM/RPM) 抵触を防ぐため、`tenacity` 等を用いた Exponential Backoff によるリトライ機構を実装すること。
 - dimension プロパティ
 
 **Step 3: Commit**
@@ -927,7 +927,7 @@ git commit -m "feat: ローカルモデル Embedding Provider を実装"
 
 **Step 1: テスト + 実装**
 
-LiteLLM: litellm.aembedding() のラッパー
+LiteLLM: litellm.aembedding() のラッパー。`embed_batch` には `tenacity` 等を用いた Exponential Backoff (リトライ機構) を実装すること。
 Custom API: httpx で POST リクエスト
 
 **Step 2: Commit**
@@ -1147,6 +1147,7 @@ Pipeline 全体のフロー: 入力 → Adapter → Chunker → Classifier → E
 **Step 2: 実装**
 
 各コンポーネントを順番に呼び出す IngestionPipeline クラス。
+**注意 (トランザクション境界):** `EmbeddingProvider` によるベクトル化処理（重いネットワーク待機）は、必ず `StorageAdapter` の書き込みトランザクション (`save_memory` 等) を開始する**前**に完了させてください。トランザクション内で待機すると SQLite の `SQLITE_BUSY` (busy_timeout) を引き起こす原因となります。
 
 **Step 3: Commit**
 
@@ -1597,7 +1598,9 @@ class Server:
 
 各ツールハンドラの冒頭で `await self._ensure_initialized()` を呼び出す。
 
-**URL 取得の並行制限要件（必須）:**
+**URL 取得の並行制限要件とプロセススコープ（必須）:**
+
+> **開発者向け Docstring 要件**: URLフェッチ用の `asyncio.Semaphore` はインスタンスレベルの排他制御です。MCPサーバーが複数プロセスで起動された場合、この Semaphore はプロセス単位での制限となる旨を `server.py` のコードコメントに明記してください。
 
 `memory_save_url` は最大 30 秒の HTTP タイムアウトを持つため、
 同時多数の呼び出しで非同期ワーカーが枯渇するリスクがある。

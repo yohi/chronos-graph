@@ -890,7 +890,7 @@ OpenAIEmbeddingProvider のテスト（httpx モック）。
 **Step 2: 実装**
 
 - embed: 単一テキスト → ベクトル
-- embed_batch: バッチ処理。外部 API のトークン上限やペイロード上限を回避するため、内部でリストを固定サイズ（例: 100件ごと）のチャンクへ分割（ページネーション）して送信すること。さらに、外部 API レートリミット (TPM/RPM) 抵触を防ぐため、`tenacity` 等を用いた Exponential Backoff によるリトライ機構を組み合わせて実装すること。
+- embed_batch: バッチ処理。外部 API のトークン上限やペイロード上限を回避するため、内部でリストを固定サイズ（例: 100件ごと）のチャンクへ分割（ページネーション）して送信すること。この際、入力時のインデックスを追跡し、分割リトライ処理等が行われても **最終的な返り値の順序が入力 `texts` と完全に一致することを保証** すること。さらに、外部 API レートリミット (TPM/RPM) 抵触を防ぐため、特定の例外（HTTP 429, タイムアウト, 5xx等）に絞って `tenacity` 等を用いた Exponential Backoff によるリトライ機構を組み合わせて実装すること。
 - dimension プロパティ
 
 **Step 3: Commit**
@@ -930,8 +930,8 @@ git commit -m "feat: ローカルモデル Embedding Provider を実装"
 
 **Step 1: テスト + 実装**
 
-LiteLLM: litellm.aembedding() のラッパー。`embed_batch` には固定サイズのページネーション分割と、`tenacity` 等を用いた Exponential Backoff (リトライ機構) の両方を実装し、レートリミットとAPIペイロード上限に対処すること。
-Custom API: httpx で POST リクエスト。LiteLLMと同様に、`embed_batch` での固定サイズページネーションと `tenacity` 等を用いた Exponential Backoff (リトライ機構) を実装し、レートリミットおよびペイロード制限対策を行うこと。
+LiteLLM: litellm.aembedding() のラッパー。`embed_batch` には固定サイズのページネーション分割と、インデックスを追跡して元配列の順序を完全に保持する再構築ロジック、および `tenacity` 等を用いた特定例外の Exponential Backoff (リトライ機構) を実装し、レートリミットとAPIペイロード上限に対処すること。
+Custom API: httpx で POST リクエスト。LiteLLMと同様に、`embed_batch` での固定サイズページネーションとインデックス追跡による順序保証、特定例外に対する `tenacity` 等を用いた Exponential Backoff (リトライ機構) を実装し、レートリミットおよびペイロード制限対策を行うこと。
 
 **Step 2: Commit**
 
@@ -986,11 +986,12 @@ git commit -m "feat: Embedding Provider ファクトリを実装"
 
 SSRF の DNS リバインディング攻撃を防ぐため、以下のフローで HTTP リクエストを発行:
 
-1. URL のホスト名を DNS 解決し、IP アドレスを取得
+1. URL のホスト名を DNS 解決し、解決された IP アドレスを取得
 2. 取得した IP に対し、`ipaddress` モジュールを用いて厳密な検証（`is_private`, `is_loopback`, `is_link_local`, `is_multicast`, `is_unspecified`, および `0.0.0.0/8` 等）を行い、該当する場合は拒否する。
-3. 検証済み IP に直接接続（`Host` ヘッダーは元のホスト名を設定）
-4. コネクション確立後、`httpx` のストリーミングAPI (`stream`) を用いてレスポンスデータを少しずつ読み込み、データ量が 10MB を超過した時点で直ちに通信を中断する。
-5. リダイレクト発生時は遷移先 URL に対して手順 1-4 を再実行
+3. 検証済みの IP アドレスに対して直接接続する際、TLS ハンドシェイクにおいて `server_hostname` (SNI) に元のホスト名を設定し、かつ完全な証明書検証（ホスト名一致確認を含む）を強制する。証明書の不一致や検証失敗が発生した場合は接続を拒否する。
+4. 検証済みの IP と TLS 設定を使用して HTTP リクエストを発行（`Host` ヘッダーは元のホスト名を設定）
+5. コネクション確立後、まずレスポンスヘッダーの `Content-Type` が許可リストに含まれることを検証し、その後レスポンスボディを `httpx` のストリーミングAPI (`stream`) を用いて少しずつ読み込み、データ量が 10MB を超過した時点で直ちに通信を中断する。
+6. リダイレクト発生時は遷移先 URL に対して手順 1-5 を再実行
 
 `httpx` のカスタム Transport で DNS 解決と IP 検証を接続前に強制実行する。
 

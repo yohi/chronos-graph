@@ -1256,28 +1256,34 @@ git commit -m "feat: Graph Traversal を実装"
 
 **Step 2: 実装**
 
-SPEC.md §5.4 の数式をそのまま実装。RRF スコアは理論上の最大スコア（theoretical_max）を用いて正規化する。
+SPEC.md §5.4 の数式をそのまま実装。RRF スコアは理論上の最大スコア（weights_sumとkから算出）を用いて正規化する。
 
 ```python
 import math
 
-def normalize_rrf(scores: list[float], theoretical_max: float) -> list[float]:
-    if not scores or theoretical_max <= 0.0:
+def normalize_rrf(scores: list[float], weights_sum: float = 1.0, k: int = 60) -> list[float]:
+    if not scores:
+        return []
+        
+    max_possible_score = weights_sum * (1.0 / (k + 2))
+    if max_possible_score <= 0.0:
         return [0.0] * len(scores)
     
     normalized = []
     for s in scores:
-        val = s / theoretical_max
+        val = s / max_possible_score
         # [0.0, 1.0] にクランプ
         normalized.append(max(0.0, min(1.0, val)))
     return normalized
 
-# rank=0 (1位) で各検索ソースが最も高い貢献をした場合のスコアを算出
-# 例: theoretical_max = sum(weight * 1 / (K + 0 + 1) for _ in search_sources)
 rrf_scores_raw = [sum(weight * 1/(K + rank + 1) for ...) for memory in results]
-normalized_rrfs = normalize_rrf(rrf_scores_raw, theoretical_max)  # theoretical_max による正規化
-time_decay = 0.5 ** (days_since_access / half_life)
-final_score = 0.5 * normalized_rrfs + 0.3 * time_decay + 0.2 * importance_score
+normalized_rrfs = normalize_rrf(rrf_scores_raw, weights_sum=1.0, k=K)
+
+final_scores = []
+for i in range(len(results)):
+    time_decay = 0.5 ** (days_since_access_list[i] / half_life)
+    score_i = 0.5 * normalized_rrfs[i] + 0.3 * time_decay + 0.2 * importance_score_list[i]
+    final_scores.append(score_i)
 ```
 
 **Step 3: Commit**
@@ -1295,7 +1301,7 @@ Expected: PASS
 
 **追加検証観点（RRF エッジケース）:**
 
-- 入力が空配列、または `theoretical_max` が 0 以下の場合は `0.0` を返すこと
+- 入力が空配列の場合は空配列 `[]` を返す、または入力が非空で `theoretical_max`（または最大期待値）が 0 以下の場合は元の入力長と同じ長さの浮動小数点ゼロ配列（例: `[0.0, 0.0, ...]`）を返すこと
 - 全ての結果が `[0.0, 1.0]` の範囲にクランプされていること
 - 1 件のみ返る場合や同点のみの結果でも破綻しないこと
 - `final_score` の並び順が期待通りになること
@@ -1534,7 +1540,7 @@ git commit -m "feat: RL 拡張ポイント (Protocol + NoOp) を実装"
 - **ベクトル次元数フェイルファストチェック（SPEC.md §9.1）:**
   - 初期化時に `storage.get_vector_dimension()` と `embedding_provider.dimension` を比較
   - `stored_dim is not None and stored_dim != current_dim` の場合 `ConfigurationError` を発生
-  - 例外メッセージにて、具体的なリカバリ手順（`SQLITE_DB_PATH` の変更 または DBファイルの手動削除）を明示し、運用デッドロックを防ぐ
+  - 例外メッセージにて、具体的なリカバリ手順（`SQLITE_DB_PATH` の変更 または DB ファイルの手動削除）を明示し、運用デッドロックを防ぐ
   - `stored_dim is None` の場合は警告ログを出力し続行（初回起動時は次元不明）
 
 **Step 2: Commit**

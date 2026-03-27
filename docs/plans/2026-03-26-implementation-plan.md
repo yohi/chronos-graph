@@ -975,20 +975,21 @@ git commit -m "feat: Embedding Provider ファクトリを実装"
 SSRF の DNS リバインディング攻撃を防ぐため、以下のフローで HTTP リクエストを発行:
 
 1. URL のホスト名を DNS 解決し、IP アドレスを取得
-2. 取得した IP がプライベート IP 空間に該当しないことを検証
+2. 取得した IP に対し、`ipaddress` モジュールを用いて厳密な検証（`is_private`, `is_loopback`, `is_link_local`, `is_multicast`, `is_unspecified`, および `0.0.0.0/8` 等）を行い、該当する場合は拒否する。
 3. 検証済み IP に直接接続（`Host` ヘッダーは元のホスト名を設定）
 4. リダイレクト発生時は遷移先 URL に対して手順 1-3 を再実行
 
 `httpx` のカスタム Transport で DNS 解決と IP 検証を接続前に強制実行する。
 
-**URLAdapter の拒否系テスト（必須）:**
+**URLAdapter の拒否系ユニットテスト（必須）:**
 
 以下のセキュリティテストを `tests/unit/test_adapters.py` に含める:
 
 - private IP / loopback URL（`127.0.0.1`, `10.x.x.x`, `169.254.169.254`）を拒否すること
-- IPv6 private / loopback（`::1`, `fc00::/7`）を拒否すること
+- IPv6 private / loopback / link-local / multicast（`::1`, `fc00::/7`, `fe80::/10`, `ff00::/8`）を拒否すること
+- `0.0.0.0` などの特殊アドレスを拒否すること
 - ホスト名ではなく IP リテラル（例: `http://127.0.0.1/`）も拒否すること
-- DNS 応答が複数 IP を返す場合、1件でも private IP を含めば拒否すること
+- DNS 応答が複数 IP を返す場合、1件でも private/restricted IP を含めば拒否すること
 - リダイレクト 4 回目で失敗すること（`url_max_redirects=3`）
 - 10MB 超のレスポンスを拒否すること（`url_max_response_bytes`）
 - 許可されていない Content-Type を拒否すること（`url_allowed_content_types`）

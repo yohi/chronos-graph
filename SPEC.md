@@ -145,7 +145,8 @@ class SourceType(str, Enum):
 | | `DEPENDS_ON` | — | 依存関係 |
 | | `CONTRADICTS` | `detected_at: timestamp` | 矛盾する情報（将来の概念ドリフト検出） |
 | | `SUPERSEDES` | — | 新情報による旧情報の置換 |
-| | `CHUNK_NEXT` | — | 同一ドキュメント内のチャンクの連続性 |
+| | `CHUNK_NEXT` | — | 同一ドキュメント内のチャンクの連続性（前→後） |
+| | `CHUNK_PREV` | — | 同一ドキュメント内のチャンクの連続性（後→前） |
 
 ### 3.4 記憶の自動分類ルール
 
@@ -225,7 +226,7 @@ class SourceAdapter(Protocol):
 | `TEMPORAL_NEXT/PREV` | 同一セッション/プロジェクトの時系列順 | ✅ |
 | `SUPERSEDES` | Deduplicator が Append-only 置換を実行（新→旧） | ✅ |
 | `REFERENCES` | チャンク中の URL・ファイルパスの抽出 | ✅ |
-| `CHUNK_NEXT` | 同一ドキュメント（URLや長文入力）から分割された連続するチャンク群の順序リンク | ✅ |
+| `CHUNK_NEXT/PREV` | 同一ドキュメント（URLや長文入力）から分割された連続するチャンク群の順序リンク | ✅ |
 | `CAUSED_BY/RESULTED_IN` | 因果関係推定 | ❌（RL 拡張ポイント） |
 
 **検索範囲とエッジ作成の上限およびバルク処理:**

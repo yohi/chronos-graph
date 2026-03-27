@@ -289,21 +289,21 @@ final_score = 0.5 × rrf_score + 0.3 × time_decay + 0.2 × importance_score
 
 **RRF スコアの正規化（必須）:**
 
-RRF の生スコアは非常に小さな値（K=60, top_k=10 の場合、典型的に 0.001〜0.016）となり、
+RRF の生スコアは非常に小さな値（K=60, rank=1 の最大値でも約 0.016）となり、
 time_decay（≈0.0〜1.0）や importance_score（0.0〜1.0）とスケールが大きく異なる。
-正規化しないと RRF の寄与率が設計意図の 50% ではなく実質 2% 未満になるため、
-結果セット内の Min-Max 正規化を適用する:
+Min-Max正規化を適用すると、結果が1件のみの場合や関連度が低い場合でも一律でスコアが1.0にインフレしてしまう問題があるため、
+理論上の最大期待値（rank=1の時の値）を分母とした、静的なスケール引き伸ばしを適用する:
 
 ```python
-import math
-
-def normalize_rrf(scores: list[float]) -> list[float]:
+def normalize_rrf(scores: list[float], k: int = 60) -> list[float]:
     if not scores:
         return []
-    min_s, max_s = min(scores), max(scores)
-    if math.isclose(max_s, min_s, rel_tol=1e-9, abs_tol=1e-8):  # 結果が1件 or 全同スコア
-        return [1.0] * len(scores)
-    return [(s - min_s) / (max_s - min_s) for s in scores]
+    # RRFの理論上の最大期待値 (rank=1の場合)。
+    # 公式: 1 / (K + rank + 1) -> 1 / (60 + 1 + 1) = 1 / 62
+    max_possible_score = 1.0 / (k + 2)
+    
+    # スコアを最大期待値で割りスケールを合わせる（1.0を超える場合は1.0にクリップ）
+    return [min(1.0, s / max_possible_score) for s in scores]
 ```
 
 | パラメータ | デフォルト値 | 説明 |
@@ -816,8 +816,11 @@ stored_dim = await storage.get_vector_dimension()
 current_dim = embedding_provider.dimension
 if stored_dim is not None and stored_dim != current_dim:
     raise ConfigurationError(
-        f"ベクトル次元数の不一致: DB={stored_dim}, Provider={current_dim}. "
-        f"`context-store migrate-embeddings` を実行して既存ベクトルを再計算してください。"
+        f"ベクトル次元数の不一致: DB={stored_dim}, Provider={current_dim}.\\n"
+        f"現行バージョンでは自動マイグレーションはサポートされていません。\\n"
+        f"以下のいずれかの方法でデッドロック状態を回避してください:\\n"
+        f"1. 環境変数 STORAGE_DB_PATH (SQLite) や Postgres の DB 名を変更して別環境として開始する\\n"
+        f"2. CLIコマンド `context-store clear-db` で既存データを初期化する"
     )
 ```
 

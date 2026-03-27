@@ -97,6 +97,7 @@ class Memory:
     updated_at: datetime
     archived_at: datetime | None    # アーカイブ日時 (NoneならActive)
     tags: list[str]                 # プロジェクトタグ等
+    project: str | None = None      # プロジェクト識別子
 ```
 
 ### 2.2 グラフモデル（Neo4j）
@@ -202,12 +203,12 @@ class SourceAdapter(Protocol):
 
 ```python
 class Deduplicator:
-    SIMILARITY_THRESHOLD = 0.90   # コサイン類似度がこれ以上なら重複 → 上書き
+    SIMILARITY_THRESHOLD = 0.90   # コサイン類似度がこれ以上なら重複 → Append-only 置換
     CONSOLIDATION_THRESHOLD = 0.85  # 統合候補の閾値
 
     def check(self, new_memory: Memory) -> DeduplicationResult:
         # 1. 新チャンクのベクトルで既存Top5を検索
-        # 2. 同一プロジェクト & 類似度 >= 0.90 → 上書き更新
+        # 2. 同一プロジェクト & 類似度 >= 0.90 → Append-only 置換（旧記憶をArchive、新規 INSERT、SUPERSEDESエッジ作成）
         # 3. 同一プロジェクト & 0.85 <= 類似度 < 0.90 → 統合候補としてマーク
         # 4. それ以外 → 新規挿入
 ```
@@ -218,7 +219,7 @@ class Deduplicator:
 
 - **SEMANTICALLY_RELATED**: ベクトル類似度 >= 0.70 の既存ノードとリンク
 - **TEMPORAL_NEXT/PREV**: 同一セッション・プロジェクトの記憶を時系列順にリンク
-- **SUPERSEDES**: Deduplicatorが上書き更新を行った場合にリンク
+- **SUPERSEDES**: DeduplicatorがAppend-only 置換を行った場合にリンク
 - **REFERENCES**: チャンク中の明示的参照（URL・ファイルパス等）からリンク
 - **CAUSED_BY/RESULTED_IN**: 将来のRL拡張ポイント（初期実装ではスキップ）
 
@@ -342,15 +343,19 @@ class ResultFusion:
                    Purged     (物理削除)
 ```
 
-### 5.2 バックグラウンドジョブ
+### 5.2 イベント駆動型クリーンアップ
 
-| ジョブ | 実行頻度 | 処理内容 |
+| ジョブ | トリガー条件 | 処理内容 |
 |---|---|---|
-| Decay Scorer | 毎日 | 全Active記憶の複合スコアを再計算、閾値以下をマーク |
-| Auto Archiver | 毎日 | マークされた記憶をArchived状態に遷移 |
-| Consolidator | 週1回 | 統合候補の記憶群をマージ処理 |
-| Purger | 週1回 | Archived後N日経過した記憶を物理削除 |
-| Stats Collector | 毎日 | DB使用量・記憶数・平均スコアの統計記録 |
+| Decay Scorer | 初回起動時、または記憶保存時（条件付き） | 全Active記憶の複合スコアを再計算、閾値以下をマーク |
+| Auto Archiver | 同上 | マークされた記憶をArchived状態に遷移 |
+| Consolidator | 同上 | 統合候補の記憶群をマージ処理 |
+| Purger | 同上 | Archived後N日経過した記憶を物理削除 |
+| Stats Collector | 同上 | DB使用量・記憶数・平均スコアの統計記録 |
+
+※時間ベースではなく、`memory_save` 呼び出し回数（例: 50回）の超過や、前回実行から一定時間経過（例: 1日）などを条件に非同期にジョブがトリガーされる。
+
+Lifecycle Manager は、`memory_save` 累積回数が **50 回** に達した場合、または前回クリーンアップから **1 日** 以上経過した場合に起動する。これらの閾値は実装計画ではなく `SPEC.md` を正本とし、保存回数ベース・経過時間ベースの両トリガーを併用する。
 
 ### 5.3 Decay Scorer
 
@@ -379,10 +384,8 @@ lifecycle:
     archive_threshold: 0.05
   consolidation:
     similarity_threshold: 0.85
-    schedule: "weekly"
   purge:
     retention_days: 90
-    schedule: "weekly"
   # 将来の拡張: 概念ドリフト検出
   # concept_drift:
   #   enabled: false
@@ -494,6 +497,7 @@ class StorageAdapter(Protocol):
     async def vector_search(self, embedding: list[float], top_k: int) -> list[ScoredMemory]: ...
     async def keyword_search(self, query: str, top_k: int) -> list[ScoredMemory]: ...
     async def list_by_filter(self, filters: MemoryFilters) -> list[Memory]: ...
+    async def get_vector_dimension(self) -> int | None: ...
     async def dispose(self) -> None: ...
 
 class GraphAdapter(Protocol):
@@ -507,8 +511,33 @@ class CacheAdapter(Protocol):
     async def get(self, key: str) -> Any | None: ...
     async def set(self, key: str, value: Any, ttl: int) -> None: ...
     async def invalidate(self, key: str) -> None: ...
+    async def invalidate_prefix(self, prefix: str) -> None: ...
     async def dispose(self) -> None: ...
 ```
+
+#### invalidate_prefix 実装注記
+
+- Redis: `KEYS` コマンドは使用禁止。`SCAN` + batched `DELETE` でブロッキング回避（SPEC.md §8.3 参照）
+- InMemory: プレフィックス一致での安全なループ削除（`asyncio.Lock` で排他制御）
+- 原子性: 個別キー削除はベストエフォート。全削除完了までに一貫性違反が発生する可能性あり
+- 計算量: O(n)（n = プレフィックス一致キー数）
+
+#### get_vector_dimension() のバックエンド別実装方針
+
+**PostgreSQL:**
+- `pg_typeof(embedding)` で列型を確認し、`array_length(embedding, 1)` で次元数を取得
+- 例: `SELECT array_length(embedding, 1) FROM memories LIMIT 1`
+- 列が存在しない、または NULL のみの場合は `None` を返す
+
+**SQLite:**
+- 専用メタデータテーブル `vectors_metadata` を参照
+- 例: `SELECT dimension FROM vectors_metadata WHERE table_name = 'memories'`
+- メタテーブル未存在・不整合の場合は `None` を返す（初期化時に警告ログ）
+
+**Orchestrator フェイルファスト:**
+- 初期化時に `storage.get_vector_dimension()` と `embedding_provider.dimension` を比較
+- `stored_dim is not None and stored_dim != current_dim` の場合 `ConfigurationError` を発生
+- 詳細は SPEC.md §9.1 参照
 
 初期実装: PostgresStorageAdapter, Neo4jGraphAdapter, RedisCacheAdapter
 
@@ -580,7 +609,7 @@ class Orchestrator:
 | Neo4jドライバ | neo4j-python-driver (async) | 公式非同期ドライバ |
 | 日本語FTS | pg_bigm or pgroonga | PostgreSQLの日本語全文検索拡張 |
 | 埋め込み(ローカル) | sentence-transformers | Ruri v3-310m等のローカルモデル |
-| スケジューラ | APScheduler | バックグラウンドジョブ (Lifecycle) |
+| ストレージ（ライトウェイト） | aiosqlite + sqlite-vec + FTS5 | ゼロコンフィグモード（デフォルト） |
 | 設定管理 | pydantic-settings | 型安全な設定 + .env サポート |
 | テスト | pytest + pytest-asyncio | 非同期テスト対応 |
 | コンテナ | Docker Compose | PostgreSQL / Neo4j / Redis の一括管理 |
@@ -628,9 +657,13 @@ context-store-mcp/
 │       │   ├── consolidator.py
 │       │   └── purger.py
 │       │
-│       ├── storage/               # Storage Layer
+│       ├── storage/               # Storage Layer (SQLite default)
 │       │   ├── __init__.py
 │       │   ├── protocols.py
+│       │   ├── factory.py
+│       │   ├── inmemory.py
+│       │   ├── sqlite.py
+│       │   ├── sqlite_graph.py
 │       │   ├── postgres.py
 │       │   ├── neo4j.py
 │       │   └── redis.py

@@ -282,7 +282,7 @@ class SearchStrategy:
 
 ```text
 rrf_score_raw = Σ (weight × 1/(K + rank + 1))    # K = 60
-rrf_score = min_max_normalize(rrf_score_raw)       # 結果セット内で 0.0〜1.0 に正規化
+rrf_score = normalize_rrf(rrf_score_raw, weights_sum)  # 理論上の最大期待値に基づく正規化
 time_decay = 0.5 ^ (days_since_access / 30)        # 半減期 30 日
 final_score = 0.5 × rrf_score + 0.3 × time_decay + 0.2 × importance_score
 ```
@@ -295,12 +295,13 @@ Min-Max正規化を適用すると、結果が1件のみの場合や関連度が
 理論上の最大期待値（rank=1の時の値）を分母とした、静的なスケール引き伸ばしを適用する:
 
 ```python
-def normalize_rrf(scores: list[float], k: int = 60) -> list[float]:
+def normalize_rrf(scores: list[float], weights_sum: float = 1.0, k: int = 60) -> list[float]:
     if not scores:
         return []
-    # RRFの理論上の最大期待値 (rank=1の場合)。
+    # RRFの理論上の最大期待値 (全指標においてrank=1が並んだ場合)。
     # 公式: 1 / (K + rank + 1) -> 1 / (60 + 1 + 1) = 1 / 62
-    max_possible_score = 1.0 / (k + 2)
+    # 最大期待値 = sum(weights) * (1.0 / (K + 2))
+    max_possible_score = weights_sum * (1.0 / (k + 2))
     
     # スコアを最大期待値で割りスケールを合わせる（1.0を超える場合は1.0にクリップ）
     return [min(1.0, s / max_possible_score) for s in scores]
@@ -819,8 +820,8 @@ if stored_dim is not None and stored_dim != current_dim:
         f"ベクトル次元数の不一致: DB={stored_dim}, Provider={current_dim}.\\n"
         f"現行バージョンでは自動マイグレーションはサポートされていません。\\n"
         f"以下のいずれかの方法でデッドロック状態を回避してください:\\n"
-        f"1. 環境変数 STORAGE_DB_PATH (SQLite) や Postgres の DB 名を変更して別環境として開始する\\n"
-        f"2. CLIコマンド `context-store clear-db` で既存データを初期化する"
+        f"1. 環境変数 SQLITE_DB_PATH や Postgres の DB 名を変更して別環境として開始する\\n"
+        f"2. SQLite の場合はファイル (~/.context-store/memories.db) を手動で物理削除し、既存データを初期化する"
     )
 ```
 

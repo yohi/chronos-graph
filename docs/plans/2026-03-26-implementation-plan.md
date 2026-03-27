@@ -219,6 +219,7 @@ def test_default_settings():
     assert settings.archive_threshold == 0.05
     assert settings.similarity_threshold == 0.70
     assert settings.dedup_threshold == 0.90
+    assert settings.graph_fanout_limit == 50
 
 def test_embedding_provider_validation():
     settings = Settings(
@@ -300,6 +301,7 @@ class Settings(BaseSettings):
     default_top_k: int = 10
     similarity_threshold: float = 0.70
     dedup_threshold: float = 0.90
+    graph_fanout_limit: int = 50
 
     # --- URL Fetch (SSRF 対策) ---
     url_fetch_concurrency: int = 3
@@ -357,6 +359,7 @@ PURGE_RETENTION_DAYS=90
 DEFAULT_TOP_K=10
 SIMILARITY_THRESHOLD=0.70
 DEDUP_THRESHOLD=0.90
+GRAPH_FANOUT_LIMIT=50
 
 # === URL Fetch (SSRF 対策) ===
 URL_FETCH_CONCURRENCY=3
@@ -1223,7 +1226,7 @@ git commit -m "feat: Keyword Search を実装"
 
 - Vector Search で取得した上位ノードを起点として Graph Adapter で traverse
 - SearchStrategy に基づくエッジタイプフィルタ
-- **スーパーノード対策**: 各ノードからのエッジ展開（fan-out）時に取得上限（例: 50件）を設け、グラフ検索時のクエリ爆発を防ぐ
+- **スーパーノード対策**: 各ノードからのエッジ展開（fan-out）時に取得上限（`Settings.graph_fanout_limit` から取得し適用）を設け、グラフ検索時のクエリ爆発を防ぐ
 - Neo4j 接続失敗時は空結果を返す（Graceful Degradation）
 
 **Step 2: Commit**
@@ -1522,7 +1525,7 @@ git commit -m "feat: RL 拡張ポイント (Protocol + NoOp) を実装"
 - **ベクトル次元数フェイルファストチェック（SPEC.md §9.1）:**
   - 初期化時に `storage.get_vector_dimension()` と `embedding_provider.dimension` を比較
   - `stored_dim is not None and stored_dim != current_dim` の場合 `ConfigurationError` を発生
-  - 例外メッセージにて、具体的なリカバリ手順（`STORAGE_DB_PATH` の変更 または CLIコマンド確認）を明示し、ユーザーの運用デッドロックを防ぐ
+  - 例外メッセージにて、具体的なリカバリ手順（`SQLITE_DB_PATH` の変更 または DBファイルの手動削除）を明示し、運用デッドロックを防ぐ
   - `stored_dim is None` の場合は警告ログを出力し続行（初回起動時は次元不明）
 
 **Step 2: Commit**

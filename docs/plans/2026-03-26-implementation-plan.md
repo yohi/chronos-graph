@@ -42,6 +42,7 @@ dependencies = [
     "aiosqlite>=0.20.0",
     "sqlite-vec>=0.1.0",
     "tenacity>=8.0.0",
+    "tiktoken>=0.6.0",
 ]
 
 [project.optional-dependencies]
@@ -221,6 +222,7 @@ def test_default_settings():
     assert settings.similarity_threshold == 0.70
     assert settings.dedup_threshold == 0.90
     assert settings.graph_fanout_limit == 50
+    assert settings.max_supersedes_hops == 50
 
 def test_embedding_provider_validation():
     settings = Settings(
@@ -303,6 +305,7 @@ class Settings(BaseSettings):
     similarity_threshold: float = 0.70
     dedup_threshold: float = 0.90
     graph_fanout_limit: int = 50
+    max_supersedes_hops: int = 50
 
     # --- URL Fetch (SSRF 対策) ---
     url_fetch_concurrency: int = 3
@@ -361,6 +364,7 @@ DEFAULT_TOP_K=10
 SIMILARITY_THRESHOLD=0.70
 DEDUP_THRESHOLD=0.90
 GRAPH_FANOUT_LIMIT=50
+MAX_SUPERSEDES_HOPS=50
 
 # === URL Fetch (SSRF 対策) ===
 URL_FETCH_CONCURRENCY=3
@@ -374,6 +378,10 @@ URL_TIMEOUT_SECONDS=30
 
 Run: `pytest tests/unit/test_config.py -v`
 Expected: PASS
+
+*Deployment & Testing Validation*:
+テスト実行時および本番デプロイ時において、環境変数で指定（または省略）された `MAX_SUPERSEDES_HOPS` 等の各設定値が期待通りにロードされ、トラバーサル制限として機能するかどうかを検証すること。
+具体的には、Task 5.4 の自動テスト（`tests/unit/test_graph_traversal.py`）を拡張し、`MAX_SUPERSEDES_HOPS` に小さい値をオーバーライド設定してトラバーサルアルゴリズムを実行する。指定されたホップ上限内で到達するケース（success case）と、上限を超過するためトラバーサルが設定レイヤで正確に停止するケース（failure/halt case）の両方のアサーションを実装し、必ずCIのパス要件として自動実行させること。
 
 **Step 6: Commit**
 
@@ -832,6 +840,7 @@ git commit -m "feat: SQLite Storage Adapter (ライトウェイト版) を実装
 - SPEC.md §8.4 の `memory_edges` スキーマと再帰的 CTE クエリをそのまま実装
 - `SQLiteStorageAdapter` と同一の DB ファイルを共有（接続の受け渡し）
 - PRAGMA は `SQLiteStorageAdapter` 側で既に適用済みを前提
+- **トラバーサル上限設定**: `SUPERSEDES` チェーンループ回避用の物理ホップ上限値（CTE 内の `physical_depth >= max_supersedes_hops` 制約）はハードコードを避け、`config.py` の `Settings.max_supersedes_hops` を参照するかコンストラクタで受け取る設計とし、テストやランタイムでのチューニングを容易にすること。
 
 **Step 3: テスト確認 & Commit**
 
@@ -859,7 +868,7 @@ git commit -m "feat: SQLite Graph Adapter (再帰的 CTE) を実装"
 
 **Step 2: 実装**
 
-- InMemoryCacheAdapter: `dict` + `asyncio.Lock` + TTL 管理
+- InMemoryCacheAdapter: `dict` + `asyncio.Lock` + TTL 管理。`invalidate_prefix` メソッドでのループ内におけるO(N)ブロッキングとロック競合を防ぐため、以下のいずれかのアプローチを必須として実装すること: (a) スリープ前のロック一時解放・再取得（`batch_size` 毎にロックを解放し、`await asyncio.sleep(0.001)` を実行してから再取得する）、または (b) 全キーのリストを短いロック期間でスナップショットとして抽出し、ロック解放後にバッチ削除を実行する。
 - StorageFactory: Settings に基づいて適切なアダプターを返すファクトリ関数
   `create_storage(settings) -> tuple[StorageAdapter, GraphAdapter, CacheAdapter]`
   ※ `sqlite` モードでは GraphAdapter = SQLiteGraphAdapter（None ではない）
@@ -874,7 +883,7 @@ git commit -m "feat: InMemory Cache Adapter + Storage Factory を実装"
 
 ## Phase 3: Embedding Provider
 
-### Task 3.1: Embedding Protocol + OpenAI Provider
+### Task 3.1: Protocol 定義 (Embedding / TokenCounter) + OpenAI Provider
 
 **Files:**
 - Create: `src/context_store/embedding/__init__.py`
@@ -884,8 +893,9 @@ git commit -m "feat: InMemory Cache Adapter + Storage Factory を実装"
 
 **Step 1: Protocol 定義 + テスト**
 
-SPEC.md §9 の EmbeddingProvider Protocol を定義。
-OpenAIEmbeddingProvider のテスト（httpx モック）。
+- SPEC.md §9 の EmbeddingProvider Protocol を `src/context_store/embedding/protocols.py` に定義。
+- **TokenCounter Protocol の定義**: 同様に `protocols.py` にて `class TokenCounter(Protocol): def count_tokens(self, text: str) -> int: ...` などの型定義・インターフェースを定義。将来的に Post Processor のフォールバック等から利用可能にする。
+- OpenAIEmbeddingProvider のテスト（httpx モック）。
 
 **Step 2: 実装**
 
@@ -1063,11 +1073,13 @@ git commit -m "feat: Chunker (Q&A分割/セクション分割) を実装"
 - 「DBのマイグレーションを実行した」→ EPISODIC
 - 「JWTとはJSON Web Tokenの略で...」→ SEMANTIC
 - 「デプロイ手順: 1. docker compose up 2. ...」→ PROCEDURAL
+- 未分類入力（例: 「なるほど」「そうなんだ」等の分類ルールに合致しない曖昧な発話）→ EPISODIC に正しくフォールバックされること
 
 **Step 2: 実装**
 
-ルールベース分類: キーワードマッチ + 構文パターン。
-LLM は使用しない。
+- ルールベース分類: キーワードマッチ + 構文パターン（LLM は使用しない）。
+- 上記のいずれのパターンにも合致しない曖昧な入力に対するフォールバック（デフォルト）の MemoryType を `EPISODIC` とするロジックを実装。
+- QA / テレメトリ要件 (SPEC超過の拡張機能—オプション実装): SPEC.md §3.4 または 160行目の「EPISODIC へのフォールバック」仕様に対する監視として、未分類入力があった場合ルールの改善に繋げるための警告・専用ログを出力するテレメトリフックをオプションで実装する。
 
 **Step 3: Commit**
 
@@ -1241,6 +1253,7 @@ git commit -m "feat: Keyword Search を実装"
 - Vector Search で取得した上位ノードを起点として Graph Adapter で traverse
 - SearchStrategy に基づくエッジタイプフィルタ
 - **スーパーノード対策**: 各ノードからのエッジ展開（fan-out）時に取得上限（`Settings.graph_fanout_limit` から取得し適用）を設け、グラフ検索時のクエリ爆発を防ぐ
+- **SUPERSEDES チェーン透過的解決**: `SUPERSEDES` エッジを辿るトラバーサルは論理深さカウントを消費しない実装とし、長大チェーンでも最新の Active ノードに到達可能にする。具体的には再帰的CTEにおいて論理深さ（`logical_depth`）と物理深さ（`physical_depth`）を分離し、`physical_depth` は常に +1、`logical_depth` は `CASE WHEN edge_type = 'SUPERSEDES' THEN logical_depth ELSE logical_depth + 1 END` で分岐更新する。探索停止条件に `visited_supersedes_ids` でのサイクル検出に加え、「物理的な最大ホップ数（`config.py` の `Settings.max_supersedes_hops` [デフォ: 50] または環境変数経由のオーバーライド値）」を超過時というハードリミットを組み込み、停止時はエラーを投げずその到達時点の最新ノードを静かに返すフェイルセーフ挙動を仕様とする。この定数をGraph Adapterに注入（plumbing）することでテストやランタイムチューニングを容易にする。
 - Neo4j 接続失敗時は空結果を返す（Graceful Degradation）
 
 **Step 2: Commit**
@@ -1327,7 +1340,11 @@ Expected: PASS
 **Step 1: テスト + 実装**
 
 - プロジェクトフィルタ
-- 最大トークン制限
+- 最大トークン制限（`tiktoken` 等を用いた正確なトークン計算を実装）
+  - **エンコーディング選択**: まず `tiktoken` の `encoding_for_model(model)` を第一候補としてトークンエンコーダの取得を試みる。
+  - **プロバイダー依存フォールバック**: `encoding_for_model` が例外エラーや未対応を返す場合（ローカルモデルや一部の LiteLLM モデル等を利用している時）、`src/context_store/embedding/protocols.py` で定義した（Task 3.1） `TokenCounter` Protocol を経由してフォールバックする。
+  - **近似による過大推定でのガード**: デフォルトエンコーディング（未指定時の `cl100k_base` 等）でのカウントも利用不可能な場合の最終手段として文字数近似を使用する。この際は、**必ず安全側（過大推定）**となる式（例: `ceil(len(text) * safety_margin)` 、safety_margin は 0.5~0.6 等）を採用し、`max_tokens` 超過を防ぐためのガードとする。
+  - **エラーハンドリングとロギング**: フォールバックが発生した場合は、その決定と使用するフォールバックポリシー（利用したデフォルトエンコーディング名や文字数近似でのマージン値など）をシステムログに明示的に記録する。
 - access_count / last_accessed_at の更新
 
 **Step 2: Commit**

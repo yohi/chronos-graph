@@ -321,6 +321,8 @@ class ResultFusion:
 
 - プロジェクトフィルタ（オプション）
 - 最大トークン制限（エージェントのコンテキスト消費を抑制）
+  - `tiktoken`の`encoding_for_model(model)`を第一候補の推奨手順として使用する。
+  - 非互換プロバイダー利用時など、`encoding_for_model`が例外・非対応となる場合は、TokenCounter等の抽象化インターフェースを介して文字数ベースの近似推算やデフォルトエンコーディングへと切り替え、その決定をシステムログに残すフォールバックポリシーを採用する。
 - アクセス記録更新（last_accessed_at, access_count）
 
 ---

@@ -860,7 +860,7 @@ git commit -m "feat: SQLite Graph Adapter (再帰的 CTE) を実装"
 
 **Step 2: 実装**
 
-- InMemoryCacheAdapter: `dict` + `asyncio.Lock` + TTL 管理（`invalidate_prefix` でのループ内にはO(N)ブロッキング防止のため必要に応じ `await asyncio.sleep(0.001)` を挿入する。この際バッチサイズは可変パラメータ（例: `batch_size=100`）として設定可能にし、スリープ直前に一時的にロックを解放・再取得するなど、ロックの競合長期化を防ぐ設計とすること）
+- InMemoryCacheAdapter: `dict` + `asyncio.Lock` + TTL 管理。`invalidate_prefix` メソッドでのループ内におけるO(N)ブロッキングとロック競合を防ぐため、以下のいずれかのアプローチを必須として実装すること: (a) スリープ前のロック一時解放・再取得（`batch_size` 毎にロックを解放し、`await asyncio.sleep(0.001)` を実行してから再取得する）、または (b) 全キーのリストを短いロック期間でスナップショットとして抽出し、ロック解放後にバッチ削除を実行する。
 - StorageFactory: Settings に基づいて適切なアダプターを返すファクトリ関数
   `create_storage(settings) -> tuple[StorageAdapter, GraphAdapter, CacheAdapter]`
   ※ `sqlite` モードでは GraphAdapter = SQLiteGraphAdapter（None ではない）
@@ -1070,7 +1070,7 @@ git commit -m "feat: Chunker (Q&A分割/セクション分割) を実装"
 
 - ルールベース分類: キーワードマッチ + 構文パターン（LLM は使用しない）。
 - 上記のいずれのパターンにも合致しない曖昧な入力に対するフォールバック（デフォルト）の MemoryType を `EPISODIC` とするロジックを実装。
-- QA / テレメトリ要件: フォールバックに該当した入力（未分類入力）があった場合、ルールの改善に繋げるために警告または専用ログとして出力するテレメトリフック（監視用ログ記録）機構を実装する。
+- QA / テレメトリ要件 (SPEC超過の拡張機能—オプション実装): SPEC.md §3.4 または 160行目の「EPISODIC へのフォールバック」仕様に対する監視として、未分類入力があった場合ルールの改善に繋げるための警告・専用ログを出力するテレメトリフックをオプションで実装する。
 
 **Step 3: Commit**
 
@@ -1244,7 +1244,7 @@ git commit -m "feat: Keyword Search を実装"
 - Vector Search で取得した上位ノードを起点として Graph Adapter で traverse
 - SearchStrategy に基づくエッジタイプフィルタ
 - **スーパーノード対策**: 各ノードからのエッジ展開（fan-out）時に取得上限（`Settings.graph_fanout_limit` から取得し適用）を設け、グラフ検索時のクエリ爆発を防ぐ
-- **SUPERSEDES チェーン透過的解決**: `SUPERSEDES` エッジを辿るトラバーサルは論理的な深さカウントを消費しないよう実装し、度重なる更新でチェーンが長大化した場合でも確実に最新の Active ノードに到達できるようにする。具体的には再帰的CTEにおいて論理深さ（`logical_depth`）と物理深さ（`physical_depth`）を分離し、`physical_depth` は常に +1、`logical_depth` は `CASE WHEN edge_type = 'SUPERSEDES' THEN logical_depth ELSE logical_depth + 1 END` と更新し、ハードリミットや無限ループ回避のための探索停止条件（訪問済みノード `visited_supersedes_ids` の保持など）を適用してサイクルによる無限ループを安全に脱出するよう実装する。
+- **SUPERSEDES チェーン透過的解決**: `SUPERSEDES` エッジを辿るトラバーサルは論理深さカウントを消費しない実装とし、長大チェーンでも最新の Active ノードに到達可能にする。具体的には再帰的CTEにおいて論理深さ（`logical_depth`）と物理深さ（`physical_depth`）を分離し、`physical_depth` は常に +1、`logical_depth` は `CASE WHEN edge_type = 'SUPERSEDES' THEN logical_depth ELSE logical_depth + 1 END` で分岐更新する。探索停止条件に `visited_supersedes_ids` でのサイクル検出に加え、「物理的な最大ホップ数（例: `MAX_SUPERSEDES_HOPS = 50`）を超過時 (`physical_depth >= MAX_SUPERSEDES_HOPS`)」を組み込み、停止時はエラーを投げずその到達時点の最新ノードを結果として静かに返すフェイルセーフな挙動を仕様とする。
 - Neo4j 接続失敗時は空結果を返す（Graceful Degradation）
 
 **Step 2: Commit**

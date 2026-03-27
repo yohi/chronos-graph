@@ -304,6 +304,7 @@ class Settings(BaseSettings):
     similarity_threshold: float = 0.70
     dedup_threshold: float = 0.90
     graph_fanout_limit: int = 50
+    max_supersedes_hops: int = 50
 
     # --- URL Fetch (SSRF 対策) ---
     url_fetch_concurrency: int = 3
@@ -833,6 +834,7 @@ git commit -m "feat: SQLite Storage Adapter (ライトウェイト版) を実装
 - SPEC.md §8.4 の `memory_edges` スキーマと再帰的 CTE クエリをそのまま実装
 - `SQLiteStorageAdapter` と同一の DB ファイルを共有（接続の受け渡し）
 - PRAGMA は `SQLiteStorageAdapter` 側で既に適用済みを前提
+- **トラバーサル上限設定**: `SUPERSEDES` チェーンループ回避用の物理ホップ上限値（CTE 内の `physical_depth >= max_supersedes_hops` 制約）はハードコードを避け、`config.py` の `Settings.max_supersedes_hops` を参照するかコンストラクタで受け取る設計とし、テストやランタイムでのチューニングを容易にすること。
 
 **Step 3: テスト確認 & Commit**
 
@@ -1244,7 +1246,7 @@ git commit -m "feat: Keyword Search を実装"
 - Vector Search で取得した上位ノードを起点として Graph Adapter で traverse
 - SearchStrategy に基づくエッジタイプフィルタ
 - **スーパーノード対策**: 各ノードからのエッジ展開（fan-out）時に取得上限（`Settings.graph_fanout_limit` から取得し適用）を設け、グラフ検索時のクエリ爆発を防ぐ
-- **SUPERSEDES チェーン透過的解決**: `SUPERSEDES` エッジを辿るトラバーサルは論理深さカウントを消費しない実装とし、長大チェーンでも最新の Active ノードに到達可能にする。具体的には再帰的CTEにおいて論理深さ（`logical_depth`）と物理深さ（`physical_depth`）を分離し、`physical_depth` は常に +1、`logical_depth` は `CASE WHEN edge_type = 'SUPERSEDES' THEN logical_depth ELSE logical_depth + 1 END` で分岐更新する。探索停止条件に `visited_supersedes_ids` でのサイクル検出に加え、「物理的な最大ホップ数（例: `MAX_SUPERSEDES_HOPS = 50`）を超過時 (`physical_depth >= MAX_SUPERSEDES_HOPS`)」を組み込み、停止時はエラーを投げずその到達時点の最新ノードを結果として静かに返すフェイルセーフな挙動を仕様とする。
+- **SUPERSEDES チェーン透過的解決**: `SUPERSEDES` エッジを辿るトラバーサルは論理深さカウントを消費しない実装とし、長大チェーンでも最新の Active ノードに到達可能にする。具体的には再帰的CTEにおいて論理深さ（`logical_depth`）と物理深さ（`physical_depth`）を分離し、`physical_depth` は常に +1、`logical_depth` は `CASE WHEN edge_type = 'SUPERSEDES' THEN logical_depth ELSE logical_depth + 1 END` で分岐更新する。探索停止条件に `visited_supersedes_ids` でのサイクル検出に加え、「物理的な最大ホップ数（`config.py` の `Settings.max_supersedes_hops` [デフォ: 50] または環境変数経由のオーバーライド値）」を超過時というハードリミットを組み込み、停止時はエラーを投げずその到達時点の最新ノードを静かに返すフェイルセーフ挙動を仕様とする。この定数をGraph Adapterに注入（plumbing）することでテストやランタイムチューニングを容易にする。
 - Neo4j 接続失敗時は空結果を返す（Graceful Degradation）
 
 **Step 2: Commit**

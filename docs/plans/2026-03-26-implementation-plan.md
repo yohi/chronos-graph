@@ -41,6 +41,7 @@ dependencies = [
     "httpx>=0.27.0",
     "aiosqlite>=0.20.0",
     "sqlite-vec>=0.1.0",
+    "tenacity>=8.0.0",
 ]
 
 [project.optional-dependencies]
@@ -55,11 +56,9 @@ embedding-local = [
 ]
 embedding-openai = [
     "openai>=1.0.0",
-    "tenacity>=8.0.0",
 ]
 embedding-litellm = [
     "litellm>=1.0.0",
-    "tenacity>=8.0.0",
 ]
 dev = [
     "pytest>=8.0.0",
@@ -930,7 +929,7 @@ git commit -m "feat: ローカルモデル Embedding Provider を実装"
 **Step 1: テスト + 実装**
 
 LiteLLM: litellm.aembedding() のラッパー。`embed_batch` には `tenacity` 等を用いた Exponential Backoff (リトライ機構) を実装すること。
-Custom API: httpx で POST リクエスト
+Custom API: httpx で POST リクエスト。LiteLLMと同様に、`tenacity` 等を用いた Exponential Backoff (リトライ機構) を実装し、レートリミット対策を行うこと。
 
 **Step 2: Commit**
 

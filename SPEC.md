@@ -817,7 +817,7 @@ class EmbeddingProvider(Protocol):
 
 **レートリミット対策:**
 `memory_save_url` 等で巨大なMarkdown文書を取り込み、多数のチャンクに分割して `embed_batch` に渡した場合、OpenAI等の外部APIのレートリミット（TPM/RPM）に抵触する可能性があります。
-`EmbeddingProvider` の実装（特に `openai.py` と `litellm.py`）においては、`tenacity` ライブラリ等を用いて Exponential Backoff にジッター (Jitter) を加えたリトライ機構を実装することが必須です。具体的な制約として、最大試行回数（`stop_after_attempt` 等）または最大経過時間（`stop_after_delay` 等）を明示し、リトライ対象とする例外（HTTP 429 Rate Limit、ネットワークタイムアウト、5xx系のサーバーサイドエラー等）を厳密に列挙指定してください。
+`EmbeddingProvider` の実装（特に外部通信を伴う `openai.py`、`litellm.py`、`custom_api.py`）においては、`tenacity` ライブラリ等を用いて Exponential Backoff にジッター (Jitter) を加えたリトライ機構を実装することが必須です。具体的な制約として、最大試行回数（`stop_after_attempt` 等）または最大経過時間（`stop_after_delay` 等）を明示し、リトライ対象とする例外（HTTP 429 Rate Limit、ネットワークタイムアウト、5xx系のサーバーサイドエラー等）を厳密に列挙指定してください。
 
 #### ベクトル次元数の整合性チェック（フェイルファスト）
 

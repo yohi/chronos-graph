@@ -788,8 +788,12 @@ git commit -m "feat: Redis Cache Adapter を実装"
 **Step 2: 実装**
 
 - `aiosqlite` で非同期接続管理
-  - **スレッドプール枯渇・コンテンション対策**: `aiosqlite` 生成時にバックグラウンドのスレッドプール数を適切に明示（例: 5~10）し、コネクションプールの上限を設ける
-- 接続確立直後に PRAGMA を強制実行（`journal_mode=WAL`, `busy_timeout=5000`, `foreign_keys=ON`, `synchronous=NORMAL`）
+  - **注意**: `aiosqlite` ではワーカースレッド数の明示は不可。
+  - **スレッドプール枯渇・コンテンション対策**として、以下の代替実装を行う:
+    - **並行接続数の上限設定**（`asyncio.Semaphore` 等で接続数を制限）
+    - **コネクションプール設計**（再利用するコネクション管理）
+    - **非同期タスクキューの制御**（タスク発行を制限して同時実行数を抑える）
+- 接続確立後 (`pool/get_connection` ルーチン内など) 直ちに PRAGMA を強制実行し、`journal_mode=WAL`, `busy_timeout=5000`, `foreign_keys=ON`, `synchronous=NORMAL` を適用する
 - `sqlite-vec` 拡張のロードとベクトルインデックス作成
 - `FTS5` テーブルの作成（`content` カラムの全文検索用）
 - メタデータテーブル `vectors_metadata` を作成し、次元数を保存
@@ -1252,23 +1256,28 @@ git commit -m "feat: Graph Traversal を実装"
 
 **Step 2: 実装**
 
-SPEC.md §5.4 の数式をそのまま実装。RRF スコアは Min-Max 正規化必須。
+SPEC.md §5.4 の数式をそのまま実装。RRF スコアは理論上の最大スコア（theoretical_max）を用いて正規化する。
 
 ```python
 import math
 
-def normalize_rrf(scores: list[float]) -> list[float]:
-    if not scores:
-        return []
-    min_s, max_s = min(scores), max(scores)
-    if math.isclose(max_s, min_s, rel_tol=1e-9, abs_tol=1e-8):
-        return [1.0] * len(scores)
-    return [(s - min_s) / (max_s - min_s) for s in scores]
+def normalize_rrf(scores: list[float], theoretical_max: float) -> list[float]:
+    if not scores or theoretical_max <= 0.0:
+        return [0.0] * len(scores)
+    
+    normalized = []
+    for s in scores:
+        val = s / theoretical_max
+        # [0.0, 1.0] にクランプ
+        normalized.append(max(0.0, min(1.0, val)))
+    return normalized
 
+# rank=0 (1位) で各検索ソースが最も高い貢献をした場合のスコアを算出
+# 例: theoretical_max = sum(weight * 1 / (K + 0 + 1) for _ in search_sources)
 rrf_scores_raw = [sum(weight * 1/(K + rank + 1) for ...) for memory in results]
-normalized_rrfs = normalize_rrf(rrf_scores_raw)  # SPEC.md §5.4 準拠の Min-Max 正規化
+normalized_rrfs = normalize_rrf(rrf_scores_raw, theoretical_max)  # theoretical_max による正規化
 time_decay = 0.5 ** (days_since_access / half_life)
-final_score = 0.5 * normalized_rrf + 0.3 * time_decay + 0.2 * importance_score
+final_score = 0.5 * normalized_rrfs + 0.3 * time_decay + 0.2 * importance_score
 ```
 
 **Step 3: Commit**
@@ -1286,9 +1295,9 @@ Expected: PASS
 
 **追加検証観点（RRF エッジケース）:**
 
-- 入力が空配列の場合に `normalize_rrf()` が空配列を返すこと
-- 1 件のみ返る場合に `normalize_rrf()` が `1.0` を返すこと
-- 同点のみの結果でも破綻しないこと
+- 入力が空配列、または `theoretical_max` が 0 以下の場合は `0.0` を返すこと
+- 全ての結果が `[0.0, 1.0]` の範囲にクランプされていること
+- 1 件のみ返る場合や同点のみの結果でも破綻しないこと
 - `final_score` の並び順が期待通りになること
 
 ---

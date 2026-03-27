@@ -222,6 +222,7 @@ def test_default_settings():
     assert settings.similarity_threshold == 0.70
     assert settings.dedup_threshold == 0.90
     assert settings.graph_fanout_limit == 50
+    assert settings.max_supersedes_hops == 50
 
 def test_embedding_provider_validation():
     settings = Settings(
@@ -363,6 +364,7 @@ DEFAULT_TOP_K=10
 SIMILARITY_THRESHOLD=0.70
 DEDUP_THRESHOLD=0.90
 GRAPH_FANOUT_LIMIT=50
+MAX_SUPERSEDES_HOPS=50
 
 # === URL Fetch (SSRF 対策) ===
 URL_FETCH_CONCURRENCY=3
@@ -376,6 +378,9 @@ URL_TIMEOUT_SECONDS=30
 
 Run: `pytest tests/unit/test_config.py -v`
 Expected: PASS
+
+*Deployment & Testing Validation*:
+テスト実行時および本番デプロイ時において、環境変数で指定（または省略）された `MAX_SUPERSEDES_HOPS` 等の各設定値が期待通りにロードされ、トラバーサル制限として機能するかどうかを検証すること。
 
 **Step 6: Commit**
 
@@ -1334,9 +1339,9 @@ Expected: PASS
 
 - プロジェクトフィルタ
 - 最大トークン制限（`tiktoken` 等を用いた正確なトークン計算を実装）
-  - **エンコーディング選択**: `tiktoken` 使用時は OpenAI のエンコーディング（GPT-4系は `cl100k_base`、GPT-3系は `p50k_base`）を設定可能にする。
-  - **プロバイダー依存フォールバック**: OpenAI 以外のプロバイダー（`sentence-transformers` 等のローカルモデルや LiteLLM）を使用する場合はプロバイダーのタイプを検知し、`tiktoken` が不適切な場合は事前定義された近似トークナイザーまたは文字数ベースの近似値へフォールバックする。
-  - **エラーハンドリング**: `tiktoken` がモデルをハンドリングできない場合はプロバイダーと選択したフォールバックをログに記録し、文字ベースの推算へとフォールバックする（TokenCounter Protocol等のインターフェース抽象化を推奨）。
+  - **エンコーディング選択**: まず `tiktoken` の `encoding_for_model(model)` を第一候補としてトークンエンコーダの取得を試みる。
+  - **プロバイダー依存フォールバック**: `encoding_for_model` が例外エラーや未対応を返す場合（ローカルモデルや一部の LiteLLM モデル等を利用している時）、TokenCounter Protocol などの抽象化インターフェースを介して、文字数ベースの近似（例: `文字数 / 1.05` など）または事前定義のデフォルトエンコーディングへとフォールバックする。
+  - **エラーハンドリングとロギング**: フォールバックが発生した場合は、その決定と使用するフォールバックポリシー（デフォルトエンコーディング名や近似計算戦略）をシステムログに明示的に記録する。
 - access_count / last_accessed_at の更新
 
 **Step 2: Commit**

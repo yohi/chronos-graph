@@ -805,7 +805,7 @@ git commit -m "feat: Redis Cache Adapter を実装"
     - **非同期タスクキューの制御**（タスク発行を制限して同時実行数を抑える）
 - 接続確立後 (`pool/get_connection` ルーチン内など) 直ちに PRAGMA を強制実行し、`journal_mode=WAL`, `busy_timeout=5000`, `foreign_keys=ON`, `synchronous=NORMAL` を適用する
 - `sqlite-vec` 拡張のロードとベクトルインデックス作成
-- `sqlite-vec` が期待するバイナリBLOBへの型シリアライズ要件として、Python の `list[float]` を保存時/検索時に `struct.pack('<' + 'f' * len(embedding), *embedding)` 等を用いて正確にエンコード・デコードする処理を実装内に明示的に組み込むこと。
+- `sqlite-vec` が期待するバイナリBLOBへの型シリアライズ要件として、Python の `list[float]` を保存時/検索時に `struct.pack('<' + 'f' * len(embedding), *embedding)` 等を用いて正確にエンコード・デコードする処理を実装内に明示的に組み込むこと。また、エンコード処理（例: encode_embedding / save_embedding）およびデコード処理（例: decode_embedding / load_embedding）において、入力を必ず float32 にキャストし、保存時・検索時に次元数が期待値と一致するか `validate_embedding` 関数等で検証（不一致時はエラー）すること。さらに、`math.isnan` や `math.isinf` を用いて不正な値（NaN/Inf）を検出し、保存・検索を事前に拒否する実装を含めること。
 - `FTS5` テーブルの作成（`content` カラムの全文検索用）
 - メタデータテーブル `vectors_metadata` を作成し、次元数を保存
 - `get_vector_dimension`: `SELECT dimension FROM vectors_metadata WHERE table_name = 'memories'`

@@ -381,6 +381,7 @@ Expected: PASS
 
 *Deployment & Testing Validation*:
 テスト実行時および本番デプロイ時において、環境変数で指定（または省略）された `MAX_SUPERSEDES_HOPS` 等の各設定値が期待通りにロードされ、トラバーサル制限として機能するかどうかを検証すること。
+具体的には、Task 5.4 の自動テスト（`tests/unit/test_graph_traversal.py`）を拡張し、`MAX_SUPERSEDES_HOPS` に小さい値をオーバーライド設定してトラバーサルアルゴリズムを実行する。指定されたホップ上限内で到達するケース（success case）と、上限を超過するためトラバーサルが設定レイヤで正確に停止するケース（failure/halt case）の両方のアサーションを実装し、必ずCIのパス要件として自動実行させること。
 
 **Step 6: Commit**
 
@@ -882,7 +883,7 @@ git commit -m "feat: InMemory Cache Adapter + Storage Factory を実装"
 
 ## Phase 3: Embedding Provider
 
-### Task 3.1: Embedding Protocol + OpenAI Provider
+### Task 3.1: Protocol 定義 (Embedding / TokenCounter) + OpenAI Provider
 
 **Files:**
 - Create: `src/context_store/embedding/__init__.py`
@@ -892,8 +893,9 @@ git commit -m "feat: InMemory Cache Adapter + Storage Factory を実装"
 
 **Step 1: Protocol 定義 + テスト**
 
-SPEC.md §9 の EmbeddingProvider Protocol を定義。
-OpenAIEmbeddingProvider のテスト（httpx モック）。
+- SPEC.md §9 の EmbeddingProvider Protocol を `src/context_store/embedding/protocols.py` に定義。
+- **TokenCounter Protocol の定義**: 同様に `protocols.py` にて `class TokenCounter(Protocol): def count_tokens(self, text: str) -> int: ...` などの型定義・インターフェースを定義。将来的に Post Processor のフォールバック等から利用可能にする。
+- OpenAIEmbeddingProvider のテスト（httpx モック）。
 
 **Step 2: 実装**
 
@@ -1340,8 +1342,9 @@ Expected: PASS
 - プロジェクトフィルタ
 - 最大トークン制限（`tiktoken` 等を用いた正確なトークン計算を実装）
   - **エンコーディング選択**: まず `tiktoken` の `encoding_for_model(model)` を第一候補としてトークンエンコーダの取得を試みる。
-  - **プロバイダー依存フォールバック**: `encoding_for_model` が例外エラーや未対応を返す場合（ローカルモデルや一部の LiteLLM モデル等を利用している時）、TokenCounter Protocol などの抽象化インターフェースを介してフォールバックする。文字数ベース近似を使う場合は、**必ず安全側（過大推定）**となる式（例: `ceil(raw_estimate * safety_margin)`）を採用し、`max_tokens` 超過を防ぐためのガードとして扱う。必要に応じて事前定義のデフォルトエンコーディングも利用可能とする。
-  - **エラーハンドリングとロギング**: フォールバックが発生した場合は、その決定と使用するフォールバックポリシー（デフォルトエンコーディング名や近似計算戦略）をシステムログに明示的に記録する。
+  - **プロバイダー依存フォールバック**: `encoding_for_model` が例外エラーや未対応を返す場合（ローカルモデルや一部の LiteLLM モデル等を利用している時）、`src/context_store/embedding/protocols.py` で定義した（Task 3.1） `TokenCounter` Protocol を経由してフォールバックする。
+  - **近似による過大推定でのガード**: デフォルトエンコーディング（未指定時の `cl100k_base` 等）でのカウントも利用不可能な場合の最終手段として文字数近似を使用する。この際は、**必ず安全側（過大推定）**となる式（例: `ceil(len(text) * safety_margin)` 、safety_margin は 0.5~0.6 等）を採用し、`max_tokens` 超過を防ぐためのガードとする。
+  - **エラーハンドリングとロギング**: フォールバックが発生した場合は、その決定と使用するフォールバックポリシー（利用したデフォルトエンコーディング名や文字数近似でのマージン値など）をシステムログに明示的に記録する。
 - access_count / last_accessed_at の更新
 
 **Step 2: Commit**

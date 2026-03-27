@@ -42,6 +42,7 @@ dependencies = [
     "aiosqlite>=0.20.0",
     "sqlite-vec>=0.1.0",
     "tenacity>=8.0.0",
+    "tiktoken>=0.6.0",
 ]
 
 [project.optional-dependencies]
@@ -859,7 +860,7 @@ git commit -m "feat: SQLite Graph Adapter (再帰的 CTE) を実装"
 
 **Step 2: 実装**
 
-- InMemoryCacheAdapter: `dict` + `asyncio.Lock` + TTL 管理
+- InMemoryCacheAdapter: `dict` + `asyncio.Lock` + TTL 管理（`invalidate_prefix` でのループ内にはO(N)ブロッキング防止のため100件ごとに `await asyncio.sleep(0)` を挿入する）
 - StorageFactory: Settings に基づいて適切なアダプターを返すファクトリ関数
   `create_storage(settings) -> tuple[StorageAdapter, GraphAdapter, CacheAdapter]`
   ※ `sqlite` モードでは GraphAdapter = SQLiteGraphAdapter（None ではない）
@@ -1241,6 +1242,7 @@ git commit -m "feat: Keyword Search を実装"
 - Vector Search で取得した上位ノードを起点として Graph Adapter で traverse
 - SearchStrategy に基づくエッジタイプフィルタ
 - **スーパーノード対策**: 各ノードからのエッジ展開（fan-out）時に取得上限（`Settings.graph_fanout_limit` から取得し適用）を設け、グラフ検索時のクエリ爆発を防ぐ
+- **SUPERSEDES チェーン透過的解決**: `SUPERSEDES` エッジを辿るトラバーサルは `depth` カウントを消費しないよう実装し、度重なる更新でチェーンが長大化した場合でも確実に最新の Active ノードに到達できるようにする
 - Neo4j 接続失敗時は空結果を返す（Graceful Degradation）
 
 **Step 2: Commit**
@@ -1327,7 +1329,7 @@ Expected: PASS
 **Step 1: テスト + 実装**
 
 - プロジェクトフィルタ
-- 最大トークン制限
+- 最大トークン制限（`tiktoken` 等を用いた正確なトークン計算を実装）
 - access_count / last_accessed_at の更新
 
 **Step 2: Commit**

@@ -169,7 +169,8 @@ LLM は使用しない（トークン消費ゼロの原則）。
 
 **トランザクション境界の設計原則:**
 `EmbeddingProvider` によるベクトル化処理（外部API呼び出しや重いローカル推論）は、**必ず Storage Layer の書き込みトランザクション（`save_memory` 等）を開始する前**に完了させてください。
-SQLite の `busy_timeout=5000` は強力ですが、トランザクション内でネットワークI/Oを待機すると、他のエージェント（プロセス）からの書き込みを長時間ブロックし、`SQLITE_BUSY` エラーを引き起こす原因となります。この制約は実装コードおよびテスト内で明示的に保証する必要があります。
+SQLite の `busy_timeout=5000` は強力ですが、トランザクション内でネットワークI/Oを待機すると、他のエージェント（プロセス）からの書き込みを長時間ブロックし、`SQLITE_BUSY` エラーを引き起こす原因となります。
+この制約は実装コードおよびテスト内で明示的に保証する必要があります（例: モックを用いて、`EmbeddingProvider.embed_batch` の完了前に `StorageAdapter.save_memory` などのトランザクションメソッドが呼び出されるとテストが失敗するような呼び出し順序検証を実装すること）。
 
 ### 4.2 Source Adapter
 
@@ -816,7 +817,7 @@ class EmbeddingProvider(Protocol):
 
 **レートリミット対策:**
 `memory_save_url` 等で巨大なMarkdown文書を取り込み、多数のチャンクに分割して `embed_batch` に渡した場合、OpenAI等の外部APIのレートリミット（TPM/RPM）に抵触する可能性があります。
-`EmbeddingProvider` の実装（特に `openai.py` と `litellm.py`）においては、`tenacity` ライブラリ等を用いて Exponential Backoff を伴うリトライ機構を実装することが必須です。
+`EmbeddingProvider` の実装（特に `openai.py` と `litellm.py`）においては、`tenacity` ライブラリ等を用いて Exponential Backoff にジッター (Jitter) を加えたリトライ機構を実装することが必須です。具体的な制約として、最大試行回数（`stop_after_attempt` 等）または最大経過時間（`stop_after_delay` 等）を明示し、リトライ対象とする例外（HTTP 429 Rate Limit、ネットワークタイムアウト、5xx系のサーバーサイドエラー等）を厳密に列挙指定してください。
 
 #### ベクトル次元数の整合性チェック（フェイルファスト）
 

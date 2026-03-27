@@ -145,6 +145,7 @@ class SourceType(str, Enum):
 | | `DEPENDS_ON` | — | 依存関係 |
 | | `CONTRADICTS` | `detected_at: timestamp` | 矛盾する情報（将来の概念ドリフト検出） |
 | | `SUPERSEDES` | — | 新情報による旧情報の置換 |
+| | `CHUNK_NEXT` | — | 同一ドキュメント内のチャンクの連続性 |
 
 ### 3.4 記憶の自動分類ルール
 
@@ -224,6 +225,7 @@ class SourceAdapter(Protocol):
 | `TEMPORAL_NEXT/PREV` | 同一セッション/プロジェクトの時系列順 | ✅ |
 | `SUPERSEDES` | Deduplicator が Append-only 置換を実行（新→旧） | ✅ |
 | `REFERENCES` | チャンク中の URL・ファイルパスの抽出 | ✅ |
+| `CHUNK_NEXT` | 同一ドキュメント（URLや長文入力）から分割された連続するチャンク群の順序リンク | ✅ |
 | `CAUSED_BY/RESULTED_IN` | 因果関係推定 | ❌（RL 拡張ポイント） |
 
 **検索範囲とエッジ作成の上限およびバルク処理:**
@@ -492,7 +494,7 @@ FastMCP を使用。重いモジュール（sentence-transformers 等）は**遅
 | 引数 | 型 | 必須 | デフォルト | 説明 |
 |---|---|---|---|---|
 | `content` | str | ✅ | — | 記憶する内容 |
-| `source` | str | — | `"manual"` | `"conversation"` / `"manual"` / `"url"` |
+| `source` | str | — | `"conversation"` | `"conversation"` / `"manual"` / `"url"` |
 | `project` | str? | — | None | プロジェクトタグ |
 | `tags` | list[str] | — | [] | 追加タグ（制約：要素最大長50、`^[a-zA-Z0-9_-]+$`） |
 | `importance` | float? | — | None | 重要度ヒント（None なら自動） |
@@ -760,7 +762,7 @@ PRAGMA synchronous=NORMAL;         -- WAL モードでは NORMAL で十分な耐
 > 
 > **注意 (ファイルシステム制約)**: SQLite の WAL モードは同一マシン上のアクセスには対応しますが、NFS や CIFS などのネットワークファイルシステム上では正しく動作しません。
 > 
-> **保守運用**: 長時間運用で WAL が肥大化した場合に備え、定期的な `PRAGMA wal_checkpoint` と必要に応じた `VACUUM` を推奨する。
+> **保守運用**: 長時間運用で WAL が肥大化した場合に備え、Lifecycle Manager などのイベント駆動ジョブにて定期的に `PRAGMA wal_checkpoint(PASSIVE)` を安全に実行し、必要に応じた `VACUUM` を推奨する（TRUNCATE は長時間のロック競合を起こす懸念があるため避ける）。
 > 
 > **セキュリティ制約 (パーミッション)**: 記憶データ（会話ログ等）を含むため、DB ファイル（`~/.context-store/memories.db`）の作成時にパーミッションを `0600`（所有者のみ読み書き可）に設定することを必須とします。
 

@@ -797,6 +797,7 @@ SELECT DISTINCT to_id, edge_type, depth FROM graph;
 
 > **特記事項 (`SUPERSEDES` チェーンの解決)**:
 > Deduplicator による Append-only 置換で形成される `SUPERSEDES` エッジは新旧情報の論理的な同一性を示すため、この種のトラバーサルは論理的な「深さ」とみなさないこと。再帰的CTEやトラバーサルロジック内において、`SUPERSEDES` を辿る操作は `depth` のカウントを加算させない（透過的に最新ノードへ解決する）よう実装し、更新頻度の高いノードがハードリミットにより最新版へ到達できなくなる問題を回避する。
+> ※ この透過解決を実装する際は、サイクル（閉路）発生時の無限ループ再帰を防止するため、訪問済みノードセット（`visited_supersedes_ids`）を保持して再訪時は打ち切るか、または物理的な最大ホップ数（例: 最大50ホップ）のサブ上限を設ける設計を必須とする。Phase 5 / Phase 9 のテスト要件として以下の3ケースを必ず含めること: (1) Long SUPERSEDES chain: 同じメモリへの10回のSUPERSEDESチェーンを作成し、depth=2のトラバーサルが常に最新のActiveノードに到達することを検証、(2) Mixed-traversal: SUPERSEDESとSEMANTICALLY_RELATED等の他のエッジを混在させ、論理深さがSUPERSEDES以外のエッジでのみカウントされることを検証、(3) Hard-limit validation: SUPERSEDESを除外した論理深さが設定したハードリミットを超えないこと、かつ物理深さのリミットにより無限ループを防止できることを検証。
 
 **性能検証要件:**
 

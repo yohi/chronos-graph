@@ -860,7 +860,7 @@ git commit -m "feat: SQLite Graph Adapter (再帰的 CTE) を実装"
 
 **Step 2: 実装**
 
-- InMemoryCacheAdapter: `dict` + `asyncio.Lock` + TTL 管理（`invalidate_prefix` でのループ内にはO(N)ブロッキング防止のため100件ごとに `await asyncio.sleep(0)` を挿入する）
+- InMemoryCacheAdapter: `dict` + `asyncio.Lock` + TTL 管理（`invalidate_prefix` でのループ内にはO(N)ブロッキング防止のため必要に応じ `await asyncio.sleep(0.001)` を挿入する。この際バッチサイズは可変パラメータ（例: `batch_size=100`）として設定可能にし、スリープ直前に一時的にロックを解放・再取得するなど、ロックの競合長期化を防ぐ設計とすること）
 - StorageFactory: Settings に基づいて適切なアダプターを返すファクトリ関数
   `create_storage(settings) -> tuple[StorageAdapter, GraphAdapter, CacheAdapter]`
   ※ `sqlite` モードでは GraphAdapter = SQLiteGraphAdapter（None ではない）
@@ -1242,7 +1242,7 @@ git commit -m "feat: Keyword Search を実装"
 - Vector Search で取得した上位ノードを起点として Graph Adapter で traverse
 - SearchStrategy に基づくエッジタイプフィルタ
 - **スーパーノード対策**: 各ノードからのエッジ展開（fan-out）時に取得上限（`Settings.graph_fanout_limit` から取得し適用）を設け、グラフ検索時のクエリ爆発を防ぐ
-- **SUPERSEDES チェーン透過的解決**: `SUPERSEDES` エッジを辿るトラバーサルは `depth` カウントを消費しないよう実装し、度重なる更新でチェーンが長大化した場合でも確実に最新の Active ノードに到達できるようにする
+- **SUPERSEDES チェーン透過的解決**: `SUPERSEDES` エッジを辿るトラバーサルは論理的な深さカウントを消費しないよう実装し、度重なる更新でチェーンが長大化した場合でも確実に最新の Active ノードに到達できるようにする。具体的には再帰的CTEにおいて論理深さ（`logical_depth`）と物理深さ（`physical_depth`）を分離し、`physical_depth` は常に +1、`logical_depth` は `CASE WHEN edge_type = 'SUPERSEDES' THEN logical_depth ELSE logical_depth + 1 END` と更新し、ハードリミットや無限ループ回避のための探索停止条件（訪問済みノード `visited_supersedes_ids` の保持など）を適用してサイクルによる無限ループを安全に脱出するよう実装する。
 - Neo4j 接続失敗時は空結果を返す（Graceful Degradation）
 
 **Step 2: Commit**
@@ -1330,6 +1330,9 @@ Expected: PASS
 
 - プロジェクトフィルタ
 - 最大トークン制限（`tiktoken` 等を用いた正確なトークン計算を実装）
+  - **エンコーディング選択**: `tiktoken` 使用時は OpenAI のエンコーディング（GPT-4系は `cl100k_base`、GPT-3系は `p50k_base`）を設定可能にする。
+  - **プロバイダー依存フォールバック**: OpenAI 以外のプロバイダー（`sentence-transformers` 等のローカルモデルや LiteLLM）を使用する場合はプロバイダーのタイプを検知し、`tiktoken` が不適切な場合は事前定義された近似トークナイザーまたは文字数ベースの近似値へフォールバックする。
+  - **エラーハンドリング**: `tiktoken` がモデルをハンドリングできない場合はプロバイダーと選択したフォールバックをログに記録し、文字ベースの推算へとフォールバックする（TokenCounter Protocol等のインターフェース抽象化を推奨）。
 - access_count / last_accessed_at の更新
 
 **Step 2: Commit**

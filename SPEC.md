@@ -816,8 +816,13 @@ SELECT DISTINCT to_id, edge_type, depth FROM graph;
 > ※ この透過解決を実装する際は、サイクル（閉路）発生時の無限ループ再帰を防止するため、訪問済みノードセット（`visited_supersedes_ids`）を保持して再訪時は打ち切るか、または物理的な最大ホップ数（例: 最大50ホップ。`graph_max_physical_hops`）のサブ上限を設ける設計を必須とする。また、制限に到達した場合はサイレントフェイルとせず、Pythonの `logging` モジュールを使用して明確な警告ログ（例: `WARNING: Physical hops limit (50) reached for node {id}. Returning stale node.`）を出力すること。Phase 5 / Phase 9 のテスト要件として以下の3ケースを必ず含めること: (1) Long SUPERSEDES chain: 同じメモリへの10回のSUPERSEDESチェーンを作成し、depth=2のトラバーサルが常に最新のActiveノードに到達することを検証、(2) Mixed-traversal: SUPERSEDESとSEMANTICALLY_RELATED等の他のエッジを混在させ、論理深さがSUPERSEDES以外のエッジでのみカウントされることを検証、(3) Hard-limit validation: SUPERSEDESを除外した論理深さが設定した論理ハードリミット（`graph_max_logical_depth`）を超えないこと、かつ物理深さのリミット（`graph_max_physical_hops`）により無限ループを防止し、警告ログが出力されることを検証。
 
 **SQLite のバックプレッシャー制御:**
-aiosqlite を用いた非同期実行において、FastMCP 側で大量の並行リクエストが発生した場合、スレッド枯渇やメモリ上のタスク滞留を防ぐため、`SQLiteStorageAdapter` の初期化時に `asyncio.Semaphore(sqlite_max_concurrent_connections)` を設定し、すべての DB 操作メソッド（`save_memory`, `vector_search`, `keyword_search` 等）がこのセマフォを獲得してから実行されるようにラップする設計とすること。
-その際、セマフォ取得にタイムアウト（`sqlite_acquire_timeout`）を設定し、取得に失敗した場合は `StorageError(code="STORAGE_BUSY", recoverable=True)` を送出してクライアントに過負荷状態を通知すること。実装には `asyncio.wait_for(semaphore.acquire(), timeout=...)` 等を用い、イベントループ内での無制限な待機を回避する。
+aiosqlite を用いた非同期実行において、FastMCP 側で大量の並行リクエストが発生した場合、スレッド枯渇やメモリ上のタスク滞留を防ぐため、以下のバックプレッシャー機構を実装すること：
+
+1.  **同時接続制限**: `SQLiteStorageAdapter` 初期化時に `asyncio.Semaphore(sqlite_max_concurrent_connections)` を設定し、すべての DB 操作メソッド（`save_memory`, `vector_search`, `keyword_search` 等）をラップする。
+2.  **待ち行列数制限 (Bounded Queueing)**: セマフォ取得待ちのタスク数が `sqlite_max_queued_requests` を超えた場合、タイムアウトを待たずに**即座に** `StorageError(code="STORAGE_BUSY", recoverable=True)` を送出してリクエストを拒否する（Fail-fast）。
+3.  **取得タイムアウト**: セマフォ取得待ちが `sqlite_acquire_timeout` を超過した場合も同様に `StorageError` を送出する。
+
+これにより、イベントループ内での無制限なコルーチン滞留を防止し、システム全体の応答性を維持する。実装には `asyncio.wait_for` とセマフォ内部状態（`_value` や待ちタスク数）のチェック、または有界なセマフォ/キューパターンを用いること。
 
 **性能検証要件:**
 
@@ -1042,6 +1047,7 @@ DEDUP_THRESHOLD=0.90
 GRAPH_MAX_LOGICAL_DEPTH=5
 GRAPH_MAX_PHYSICAL_HOPS=50
 SQLITE_MAX_CONCURRENT_CONNECTIONS=5
+SQLITE_MAX_QUEUED_REQUESTS=20        # セマフォ取得待ちの最大キュー数 (超過時は即時拒否)
 SQLITE_ACQUIRE_TIMEOUT=2000          # ms (セマフォ取得待ちタイムアウト)
 ```
 

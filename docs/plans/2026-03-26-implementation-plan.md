@@ -225,6 +225,7 @@ def test_default_settings():
     assert settings.graph_max_logical_depth == 5
     assert settings.graph_max_physical_hops == 50
     assert settings.sqlite_max_concurrent_connections == 5
+    assert settings.sqlite_max_queued_requests == 20
     assert settings.sqlite_acquire_timeout == 2.0
 
 def test_embedding_provider_validation():
@@ -313,6 +314,7 @@ class Settings(BaseSettings):
 
     # --- SQLite specific ---
     sqlite_max_concurrent_connections: int = 5
+    sqlite_max_queued_requests: int = 20
     sqlite_acquire_timeout: float = 2.0  # seconds
 
     # --- URL Fetch (SSRF 対策) ---
@@ -375,6 +377,7 @@ GRAPH_FANOUT_LIMIT=50
 GRAPH_MAX_LOGICAL_DEPTH=5
 GRAPH_MAX_PHYSICAL_HOPS=50
 SQLITE_MAX_CONCURRENT_CONNECTIONS=5
+SQLITE_MAX_QUEUED_REQUESTS=20
 SQLITE_ACQUIRE_TIMEOUT=2.0
 
 # === URL Fetch (SSRF 対策) ===
@@ -805,7 +808,9 @@ git commit -m "feat: Redis Cache Adapter を実装"
 - keyword_search: `FTS5` による全文検索（N-gram トークナイザ）
 - 単一ファイルで動作すること（一時ディレクトリで検証）
 - WAL モードが有効であることの検証（`PRAGMA journal_mode` の戻り値チェック）
-- 並行処理 & バックプレッシャーテスト: `sqlite_max_concurrent_connections=2` に設定し、10 個の同時リクエストを発行。アクティブな DB 処理が常に 2 以下であることを検証（セマフォの acquire/release をラップしたカウンタ等で計測）。
+- 並行処理 & バックプレッシャーテスト: `sqlite_max_concurrent_connections=2`, `sqlite_max_queued_requests=3` に設定し、10 個の同時リクエストを発行。
+  1. アクティブな DB 処理が常に 2 以下であることを検証。
+  2. 待ち行列が 3 を超えたリクエスト（合計 2+3=5 リクエスト目以降）が**即座に** `StorageError` で拒否されることを検証。
 - セマフォ取得タイムアウトテスト: セマフォ取得に `sqlite_acquire_timeout` 以上かかる状況を作り、`StorageError(code="STORAGE_BUSY", ...)` が送出されることを検証。
 - シリアライズ・デシリアライズ関連テスト: `serialize_float32`, `encode_embedding`, `save_embedding`, `decode_embedding`, `load_embedding`, `validate_embedding` を対象に、1) 保存→読み戻しでの一致（float32 キャスト含む）、2) 次元不一致時のエラー（保存・検索時）、3) NaN/Inf を含む入力の拒否、4) 公式APIフォールバック経路の動作確認（シリアライズ整合性とエラー処理）の単体テストを追加すること
 
@@ -814,7 +819,9 @@ git commit -m "feat: Redis Cache Adapter を実装"
 - `aiosqlite` で非同期接続管理
   - **注意**: `aiosqlite` ではワーカースレッド数の明示は不可。
   - **スレッドプール枯渇・コンテンション対策**として、以下の代替実装を行う:
-    - **バックプレッシャー制御**: `Settings.sqlite_max_concurrent_connections` に基づき、`SQLiteStorageAdapter` インスタンスレベルで単一の `asyncio.Semaphore` を保持し、`save_memory` や `vector_search` などのすべての DB 操作をこのセマフォでラップすること。その際、`asyncio.wait_for(semaphore.acquire(), timeout=Settings.sqlite_acquire_timeout)` を用い、タイムアウト時は `StorageError(code="STORAGE_BUSY", ...)` を送出すること。これによりメモリへのタスク滞留を防ぐ。
+    - **バックプレッシャー制御**: `Settings.sqlite_max_concurrent_connections` に基づき、`SQLiteStorageAdapter` インスタンスレベルで単一の `asyncio.Semaphore` を保持し、`save_memory` や `vector_search` などのすべての DB 操作をこのセマフォでラップすること。その際、以下の二重のガードを実装すること：
+      1. **待ち行列数チェック**: セマフォ取得前に、現在待機中のタスク数（`len(semaphore._waiters)` 等）を確認し、`Settings.sqlite_max_queued_requests` を超えている場合は即座に `StorageError(code="STORAGE_BUSY", ...)` を送出する。
+      2. **取得タイムアウト**: `asyncio.wait_for(semaphore.acquire(), timeout=Settings.sqlite_acquire_timeout)` を用い、タイムアウト時は `StorageError` を送出する。
 
     - **コネクションプール設計**（再利用するコネクション管理）
     - TRUNCATEなどによるロック競合で `aiosqlite.OperationalError: database is locked` や `SQLITE_BUSY` 等が発生した場合、クラッシュさせるのではなく `StorageError(code="STORAGE_BUSY", recoverable=True)` を送出してMCPクライアントにエラーを通知する（再試行を促す）ハンドリングを追加すること。

@@ -812,7 +812,7 @@ git commit -m "feat: Redis Cache Adapter を実装"
 - WAL モードが有効であることの検証（`PRAGMA journal_mode` の戻り値チェック）
 - 並行処理 & バックプレッシャーテスト: `sqlite_max_concurrent_connections=2`, `sqlite_max_queued_requests=3` に設定し、10 個の同時リクエストを発行。
   1. アクティブな DB 処理が常に 2 以下であることを検証。
-  2. 待ち行列が 3 を超えたリクエスト（合計 2+3=5 リクエスト目以降）が**即座に** `StorageError` で拒否されることを検証。
+  2. 待ち行列が 3 を超えたリクエスト（合計5件を超えるリクエスト、すなわち6件目以降）が**即座に** `StorageError` で拒否されることを検証。
   3. **拒否されなかったリクエスト（成功ケース）が正常に完了することを検証。**
   4. **送出されるエラーが `StorageError` であり、かつ `code == "STORAGE_BUSY"` であることを検証。**
   5. **テスト終了後にセマフォのカウンタが不整合なく初期値に戻っていること（リークなし）を検証するアサーションを追加。**
@@ -825,11 +825,20 @@ git commit -m "feat: Redis Cache Adapter を実装"
   - **注意**: `aiosqlite` ではワーカースレッド数の明示は不可。
   - **スレッドプール枯渇・コンテンション対策**として、以下の代替実装を行う:
     - **バックプレッシャー制御**: `Settings.sqlite_max_concurrent_connections` に基づき、`SQLiteStorageAdapter` インスタンスレベルで単一の `asyncio.Semaphore` を保持し、`save_memory` や `vector_search` などの**すべての DB 操作**をこのセマフォでラップすること。その際、以下の二重のガードを実装すること：
-      1. **待ち行列数チェック**: セマフォ取得前に、現在待機中のタスク数（`len(semaphore._waiters)` 等）を確認し、`Settings.sqlite_max_queued_requests` を超えている場合は即座に `StorageError(code="STORAGE_BUSY", ...)` を送出する。
+      1. **待ち行列数チェック**: セマフォ取得前に、現在待機中のタスク数を確認し、`Settings.sqlite_max_queued_requests` 以上である場合は即座に `StorageError(code="STORAGE_BUSY", ...)` を送出する。
       2. **取得タイムアウト**: `asyncio.wait_for(semaphore.acquire(), timeout=Settings.sqlite_acquire_timeout)` を用い、タイムアウト時は `StorageError` を送出する。
 
     - **コネクションプール設計**（再利用するコネクション管理）
-    - **エラー処理**: TRUNCATEなどによるロック競合で `aiosqlite.OperationalError: database is locked` や `SQLITE_BUSY` 等が発生した場合、**これらを適切にキャッチして `StorageError(code="STORAGE_BUSY", recoverable=True)` へと変換**し、MCPクライアントにエラーを通知する（再試行を促す）ハンドリングを追加すること。
+    - **エラー処理**: TRUNCATEなどによるロック競合で以下のエラーが発生した場合、`StorageError(code="STORAGE_BUSY", recoverable=True)` へと変換し、MCPクライアントにリトライを促すハンドリングを追加すること。
+      捕捉対象: `aiosqlite.OperationalError` のうちメッセージが `"database is locked"` / `"locked"` / `"busy"` を含むもの（SQLite エラーコード: SQLITE_BUSY=5, SQLITE_LOCKED=6, SQLITE_BUSY_SNAPSHOT=517）。ロック無関係の `OperationalError` は再スローすること。
+      例:
+      ```python
+      except aiosqlite.OperationalError as e:
+          error_msg = str(e).lower()
+          if any(kw in error_msg for kw in ["database is locked", "locked", "busy"]):
+              raise StorageError(code="STORAGE_BUSY", message=str(e), recoverable=True)
+          raise
+      ```
     - **堅牢化**: CRUD 操作、ベクトル検索、FTS 検索、メタデータ取得など、**すべての DB アクセスメソッドにおいて例外なくセマフォとタイムアウトを利用**すること。
 - 接続確立後 (`pool/get_connection` ルーチン内など) 直ちに PRAGMA を強制実行し、`journal_mode=WAL`, `busy_timeout=5000`, `foreign_keys=ON`, `synchronous=NORMAL` を適用する
 - `sqlite-vec` 拡張のロードとベクトルインデックス作成

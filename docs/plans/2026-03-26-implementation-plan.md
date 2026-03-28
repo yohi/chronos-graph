@@ -222,7 +222,9 @@ def test_default_settings():
     assert settings.similarity_threshold == 0.70
     assert settings.dedup_threshold == 0.90
     assert settings.graph_fanout_limit == 50
-    assert settings.max_supersedes_hops == 50
+    assert settings.graph_max_logical_depth == 5
+    assert settings.graph_max_physical_hops == 50
+    assert settings.sqlite_max_concurrent_connections == 5
 
 def test_embedding_provider_validation():
     settings = Settings(
@@ -305,7 +307,11 @@ class Settings(BaseSettings):
     similarity_threshold: float = 0.70
     dedup_threshold: float = 0.90
     graph_fanout_limit: int = 50
-    max_supersedes_hops: int = 50
+    graph_max_logical_depth: int = 5
+    graph_max_physical_hops: int = 50
+
+    # --- SQLite specific ---
+    sqlite_max_concurrent_connections: int = 5
 
     # --- URL Fetch (SSRF 対策) ---
     url_fetch_concurrency: int = 3
@@ -364,7 +370,9 @@ DEFAULT_TOP_K=10
 SIMILARITY_THRESHOLD=0.70
 DEDUP_THRESHOLD=0.90
 GRAPH_FANOUT_LIMIT=50
-MAX_SUPERSEDES_HOPS=50
+GRAPH_MAX_LOGICAL_DEPTH=5
+GRAPH_MAX_PHYSICAL_HOPS=50
+SQLITE_MAX_CONCURRENT_CONNECTIONS=5
 
 # === URL Fetch (SSRF 対策) ===
 URL_FETCH_CONCURRENCY=3
@@ -380,8 +388,8 @@ Run: `pytest tests/unit/test_config.py -v`
 Expected: PASS
 
 *Deployment & Testing Validation*:
-テスト実行時および本番デプロイ時において、環境変数で指定（または省略）された `MAX_SUPERSEDES_HOPS` 等の各設定値が期待通りにロードされ、トラバーサル制限として機能するかどうかを検証すること。
-具体的には、Task 5.4 の自動テスト（`tests/unit/test_graph_traversal.py`）を拡張し、`MAX_SUPERSEDES_HOPS` に小さい値をオーバーライド設定してトラバーサルアルゴリズムを実行する。指定されたホップ上限内で到達するケース（success case）と、上限を超過するためトラバーサルが設定レイヤで正確に停止するケース（failure/halt case）の両方のアサーションを実装し、必ずCIのパス要件として自動実行させること。
+テスト実行時および本番デプロイ時において、環境変数で指定（または省略）された `GRAPH_MAX_PHYSICAL_HOPS` 等の各設定値が期待通りにロードされ、トラバーサル制限として機能するかどうかを検証すること。
+具体的には、Task 5.4 の自動テスト（`tests/unit/test_graph_traversal.py`）を拡張し、`GRAPH_MAX_PHYSICAL_HOPS` に小さい値をオーバーライド設定してトラバーサルアルゴリズムを実行する。指定されたホップ上限内で到達するケース（success case）と、上限を超過するためトラバーサルが設定レイヤで正確に停止するケース（failure/halt case）の両方のアサーションを実装し、必ずCIのパス要件として自動実行させること。
 
 **Step 6: Commit**
 
@@ -801,9 +809,9 @@ git commit -m "feat: Redis Cache Adapter を実装"
 - `aiosqlite` で非同期接続管理
   - **注意**: `aiosqlite` ではワーカースレッド数の明示は不可。
   - **スレッドプール枯渇・コンテンション対策**として、以下の代替実装を行う:
-    - **並行接続数の上限設定**（`asyncio.Semaphore` 等で接続数を制限）
+    - **バックプレッシャー制御**: `Settings.sqlite_max_concurrent_connections` に基づき、`SQLiteStorageAdapter` インスタンスレベルで単一の `asyncio.Semaphore` を保持し、`save_memory` や `vector_search` などのすべての DB 操作をこのセマフォでラップするデコレータまたはコンテキストマネージャを実装すること。これによりメモリへのタスク滞留を防ぐ。
     - **コネクションプール設計**（再利用するコネクション管理）
-    - **非同期タスクキューの制御**（タスク発行を制限して同時実行数を抑える）
+    - TRUNCATEなどによるロック競合で `aiosqlite.OperationalError: database is locked` や `SQLITE_BUSY` 等が発生した場合、クラッシュさせるのではなく `MemoryError(code="STORAGE_BUSY", recoverable=True)` を送出してMCPクライアントにエラーを通知する（再試行を促す）ハンドリングを追加すること。
 - 接続確立後 (`pool/get_connection` ルーチン内など) 直ちに PRAGMA を強制実行し、`journal_mode=WAL`, `busy_timeout=5000`, `foreign_keys=ON`, `synchronous=NORMAL` を適用する
 - `sqlite-vec` 拡張のロードとベクトルインデックス作成
 - `sqlite-vec` が期待するバイナリBLOBへの型シリアライズ要件として、Python の `list[float]` を保存時/検索時に公式パッケージ (`sqlite-vec`) が提供する `serialize_float32()` を用いて正確にエンコードする処理を優先的に実装に組み込むこと（背景技術として `struct.pack('<' + 'f' * len(embedding), *embedding)` を理解しつつ公式APIを第一選択とする）。また、エンコード処理（例: encode_embedding / save_embedding）およびデコード処理（例: decode_embedding / load_embedding）において、入力を必ず float32 にキャストし、保存時・検索時に次元数が期待値と一致するか `validate_embedding` 関数等で検証（不一致時はエラー）すること。さらに、`math.isnan` や `math.isinf` を用いて不正な値（NaN/Inf）を検出し、保存・検索を事前に拒否する実装を含めること。
@@ -832,7 +840,7 @@ git commit -m "feat: SQLite Storage Adapter (ライトウェイト版) を実装
 - `create_edge`: エッジの追加（重複時は無視または更新）
 - `create_edges_batch`: 複数エッジの情報を executemany 等で一括インサート（N+1問題対策）
 - `traverse`: 再帰的 CTE によるグラフトラバーサル（depth=1,2,3 で検証）
-- `traverse` の depth ハードリミット（depth > 5 は強制的に 5 に制限）
+- `traverse` の depth ハードリミット（`Settings.graph_max_logical_depth` で検証。これを超える値は強制制限）
 - `delete_node`: ノードと関連エッジの削除
 - `create_node`: ノードの作成（メタデータ付き）
 - GraphAdapter Protocol に完全準拠
@@ -842,7 +850,7 @@ git commit -m "feat: SQLite Storage Adapter (ライトウェイト版) を実装
 - SPEC.md §8.4 の `memory_edges` スキーマと再帰的 CTE クエリをそのまま実装
 - `SQLiteStorageAdapter` と同一の DB ファイルを共有（接続の受け渡し）
 - PRAGMA は `SQLiteStorageAdapter` 側で既に適用済みを前提
-- **トラバーサル上限設定**: `SUPERSEDES` チェーンループ回避用の物理ホップ上限値（CTE 内の `physical_depth >= max_supersedes_hops` 制約）はハードコードを避け、`config.py` の `Settings.max_supersedes_hops` を参照するかコンストラクタで受け取る設計とし、テストやランタイムでのチューニングを容易にすること。
+- **トラバーサル上限設定**: `SUPERSEDES` チェーンループ回避用の物理ホップ上限値（CTE 内の `physical_depth >= graph_max_physical_hops` 制約）はハードコードを避け、`config.py` の `Settings.graph_max_physical_hops` を参照するかコンストラクタで受け取る設計とし、テストやランタイムでのチューニングを容易にすること。
 
 **Step 3: テスト確認 & Commit**
 
@@ -1257,7 +1265,7 @@ git commit -m "feat: Keyword Search を実装"
 - Vector Search で取得した上位ノードを起点として Graph Adapter で traverse
 - SearchStrategy に基づくエッジタイプフィルタ
 - **スーパーノード対策**: 各ノードからのエッジ展開（fan-out）時に取得上限（`Settings.graph_fanout_limit` から取得し適用）を設け、グラフ検索時のクエリ爆発を防ぐ
-- **SUPERSEDES チェーン透過的解決**: `SUPERSEDES` エッジを辿るトラバーサルは論理深さカウントを消費しない実装とし、長大チェーンでも最新の Active ノードに到達可能にする。具体的には再帰的CTEにおいて論理深さ（`logical_depth`）と物理深さ（`physical_depth`）を分離し、`physical_depth` は常に +1、`logical_depth` は `CASE WHEN edge_type = 'SUPERSEDES' THEN logical_depth ELSE logical_depth + 1 END` で分岐更新する。探索停止条件に `visited_supersedes_ids` でのサイクル検出に加え、「物理的な最大ホップ数（`config.py` の `Settings.max_supersedes_hops` [デフォ: 50] または環境変数経由のオーバーライド値）」を超過時というハードリミットを組み込む。**可視化要件**: ハードリミット到達時はエラーを投げずその到達時点の最新ノードを返すフェイルセーフ挙動とするが、将来的な概念ドリフトや異常のデバッグを可能にするため、Pythonの `logging` モジュールを使用して明確な警告ログ（例: `WARNING: SUPERSEDES chain limit (50) reached for node {id}. Returning stale node.`）を必ず出力すること。この定数をGraph Adapterに注入（plumbing）することでテストやランタイムチューニングを容易にする。
+- **SUPERSEDES チェーン透過的解決**: `SUPERSEDES` エッジを辿るトラバーサルは論理深さカウントを消費しない実装とし、長大チェーンでも最新の Active ノードに到達可能にする。具体的には再帰的CTEにおいて論理深さ（`logical_depth`）と物理深さ（`physical_depth`）を分離し、`physical_depth` は常に +1、`logical_depth` は `CASE WHEN edge_type = 'SUPERSEDES' THEN logical_depth ELSE logical_depth + 1 END` で分岐更新する。探索停止条件に `visited_supersedes_ids` でのサイクル検出に加え、「物理的な最大ホップ数（`config.py` の `Settings.graph_max_physical_hops` [デフォ: 50] または環境変数経由のオーバーライド値）」を超過時というハードリミットを組み込む。**可視化要件**: ハードリミット到達時はエラーを投げずその到達時点の最新ノードを返すフェイルセーフ挙動とするが、将来的な概念ドリフトや異常のデバッグを可能にするため、Pythonの `logging` モジュールを使用して明確な警告ログ（例: `WARNING: Physical hops limit (50) reached for node {id}. Returning stale node.`）を必ず出力すること。この定数をGraph Adapterに注入（plumbing）することでテストやランタイムチューニングを容易にする。
 - Neo4j 接続失敗時は空結果を返す（Graceful Degradation）
 
 **Step 2: Commit**

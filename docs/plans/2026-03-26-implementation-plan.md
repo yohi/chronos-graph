@@ -226,7 +226,8 @@ def test_default_settings():
     assert settings.graph_max_physical_hops == 50
     assert settings.sqlite_max_concurrent_connections == 5
     assert settings.sqlite_max_queued_requests == 20
-    assert settings.sqlite_acquire_timeout == 2.0
+    assert isinstance(settings.sqlite_acquire_timeout, float)
+    assert settings.sqlite_acquire_timeout == 2.0  # seconds
 
 def test_embedding_provider_validation():
     settings = Settings(
@@ -318,6 +319,12 @@ class Settings(BaseSettings):
     sqlite_max_concurrent_connections: int = Field(default=5, ge=1)
     sqlite_max_queued_requests: int = Field(default=20, ge=1)
     sqlite_acquire_timeout: float = Field(default=2.0, gt=0.0)  # seconds
+    wal_truncate_size_bytes: int = Field(default=104857600, ge=0)  # 100MB
+    wal_passive_fail_consecutive_threshold: int = Field(default=3, ge=1)
+    wal_passive_fail_window_seconds: int = Field(default=600, ge=1)
+    wal_passive_fail_window_count_threshold: int = Field(default=5, ge=1)
+    wal_checkpoint_mode_passive: str = "PASSIVE"
+    wal_checkpoint_mode_truncate: str = "TRUNCATE"
 
     # --- URL Fetch (SSRF 対策) ---
     url_fetch_concurrency: int = 3
@@ -812,10 +819,10 @@ git commit -m "feat: Redis Cache Adapter を実装"
 - WAL モードが有効であることの検証（`PRAGMA journal_mode` の戻り値チェック）
 - 並行処理 & バックプレッシャーテスト: `sqlite_max_concurrent_connections=2`, `sqlite_max_queued_requests=3` に設定し、10 個の同時リクエストを発行。
   1. アクティブな DB 処理が常に 2 以下であることを検証。
-  2. 待ち行列が 3 を超えたリクエスト（合計5件を超えるリクエスト、すなわち6件目以降）が**即座に** `StorageError` で拒否されることを検証。
-  3. **拒否されなかったリクエスト（成功ケース）が正常に完了することを検証。**
-  4. **送出されるエラーが `StorageError` であり、かつ `code == "STORAGE_BUSY"` であることを検証。**
-  5. **テスト終了後にセマフォのカウンタが不整合なく初期値に戻っていること（リークなし）を検証するアサーションを追加。**
+  2. 待ち行列が許容数（3）を超えたリクエスト（同時リクエスト10件中、許容される上限5件を超過した残りの5件のリクエスト）が**即座に** `StorageError` で拒否されること、および `code == "STORAGE_BUSY"` であることをアサーションで検証。
+  3. **拒否されなかったリクエスト（許可された正確に5件の成功ケース：アクティブ2件＋待機3件）が正常に完了することを検証。**
+  4. **送出されるエラーや成功した結果を集計し、成功数=5、拒否数=5（またはそれに準ずる一貫した合計）であることをアサーションで検証。**
+  5. **テスト終了後にセマフォおよび待機カウンタが不整合なく初期値に戻っていること（リークなし）を検証するアサーションを追加。**
 - セマフォ取得タイムアウトテスト: セマフォ取得に `sqlite_acquire_timeout` 以上かかる状況を作り、`StorageError(code="STORAGE_BUSY", ...)` が送出されることを検証。
 - シリアライズ・デシリアライズ関連テスト: `serialize_float32`, `encode_embedding`, `save_embedding`, `decode_embedding`, `load_embedding`, `validate_embedding` を対象に、1) 保存→読み戻しでの一致（float32 キャスト含む）、2) 次元不一致時のエラー（保存・検索時）、3) NaN/Inf を含む入力の拒否、4) 公式APIフォールバック経路の動作確認（シリアライズ整合性とエラー処理）の単体テストを追加すること
 

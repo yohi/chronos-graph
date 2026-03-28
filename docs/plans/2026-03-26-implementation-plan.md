@@ -222,7 +222,12 @@ def test_default_settings():
     assert settings.similarity_threshold == 0.70
     assert settings.dedup_threshold == 0.90
     assert settings.graph_fanout_limit == 50
-    assert settings.max_supersedes_hops == 50
+    assert settings.graph_max_logical_depth == 5
+    assert settings.graph_max_physical_hops == 50
+    assert settings.sqlite_max_concurrent_connections == 5
+    assert settings.sqlite_max_queued_requests == 20
+    assert isinstance(settings.sqlite_acquire_timeout, float)
+    assert settings.sqlite_acquire_timeout == 2.0  # seconds
 
 def test_embedding_provider_validation():
     settings = Settings(
@@ -305,7 +310,21 @@ class Settings(BaseSettings):
     similarity_threshold: float = 0.70
     dedup_threshold: float = 0.90
     graph_fanout_limit: int = 50
-    max_supersedes_hops: int = 50
+    # GRAPH_MAX_LOGICAL_DEPTH 環境変数をマッピング（デフォルト: 5）。クライアントが指定できる最大論理深さ（クライアント向けの制限）
+    graph_max_logical_depth: int = Field(default=5, ge=1)
+    # GRAPH_MAX_PHYSICAL_HOPS 環境変数をマッピング（デフォルト: 50）。SUPERSEDES解決時の無限ループ防止用内部制限（最大物理ホップ数）
+    graph_max_physical_hops: int = Field(default=50, ge=1)
+
+    # --- SQLite specific ---
+    sqlite_max_concurrent_connections: int = Field(default=5, ge=1)
+    sqlite_max_queued_requests: int = Field(default=20, ge=1)
+    sqlite_acquire_timeout: float = Field(default=2.0, gt=0.0)  # seconds
+    wal_truncate_size_bytes: int = Field(default=104857600, ge=0)  # 100MB
+    wal_passive_fail_consecutive_threshold: int = Field(default=3, ge=1)
+    wal_passive_fail_window_seconds: int = Field(default=600, ge=1)
+    wal_passive_fail_window_count_threshold: int = Field(default=5, ge=1)
+    wal_checkpoint_mode_passive: str = "PASSIVE"
+    wal_checkpoint_mode_truncate: str = "TRUNCATE"
 
     # --- URL Fetch (SSRF 対策) ---
     url_fetch_concurrency: int = 3
@@ -364,7 +383,11 @@ DEFAULT_TOP_K=10
 SIMILARITY_THRESHOLD=0.70
 DEDUP_THRESHOLD=0.90
 GRAPH_FANOUT_LIMIT=50
-MAX_SUPERSEDES_HOPS=50
+GRAPH_MAX_LOGICAL_DEPTH=5
+GRAPH_MAX_PHYSICAL_HOPS=50
+SQLITE_MAX_CONCURRENT_CONNECTIONS=5
+SQLITE_MAX_QUEUED_REQUESTS=20
+SQLITE_ACQUIRE_TIMEOUT=2.0
 
 # === URL Fetch (SSRF 対策) ===
 URL_FETCH_CONCURRENCY=3
@@ -380,8 +403,8 @@ Run: `pytest tests/unit/test_config.py -v`
 Expected: PASS
 
 *Deployment & Testing Validation*:
-テスト実行時および本番デプロイ時において、環境変数で指定（または省略）された `MAX_SUPERSEDES_HOPS` 等の各設定値が期待通りにロードされ、トラバーサル制限として機能するかどうかを検証すること。
-具体的には、Task 5.4 の自動テスト（`tests/unit/test_graph_traversal.py`）を拡張し、`MAX_SUPERSEDES_HOPS` に小さい値をオーバーライド設定してトラバーサルアルゴリズムを実行する。指定されたホップ上限内で到達するケース（success case）と、上限を超過するためトラバーサルが設定レイヤで正確に停止するケース（failure/halt case）の両方のアサーションを実装し、必ずCIのパス要件として自動実行させること。
+テスト実行時および本番デプロイ時において、環境変数で指定（または省略）された `GRAPH_MAX_PHYSICAL_HOPS` 等の各設定値が期待通りにロードされ、トラバーサル制限として機能するかどうかを検証すること。
+具体的には、Task 5.4 の自動テスト（`tests/unit/test_graph_traversal.py`）を拡張し、テストスコープ内で一時的に `GRAPH_MAX_PHYSICAL_HOPS` 環境変数を小さい値にオーバーライド設定（テスト後に復元）して、本番コードと同じトラバーサルのエントリポイントとなる関数/クラスを実行する。指定されたホップ上限内で到達するケース（success case）と、上限を超過するためトラバーサルが停止し上限超過時の結果（ログ出力と到達時点のノード）を返すケース（failure/halt case）の両方のアサーションを実装し、PR時にユニットテストを実行するCIワークフローにこれらのテストが含まれ、自動実行されることを保証すること。
 
 **Step 6: Commit**
 
@@ -794,6 +817,13 @@ git commit -m "feat: Redis Cache Adapter を実装"
 - keyword_search: `FTS5` による全文検索（N-gram トークナイザ）
 - 単一ファイルで動作すること（一時ディレクトリで検証）
 - WAL モードが有効であることの検証（`PRAGMA journal_mode` の戻り値チェック）
+- 並行処理 & バックプレッシャーテスト: `sqlite_max_concurrent_connections=2`, `sqlite_max_queued_requests=3` に設定し、10 個の同時リクエストを発行。
+  1. アクティブな DB 処理が常に 2 以下であることを検証。
+  2. 待ち行列が許容数（3）を超えたリクエスト（同時リクエスト10件中、許容される上限5件を超過した残りの5件のリクエスト）が**即座に** `StorageError` で拒否されること、および `code == "STORAGE_BUSY"` であることをアサーションで検証。
+  3. **拒否されなかったリクエスト（許可された正確に5件の成功ケース：アクティブ2件＋待機3件）が正常に完了することを検証。**
+  4. **送出されるエラーや成功した結果を集計し、成功数=5、拒否数=5 を必須とする厳密な等価チェック（成功数 == 5 かつ 拒否数 == 5）であることをアサーションで検証。**
+  5. **テスト終了後にセマフォおよび待機カウンタが不整合なく初期値に戻っていること（リークなし）を検証するアサーションを追加。**
+- セマフォ取得タイムアウトテスト: セマフォ取得に `sqlite_acquire_timeout` 以上かかる状況を作り、`StorageError(code="STORAGE_BUSY", ...)` が送出されることを検証。
 - シリアライズ・デシリアライズ関連テスト: `serialize_float32`, `encode_embedding`, `save_embedding`, `decode_embedding`, `load_embedding`, `validate_embedding` を対象に、1) 保存→読み戻しでの一致（float32 キャスト含む）、2) 次元不一致時のエラー（保存・検索時）、3) NaN/Inf を含む入力の拒否、4) 公式APIフォールバック経路の動作確認（シリアライズ整合性とエラー処理）の単体テストを追加すること
 
 **Step 2: 実装**
@@ -801,9 +831,22 @@ git commit -m "feat: Redis Cache Adapter を実装"
 - `aiosqlite` で非同期接続管理
   - **注意**: `aiosqlite` ではワーカースレッド数の明示は不可。
   - **スレッドプール枯渇・コンテンション対策**として、以下の代替実装を行う:
-    - **並行接続数の上限設定**（`asyncio.Semaphore` 等で接続数を制限）
+    - **バックプレッシャー制御**: `Settings.sqlite_max_concurrent_connections` に基づき、`SQLiteStorageAdapter` インスタンスレベルで単一の `asyncio.Semaphore` を保持し、`save_memory` や `vector_search` などの**すべての DB 操作**をこのセマフォでラップすること。その際、TOCTOUと内部属性（_waiters）への依存を排除するため、`asyncio.Lock` 等で保護される明示的な待機カウンタ（またはアトミックなガード）を導入し、以下の二重のガードを実装すること：
+      1. **待ち行列数チェック**: セマフォ取得前にロック配下でカウンタを確認し、`Settings.sqlite_max_queued_requests` 以上である場合は即座に `StorageError(code="STORAGE_BUSY", ...)` を送出する。許容範囲内ならカウンタをインクリメントする。
+      2. **取得とタイムアウト**: `asyncio.wait_for(semaphore.acquire(), timeout=Settings.sqlite_acquire_timeout)` を用い、タイムアウト時は `StorageError` を送出する。セマフォ取得の成否（正常取得、またはタイムアウトなどの例外）に関わらず、後続処理（または finally ブロック）で必ずロック配下でカウンタをデクリメントする。
+
     - **コネクションプール設計**（再利用するコネクション管理）
-    - **非同期タスクキューの制御**（タスク発行を制限して同時実行数を抑える）
+    - **エラー処理**: TRUNCATEなどによるロック競合で以下のエラーが発生した場合、`StorageError(code="STORAGE_BUSY", recoverable=True)` へと変換し、MCPクライアントにリトライを促すハンドリングを追加すること。
+      捕捉対象: `aiosqlite.OperationalError` のうちメッセージが `"database is locked"` / `"locked"` / `"busy"` を含むもの（SQLite エラーコード: SQLITE_BUSY=5, SQLITE_LOCKED=6, SQLITE_BUSY_SNAPSHOT=517）。ロック無関係の `OperationalError` は再スローすること。
+      例:
+      ```python
+      except aiosqlite.OperationalError as e:
+          error_msg = str(e).lower()
+          if any(kw in error_msg for kw in ["database is locked", "locked", "busy"]):
+              raise StorageError(code="STORAGE_BUSY", message=str(e), recoverable=True)
+          raise
+      ```
+    - **堅牢化**: CRUD 操作、ベクトル検索、FTS 検索、メタデータ取得など、**すべての DB アクセスメソッドにおいて例外なくセマフォとタイムアウトを利用**すること。
 - 接続確立後 (`pool/get_connection` ルーチン内など) 直ちに PRAGMA を強制実行し、`journal_mode=WAL`, `busy_timeout=5000`, `foreign_keys=ON`, `synchronous=NORMAL` を適用する
 - `sqlite-vec` 拡張のロードとベクトルインデックス作成
 - `sqlite-vec` が期待するバイナリBLOBへの型シリアライズ要件として、Python の `list[float]` を保存時/検索時に公式パッケージ (`sqlite-vec`) が提供する `serialize_float32()` を用いて正確にエンコードする処理を優先的に実装に組み込むこと（背景技術として `struct.pack('<' + 'f' * len(embedding), *embedding)` を理解しつつ公式APIを第一選択とする）。また、エンコード処理（例: encode_embedding / save_embedding）およびデコード処理（例: decode_embedding / load_embedding）において、入力を必ず float32 にキャストし、保存時・検索時に次元数が期待値と一致するか `validate_embedding` 関数等で検証（不一致時はエラー）すること。さらに、`math.isnan` や `math.isinf` を用いて不正な値（NaN/Inf）を検出し、保存・検索を事前に拒否する実装を含めること。
@@ -832,7 +875,7 @@ git commit -m "feat: SQLite Storage Adapter (ライトウェイト版) を実装
 - `create_edge`: エッジの追加（重複時は無視または更新）
 - `create_edges_batch`: 複数エッジの情報を executemany 等で一括インサート（N+1問題対策）
 - `traverse`: 再帰的 CTE によるグラフトラバーサル（depth=1,2,3 で検証）
-- `traverse` の depth ハードリミット（depth > 5 は強制的に 5 に制限）
+- `traverse` の depth ハードリミット（`Settings.graph_max_logical_depth` で検証。これを超える値は強制制限）
 - `delete_node`: ノードと関連エッジの削除
 - `create_node`: ノードの作成（メタデータ付き）
 - GraphAdapter Protocol に完全準拠
@@ -842,7 +885,7 @@ git commit -m "feat: SQLite Storage Adapter (ライトウェイト版) を実装
 - SPEC.md §8.4 の `memory_edges` スキーマと再帰的 CTE クエリをそのまま実装
 - `SQLiteStorageAdapter` と同一の DB ファイルを共有（接続の受け渡し）
 - PRAGMA は `SQLiteStorageAdapter` 側で既に適用済みを前提
-- **トラバーサル上限設定**: `SUPERSEDES` チェーンループ回避用の物理ホップ上限値（CTE 内の `physical_depth >= max_supersedes_hops` 制約）はハードコードを避け、`config.py` の `Settings.max_supersedes_hops` を参照するかコンストラクタで受け取る設計とし、テストやランタイムでのチューニングを容易にすること。
+- **トラバーサル上限設定**: `SUPERSEDES` チェーンループ回避用の物理ホップ上限値（CTE 内の `physical_depth >= graph_max_physical_hops` 制約）はハードコードを避け、`config.py` の `Settings.graph_max_physical_hops` を参照するかコンストラクタで受け取る設計とし、テストやランタイムでのチューニングを容易にすること。
 
 **Step 3: テスト確認 & Commit**
 
@@ -1257,7 +1300,14 @@ git commit -m "feat: Keyword Search を実装"
 - Vector Search で取得した上位ノードを起点として Graph Adapter で traverse
 - SearchStrategy に基づくエッジタイプフィルタ
 - **スーパーノード対策**: 各ノードからのエッジ展開（fan-out）時に取得上限（`Settings.graph_fanout_limit` から取得し適用）を設け、グラフ検索時のクエリ爆発を防ぐ
-- **SUPERSEDES チェーン透過的解決**: `SUPERSEDES` エッジを辿るトラバーサルは論理深さカウントを消費しない実装とし、長大チェーンでも最新の Active ノードに到達可能にする。具体的には再帰的CTEにおいて論理深さ（`logical_depth`）と物理深さ（`physical_depth`）を分離し、`physical_depth` は常に +1、`logical_depth` は `CASE WHEN edge_type = 'SUPERSEDES' THEN logical_depth ELSE logical_depth + 1 END` で分岐更新する。探索停止条件に `visited_supersedes_ids` でのサイクル検出に加え、「物理的な最大ホップ数（`config.py` の `Settings.max_supersedes_hops` [デフォ: 50] または環境変数経由のオーバーライド値）」を超過時というハードリミットを組み込む。**可視化要件**: ハードリミット到達時はエラーを投げずその到達時点の最新ノードを返すフェイルセーフ挙動とするが、将来的な概念ドリフトや異常のデバッグを可能にするため、Pythonの `logging` モジュールを使用して明確な警告ログ（例: `WARNING: SUPERSEDES chain limit (50) reached for node {id}. Returning stale node.`）を必ず出力すること。この定数をGraph Adapterに注入（plumbing）することでテストやランタイムチューニングを容易にする。
+- **SUPERSEDES チェーン透過的解決**: `SUPERSEDES` エッジを辿るトラバーサルは論理深さカウントを消費しない実装とし、長大チェーンでも最新の Active ノードに到達可能にする。具体的には、再帰的CTEにおいて以下のルールを設ける：
+  - **1. 深さの分離 (Depth Separation)**: 再帰的CTEにおいて論理深さ（`logical_depth`）と物理深さ（`physical_depth`）を分離する。`physical_depth` はトラバーサルごとに常に `+1` されるが、`logical_depth` は `CASE WHEN edge_type = 'SUPERSEDES' THEN logical_depth ELSE logical_depth + 1 END` という条件式で分岐更新する。
+  - **2. ハードリミット (Hard Limit)**: 探索停止条件として `visited_supersedes_ids` によるサイクル検出に加え、物理的な最大ホップ数を制限するハードリミットを組み込む。この制限には `config.py` の `Settings.graph_max_physical_hops`（デフォルト: 50、環境変数で上書き可）を使用する。
+  - **3. 警告ログ (Warning Logging)**: ハードリミット到達時はエラーを発生させず、到達時点の最新ノードを返すフェイルセーフな動作とする。ただし、将来的な概念ドリフトや異常のデバッグのため、Pythonの `logging` モジュールを使用して明確な警告ログを必ず出力する。例: `logging.warning(f"Physical hops limit ({Settings.graph_max_physical_hops}) reached while resolving SUPERSEDES chain for node {node_id}. Returning last reachable node (may not be the latest active version).")`
+  - **4. 必須テストケース**: これらの挙動を担保するため、以下の3つのテストケースを実装すること。
+    - **Long SUPERSEDES chain**: 10回のSUPERSEDESチェーンを作成し、depth=2のトラバーサルが常に最新のActiveノードに到達することを検証。
+    - **Mixed-traversal**: SUPERSEDESとSEMANTICALLY_RELATED等の他のエッジを混在させ、論理深さがSUPERSEDES以外のエッジでのみカウントされることを検証。
+    - **Hard-limit validation**: SUPERSEDESを除外した論理深さが設定値に収まること、かつ物理深さのリミット超過時に無限ループが防止され、警告ログが出力されることを検証。
 - Neo4j 接続失敗時は空結果を返す（Graceful Degradation）
 
 **Step 2: Commit**

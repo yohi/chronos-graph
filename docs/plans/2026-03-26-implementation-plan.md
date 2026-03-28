@@ -811,6 +811,9 @@ git commit -m "feat: Redis Cache Adapter を実装"
 - 並行処理 & バックプレッシャーテスト: `sqlite_max_concurrent_connections=2`, `sqlite_max_queued_requests=3` に設定し、10 個の同時リクエストを発行。
   1. アクティブな DB 処理が常に 2 以下であることを検証。
   2. 待ち行列が 3 を超えたリクエスト（合計 2+3=5 リクエスト目以降）が**即座に** `StorageError` で拒否されることを検証。
+  3. **拒否されなかったリクエスト（成功ケース）が正常に完了することを検証。**
+  4. **送出されるエラーが `StorageError` であり、かつ `code == "STORAGE_BUSY"` であることを検証。**
+  5. **テスト終了後にセマフォのカウンタが不整合なく初期値に戻っていること（リークなし）を検証するアサーションを追加。**
 - セマフォ取得タイムアウトテスト: セマフォ取得に `sqlite_acquire_timeout` 以上かかる状況を作り、`StorageError(code="STORAGE_BUSY", ...)` が送出されることを検証。
 - シリアライズ・デシリアライズ関連テスト: `serialize_float32`, `encode_embedding`, `save_embedding`, `decode_embedding`, `load_embedding`, `validate_embedding` を対象に、1) 保存→読み戻しでの一致（float32 キャスト含む）、2) 次元不一致時のエラー（保存・検索時）、3) NaN/Inf を含む入力の拒否、4) 公式APIフォールバック経路の動作確認（シリアライズ整合性とエラー処理）の単体テストを追加すること
 
@@ -819,12 +822,13 @@ git commit -m "feat: Redis Cache Adapter を実装"
 - `aiosqlite` で非同期接続管理
   - **注意**: `aiosqlite` ではワーカースレッド数の明示は不可。
   - **スレッドプール枯渇・コンテンション対策**として、以下の代替実装を行う:
-    - **バックプレッシャー制御**: `Settings.sqlite_max_concurrent_connections` に基づき、`SQLiteStorageAdapter` インスタンスレベルで単一の `asyncio.Semaphore` を保持し、`save_memory` や `vector_search` などのすべての DB 操作をこのセマフォでラップすること。その際、以下の二重のガードを実装すること：
+    - **バックプレッシャー制御**: `Settings.sqlite_max_concurrent_connections` に基づき、`SQLiteStorageAdapter` インスタンスレベルで単一の `asyncio.Semaphore` を保持し、`save_memory` や `vector_search` などの**すべての DB 操作**をこのセマフォでラップすること。その際、以下の二重のガードを実装すること：
       1. **待ち行列数チェック**: セマフォ取得前に、現在待機中のタスク数（`len(semaphore._waiters)` 等）を確認し、`Settings.sqlite_max_queued_requests` を超えている場合は即座に `StorageError(code="STORAGE_BUSY", ...)` を送出する。
       2. **取得タイムアウト**: `asyncio.wait_for(semaphore.acquire(), timeout=Settings.sqlite_acquire_timeout)` を用い、タイムアウト時は `StorageError` を送出する。
 
     - **コネクションプール設計**（再利用するコネクション管理）
-    - TRUNCATEなどによるロック競合で `aiosqlite.OperationalError: database is locked` や `SQLITE_BUSY` 等が発生した場合、クラッシュさせるのではなく `StorageError(code="STORAGE_BUSY", recoverable=True)` を送出してMCPクライアントにエラーを通知する（再試行を促す）ハンドリングを追加すること。
+    - **エラー処理**: TRUNCATEなどによるロック競合で `aiosqlite.OperationalError: database is locked` や `SQLITE_BUSY` 等が発生した場合、**これらを適切にキャッチして `StorageError(code="STORAGE_BUSY", recoverable=True)` へと変換**し、MCPクライアントにエラーを通知する（再試行を促す）ハンドリングを追加すること。
+    - **堅牢化**: CRUD 操作、ベクトル検索、FTS 検索、メタデータ取得など、**すべての DB アクセスメソッドにおいて例外なくセマフォとタイムアウトを利用**すること。
 - 接続確立後 (`pool/get_connection` ルーチン内など) 直ちに PRAGMA を強制実行し、`journal_mode=WAL`, `busy_timeout=5000`, `foreign_keys=ON`, `synchronous=NORMAL` を適用する
 - `sqlite-vec` 拡張のロードとベクトルインデックス作成
 - `sqlite-vec` が期待するバイナリBLOBへの型シリアライズ要件として、Python の `list[float]` を保存時/検索時に公式パッケージ (`sqlite-vec`) が提供する `serialize_float32()` を用いて正確にエンコードする処理を優先的に実装に組み込むこと（背景技術として `struct.pack('<' + 'f' * len(embedding), *embedding)` を理解しつつ公式APIを第一選択とする）。また、エンコード処理（例: encode_embedding / save_embedding）およびデコード処理（例: decode_embedding / load_embedding）において、入力を必ず float32 にキャストし、保存時・検索時に次元数が期待値と一致するか `validate_embedding` 関数等で検証（不一致時はエラー）すること。さらに、`math.isnan` や `math.isinf` を用いて不正な値（NaN/Inf）を検出し、保存・検索を事前に拒否する実装を含めること。

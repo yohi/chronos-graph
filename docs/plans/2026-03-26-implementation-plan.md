@@ -654,7 +654,7 @@ Expected: インポート成功（エラーなし）
 
 SPEC.md §3.1 および §6.2 に準拠したテーブル定義:
 
-- `memories` テーブル（全フィールド、`embedding` vector カラム含む）
+- `memories` テーブル（全フィールド、`embedding` vector カラム含む。DBレベルの重複排除を強制するため、必ず `content_hash` カラムを定義し、当該カラムに `UNIQUE` 制約または `UNIQUE` インデックスを設定すること）
 - `lifecycle_state` テーブル（`last_cleanup_at`, `save_count`, `cleanup_running`, `updated_at`）
 - B-tree インデックス: `memory_type`, `source_type`, `archived_at`, `project`
 - HNSW ベクトルインデックス: `embedding` カラム

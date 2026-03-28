@@ -145,6 +145,8 @@ class SourceType(str, Enum):
 | | `DEPENDS_ON` | — | 依存関係 |
 | | `CONTRADICTS` | `detected_at: timestamp` | 矛盾する情報（将来の概念ドリフト検出） |
 | | `SUPERSEDES` | — | 新情報による旧情報の置換 |
+| | `CHUNK_NEXT` | — | 同一ドキュメント内のチャンクの連続性（前→後） |
+| | `CHUNK_PREV` | — | 同一ドキュメント内のチャンクの連続性（後→前） |
 
 ### 3.4 記憶の自動分類ルール
 
@@ -224,6 +226,7 @@ class SourceAdapter(Protocol):
 | `TEMPORAL_NEXT/PREV` | 同一セッション/プロジェクトの時系列順 | ✅ |
 | `SUPERSEDES` | Deduplicator が Append-only 置換を実行（新→旧） | ✅ |
 | `REFERENCES` | チャンク中の URL・ファイルパスの抽出 | ✅ |
+| `CHUNK_NEXT/PREV` | 同一ドキュメント（URLや長文入力）から分割された連続するチャンク群の順序リンク | ✅ |
 | `CAUSED_BY/RESULTED_IN` | 因果関係推定 | ❌（RL 拡張ポイント） |
 
 **検索範囲とエッジ作成の上限およびバルク処理:**
@@ -492,13 +495,15 @@ FastMCP を使用。重いモジュール（sentence-transformers 等）は**遅
 | 引数 | 型 | 必須 | デフォルト | 説明 |
 |---|---|---|---|---|
 | `content` | str | ✅ | — | 記憶する内容 |
-| `source` | str | — | `"manual"` | `"conversation"` / `"manual"` / `"url"` |
+| `source` | str | — | `"conversation"` | `"conversation"` / `"manual"` / `"url"` |
 | `project` | str? | — | None | プロジェクトタグ |
 | `tags` | list[str] | — | [] | 追加タグ（制約：要素最大長50、`^[a-zA-Z0-9_-]+$`） |
 | `importance` | float? | — | None | 重要度ヒント（None なら自動） |
 
 記憶種別（episodic/semantic/procedural）は自動分類される。
 重複する記憶が存在する場合は自動的に統合される。
+
+**互換性 / 移行への注意**: `source` フィールドの既定値が以前の値から `"conversation"` に変更されました。そのため、既存API利用時の既定挙動が変化する可能性があります。既存クライアントで明示的な挙動を維持したい場合は、明示的に `source: "manual"` などを設定して対処してください。
 
 #### `memory_save_url` — URL からの取り込み
 
@@ -760,7 +765,7 @@ PRAGMA synchronous=NORMAL;         -- WAL モードでは NORMAL で十分な耐
 > 
 > **注意 (ファイルシステム制約)**: SQLite の WAL モードは同一マシン上のアクセスには対応しますが、NFS や CIFS などのネットワークファイルシステム上では正しく動作しません。
 > 
-> **保守運用**: 長時間運用で WAL が肥大化した場合に備え、定期的な `PRAGMA wal_checkpoint` と必要に応じた `VACUUM` を推奨する。
+> **保守運用**: 長時間運用で WAL が肥大化した場合に備え、Lifecycle Manager などのイベント駆動ジョブにて定期的に `PRAGMA wal_checkpoint(PASSIVE)` を実行する。ただし PASSIVE は非ブロッキングにチェックポイント処理を試行するものの即時の WAL ファイル縮小（truncation）を保証しない。確実なファイルサイズ縮小が必要な運用フェーズでは `wal_checkpoint(TRUNCATE)` や明示的な `VACUUM` を検討すること（ただしこれらは長時間のロック競合を起こす懸念があるため、実行タイミングに注意が必要）。
 > 
 > **セキュリティ制約 (パーミッション)**: 記憶データ（会話ログ等）を含むため、DB ファイル（`~/.context-store/memories.db`）の作成時にパーミッションを `0600`（所有者のみ読み書き可）に設定することを必須とします。
 

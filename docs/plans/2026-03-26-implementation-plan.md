@@ -225,6 +225,7 @@ def test_default_settings():
     assert settings.graph_max_logical_depth == 5
     assert settings.graph_max_physical_hops == 50
     assert settings.sqlite_max_concurrent_connections == 5
+    assert settings.sqlite_acquire_timeout == 2.0
 
 def test_embedding_provider_validation():
     settings = Settings(
@@ -312,6 +313,7 @@ class Settings(BaseSettings):
 
     # --- SQLite specific ---
     sqlite_max_concurrent_connections: int = 5
+    sqlite_acquire_timeout: float = 2.0  # seconds
 
     # --- URL Fetch (SSRF 対策) ---
     url_fetch_concurrency: int = 3
@@ -373,6 +375,7 @@ GRAPH_FANOUT_LIMIT=50
 GRAPH_MAX_LOGICAL_DEPTH=5
 GRAPH_MAX_PHYSICAL_HOPS=50
 SQLITE_MAX_CONCURRENT_CONNECTIONS=5
+SQLITE_ACQUIRE_TIMEOUT=2.0
 
 # === URL Fetch (SSRF 対策) ===
 URL_FETCH_CONCURRENCY=3
@@ -802,6 +805,8 @@ git commit -m "feat: Redis Cache Adapter を実装"
 - keyword_search: `FTS5` による全文検索（N-gram トークナイザ）
 - 単一ファイルで動作すること（一時ディレクトリで検証）
 - WAL モードが有効であることの検証（`PRAGMA journal_mode` の戻り値チェック）
+- 並行処理 & バックプレッシャーテスト: `sqlite_max_concurrent_connections=2` に設定し、10 個の同時リクエストを発行。アクティブな DB 処理が常に 2 以下であることを検証（セマフォの acquire/release をラップしたカウンタ等で計測）。
+- セマフォ取得タイムアウトテスト: セマフォ取得に `sqlite_acquire_timeout` 以上かかる状況を作り、`StorageError(code="STORAGE_BUSY", ...)` が送出されることを検証。
 - シリアライズ・デシリアライズ関連テスト: `serialize_float32`, `encode_embedding`, `save_embedding`, `decode_embedding`, `load_embedding`, `validate_embedding` を対象に、1) 保存→読み戻しでの一致（float32 キャスト含む）、2) 次元不一致時のエラー（保存・検索時）、3) NaN/Inf を含む入力の拒否、4) 公式APIフォールバック経路の動作確認（シリアライズ整合性とエラー処理）の単体テストを追加すること
 
 **Step 2: 実装**
@@ -809,9 +814,10 @@ git commit -m "feat: Redis Cache Adapter を実装"
 - `aiosqlite` で非同期接続管理
   - **注意**: `aiosqlite` ではワーカースレッド数の明示は不可。
   - **スレッドプール枯渇・コンテンション対策**として、以下の代替実装を行う:
-    - **バックプレッシャー制御**: `Settings.sqlite_max_concurrent_connections` に基づき、`SQLiteStorageAdapter` インスタンスレベルで単一の `asyncio.Semaphore` を保持し、`save_memory` や `vector_search` などのすべての DB 操作をこのセマフォでラップするデコレータまたはコンテキストマネージャを実装すること。これによりメモリへのタスク滞留を防ぐ。
+    - **バックプレッシャー制御**: `Settings.sqlite_max_concurrent_connections` に基づき、`SQLiteStorageAdapter` インスタンスレベルで単一の `asyncio.Semaphore` を保持し、`save_memory` や `vector_search` などのすべての DB 操作をこのセマフォでラップすること。その際、`asyncio.wait_for(semaphore.acquire(), timeout=Settings.sqlite_acquire_timeout)` を用い、タイムアウト時は `StorageError(code="STORAGE_BUSY", ...)` を送出すること。これによりメモリへのタスク滞留を防ぐ。
+
     - **コネクションプール設計**（再利用するコネクション管理）
-    - TRUNCATEなどによるロック競合で `aiosqlite.OperationalError: database is locked` や `SQLITE_BUSY` 等が発生した場合、クラッシュさせるのではなく `MemoryError(code="STORAGE_BUSY", recoverable=True)` を送出してMCPクライアントにエラーを通知する（再試行を促す）ハンドリングを追加すること。
+    - TRUNCATEなどによるロック競合で `aiosqlite.OperationalError: database is locked` や `SQLITE_BUSY` 等が発生した場合、クラッシュさせるのではなく `StorageError(code="STORAGE_BUSY", recoverable=True)` を送出してMCPクライアントにエラーを通知する（再試行を促す）ハンドリングを追加すること。
 - 接続確立後 (`pool/get_connection` ルーチン内など) 直ちに PRAGMA を強制実行し、`journal_mode=WAL`, `busy_timeout=5000`, `foreign_keys=ON`, `synchronous=NORMAL` を適用する
 - `sqlite-vec` 拡張のロードとベクトルインデックス作成
 - `sqlite-vec` が期待するバイナリBLOBへの型シリアライズ要件として、Python の `list[float]` を保存時/検索時に公式パッケージ (`sqlite-vec`) が提供する `serialize_float32()` を用いて正確にエンコードする処理を優先的に実装に組み込むこと（背景技術として `struct.pack('<' + 'f' * len(embedding), *embedding)` を理解しつつ公式APIを第一選択とする）。また、エンコード処理（例: encode_embedding / save_embedding）およびデコード処理（例: decode_embedding / load_embedding）において、入力を必ず float32 にキャストし、保存時・検索時に次元数が期待値と一致するか `validate_embedding` 関数等で検証（不一致時はエラー）すること。さらに、`math.isnan` や `math.isinf` を用いて不正な値（NaN/Inf）を検出し、保存・検索を事前に拒否する実装を含めること。

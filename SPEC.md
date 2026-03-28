@@ -631,7 +631,7 @@ PostgreSQL・Neo4j 両方から削除する。
 統一されたエラーレスポンス:
 
 ```python
-class MemoryError:
+class StorageError:
     code: str           # "NOT_FOUND" | "STORAGE_ERROR" | "EMBEDDING_ERROR" 等
     message: str        # 人間が読めるエラーメッセージ
     recoverable: bool   # リトライ可能か
@@ -644,7 +644,7 @@ Graceful Degradation:
 | Neo4j | グラフ検索をスキップ。ベクトル + キーワード検索のみで動作継続 |
 | Redis | キャッシュなしで直接 DB 検索 |
 | PostgreSQL | 全ツールがエラーを返す（マスター DB） |
-| SQLite | WAL TRUNCATE中などのロック競合時（`SQLITE_BUSY`等）、`MemoryError(code="STORAGE_BUSY", recoverable=True)`を返しMCPクライアントにリトライを促す |
+| SQLite | WAL TRUNCATE中などのロック競合時（`SQLITE_BUSY`等）、`StorageError(code="STORAGE_BUSY", recoverable=True)`を返しMCPクライアントにリトライを促す |
 
 ---
 
@@ -816,7 +816,8 @@ SELECT DISTINCT to_id, edge_type, depth FROM graph;
 > ※ この透過解決を実装する際は、サイクル（閉路）発生時の無限ループ再帰を防止するため、訪問済みノードセット（`visited_supersedes_ids`）を保持して再訪時は打ち切るか、または物理的な最大ホップ数（例: 最大50ホップ。`graph_max_physical_hops`）のサブ上限を設ける設計を必須とする。また、制限に到達した場合はサイレントフェイルとせず、Pythonの `logging` モジュールを使用して明確な警告ログ（例: `WARNING: Physical hops limit (50) reached for node {id}. Returning stale node.`）を出力すること。Phase 5 / Phase 9 のテスト要件として以下の3ケースを必ず含めること: (1) Long SUPERSEDES chain: 同じメモリへの10回のSUPERSEDESチェーンを作成し、depth=2のトラバーサルが常に最新のActiveノードに到達することを検証、(2) Mixed-traversal: SUPERSEDESとSEMANTICALLY_RELATED等の他のエッジを混在させ、論理深さがSUPERSEDES以外のエッジでのみカウントされることを検証、(3) Hard-limit validation: SUPERSEDESを除外した論理深さが設定した論理ハードリミット（`graph_max_logical_depth`）を超えないこと、かつ物理深さのリミット（`graph_max_physical_hops`）により無限ループを防止し、警告ログが出力されることを検証。
 
 **SQLite のバックプレッシャー制御:**
-aiosqlite を用いた非同期実行において、FastMCP 側で大量の並行リクエストが発生した場合、スレッド枯渇やメモリ上のタスク滞留を防ぐため、`SQLiteStorageAdapter` の初期化時に `asyncio.Semaphore(sqlite_max_concurrent_connections)` を設定し、すべての DB 操作メソッド（`save_memory`, `search` 等）がこのセマフォを獲得してから実行されるようにラップする設計とすること。
+aiosqlite を用いた非同期実行において、FastMCP 側で大量の並行リクエストが発生した場合、スレッド枯渇やメモリ上のタスク滞留を防ぐため、`SQLiteStorageAdapter` の初期化時に `asyncio.Semaphore(sqlite_max_concurrent_connections)` を設定し、すべての DB 操作メソッド（`save_memory`, `vector_search`, `keyword_search` 等）がこのセマフォを獲得してから実行されるようにラップする設計とすること。
+その際、セマフォ取得にタイムアウト（`sqlite_acquire_timeout`）を設定し、取得に失敗した場合は `StorageError(code="STORAGE_BUSY", recoverable=True)` を送出してクライアントに過負荷状態を通知すること。実装には `asyncio.wait_for(semaphore.acquire(), timeout=...)` 等を用い、イベントループ内での無制限な待機を回避する。
 
 **性能検証要件:**
 
@@ -1041,6 +1042,7 @@ DEDUP_THRESHOLD=0.90
 GRAPH_MAX_LOGICAL_DEPTH=5
 GRAPH_MAX_PHYSICAL_HOPS=50
 SQLITE_MAX_CONCURRENT_CONNECTIONS=5
+SQLITE_ACQUIRE_TIMEOUT=2000          # ms (セマフォ取得待ちタイムアウト)
 ```
 
 ---

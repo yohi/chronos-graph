@@ -425,7 +425,28 @@ git commit -m "feat: pydantic-settings による設定管理を実装"
 - Create: `src/context_store/logger.py`
 - Create: `tests/unit/test_logger.py`
 
-**Step 1: 実装**
+**Step 1: テストを書く**
+
+```python
+# tests/unit/test_logger.py
+import pytest
+from context_store.logger import get_logger, set_context, clear_context
+
+def test_context_propagation():
+    # ContextVar 経由で request_id や agent_id が伝播することを検証
+    pass
+
+def test_structured_json_output(capsys):
+    # 出力が JSON/KV フォーマットであることを検証
+    pass
+
+def test_stderr_fatal_errors(capsys):
+    # 致命的エラーが stderr に出力されることを検証
+    pass
+```
+- 非同期コンテキスト（`asyncio`）でのコンテキスト伝播が正しいことを検証する。
+
+**Step 2: 実装**
 
 - `structlog` あるいは標準 `logging` モジュールを用いた JSON/KV フォーマット出力の共通設定を実装。
 - 以下の可観測性（Observability）要件を満たす機構を提供する:
@@ -433,7 +454,7 @@ git commit -m "feat: pydantic-settings による設定管理を実装"
   - バックプレッシャー制御、サーキットブレーカー（`interrupt()`）、自己修復（Consolidator）、SQLiteのロック待機などの複雑な非同期処理において、デバッグや障害解析を容易にする詳細なトレース出力。
   - 致命的なエラーや警告の標準エラー（stderr）への構造化出力。
 
-**Step 2: Commit**
+**Step 3: Commit**
 
 ```bash
 git add src/context_store/logger.py tests/unit/test_logger.py
@@ -944,11 +965,11 @@ git commit -m "feat: SQLite Graph Adapter (再帰的 CTE) を実装"
 
 **Step 2: 実装**
 
-- InMemoryCacheAdapter: `dict` + `asyncio.Lock` + TTL 管理。`invalidate_prefix` メソッドでのループ内におけるO(N)ブロッキングとロック競合を防ぐため、以下のいずれかのアプローチを必須として実装すること: (a) スリープ前のロック一時解放・再取得（`batch_size` 毎にロックを解放し、`await asyncio.sleep(0.001)` を実行してから再取得する）、または (b) 全キーのリストを短いロック期間でスナップショットとして抽出し、ロック解放後にバッチ削除を実行する。
-  - **Cache Coherenceの保証**: 複数プロセスが同じSQLiteを共有する際のStale Cache対策として、データの読み取り時（`get`等の呼び出し時）に `SQLiteStorageAdapter` 経由または直接DBの `system_metadata` 等から最終更新日時を軽量にポーリングし、メモリ上の保持時刻と比較して変更があればキャッシュ全体をパージするポーリング機構を実装すること。
+- InMemoryCacheAdapter: `dict` + `asyncio.Lock` + TTL 管理。`invalidate_prefix` メソッドでのループ内におけるO(N)ブロッキングとロック競合を防ぐため、以下のいずれかのアプローチを必須として実装すること: (a) スリープ前のロック一時解放・再取得（`batch_size` 毎にロックを解放し、`await asyncio.sleep(0.001)` を実行してから再取得する）、または (b) 全キーのリストを短いロック期間でスナップショットとして抽出し、ロック解放後にバッチ削除を実行する。また、キャッシュの全体クリアを行う `clear` メソッドを実装すること。
 - StorageFactory: Settings に基づいて適切なアダプターを返すファクトリ関数
   `create_storage(settings) -> tuple[StorageAdapter, GraphAdapter, CacheAdapter]`
   ※ `sqlite` モードでは GraphAdapter = SQLiteGraphAdapter（None ではない）
+  - **Cache Coherenceの保証**: `InMemoryCacheAdapter` 自体にはストレージの依存を持たせず、`StorageFactory` 内で `SQLiteCacheCoherenceChecker` などのデコレータまたはバックグラウンドタスクを構築する。複数プロセスが同じSQLiteを共有する際のStale Cache対策として、一定間隔（`CACHE_COHERENCE_POLL_INTERVAL_SECONDS`、例: 5秒）ごとに `system_metadata` テーブルから `key = 'last_cache_update'` の `updated_at` をポーリングし、インメモリの保持時刻より新しい変更があれば `CacheAdapter.clear()` を呼び出す機構を組み込むこと。
 
 **Step 3: テスト確認 & Commit**
 

@@ -1,4 +1,22 @@
-# Context Store MCP v2.0 — 設計・仕様書
+# ChronosGraph (旧: Context Store MCP v2.0) — 設計・仕様書
+
+> **名称について**: 本システムの正式プロジェクト名称は「**ChronosGraph**」です。開発・運用上の混乱を防ぐため、パッケージ名、モジュール名、データベース名、環境変数のプレフィックス等といった内部コンポーネント名としては引き続き `context_store` / `context-store-mcp` を使用するマッピングを採用しています。
+> 
+> **名称マッピング表と移行ガイダンス**:
+> 
+> | 項目 | 使用する名称 | 備考 |
+> |---|---|---|
+> | 正式プロジェクト名 | **ChronosGraph** | README.mdのタイトルや一般向けドキュメントで使用 |
+> | PyPI パッケージ名 | `context-store-mcp` | `pyproject.toml` の `name` |
+> | Python モジュール名 | `context_store` | `src/context_store/` など |
+> | CLI コマンド | `context-store` | `python -m context_store` など |
+> | データベース名 | `context_store` | PostgreSQL の DB名・ユーザー名 |
+> | Docker サービス名 | `postgres`, `neo4j` | (変更なし) |
+> | 環境変数プレフィックス| (なし) | `POSTGRES_DB` など既存のまま |
+> 
+> **互換性の保証**:
+> 名称変更に伴う破壊的変更はありません。既存の `.env` ファイル、MCP クライアント設定、データベースファイル（`memories.db`）はそのまま利用可能です。バージョンは `v2.0` として扱われます。
+> **検索性の維持**: 古い名称で検索するユーザーのディスカバビリティを維持するため、README.md の冒頭等には旧名称（Context Store MCP）を併記することを推奨します。
 
 > AIエージェント向け MCP ベース長期記憶システム
 
@@ -339,6 +357,11 @@ def normalize_rrf(scores: list[float], weights_sum: float = 1.0, k: int = 60) ->
 
 - プロジェクトタグによるフィルタリング（オプション）
 - 最大トークン制限によるコンテキスト消費の抑制
+  - **完全オフライン対応**: トークン計算に利用する `tiktoken` はデフォルトでエンコーディング辞書をネットワークからフェッチするため、エアギャップ（完全オフライン）環境でのクラッシュリスクがあります。このため、以下の優先順位に基づくフォールバックチェーンと例外ハンドリングを必須要件とします。
+    1. **`tiktoken.encoding_for_model(model)`**: 初期化時およびエンコード実行時に、ネットワーク関連エラー（`TimeoutError`, `ConnectionError`, `OSError`, `urllib.error.URLError` 等）を明示的にキャッチした場合は、即座にステップ 3 へジャンプします。
+    2. **`TokenCounter` Protocol**: プロバイダー固有のフォールバック手段がある場合に試行します。
+    3. **前述の言語別最適化（§5.5.1 の ASCII 比率ベースの動的マージン）を用いた文字数近似**: 最終手段として安全側過大推定による近似式（例: `token_count_approx = ceil(len(text) / 3.0 * safety_margin)`、日本語等の場合は `safety_margin = 1.2` または `3.0` 等）へフォールバックします。
+    すべてのフォールバック発動時は、どの関数（`encoding_for_model` や `TokenCounter`）で失敗したかを含む明確なログを `INFO`/`WARNING` レベルで出力し、運用者が発生頻度を監視できるようにしてください。
 - `last_accessed_at` と `access_count` の更新
 
 ---
@@ -840,6 +863,12 @@ SELECT DISTINCT to_id, edge_type, depth FROM graph;
 > Deduplicator による Append-only 置換で形成される `SUPERSEDES` エッジは新旧情報の論理的な同一性を示すため、この種のトラバーサルは論理的な「深さ」とみなさないこと。再帰的CTEやトラバーサルロジック内において、`SUPERSEDES` を辿る操作は `depth` のカウントを加算させない（透過的に最新ノードへ解決する）よう実装し、更新頻度の高いノードがハードリミットにより最新版へ到達できなくなる問題を回避する。
 > ※ この透過解決を実装する際は、サイクル（閉路）発生時の無限ループ再帰を防止するため、訪問済みノードセット（`visited_supersedes_ids`）を保持して再訪時は打ち切るか、または物理的な最大ホップ数（例: 最大50ホップ。`graph_max_physical_hops`）のサブ上限を設ける設計を必須とする。また、制限に到達した場合はサイレントフェイルとせず、Pythonの `logging` モジュールを使用して明確な警告ログ（例: `logging.warning(f"Physical hops limit ({Settings.graph_max_physical_hops}) reached while resolving SUPERSEDES chain for node {node_id}. Returning last reachable node (may not be the latest active version).")`）を出力すること。Phase 5 / Phase 9 のテスト要件として以下の3ケースを必ず含めること: (1) Long SUPERSEDES chain: 同じメモリへの10回のSUPERSEDESチェーンを作成し、depth=2のトラバーサルが常に最新のActiveノードに到達することを検証、(2) Mixed-traversal: SUPERSEDESとSEMANTICALLY_RELATED等の他のエッジを混在させ、論理深さがSUPERSEDES以外のエッジでのみカウントされることを検証、(3) Hard-limit validation: SUPERSEDESを除外した論理深さが設定した論理ハードリミット（`graph_max_logical_depth`）を超えないこと、かつ物理深さのリミット（`graph_max_physical_hops`）により無限ループを防止し、警告ログが出力されることを検証。
 
+> **サーキットブレーカー（CPU時間枯渇対策）**:
+> 密なグラフにおける再帰的CTEの実行は、物理ホップ数の制限（`graph_max_physical_hops`）を満たしていても計算量が爆発し、CPU時間を枯渇させるリスクがあります。このため、SQLiteGraphAdapter におけるトラバーサルクエリ実行時には、明示的なクエリタイムアウトを導入してください。タイムアウト値は環境変数または設定ファイルから取得可能な `GRAPH_TRAVERSAL_TIMEOUT_SECONDS`（例: 1〜2秒）を使用します。
+> 
+> **注意**: `aiosqlite` を用いた場合、`asyncio.wait_for` によるタイムアウトでは Python 側のコルーチンがキャンセルされるだけで、バックグラウンドの SQLite スレッドでの CPU 消費は継続してしまいます。これを防ぐため、必ず `sqlite3.Connection.interrupt()` （プログレスハンドラ等を用いた経過時間の監視、または別タスクからの遅延呼び出し）を用いて SQLite 内部の実行を強制終了させる機構を実装してください。タイムアウト発生時は例外として処理を中断するのではなく、到達済みの部分グラフを返すか、安全に空結果を返す Graceful Degradation を行うサーキットブレーカー機構の実装を必須とします。タイムアウト発生時は警告ログも出力してください。
+> Neo4jGraphAdapter においても、同様に `GRAPH_TRAVERSAL_TIMEOUT_SECONDS` を利用し、トランザクションのタイムアウト（例: `tx.run(..., timeout=GRAPH_TRAVERSAL_TIMEOUT_SECONDS)`）を設定して、同様の Graceful Degradation を行ってください。
+
 **SQLite のバックプレッシャー制御:**
 aiosqlite を用いた非同期実行において、FastMCP 側で大量の並行リクエストが発生した場合、スレッド枯渇やメモリ上のタスク滞留を防ぐため、以下のバックプレッシャー機構を実装すること：
 
@@ -1074,6 +1103,7 @@ SIMILARITY_THRESHOLD=0.70
 DEDUP_THRESHOLD=0.90
 GRAPH_MAX_LOGICAL_DEPTH=5
 GRAPH_MAX_PHYSICAL_HOPS=50
+GRAPH_TRAVERSAL_TIMEOUT_SECONDS=2.0
 SQLITE_MAX_CONCURRENT_CONNECTIONS=5
 SQLITE_MAX_QUEUED_REQUESTS=20        # セマフォ取得待ちの最大キュー数 (超過時は即時拒否)
 SQLITE_ACQUIRE_TIMEOUT=2.0           # seconds (セマフォ取得待ちタイムアウト)

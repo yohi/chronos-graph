@@ -1,4 +1,4 @@
-# Context Store MCP v2.0 Implementation Plan
+# ChronosGraph (旧: Context Store MCP v2.0) Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
@@ -225,6 +225,7 @@ def test_default_settings():
     assert settings.graph_fanout_limit == 50
     assert settings.graph_max_logical_depth == 5
     assert settings.graph_max_physical_hops == 50
+    assert settings.graph_traversal_timeout_seconds == 2.0
     assert settings.sqlite_max_concurrent_connections == 5
     assert settings.sqlite_max_queued_requests == 20
     assert isinstance(settings.sqlite_acquire_timeout, float)
@@ -315,6 +316,7 @@ class Settings(BaseSettings):
     graph_max_logical_depth: int = Field(default=5, ge=1)
     # GRAPH_MAX_PHYSICAL_HOPS 環境変数をマッピング（デフォルト: 50）。SUPERSEDES解決時の無限ループ防止用内部制限（最大物理ホップ数）
     graph_max_physical_hops: int = Field(default=50, ge=1)
+    graph_traversal_timeout_seconds: float = Field(default=2.0, gt=0.0)
 
     # --- SQLite specific ---
     sqlite_max_concurrent_connections: int = Field(default=5, ge=1)
@@ -386,6 +388,7 @@ DEDUP_THRESHOLD=0.90
 GRAPH_FANOUT_LIMIT=50
 GRAPH_MAX_LOGICAL_DEPTH=5
 GRAPH_MAX_PHYSICAL_HOPS=50
+GRAPH_TRAVERSAL_TIMEOUT_SECONDS=2.0
 SQLITE_MAX_CONCURRENT_CONNECTIONS=5
 SQLITE_MAX_QUEUED_REQUESTS=20
 SQLITE_ACQUIRE_TIMEOUT=2.0
@@ -887,6 +890,7 @@ git commit -m "feat: SQLite Storage Adapter (ライトウェイト版) を実装
 - `SQLiteStorageAdapter` と同一の DB ファイルを共有（接続の受け渡し）
 - PRAGMA は `SQLiteStorageAdapter` 側で既に適用済みを前提
 - **トラバーサル上限設定**: `SUPERSEDES` チェーンループ回避用の物理ホップ上限値（CTE 内の `physical_depth >= graph_max_physical_hops` 制約）はハードコードを避け、`config.py` の `Settings.graph_max_physical_hops` を参照するかコンストラクタで受け取る設計とし、テストやランタイムでのチューニングを容易にすること。
+- **サーキットブレーカー（クエリタイムアウト）**: 再帰的CTEの実行時（`traverse`等）に、密なグラフでのCPU時間枯渇を防ぐため、明示的なクエリタイムアウト（設定値: `Settings.graph_traversal_timeout_seconds`）を導入すること。注意点として、`aiosqlite` のバックグラウンドスレッドで実行されるクエリは `asyncio.wait_for` では停止できないため、プログレスハンドラ (`set_progress_handler`) による監視、または別タスクからの `sqlite3.Connection.interrupt()` 呼び出しを用いて SQLite の実行を強制終了させる機構を実装すること。タイムアウト発生時は例外を送出せず、到達済みの部分グラフを返すか、安全に空結果を返す Graceful Degradation を実装し、到達したノード数を含む `graph_traversal_timeout` イベントの警告ログを出力すること。
 
 **Step 3: テスト確認 & Commit**
 
@@ -1312,6 +1316,9 @@ git commit -m "feat: Keyword Search を実装"
     - **Long SUPERSEDES chain**: 10回のSUPERSEDESチェーンを作成し、depth=2のトラバーサルが常に最新のActiveノードに到達することを検証。
     - **Mixed-traversal**: SUPERSEDESとSEMANTICALLY_RELATED等の他のエッジを混在させ、論理深さがSUPERSEDES以外のエッジでのみカウントされることを検証。
     - **Hard-limit validation**: SUPERSEDESを除外した論理深さが設定値に収まること、かつ物理深さのリミット超過時に無限ループが防止され、警告ログが出力されることを検証。
+  - **5. タイムアウト保護 (Circuit Breaker) のパイプライン検証**: `SQLiteGraphAdapter` に実装されたクエリタイムアウトが発動した際に、パイプライン全体がクラッシュせず、取得済みの部分グラフまたは空結果を用いて後続処理（Result Fusion等）が正常に継続されることを担保するテストを `tests/integration/test_retrieval_pipeline.py` に追加すること。具体的には以下の2点を実装する:
+    - (a) `SQLiteGraphAdapter.traverse()` が `asyncio.TimeoutError`（または割り込み例外）を投げるようモックし、パイプラインが例外を送出せず部分/空結果を返し、Result FusionがVector/Keyword結果と正しくマージ処理を行い、タイムアウトのフラグ/メタデータやログが記録されることを検証するユニットテスト。
+    - (b) （オプション）密集したグラフ（例: 約1,000ノードの完全グラフ等）を実際に構築し、トラバーサル時にタイムアウトを誘発させ、上記 (a) と同様のフェイルセーフな挙動（クラッシュなし、部分/空結果、フュージョン完了、ログ出力）が行われることを確認する重めの統合テスト。
 - Neo4j 接続失敗時は空結果を返す（Graceful Degradation）
 
 **Step 2: Commit**
@@ -1402,8 +1409,12 @@ Expected: PASS
   - **エンコーディング選択**: まず `tiktoken` の `encoding_for_model(model)` を第一候補としてトークンエンコーダの取得を試みる。
   - **プロバイダー依存フォールバック**: `encoding_for_model` が例外エラーや未対応を返す場合（ローカルモデルや一部の LiteLLM モデル等を利用している時）、`src/context_store/embedding/protocols.py` で定義した（Task 3.1） `TokenCounter` Protocol を経由してフォールバックする。
   - **近似による過大推定でのガード**: デフォルトエンコーディング（未指定時の `cl100k_base` 等）でのカウントも利用不可能な場合の最終手段として文字数近似を使用する。この際は、**必ず安全側（過大推定）**となる式（例: `ceil(len(text) * safety_margin)`）を採用し、`max_tokens` 超過を防ぐためのガードとする。
-  - **言語別最適化（軽量ヒューリスティクス）**: すべてのテキストに対して一律で日本語向けの係数（3.0等）を適用すると、英語主体のテキストで過大推定となり許容可能なコンテキストを早期に切り捨ててしまう懸念がある。これを防ぐため、入力テキストのASCII文字比率を判定し、英語主体（例: ASCII比率90%以上）なら `safety_margin = 1.5`、日本語等のマルチバイト主体なら `safety_margin = 3.0` のように動的に調整する軽量なヒューリスティクスを導入し検証すること。
-  - **エラーハンドリングとロギング**: フォールバックが発生した場合は、その決定と使用するフォールバックポリシー（利用したデフォルトエンコーディング名や文字数近似での動的なマージン値など）をシステムログに明示的に記録する。
+  - **言語別最適化（軽量ヒューリスティクス）**: すべてのテキストに対して一律で日本語向けの係数（3.0等）を適用すると、英語主体のテキストで過大推定となり許容可能なコンテキストを早期に切り捨ててしまう懸念がある。これを防ぐため、入力テキストのASCII文字比率を判定し、英語主体（例: ASCII比率90%以上）なら `safety_margin = 1.5`、日本語等のマルチバイト主体なら `safety_margin = 3.0` のように動的に調整する軽量なヒューリスティクス（計算式: `ceil(len(text) / 3.0 * safety_margin)`）を導入し検証すること。
+  - **オフライン環境フォールバック**: `tiktoken` はエンコーディング辞書をネットワークから取得しようとするため、完全オフライン（エアギャップ）環境では例外が発生しパイプラインが停止するリスクがある。これを防ぐため、以下の優先順位に基づく明確なフォールバックチェーンを実装すること:
+    1. **`tiktoken.encoding_for_model(model)`**: 初期化時およびエンコード実行時に、具体的なネットワーク例外（`TimeoutError`, `ConnectionError`, `OSError`, `urllib.error.URLError`）をキャッチし、発生時は即座に 3 の近似計算へフォールバックする。
+    2. **`TokenCounter` Protocol**: `tiktoken` 非対応のモデル（ローカルモデル等）の場合に利用するプロバイダー依存フォールバック。
+    3. **文字数ベース近似**: 上記で失敗した場合は前述の「言語別最適化を用いた軽量ヒューリスティクス（`ceil(len(text) / 3.0 * safety_margin)`）」を実行する。
+  - **エラーハンドリングとロギング**: フォールバックが発動した場合は、その決定と失敗した関数（`encoding_for_model` や `TokenCounter` のどちらか）を含む明確なログを `INFO` または `WARNING` レベルでシステムログに出力し、運用者が監視できるようにすること。
 - access_count / last_accessed_at の更新
 
 **Step 2: Commit**

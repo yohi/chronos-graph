@@ -216,6 +216,9 @@ class SourceAdapter(Protocol):
 > (1) 旧情報の変更履歴をグラフ構造で追跡可能、
 > (2) `SUPERSEDES` エッジが新旧ノード間に正しく作成される、
 > (3) Archived 化された旧ノードは Lifecycle Manager の Purger フローで自然にクリーンアップされる。
+> 
+> **【アーキテクチャ上のトレードオフ（結果整合性）】**
+> マルチプロセス環境において、同時に類似内容が書き込まれた場合、Ingestion Pipeline の排他制御はベストエフォートにとどまるため、類似度 ≥ 0.90 の重複がシステムに登録される可能性があります。すり抜けた重複についてはバックグラウンドの Consolidator によって事後修復される結果整合性のアプローチを採用します。詳細は Lifecycle Manager の Consolidator セクションを参照してください。
 
 ### 4.5 Graph Linker
 
@@ -437,6 +440,15 @@ SELECT pg_try_advisory_lock(hashtext('cleanup_lock'));
 ```
 
 完了時は `pg_advisory_unlock(...)` を呼び出し、SQLite と同様に stale-lock timeout の考え方を維持する。
+
+**Consolidator による自己修復（Self-healing）の実装・運用要件:**
+
+- **検出戦略**: 毎回全件のベクトル走査を行うのは非効率なため、スライディングウィンドウ方式（例：直近 N 時間・あるいは前回クリーンアップ以降に `Active` で作成・更新された記憶ノード）をトリガーとして、それらに対する類似度検索（閾値 ≥ 0.90）を実行する。
+- **パフォーマンスとスコープ**: データセットが大規模（1万〜10万件以上）な場合、Consolidator 1回あたりの処理件数（バッチサイズ）に上限（例: 100〜500件）を設け、超過分は次回のクリーンアップサイクルに持ち越す（バックオフ/スロットリング）。
+- **優先順位**: 0.85〜0.89 の通常マージ処理よりも、類似度 ≥ 0.90 の自己修復（重複排除のすり抜け対応）を優先して実行する。
+- **監視ログとメトリクス**:
+  - 自己修復発動時は、`Self-healing: archived duplicate memory {id} due to similarity {score} (superseded by {new_id})` に相当する構造化ログを `INFO` または `WARNING` レベルで出力する。
+  - 監視用メトリクスとして `self_healing_duplicate_count` を記録し、Stats Collector で集計・永続化する。
 
 ### 6.3 Decay Scorer 仕様
 

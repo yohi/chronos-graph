@@ -310,14 +310,14 @@ class Settings(BaseSettings):
     dedup_threshold: float = 0.90
     graph_fanout_limit: int = 50
     # GRAPH_MAX_LOGICAL_DEPTH 環境変数をマッピング（デフォルト: 5）。クライアントが指定できる最大論理深さ（クライアント向けの制限）
-    graph_max_logical_depth: int = 5
+    graph_max_logical_depth: int = Field(default=5, ge=1)
     # GRAPH_MAX_PHYSICAL_HOPS 環境変数をマッピング（デフォルト: 50）。SUPERSEDES解決時の無限ループ防止用内部制限（最大物理ホップ数）
-    graph_max_physical_hops: int = 50
+    graph_max_physical_hops: int = Field(default=50, ge=1)
 
     # --- SQLite specific ---
-    sqlite_max_concurrent_connections: int = 5
-    sqlite_max_queued_requests: int = 20
-    sqlite_acquire_timeout: float = 2.0  # seconds
+    sqlite_max_concurrent_connections: int = Field(default=5, ge=1)
+    sqlite_max_queued_requests: int = Field(default=20, ge=1)
+    sqlite_acquire_timeout: float = Field(default=2.0, gt=0.0)  # seconds
 
     # --- URL Fetch (SSRF 対策) ---
     url_fetch_concurrency: int = 3
@@ -824,9 +824,9 @@ git commit -m "feat: Redis Cache Adapter を実装"
 - `aiosqlite` で非同期接続管理
   - **注意**: `aiosqlite` ではワーカースレッド数の明示は不可。
   - **スレッドプール枯渇・コンテンション対策**として、以下の代替実装を行う:
-    - **バックプレッシャー制御**: `Settings.sqlite_max_concurrent_connections` に基づき、`SQLiteStorageAdapter` インスタンスレベルで単一の `asyncio.Semaphore` を保持し、`save_memory` や `vector_search` などの**すべての DB 操作**をこのセマフォでラップすること。その際、以下の二重のガードを実装すること：
-      1. **待ち行列数チェック**: セマフォ取得前に、現在待機中のタスク数を確認し、`Settings.sqlite_max_queued_requests` 以上である場合は即座に `StorageError(code="STORAGE_BUSY", ...)` を送出する。
-      2. **取得タイムアウト**: `asyncio.wait_for(semaphore.acquire(), timeout=Settings.sqlite_acquire_timeout)` を用い、タイムアウト時は `StorageError` を送出する。
+    - **バックプレッシャー制御**: `Settings.sqlite_max_concurrent_connections` に基づき、`SQLiteStorageAdapter` インスタンスレベルで単一の `asyncio.Semaphore` を保持し、`save_memory` や `vector_search` などの**すべての DB 操作**をこのセマフォでラップすること。その際、TOCTOUと内部属性（_waiters）への依存を排除するため、`asyncio.Lock` 等で保護される明示的な待機カウンタ（またはアトミックなガード）を導入し、以下の二重のガードを実装すること：
+      1. **待ち行列数チェック**: セマフォ取得前にロック配下でカウンタを確認し、`Settings.sqlite_max_queued_requests` 以上である場合は即座に `StorageError(code="STORAGE_BUSY", ...)` を送出する。許容範囲内ならカウンタをインクリメントする。
+      2. **取得とタイムアウト**: `asyncio.wait_for(semaphore.acquire(), timeout=Settings.sqlite_acquire_timeout)` を用い、タイムアウト時は `StorageError` を送出する。セマフォ取得の成否（正常取得、またはタイムアウトなどの例外）に関わらず、後続処理（または finally ブロック）で必ずロック配下でカウンタをデクリメントする。
 
     - **コネクションプール設計**（再利用するコネクション管理）
     - **エラー処理**: TRUNCATEなどによるロック競合で以下のエラーが発生した場合、`StorageError(code="STORAGE_BUSY", recoverable=True)` へと変換し、MCPクライアントにリトライを促すハンドリングを追加すること。

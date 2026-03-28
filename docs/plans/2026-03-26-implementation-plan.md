@@ -309,7 +309,9 @@ class Settings(BaseSettings):
     similarity_threshold: float = 0.70
     dedup_threshold: float = 0.90
     graph_fanout_limit: int = 50
+    # GRAPH_MAX_LOGICAL_DEPTH 環境変数をマッピング（デフォルト: 5）。クライアントが指定できる最大論理深さ（クライアント向けの制限）
     graph_max_logical_depth: int = 5
+    # GRAPH_MAX_PHYSICAL_HOPS 環境変数をマッピング（デフォルト: 50）。SUPERSEDES解決時の無限ループ防止用内部制限（最大物理ホップ数）
     graph_max_physical_hops: int = 50
 
     # --- SQLite specific ---
@@ -395,7 +397,7 @@ Expected: PASS
 
 *Deployment & Testing Validation*:
 テスト実行時および本番デプロイ時において、環境変数で指定（または省略）された `GRAPH_MAX_PHYSICAL_HOPS` 等の各設定値が期待通りにロードされ、トラバーサル制限として機能するかどうかを検証すること。
-具体的には、Task 5.4 の自動テスト（`tests/unit/test_graph_traversal.py`）を拡張し、`GRAPH_MAX_PHYSICAL_HOPS` に小さい値をオーバーライド設定してトラバーサルアルゴリズムを実行する。指定されたホップ上限内で到達するケース（success case）と、上限を超過するためトラバーサルが設定レイヤで正確に停止するケース（failure/halt case）の両方のアサーションを実装し、必ずCIのパス要件として自動実行させること。
+具体的には、Task 5.4 の自動テスト（`tests/unit/test_graph_traversal.py`）を拡張し、テストスコープ内で一時的に `GRAPH_MAX_PHYSICAL_HOPS` 環境変数を小さい値にオーバーライド設定（テスト後に復元）して、本番コードと同じトラバーサルのエントリポイントとなる関数/クラスを実行する。指定されたホップ上限内で到達するケース（success case）と、上限を超過するためトラバーサルが停止し上限超過時の結果（ログ出力と到達時点のノード）を返すケース（failure/halt case）の両方のアサーションを実装し、PR時にユニットテストを実行するCIワークフローにこれらのテストが含まれ、自動実行されることを保証すること。
 
 **Step 6: Commit**
 
@@ -1282,7 +1284,7 @@ git commit -m "feat: Keyword Search を実装"
 - Vector Search で取得した上位ノードを起点として Graph Adapter で traverse
 - SearchStrategy に基づくエッジタイプフィルタ
 - **スーパーノード対策**: 各ノードからのエッジ展開（fan-out）時に取得上限（`Settings.graph_fanout_limit` から取得し適用）を設け、グラフ検索時のクエリ爆発を防ぐ
-- **SUPERSEDES チェーン透過的解決**: `SUPERSEDES` エッジを辿るトラバーサルは論理深さカウントを消費しない実装とし、長大チェーンでも最新の Active ノードに到達可能にする。具体的には再帰的CTEにおいて論理深さ（`logical_depth`）と物理深さ（`physical_depth`）を分離し、`physical_depth` は常に +1、`logical_depth` は `CASE WHEN edge_type = 'SUPERSEDES' THEN logical_depth ELSE logical_depth + 1 END` で分岐更新する。探索停止条件に `visited_supersedes_ids` でのサイクル検出に加え、「物理的な最大ホップ数（`config.py` の `Settings.graph_max_physical_hops` [デフォ: 50] または環境変数経由のオーバーライド値）」を超過時というハードリミットを組み込む。**可視化要件**: ハードリミット到達時はエラーを投げずその到達時点の最新ノードを返すフェイルセーフ挙動とするが、将来的な概念ドリフトや異常のデバッグを可能にするため、Pythonの `logging` モジュールを使用して明確な警告ログ（例: `WARNING: Physical hops limit (50) reached for node {id}. Returning stale node.`）を必ず出力すること。この定数をGraph Adapterに注入（plumbing）することでテストやランタイムチューニングを容易にする。
+- **SUPERSEDES チェーン透過的解決**: `SUPERSEDES` エッジを辿るトラバーサルは論理深さカウントを消費しない実装とし、長大チェーンでも最新の Active ノードに到達可能にする。具体的には再帰的CTEにおいて論理深さ（`logical_depth`）と物理深さ（`physical_depth`）を分離し、`physical_depth` は常に +1、`logical_depth` は `CASE WHEN edge_type = 'SUPERSEDES' THEN logical_depth ELSE logical_depth + 1 END` で分岐更新する。探索停止条件に `visited_supersedes_ids` でのサイクル検出に加え、「物理的な最大ホップ数（`config.py` の `Settings.graph_max_physical_hops` [デフォ: 50] または環境変数経由のオーバーライド値）」を超過時というハードリミットを組み込む。**可視化要件**: ハードリミット到達時はエラーを投げずその到達時点の最新ノードを返すフェイルセーフ挙動とするが、将来的な概念ドリフトや異常のデバッグを可能にするため、Pythonの `logging` モジュールを使用して明確な警告ログ（例: `logging.warning(f"Physical hops limit ({Settings.graph_max_physical_hops}) reached while resolving SUPERSEDES chain for node {node_id}. Returning last reachable node (may not be the latest active version).")`）を必ず出力すること。この定数をGraph Adapterに注入（plumbing）することでテストやランタイムチューニングを容易にする。
 - Neo4j 接続失敗時は空結果を返す（Graceful Degradation）
 
 **Step 2: Commit**

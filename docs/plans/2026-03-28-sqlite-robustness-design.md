@@ -16,6 +16,8 @@
 ### 2.2 SQLite エラーハンドリングと `STORAGE_BUSY` への変換
 SQLite のロック競合やセマフォ取得待ちを、MCP クライアントが解釈可能な回復可能なエラーに集約します。
 
+*   **事前キュー長チェック (Queue-length guard)**:
+    *   `asyncio.wait_for(semaphore.acquire(), timeout=Settings.sqlite_acquire_timeout)` を呼び出す前に、実装は必ずセマフォの待機タスク数（例: 非プライベートな代替APIや安全な方法での待機長チェック、あるいは必要に応じて `len(semaphore._waiters)` 等）を検証し、`Settings.sqlite_max_queued_requests` 以上である場合は即座に `StorageError(code="STORAGE_BUSY", recoverable=True, message="Too many queued requests")` を送出する。これによりタイムアウトを待たずにフェイルファストする。
 *   **エラーコードのマッピング**:
     *   `aiosqlite.OperationalError` (または `sqlite3.OperationalError`) をキャッチした際、以下の条件に合致する場合は `StorageError(code="STORAGE_BUSY", recoverable=True, ...)` に変換して再送出する。
         *   エラーメッセージに `"database is locked"` または `"database is busy"` が含まれる。
@@ -23,6 +25,8 @@ SQLite のロック競合やセマフォ取得待ちを、MCP クライアント
     *   それ以外の `OperationalError` はそのまま再送出（または適切なエラーに変換）する。
 *   **タイムアウトのエラーマッピング**:
     *   `asyncio.wait_for(semaphore.acquire(), ...)` による `asyncio.TimeoutError` をキャッチし、`StorageError(code="STORAGE_BUSY", recoverable=True, message="Semaphore acquisition timeout")` を送出する。
+
+以上の「事前キュー長チェック（即時エラー送出）」と「タイムアウト・DBロック時のエラーマッピング」を併用することで、`SQLiteStorageAdapter.save_memory` や `vector_search` 等のすべての DB 操作関数において一貫したバックプレッシャー制御が適用されるようにする。
 
 ### 2.3 リソース管理の徹底
 セマフォの解放漏れ（リソースリーク）を防ぐため、以下の実装パターンを義務付けます。
@@ -34,7 +38,7 @@ SQLite のロック競合やセマフォ取得待ちを、MCP クライアント
 
 *   **`SUPERSEDES` チェーン解決ログ**:
     *   `SPEC.md` L816 の警告ログを以下のように変更する。
-    *   `"WARNING: Physical hops limit ({graph_max_physical_hops}) reached while resolving SUPERSEDES chain for node {id}. Returning last reachable node (may not be the latest active version)."`
+    *   `logging.warning(f"Physical hops limit ({Settings.graph_max_physical_hops}) reached while resolving SUPERSEDES chain for node {node_id}. Returning last reachable node (may not be the latest active version).")`
     *   これにより、エラーの発生箇所（ノードID）と原因（SUPERSEDES 解決中の物理ホップ制限）が明確になる。
 
 ## 3. テスト設計と検証要件

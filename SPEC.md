@@ -806,14 +806,17 @@ WITH RECURSIVE graph AS (
 SELECT DISTINCT to_id, edge_type, depth FROM graph;
 ```
 
-| パラメータ | デフォルト値 | 説明 |
+設定ローダー（`config.py` 等の環境変数を読み込むモジュール）によって、環境変数 `GRAPH_MAX_LOGICAL_DEPTH` は `graph_max_logical_depth` に、`GRAPH_MAX_PHYSICAL_HOPS` は `graph_max_physical_hops` にマッピングされます。これらのロールとデフォルト値は以下の通りです。
+
+| パラメータ | デフォルト値 | 役割・説明 |
 |---|---|---|
-| `max_depth` | 2 | トラバーサルの深さ |
-| ハードリミット | 5 | クライアントが指定できる最大論理深さ（`graph_max_logical_depth`。これを超える値は強制的に制限） |
+| `max_depth` | 2 | クライアントからの要求によるトラバーサルの深さのデフォルト値。 |
+| `graph_max_logical_depth` | 5 | クライアントが指定できる最大論理深さ（クライアント向けの制限。これを超える値は強制的に制限される）。 |
+| `graph_max_physical_hops` | 50 | 透過的・SUPERSEDES解決時の無限ループを防止するための内部的な最大物理ホップ数制限。 |
 
 > **特記事項 (`SUPERSEDES` チェーンの解決)**:
 > Deduplicator による Append-only 置換で形成される `SUPERSEDES` エッジは新旧情報の論理的な同一性を示すため、この種のトラバーサルは論理的な「深さ」とみなさないこと。再帰的CTEやトラバーサルロジック内において、`SUPERSEDES` を辿る操作は `depth` のカウントを加算させない（透過的に最新ノードへ解決する）よう実装し、更新頻度の高いノードがハードリミットにより最新版へ到達できなくなる問題を回避する。
-> ※ この透過解決を実装する際は、サイクル（閉路）発生時の無限ループ再帰を防止するため、訪問済みノードセット（`visited_supersedes_ids`）を保持して再訪時は打ち切るか、または物理的な最大ホップ数（例: 最大50ホップ。`graph_max_physical_hops`）のサブ上限を設ける設計を必須とする。また、制限に到達した場合はサイレントフェイルとせず、Pythonの `logging` モジュールを使用して明確な警告ログ（例: `WARNING: Physical hops limit ({graph_max_physical_hops}) reached while resolving SUPERSEDES chain for node {id}. Returning last reachable node (may not be the latest active version).`）を出力すること。Phase 5 / Phase 9 のテスト要件として以下の3ケースを必ず含めること: (1) Long SUPERSEDES chain: 同じメモリへの10回のSUPERSEDESチェーンを作成し、depth=2のトラバーサルが常に最新のActiveノードに到達することを検証、(2) Mixed-traversal: SUPERSEDESとSEMANTICALLY_RELATED等の他のエッジを混在させ、論理深さがSUPERSEDES以外のエッジでのみカウントされることを検証、(3) Hard-limit validation: SUPERSEDESを除外した論理深さが設定した論理ハードリミット（`graph_max_logical_depth`）を超えないこと、かつ物理深さのリミット（`graph_max_physical_hops`）により無限ループを防止し、警告ログが出力されることを検証。
+> ※ この透過解決を実装する際は、サイクル（閉路）発生時の無限ループ再帰を防止するため、訪問済みノードセット（`visited_supersedes_ids`）を保持して再訪時は打ち切るか、または物理的な最大ホップ数（例: 最大50ホップ。`graph_max_physical_hops`）のサブ上限を設ける設計を必須とする。また、制限に到達した場合はサイレントフェイルとせず、Pythonの `logging` モジュールを使用して明確な警告ログ（例: `logging.warning(f"Physical hops limit ({Settings.graph_max_physical_hops}) reached while resolving SUPERSEDES chain for node {node_id}. Returning last reachable node (may not be the latest active version).")`）を出力すること。Phase 5 / Phase 9 のテスト要件として以下の3ケースを必ず含めること: (1) Long SUPERSEDES chain: 同じメモリへの10回のSUPERSEDESチェーンを作成し、depth=2のトラバーサルが常に最新のActiveノードに到達することを検証、(2) Mixed-traversal: SUPERSEDESとSEMANTICALLY_RELATED等の他のエッジを混在させ、論理深さがSUPERSEDES以外のエッジでのみカウントされることを検証、(3) Hard-limit validation: SUPERSEDESを除外した論理深さが設定した論理ハードリミット（`graph_max_logical_depth`）を超えないこと、かつ物理深さのリミット（`graph_max_physical_hops`）により無限ループを防止し、警告ログが出力されることを検証。
 
 **SQLite のバックプレッシャー制御:**
 aiosqlite を用いた非同期実行において、FastMCP 側で大量の並行リクエストが発生した場合、スレッド枯渇やメモリ上のタスク滞留を防ぐため、以下のバックプレッシャー機構を実装すること：

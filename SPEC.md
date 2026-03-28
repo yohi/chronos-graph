@@ -765,7 +765,7 @@ PRAGMA synchronous=NORMAL;         -- WAL モードでは NORMAL で十分な耐
 > 
 > **注意 (ファイルシステム制約)**: SQLite の WAL モードは同一マシン上のアクセスには対応しますが、NFS や CIFS などのネットワークファイルシステム上では正しく動作しません。
 > 
-> **保守運用**: 長時間運用で WAL が肥大化した場合に備え、Lifecycle Manager などのイベント駆動ジョブにて定期的に `PRAGMA wal_checkpoint(PASSIVE)` を安全に実行し、必要に応じた `VACUUM` を推奨する（TRUNCATE は長時間のロック競合を起こす懸念があるため避ける）。
+> **保守運用**: 長時間運用で WAL が肥大化した場合に備え、Lifecycle Manager などのイベント駆動ジョブにて定期的に `PRAGMA wal_checkpoint(PASSIVE)` を実行する。ただし PASSIVE は非ブロッキングにチェックポイント処理を試行するものの即時の WAL ファイル縮小（truncation）を保証しない。確実なファイルサイズ縮小が必要な運用フェーズでは `wal_checkpoint(TRUNCATE)` や明示的な `VACUUM` を検討すること（ただしこれらは長時間のロック競合を起こす懸念があるため、実行タイミングに注意が必要）。
 > 
 > **セキュリティ制約 (パーミッション)**: 記憶データ（会話ログ等）を含むため、DB ファイル（`~/.context-store/memories.db`）の作成時にパーミッションを `0600`（所有者のみ読み書き可）に設定することを必須とします。
 

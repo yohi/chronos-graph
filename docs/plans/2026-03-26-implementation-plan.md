@@ -1293,7 +1293,14 @@ git commit -m "feat: Keyword Search を実装"
 - Vector Search で取得した上位ノードを起点として Graph Adapter で traverse
 - SearchStrategy に基づくエッジタイプフィルタ
 - **スーパーノード対策**: 各ノードからのエッジ展開（fan-out）時に取得上限（`Settings.graph_fanout_limit` から取得し適用）を設け、グラフ検索時のクエリ爆発を防ぐ
-- **SUPERSEDES チェーン透過的解決**: `SUPERSEDES` エッジを辿るトラバーサルは論理深さカウントを消費しない実装とし、長大チェーンでも最新の Active ノードに到達可能にする。具体的には再帰的CTEにおいて論理深さ（`logical_depth`）と物理深さ（`physical_depth`）を分離し、`physical_depth` は常に +1、`logical_depth` は `CASE WHEN edge_type = 'SUPERSEDES' THEN logical_depth ELSE logical_depth + 1 END` で分岐更新する。探索停止条件に `visited_supersedes_ids` でのサイクル検出に加え、「物理的な最大ホップ数（`config.py` の `Settings.graph_max_physical_hops` [デフォ: 50] または環境変数経由のオーバーライド値）」を超過時というハードリミットを組み込む。**可視化要件**: ハードリミット到達時はエラーを投げずその到達時点の最新ノードを返すフェイルセーフ挙動とするが、将来的な概念ドリフトや異常のデバッグを可能にするため、Pythonの `logging` モジュールを使用して明確な警告ログ（例: `logging.warning(f"Physical hops limit ({Settings.graph_max_physical_hops}) reached while resolving SUPERSEDES chain for node {node_id}. Returning last reachable node (may not be the latest active version).")`）を必ず出力すること。この定数をGraph Adapterに注入（plumbing）することでテストやランタイムチューニングを容易にする。
+- **SUPERSEDES チェーン透過的解決**: `SUPERSEDES` エッジを辿るトラバーサルは論理深さカウントを消費しない実装とし、長大チェーンでも最新の Active ノードに到達可能にする。具体的には、再帰的CTEにおいて以下のルールを設ける：
+  - **1. 深さの分離 (Depth Separation)**: 再帰的CTEにおいて論理深さ（`logical_depth`）と物理深さ（`physical_depth`）を分離する。`physical_depth` はトラバーサルごとに常に `+1` されるが、`logical_depth` は `CASE WHEN edge_type = 'SUPERSEDES' THEN logical_depth ELSE logical_depth + 1 END` という条件式で分岐更新する。
+  - **2. ハードリミット (Hard Limit)**: 探索停止条件として `visited_supersedes_ids` によるサイクル検出に加え、物理的な最大ホップ数を制限するハードリミットを組み込む。この制限には `config.py` の `Settings.graph_max_physical_hops`（デフォルト: 50、環境変数で上書き可）を使用する。
+  - **3. 警告ログ (Warning Logging)**: ハードリミット到達時はエラーを発生させず、到達時点の最新ノードを返すフェイルセーフな動作とする。ただし、将来的な概念ドリフトや異常のデバッグのため、Pythonの `logging` モジュールを使用して明確な警告ログを必ず出力する。例: `logging.warning(f"Physical hops limit ({Settings.graph_max_physical_hops}) reached while resolving SUPERSEDES chain for node {node_id}. Returning last reachable node (may not be the latest active version).")`
+  - **4. 必須テストケース**: これらの挙動を担保するため、以下の3つのテストケースを実装すること。
+    - **Long SUPERSEDES chain**: 10回のSUPERSEDESチェーンを作成し、depth=2のトラバーサルが常に最新のActiveノードに到達することを検証。
+    - **Mixed-traversal**: SUPERSEDESとSEMANTICALLY_RELATED等の他のエッジを混在させ、論理深さがSUPERSEDES以外のエッジでのみカウントされることを検証。
+    - **Hard-limit validation**: SUPERSEDESを除外した論理深さが設定値に収まること、かつ物理深さのリミット超過時に無限ループが防止され、警告ログが出力されることを検証。
 - Neo4j 接続失敗時は空結果を返す（Graceful Degradation）
 
 **Step 2: Commit**

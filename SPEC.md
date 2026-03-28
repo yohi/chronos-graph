@@ -160,6 +160,7 @@ LLM は使用しない（トークン消費ゼロの原則）。
 | Procedural | 手順表現（「〜する方法」「手順：」「1. 2. 3.」）、コマンド列、ステップ構造 |
 
 上記のいずれのルール・パターンにも合致しない曖昧な入力に対する**フォールバック（デフォルト）の MemoryType は `EPISODIC`** とする。
+その際、フォールバックされた記憶ノードはノイズ（不要な相槌など）である可能性が高いため、デフォルトの `importance_score` に対してペナルティ（例: 0.5倍の係数を掛けるなど）を適用し、検索結果の上位に浮上するのを防ぐロジックを追加すること。
 
 ---
 
@@ -765,7 +766,8 @@ PRAGMA synchronous=NORMAL;         -- WAL モードでは NORMAL で十分な耐
 > 
 > **注意 (ファイルシステム制約)**: SQLite の WAL モードは同一マシン上のアクセスには対応しますが、NFS や CIFS などのネットワークファイルシステム上では正しく動作しません。
 > 
-> **保守運用**: 長時間運用で WAL が肥大化した場合に備え、Lifecycle Manager などのイベント駆動ジョブにて定期的に `PRAGMA wal_checkpoint(PASSIVE)` を実行する。ただし PASSIVE は非ブロッキングにチェックポイント処理を試行するものの即時の WAL ファイル縮小（truncation）を保証しない。確実なファイルサイズ縮小が必要な運用フェーズでは `wal_checkpoint(TRUNCATE)` や明示的な `VACUUM` を検討すること（ただしこれらは長時間のロック競合を起こす懸念があるため、実行タイミングに注意が必要）。
+> **保守運用**: 長時間運用で WAL が肥大化した場合に備え、Lifecycle Manager などのイベント駆動ジョブにて定期的に `PRAGMA wal_checkpoint(PASSIVE)` を実行する。ただし PASSIVE は非ブロッキングにチェックポイント処理を試行するものの即時の WAL ファイル縮小（truncation）を保証しない。
+> **WAL肥大化のフェイルセーフ**: `PASSIVE` が継続的に失敗し、WALファイルの物理サイズが閾値（例: 100MB）を超過した場合は、システムのIOパフォーマンス低下を防ぐため、警告ログ（`WARNING` または `ERROR` レベル）を出力した上で、ロック競合のリスクを承知で `PRAGMA wal_checkpoint(TRUNCATE)` を試行する（または次回の安全な起動時まで待機する）フォールバック機構を実装すること。
 > 
 > **セキュリティ制約 (パーミッション)**: 記憶データ（会話ログ等）を含むため、DB ファイル（`~/.context-store/memories.db`）の作成時にパーミッションを `0600`（所有者のみ読み書き可）に設定することを必須とします。
 
@@ -805,7 +807,7 @@ SELECT DISTINCT to_id, edge_type, depth FROM graph;
 
 > **特記事項 (`SUPERSEDES` チェーンの解決)**:
 > Deduplicator による Append-only 置換で形成される `SUPERSEDES` エッジは新旧情報の論理的な同一性を示すため、この種のトラバーサルは論理的な「深さ」とみなさないこと。再帰的CTEやトラバーサルロジック内において、`SUPERSEDES` を辿る操作は `depth` のカウントを加算させない（透過的に最新ノードへ解決する）よう実装し、更新頻度の高いノードがハードリミットにより最新版へ到達できなくなる問題を回避する。
-> ※ この透過解決を実装する際は、サイクル（閉路）発生時の無限ループ再帰を防止するため、訪問済みノードセット（`visited_supersedes_ids`）を保持して再訪時は打ち切るか、または物理的な最大ホップ数（例: 最大50ホップ）のサブ上限を設ける設計を必須とする。Phase 5 / Phase 9 のテスト要件として以下の3ケースを必ず含めること: (1) Long SUPERSEDES chain: 同じメモリへの10回のSUPERSEDESチェーンを作成し、depth=2のトラバーサルが常に最新のActiveノードに到達することを検証、(2) Mixed-traversal: SUPERSEDESとSEMANTICALLY_RELATED等の他のエッジを混在させ、論理深さがSUPERSEDES以外のエッジでのみカウントされることを検証、(3) Hard-limit validation: SUPERSEDESを除外した論理深さが設定したハードリミットを超えないこと、かつ物理深さのリミットにより無限ループを防止できることを検証。
+> ※ この透過解決を実装する際は、サイクル（閉路）発生時の無限ループ再帰を防止するため、訪問済みノードセット（`visited_supersedes_ids`）を保持して再訪時は打ち切るか、または物理的な最大ホップ数（例: 最大50ホップ）のサブ上限を設ける設計を必須とする。また、制限に到達した場合はサイレントフェイルとせず、Pythonの `logging` モジュールを使用して明確な警告ログ（例: `WARNING: SUPERSEDES chain limit (50) reached for node {id}. Returning stale node.`）を出力すること。Phase 5 / Phase 9 のテスト要件として以下の3ケースを必ず含めること: (1) Long SUPERSEDES chain: 同じメモリへの10回のSUPERSEDESチェーンを作成し、depth=2のトラバーサルが常に最新のActiveノードに到達することを検証、(2) Mixed-traversal: SUPERSEDESとSEMANTICALLY_RELATED等の他のエッジを混在させ、論理深さがSUPERSEDES以外のエッジでのみカウントされることを検証、(3) Hard-limit validation: SUPERSEDESを除外した論理深さが設定したハードリミットを超えないこと、かつ物理深さのリミットにより無限ループを防止し、警告ログが出力されることを検証。
 
 **性能検証要件:**
 

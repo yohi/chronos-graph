@@ -757,6 +757,10 @@ class CacheAdapter(Protocol):
 | `delete_memory` | `memory:{id}`、`search:{project}:*`、`stats:{project}` |
 | `memory_prune` | 全キャッシュをクリア |
 
+**プロセス間キャッシュの一貫性（SQLite + InMemoryCacheAdapter）:**
+複数のエージェント（プロセス）が同一の SQLite DB を共有する場合、単一プロセス内の `InMemoryCacheAdapter` では他プロセスの更新を検知できず、古いデータ（Stale Cache）を返すリスクがある。
+これを防ぐため、キャッシュを参照する直前に DB 側のシステムメタデータ（例: 最終更新日時）を軽量なクエリでポーリングし、インメモリの保持時刻より新しい変更が検知された場合は、インメモリキャッシュを一括クリアする「Cache Coherence」機構を実装する。
+
 `invalidate_prefix(prefix)` の Redis 実装は `KEYS` を使わず、`SCAN` + batched `DELETE` を用いる。
 疑似コード:
 

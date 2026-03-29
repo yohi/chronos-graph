@@ -1728,7 +1728,10 @@ git commit -m "feat: RL 拡張ポイント (Protocol + NoOp) を実装"
 - **ベクトル次元数フェイルファストチェック（SPEC.md §9.1）:**
   - 初期化時に `storage.get_vector_dimension()` と `embedding_provider.dimension` を比較
   - `stored_dim is not None and stored_dim != current_dim` の場合 `ConfigurationError` を発生
-  - 例外メッセージにて、具体的なリカバリ手順（`SQLITE_DB_PATH` の変更 または DB ファイルの手動削除）を明示し、運用デッドロックを防ぐ
+  - 例外メッセージにて、具体的なリカバリ手順を明示し、運用デッドロックを防ぐ:
+    1. 環境変数 `SQLITE_DB_PATH` (SQLite) や Postgres の DB名 を変更して別環境として開始する
+    2. 既存データを退避する場合、付属の退避スクリプト (`python scripts/migrate_dimension.py`) を実行する
+    3. 全データを初期化する場合、DBファイルの手動削除（SQLite）やスキーマの再構築（PostgreSQL）を行う
   - `stored_dim is None` の場合は警告ログを出力し続行（初回起動時は次元不明）
 
 **Step 2: Commit**

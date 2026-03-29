@@ -883,7 +883,11 @@ SELECT DISTINCT to_id, edge_type, depth FROM graph;
 > **注意**: `aiosqlite` を用いた場合、`asyncio.wait_for` によるタイムアウトでは Python 側のコルーチンがキャンセルされるだけで、バックグラウンドの SQLite スレッドでの CPU 消費は継続してしまいます。これを防ぐため、必ず `sqlite3.Connection.interrupt()` （プログレスハンドラ等を用いた経過時間の監視、または別タスクからの遅延呼び出し）を用いて SQLite 内部の実行を強制終了させる機構を実装してください。
 > **【重要な副作用と実装要件（安全な SQLite Interrupt コンテキストマネージャ）】**: 非同期タスクから単純に `interrupt()` を呼び出すと、クエリ完了後のアイドル状態のコネクションに割り込みフラグが残り、**プール内の後続の無関係なクエリが `OperationalError: interrupted` でクラッシュする**という深刻な副作用があります。
 > これを防ぐため、共通基盤として非同期コンテキストマネージャ（例: `SafeSqliteInterruptCtx`）を実装してください。このコンテキストマネージャは、「クエリが確実に実行中である期間」のみ割り込みフラグを有効化し、クエリ終了後やプール返却時には絶対に割り込みが波及しないよう厳密な状態管理を行わなければなりません。
-> 特に `asyncio` のイベントループ上では、フラグの確認から `interrupt()` の呼び出しまでの間に `await` によるコンテキストスイッチが発生すると、その隙にクエリが完了してしまう漏出リスクがあります。そのため、**タイマータスク内での「フラグの確認」と「`interrupt()` の呼び出し」は `await` を挟まない単一の同期ステップとして実装する**か、`asyncio.Task.cancel()` 等を用いた厳密なアトミック制御を仕様として必須とします。
+> **実装における原子性要件**: タイマータスク内でのフラグチェックと `interrupt()` 呼び出しの間に `await` を挟んではなりません。asyncio は協調的マルチタスクであるため、`await` による制御の譲渡により、コンテキストマネージャの `__aexit__` がフラグを `False` に設定する隙が生まれます。
+> 実装パターン例:
+> 1. **単一ステップ実装**: フラグチェックと `interrupt()` を同期的に実行（`await` なし）
+> 2. **asyncio.Lock ベース**: ロックを保持したままチェック→呼び出しを実行
+> 3. **Task.cancel() ベース**: タイマーを `asyncio.Task` として管理し、コンテキスト終了時に `task.cancel()` で先制的にキャンセル
 > タイムアウト発生時は例外として処理を中断するのではなく、到達済みの部分グラフを返すか、安全に空結果を返す Graceful Degradation を行うサーキットブレーカー機構の実装を必須とします。タイムアウト発生時は警告ログも出力してください。
 > Neo4jGraphAdapter においても、同様に `GRAPH_TRAVERSAL_TIMEOUT_SECONDS` を利用し、トランザクションのタイムアウト（例: `tx.run(..., timeout=GRAPH_TRAVERSAL_TIMEOUT_SECONDS)`）を設定して、同様の Graceful Degradation を行ってください。
 
@@ -1115,7 +1119,7 @@ DECAY_HALF_LIFE_DAYS=30
 ARCHIVE_THRESHOLD=0.05
 CONSOLIDATION_THRESHOLD=0.85
 PURGE_RETENTION_DAYS=90
-STALE_LOCK_TIMEOUT_SECONDS=600      # 10分。StaleAwareFileLock が古いロックファイルを強制削除する判定時間
+STALE_LOCK_TIMEOUT_SECONDS=600  # 10 minutes; stale filelock auto-recovery threshold
 
 # === Search ===
 DEFAULT_TOP_K=10

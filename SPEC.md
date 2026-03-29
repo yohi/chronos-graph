@@ -737,6 +737,7 @@ class CacheAdapter(Protocol):
     async def set(self, key: str, value: Any, ttl: int) -> None: ...
     async def invalidate(self, key: str) -> None: ...
     async def invalidate_prefix(self, prefix: str) -> None: ...
+    async def clear(self) -> None: ...
     async def dispose(self) -> None: ...
 ```
 
@@ -756,6 +757,11 @@ class CacheAdapter(Protocol):
 | `update_memory` | `memory:{id}`、`search:{project}:*`、`stats:{project}` |
 | `delete_memory` | `memory:{id}`、`search:{project}:*`、`stats:{project}` |
 | `memory_prune` | 全キャッシュをクリア |
+
+**プロセス間キャッシュの一貫性（SQLite + InMemoryCacheAdapter）:**
+複数のエージェント（プロセス）が同一の SQLite DB を共有する場合、単一プロセス内のキャッシュでは他プロセスの更新を検知できず、古いデータ（Stale Cache）を返すリスクがある。
+これを防ぐため、`StorageFactory` 内で `SQLiteCacheCoherenceChecker`（または同等の監視コンポーネント）を用いて、DB の `system_metadata` テーブルの `key = 'last_cache_update'` の `updated_at` をポーリングする。
+パフォーマンス劣化を防ぐため、ポーリングは `get` の呼び出し毎ではなく、設定可能な一定間隔（例: `CACHE_COHERENCE_POLL_INTERVAL_SECONDS` = 5秒）でのみ実行する。インメモリの最終更新時刻より DB 側の時刻が新しいことが検知された場合は、`CacheAdapter.clear()` を呼び出してインメモリキャッシュを一括クリアする。
 
 `invalidate_prefix(prefix)` の Redis 実装は `KEYS` を使わず、`SCAN` + batched `DELETE` を用いる。
 疑似コード:

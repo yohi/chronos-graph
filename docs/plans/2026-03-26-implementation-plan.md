@@ -425,7 +425,7 @@ git commit -m "feat: pydantic-settings による設定管理を実装"
 - Create: `src/context_store/logger.py`
 - Create: `tests/unit/test_logger.py`
 
-**Step 1: テストを書く**
+**Step 1: テストを書く (Fail)**
 
 ```python
 # tests/unit/test_logger.py
@@ -445,16 +445,19 @@ def test_stderr_fatal_errors(capsys):
     pass
 ```
 - 非同期コンテキスト（`asyncio`）でのコンテキスト伝播が正しいことを検証する。
+- **検証**: `pytest tests/unit/test_logger.py` を実行し、まだ実装がないためテストが **失敗 (Fail)** することを確認する。
 
-**Step 2: 実装**
+**Step 2: 実装 (Implement)**
 
-- `structlog` あるいは標準 `logging` モジュールを用いた JSON/KV フォーマット出力の共通設定を実装。
+- `src/context_store/logger.py` を作成し、`structlog` あるいは標準 `logging` モジュールを用いた JSON/KV フォーマット出力の共通設定を実装。
 - 以下の可観測性（Observability）要件を満たす機構を提供する:
   - コンテキスト変数（`request_id`、`memory_id`、`agent_id` 等）のスレッドローカル/ContextVar による引き回しと自動付与。
   - バックプレッシャー制御、サーキットブレーカー（`interrupt()`）、自己修復（Consolidator）、SQLiteのロック待機などの複雑な非同期処理において、デバッグや障害解析を容易にする詳細なトレース出力。
   - 致命的なエラーや警告の標準エラー（stderr）への構造化出力。
 
-**Step 3: Commit**
+**Step 3: テスト成功確認 (Pass) & Commit**
+
+- **検証**: `pytest tests/unit/test_logger.py -v` を再度実行し、すべてのテストが **成功 (Pass)** することを確認する。
 
 ```bash
 git add src/context_store/logger.py tests/unit/test_logger.py

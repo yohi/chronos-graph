@@ -740,6 +740,8 @@ Expected: PASS
 
 ### Task 2.1b: 共通基盤ユーティリティの実装 (SQLite/Lock 高度制御)
 
+**前提条件:** Task 2.1 の Storage Protocol 定義が完了済みであること。
+
 **Files:**
 - Create: `src/context_store/utils/__init__.py`
 - Create: `src/context_store/utils/sqlite_interrupt.py`

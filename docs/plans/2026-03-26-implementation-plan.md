@@ -738,6 +738,52 @@ Expected: PASS
 
 ---
 
+### Task 2.1b: 共通基盤ユーティリティの実装 (SQLite/Lock 高度制御)
+
+**前提条件:** Task 2.1 の Storage Protocol 定義が完了済みであること。
+
+**Files:**
+- Create: `src/context_store/utils/__init__.py`
+- Create: `src/context_store/utils/sqlite_interrupt.py`
+- Create: `src/context_store/utils/stale_lock.py`
+- Create: `tests/unit/test_sqlite_interrupt.py`
+- Create: `tests/unit/test_stale_lock.py`
+- Create: `tests/integration/test_utils_integration.py`
+- Modify: `src/context_store/config.py`
+- Modify: `.env.example`
+
+**Step 1: 設定 (Config) の追加とテストの作成**
+
+- `config.py` および `.env.example` に `STALE_LOCK_TIMEOUT_SECONDS`（デフォルト: 600秒/10分）を追加。
+- `test_sqlite_interrupt.py`: モックした SQLite コネクションに対して、コンテキストマネージャ内でのみ `interrupt()` が発行され、コンテキスト外や完了後には発行されないこと、および複数クエリの連続実行時に副作用がないことを検証。
+- `test_stale_lock.py`: `filelock` の取得時、ファイルの `mtime` が有効期限内の場合はスキップ（Timeout）し、`STALE_LOCK_TIMEOUT_SECONDS` を超過している場合はファイルを強制削除して再取得に成功することを検証。テストでは設定値のモック/オーバーライドを行うこと。
+- `test_utils_integration.py`: 実ファイルシステムおよび SQLite DB（または temp-file）を用いた結合テストを追加。
+  1. **SafeSqliteInterruptCtx**: `SQLiteGraphAdapter` 等の実コンポーネント内で長時間クエリを実行し、本コンテキスト内で意図的に `interrupt()` を発生させる。長時間クエリが適切に中断されること、かつ直後に発行される後続クエリが `OperationalError: interrupted` なしで成功することを検証。
+  2. **StaleAwareFileLock**: `LifecycleManager` が利用する想定で、意図的に古い `mtime` を持つロックファイルを作成し、`StaleAwareFileLock` が古いファイルを強制削除して正常にロックを再取得できることを検証。
+
+**Step 2: 実装**
+
+- **安全な SQLite Interrupt コンテキストマネージャ (`SafeSqliteInterruptCtx`)**:
+  `aiosqlite` のバックグラウンドスレッドで長時間クエリ（再帰的 CTE 等）を強制終了する際、クエリが確実に実行中である期間のみ割り込みフラグを有効化し、クエリ完了後やプール返却時に `OperationalError: interrupted` の副作用を波及させない厳密な状態管理ラッパーを実装する。
+- **Stale Lock 自動リカバリ基盤 (`StaleAwareFileLock`)**:
+  LifecycleManager 等のプロセス間排他制御で利用する `filelock` をラップし、プロセス強制終了等によるロックファイルの残留（Stale Lock）を自動修復する機構を実装する。取得時に `config.py` から読み込んだ `STALE_LOCK_TIMEOUT_SECONDS` とファイルの最終更新時刻を比較し、超過していれば強制削除・再取得を行う。
+
+**Step 3: Commit**
+
+```bash
+git add src/context_store/utils/ src/context_store/config.py .env.example tests/unit/ tests/integration/
+git commit -m "feat: 共通基盤ユーティリティ (SafeSqliteInterruptCtx, StaleAwareFileLock) と設定層・結合テストを実装"
+```
+
+**Verification:**
+
+```bash
+Run: pytest tests/unit/test_sqlite_interrupt.py tests/unit/test_stale_lock.py tests/integration/test_utils_integration.py -v
+Expected: PASS
+```
+
+---
+
 ### Task 2.2: PostgreSQL Storage Adapter
 
 **前提条件:** Task 2.1a のスキーマが適用済みであること。

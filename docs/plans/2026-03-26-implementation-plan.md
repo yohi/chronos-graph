@@ -1728,7 +1728,10 @@ git commit -m "feat: RL 拡張ポイント (Protocol + NoOp) を実装"
 - **ベクトル次元数フェイルファストチェック（SPEC.md §9.1）:**
   - 初期化時に `storage.get_vector_dimension()` と `embedding_provider.dimension` を比較
   - `stored_dim is not None and stored_dim != current_dim` の場合 `ConfigurationError` を発生
-  - 例外メッセージにて、具体的なリカバリ手順（`SQLITE_DB_PATH` の変更、退避スクリプトの案内、または DB ファイルの手動削除）を明示し、運用デッドロックを防ぐ
+  - 例外メッセージにて、具体的なリカバリ手順を明示し、運用デッドロックを防ぐ:
+    1. 環境変数 `SQLITE_DB_PATH` (SQLite) や Postgres の DB名 を変更して別環境として開始する
+    2. 既存データを退避する場合、付属の退避スクリプト (`python scripts/migrate_dimension.py`) を実行する
+    3. 全データを初期化する場合、DBファイルの手動削除（SQLite）やスキーマの再構築（PostgreSQL）を行う
   - `stored_dim is None` の場合は警告ログを出力し続行（初回起動時は次元不明）
 
 **Step 2: Commit**
@@ -2012,35 +2015,6 @@ Expected: PASS（有効な JSON が出力される）
 - ベンチ結果は Task 9.4 の成果物として保存し、SPEC.md §13 の目標値との比較を記録する
 
 **Step 2: Commit**
-
-```bash
-Run: pytest tests/benchmark/test_performance.py --benchmark-only -v
-Expected: ベンチマークが収集され、結果アーティファクトが出力される
-
-git add tests/benchmark/
-git add pyproject.toml
-git commit -m "test: パフォーマンスベンチマークスイートを追加"
-```
-
----
-
-## Phase Summary
-
-| Phase | 内容 | Task数 |
-|---|---|---|
-| Phase 1 | プロジェクト基盤 | 5 |
-| Phase 2 | Storage Layer | 8 |
-| Phase 3 | Embedding Provider | 4 |
-| Phase 4 | Ingestion Pipeline | 6 |
-| Phase 5 | Retrieval Pipeline | 7 |
-| Phase 5.5 | 中間統合テスト | 1 |
-| Phase 6 | Lifecycle Manager | 4 |
-| Phase 7 | RL 拡張ポイント | 1 |
-| Phase 8 | Orchestrator + MCP Server | 3 |
-| Phase 9 | 統合テスト + ドキュメント | 4 |
-| **合計** | | **43 Tasks** |
-
-p 2: Commit**
 
 ```bash
 Run: pytest tests/benchmark/test_performance.py --benchmark-only -v

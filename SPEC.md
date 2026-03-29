@@ -944,7 +944,8 @@ if stored_dim is not None and stored_dim != current_dim:
         f"現行バージョンでは自動マイグレーションはサポートされていません。\\n"
         f"以下のいずれかの方法でデッドロック状態を回避してください:\\n"
         f"1. 環境変数 SQLITE_DB_PATH や Postgres の DB 名を変更して別環境として開始する\\n"
-        f"2. SQLite の場合はファイル (~/.context-store/memories.db) を手動で物理削除し、既存データを初期化する"
+        f"2. 既存データを退避する場合、付属の退避スクリプト (`python scripts/migrate_dimension.py`) を実行する\\n"
+        f"3. 全データを初期化する場合、DBファイルの手動削除（SQLite）やスキーマの再構築（PostgreSQL）を行う"
     )
 ```
 

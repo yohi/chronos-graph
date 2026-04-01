@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from context_store.ingestion.adapters import RawContent, URLAdapter
@@ -110,9 +110,7 @@ class IngestionPipeline:
         if source_type == SourceType.URL:
             raw_contents = await self._fetch_url_content(source)
         else:
-            raw_contents = [
-                RawContent(content=source, source_type=source_type, metadata=meta)
-            ]
+            raw_contents = [RawContent(content=source, source_type=source_type, metadata=meta)]
 
         results: list[IngestionResult] = []
 

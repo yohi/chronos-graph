@@ -1,4 +1,5 @@
 """Keyword Search - キーワード検索"""
+
 from context_store.storage.protocols import StorageAdapter
 from context_store.models.search import ScoredMemory
 

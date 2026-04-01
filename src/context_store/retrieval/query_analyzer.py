@@ -1,4 +1,5 @@
 """Query Analyzer - クエリ意図解析と検索戦略決定"""
+
 import re
 from dataclasses import dataclass
 
@@ -6,6 +7,7 @@ from dataclasses import dataclass
 @dataclass
 class SearchStrategy:
     """検索戦略"""
+
     vector_weight: float  # ベクトル検索の重み
     keyword_weight: float  # キーワード検索の重み
     graph_weight: float  # グラフ検索の重み
@@ -18,21 +20,21 @@ class QueryAnalyzer:
 
     # パターンマッチング用の正規表現
     ERROR_PATTERNS = [
-        r'(ERROR|WARN|Exception|Error|TypeError|SyntaxError|ValueError)',
-        r'(ENOENT|ECONNREFUSED|ETIMEDOUT|ER_\w+|ORA-\d+)',
-        r':\s*[A-Z][\w\s]+',  # "Error: message"
+        r"(ERROR|WARN|Exception|Error|TypeError|SyntaxError|ValueError)",
+        r"(ENOENT|ECONNREFUSED|ETIMEDOUT|ER_\w+|ORA-\d+)",
+        r":\s*[A-Z][\w\s]+",  # "Error: message"
     ]
 
     CAUSALITY_PATTERNS = [
-        r'(なぜ|どうして|原因|理由|何故)',
-        r'(why|cause|reason|how did)',
+        r"(なぜ|どうして|原因|理由|何故)",
+        r"(why|cause|reason|how did)",
     ]
 
     TIME_PATTERNS = [
-        r'(昨日|今日|明日|先週|来週|先月|今月|来月|最近|最近の)',
-        r'(\d+\s*日?前|先\s*\d+\s*日)',
-        r'(yesterday|today|tomorrow|last\s+week|next\s+week|last\s+month|recently)',
-        r'(\d+\s*days?\s+ago|previous\s+week)',
+        r"(昨日|今日|明日|先週|来週|先月|今月|来月|最近|最近の)",
+        r"(\d+\s*日?前|先\s*\d+\s*日)",
+        r"(yesterday|today|tomorrow|last\s+week|next\s+week|last\s+month|recently)",
+        r"(\d+\s*days?\s+ago|previous\s+week)",
     ]
 
     def __init__(self):
@@ -44,7 +46,7 @@ class QueryAnalyzer:
     @staticmethod
     def _compile_patterns(patterns: list[str]) -> re.Pattern:
         """複数のパターンを1つの正規表現に結合"""
-        combined = '|'.join(f'({p})' for p in patterns)
+        combined = "|".join(f"({p})" for p in patterns)
         return re.compile(combined, re.IGNORECASE)
 
     def analyze(self, query: str) -> SearchStrategy:

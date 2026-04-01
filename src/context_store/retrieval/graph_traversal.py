@@ -1,4 +1,5 @@
 """Graph Traversal - グラフトラバーサル検索"""
+
 import logging
 from typing import Any
 from uuid import UUID
@@ -65,7 +66,6 @@ class GraphTraversal:
         except Exception as e:
             # Graceful Degradation: グラフ検索失敗時は空結果を返す
             logger.warning(
-                f"Graph traversal failed: {type(e).__name__}: {str(e)}. "
-                "Returning empty results."
+                f"Graph traversal failed: {type(e).__name__}: {str(e)}. Returning empty results."
             )
             return []

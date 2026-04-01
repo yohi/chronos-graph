@@ -16,6 +16,7 @@ def _get_litellm() -> Any:
     """litellm モジュールを遅延ロードする (テストでパッチ可能)。"""
     try:
         import litellm as _litellm  # type: ignore[import]
+
         return _litellm
     except ImportError as e:
         raise ImportError(

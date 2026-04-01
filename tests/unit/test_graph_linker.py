@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -73,9 +72,7 @@ async def test_graph_linker_semantically_related_created() -> None:
     new_memory = _make_memory("新しい記憶", id=uuid4())
     existing = _make_memory("類似した既存記憶", id=uuid4())
 
-    storage.vector_search = AsyncMock(
-        return_value=[_make_scored_memory(existing, 0.80)]
-    )
+    storage.vector_search = AsyncMock(return_value=[_make_scored_memory(existing, 0.80)])
 
     linker = GraphLinker(storage=storage, graph=graph)
     await linker.link(new_memory)
@@ -97,9 +94,7 @@ async def test_graph_linker_semantically_related_not_created_below_threshold() -
     new_memory = _make_memory("新しい記憶")
     existing = _make_memory("あまり似ていない記憶")
 
-    storage.vector_search = AsyncMock(
-        return_value=[_make_scored_memory(existing, 0.60)]
-    )
+    storage.vector_search = AsyncMock(return_value=[_make_scored_memory(existing, 0.60)])
 
     linker = GraphLinker(storage=storage, graph=graph)
     await linker.link(new_memory)
@@ -159,8 +154,7 @@ async def test_graph_linker_no_temporal_links_different_session() -> None:
     edges = graph.create_edges_batch.call_args[0][0]
 
     temporal_edges = [
-        e for e in edges
-        if e["edge_type"] in (EdgeType.TEMPORAL_NEXT, EdgeType.TEMPORAL_PREV)
+        e for e in edges if e["edge_type"] in (EdgeType.TEMPORAL_NEXT, EdgeType.TEMPORAL_PREV)
     ]
     assert len(temporal_edges) == 0
 
@@ -208,7 +202,7 @@ async def test_graph_linker_references_url() -> None:
     )
 
     # URL に対応するノードが存在するとして、vector_search でヒットさせる
-    url_memory = _make_memory("example.com のドキュメント")
+    _make_memory("example.com のドキュメント")
     # REFERENCESはURLメタデータから作成するため、vector_searchでヒットしなくても可
 
     linker = GraphLinker(storage=storage, graph=graph)
@@ -255,15 +249,9 @@ async def test_graph_linker_chunk_links_sequential() -> None:
     chunk_prev = [e for e in edges if e["edge_type"] == EdgeType.CHUNK_PREV]
 
     # chunk0 → chunk1: CHUNK_NEXT
-    assert any(
-        e["from_id"] == str(chunk0.id) and e["to_id"] == str(chunk1.id)
-        for e in chunk_next
-    )
+    assert any(e["from_id"] == str(chunk0.id) and e["to_id"] == str(chunk1.id) for e in chunk_next)
     # chunk1 → chunk0: CHUNK_PREV
-    assert any(
-        e["from_id"] == str(chunk1.id) and e["to_id"] == str(chunk0.id)
-        for e in chunk_prev
-    )
+    assert any(e["from_id"] == str(chunk1.id) and e["to_id"] == str(chunk0.id) for e in chunk_prev)
 
 
 # ===========================================================================

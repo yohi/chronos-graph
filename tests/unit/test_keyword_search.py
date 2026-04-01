@@ -1,4 +1,5 @@
 """Keyword Search のテスト"""
+
 import pytest
 from unittest.mock import AsyncMock
 from context_store.retrieval.keyword_search import KeywordSearch
@@ -50,7 +51,7 @@ class TestKeywordSearch:
         # Storage Adapter の keyword_search が呼ばれたことを確認
         storage_adapter.keyword_search.assert_called_once()
         call_args = storage_adapter.keyword_search.call_args
-        assert call_args[1]['top_k'] == 10
+        assert call_args[1]["top_k"] == 10
 
     @pytest.mark.asyncio
     async def test_search_returns_results(self, keyword_search):
@@ -69,7 +70,7 @@ class TestKeywordSearch:
         await keyword_search.search("query", top_k=20)
 
         call_args = storage_adapter.keyword_search.call_args
-        assert call_args[1]['top_k'] == 20
+        assert call_args[1]["top_k"] == 20
 
     @pytest.mark.asyncio
     async def test_search_default_top_k(self, keyword_search, storage_adapter):
@@ -77,7 +78,7 @@ class TestKeywordSearch:
         await keyword_search.search("query")
 
         call_args = storage_adapter.keyword_search.call_args
-        assert call_args[1]['top_k'] == 10
+        assert call_args[1]["top_k"] == 10
 
     @pytest.mark.asyncio
     async def test_search_handles_empty_results(self, keyword_search, storage_adapter):

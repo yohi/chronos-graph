@@ -116,12 +116,14 @@ class GraphLinker:
                 # 自己参照を避ける
                 if scored.memory.id == new_memory.id:
                     continue
-                edges.append({
-                    "from_id": str(new_memory.id),
-                    "to_id": str(scored.memory.id),
-                    "edge_type": EdgeType.SEMANTICALLY_RELATED,
-                    "props": {"similarity": scored.score},
-                })
+                edges.append(
+                    {
+                        "from_id": str(new_memory.id),
+                        "to_id": str(scored.memory.id),
+                        "edge_type": EdgeType.SEMANTICALLY_RELATED,
+                        "props": {"similarity": scored.score},
+                    }
+                )
         return edges
 
     def _build_temporal_edges(
@@ -139,37 +141,47 @@ class GraphLinker:
 
             if new_session and prev_session and new_session == prev_session:
                 # TEMPORAL_NEXT: prev → new
-                edges.append({
-                    "from_id": str(prev.id),
-                    "to_id": str(new_memory.id),
-                    "edge_type": EdgeType.TEMPORAL_NEXT,
-                    "props": {},
-                })
+                edges.append(
+                    {
+                        "from_id": str(prev.id),
+                        "to_id": str(new_memory.id),
+                        "edge_type": EdgeType.TEMPORAL_NEXT,
+                        "props": {},
+                    }
+                )
                 # TEMPORAL_PREV: new → prev
-                edges.append({
-                    "from_id": str(new_memory.id),
-                    "to_id": str(prev.id),
-                    "edge_type": EdgeType.TEMPORAL_PREV,
-                    "props": {},
-                })
+                edges.append(
+                    {
+                        "from_id": str(new_memory.id),
+                        "to_id": str(prev.id),
+                        "edge_type": EdgeType.TEMPORAL_PREV,
+                        "props": {},
+                    }
+                )
             elif (
-                not new_session and not prev_session
-                and new_project and prev.project
+                not new_session
+                and not prev_session
+                and new_project
+                and prev.project
                 and new_project == prev.project
             ):
                 # セッションIDがない場合はプロジェクトで判断
-                edges.append({
-                    "from_id": str(prev.id),
-                    "to_id": str(new_memory.id),
-                    "edge_type": EdgeType.TEMPORAL_NEXT,
-                    "props": {},
-                })
-                edges.append({
-                    "from_id": str(new_memory.id),
-                    "to_id": str(prev.id),
-                    "edge_type": EdgeType.TEMPORAL_PREV,
-                    "props": {},
-                })
+                edges.append(
+                    {
+                        "from_id": str(prev.id),
+                        "to_id": str(new_memory.id),
+                        "edge_type": EdgeType.TEMPORAL_NEXT,
+                        "props": {},
+                    }
+                )
+                edges.append(
+                    {
+                        "from_id": str(new_memory.id),
+                        "to_id": str(prev.id),
+                        "edge_type": EdgeType.TEMPORAL_PREV,
+                        "props": {},
+                    }
+                )
 
         return edges
 
@@ -201,23 +213,27 @@ class GraphLinker:
         # URLの検出
         urls = _URL_PATTERN.findall(content)
         for url in urls:
-            edges.append({
-                "from_id": str(new_memory.id),
-                "to_id": f"url:{url}",  # 実際のノードIDに解決される前のスタブ
-                "edge_type": EdgeType.REFERENCES,
-                "props": {"reference_url": url, "stub": True},
-            })
+            edges.append(
+                {
+                    "from_id": str(new_memory.id),
+                    "to_id": f"url:{url}",  # 実際のノードIDに解決される前のスタブ
+                    "edge_type": EdgeType.REFERENCES,
+                    "props": {"reference_url": url, "stub": True},
+                }
+            )
 
         # ファイルパスの検出（最低3セグメント以上のパスのみ）
         file_paths = _FILE_PATH_PATTERN.findall(content)
         for path in file_paths:
             if path.count("/") >= 2:  # /a/b 以上のパス
-                edges.append({
-                    "from_id": str(new_memory.id),
-                    "to_id": f"file:{path}",
-                    "edge_type": EdgeType.REFERENCES,
-                    "props": {"reference_path": path, "stub": True},
-                })
+                edges.append(
+                    {
+                        "from_id": str(new_memory.id),
+                        "to_id": f"file:{path}",
+                        "edge_type": EdgeType.REFERENCES,
+                        "props": {"reference_path": path, "stub": True},
+                    }
+                )
 
         return edges
 
@@ -247,18 +263,22 @@ class GraphLinker:
             next_chunk = sorted_chunks[i + 1]
 
             # CHUNK_NEXT: curr → next
-            edges.append({
-                "from_id": str(curr.id),
-                "to_id": str(next_chunk.id),
-                "edge_type": EdgeType.CHUNK_NEXT,
-                "props": {"document_id": doc_id_str},
-            })
+            edges.append(
+                {
+                    "from_id": str(curr.id),
+                    "to_id": str(next_chunk.id),
+                    "edge_type": EdgeType.CHUNK_NEXT,
+                    "props": {"document_id": doc_id_str},
+                }
+            )
             # CHUNK_PREV: next → curr
-            edges.append({
-                "from_id": str(next_chunk.id),
-                "to_id": str(curr.id),
-                "edge_type": EdgeType.CHUNK_PREV,
-                "props": {"document_id": doc_id_str},
-            })
+            edges.append(
+                {
+                    "from_id": str(next_chunk.id),
+                    "to_id": str(curr.id),
+                    "edge_type": EdgeType.CHUNK_PREV,
+                    "props": {"document_id": doc_id_str},
+                }
+            )
 
         return edges

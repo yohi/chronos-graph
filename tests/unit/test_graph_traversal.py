@@ -1,9 +1,8 @@
 """Graph Traversal のテスト"""
+
 import pytest
 from unittest.mock import AsyncMock
 from context_store.retrieval.graph_traversal import GraphTraversal
-from context_store.models.search import ScoredMemory
-from context_store.models.memory import Memory, MemoryType, SourceType, MemorySource
 from uuid import UUID
 
 
@@ -39,7 +38,7 @@ class TestGraphTraversal:
     async def test_traverse_with_seed_ids(self, graph_traversal, graph_adapter):
         """起点ノードIDでグラフをトラバース"""
         seed_ids = [UUID("00000000-0000-0000-0000-000000000010")]
-        results = await graph_traversal.traverse(
+        await graph_traversal.traverse(
             seed_ids=seed_ids,
             edge_types=["SEMANTICALLY_RELATED"],
             depth=2,
@@ -48,7 +47,7 @@ class TestGraphTraversal:
         # グラフアダプターが呼ばれたことを確認
         graph_adapter.traverse.assert_called_once()
         call_args = graph_adapter.traverse.call_args
-        assert call_args[1]['depth'] == 2
+        assert call_args[1]["depth"] == 2
 
     @pytest.mark.asyncio
     async def test_traverse_with_edge_type_filter(self, graph_traversal, graph_adapter):
@@ -62,7 +61,7 @@ class TestGraphTraversal:
         )
 
         call_args = graph_adapter.traverse.call_args
-        assert call_args[1]['edge_types'] == edge_types
+        assert call_args[1]["edge_types"] == edge_types
 
     @pytest.mark.asyncio
     async def test_traverse_returns_results(self, graph_traversal):
@@ -100,7 +99,7 @@ class TestGraphTraversal:
 
         call_args = graph_adapter.traverse.call_args
         # デフォルトは 2
-        assert call_args[1]['depth'] == 2
+        assert call_args[1]["depth"] == 2
 
     @pytest.mark.asyncio
     async def test_traverse_graceful_degradation_on_error(self, graph_traversal, graph_adapter):

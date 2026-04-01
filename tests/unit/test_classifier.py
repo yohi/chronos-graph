@@ -7,7 +7,7 @@ import logging
 import pytest
 
 from context_store.ingestion.adapters import RawContent
-from context_store.ingestion.classifier import ClassificationResult, Classifier
+from context_store.ingestion.classifier import Classifier
 from context_store.models.memory import MemoryType, SourceType
 
 
@@ -42,7 +42,9 @@ def test_classifier_episodic_decision() -> None:
 
 def test_classifier_episodic_conversation_source() -> None:
     """会話ログ (CONVERSATION) 由来は EPISODIC になりやすい。"""
-    raw = _make_raw("User: 今日何してた?\nAssistant: コードレビューをしました。", SourceType.CONVERSATION)
+    raw = _make_raw(
+        "User: 今日何してた?\nAssistant: コードレビューをしました。", SourceType.CONVERSATION
+    )
     classifier = Classifier()
     result = classifier.classify(raw)
 
@@ -65,7 +67,9 @@ def test_classifier_episodic_timestamp() -> None:
 
 def test_classifier_semantic_definition() -> None:
     """「JWTとはJSON Web Tokenの略で...」→ SEMANTIC。"""
-    raw = _make_raw("JWTとはJSON Web Tokenの略で、認証情報をJSONオブジェクトとして安全に送受信するための仕様です。")
+    raw = _make_raw(
+        "JWTとはJSON Web Tokenの略で、認証情報をJSONオブジェクトとして安全に送受信するための仕様です。"
+    )
     classifier = Classifier()
     result = classifier.classify(raw)
 
@@ -110,9 +114,7 @@ def test_classifier_semantic_what_is() -> None:
 
 def test_classifier_procedural_deployment() -> None:
     """「デプロイ手順: 1. docker compose up 2. ...」→ PROCEDURAL。"""
-    raw = _make_raw(
-        "デプロイ手順:\n1. docker compose up\n2. マイグレーション実行\n3. 動作確認"
-    )
+    raw = _make_raw("デプロイ手順:\n1. docker compose up\n2. マイグレーション実行\n3. 動作確認")
     classifier = Classifier()
     result = classifier.classify(raw)
 
@@ -140,7 +142,9 @@ def test_classifier_procedural_command_sequence() -> None:
 
 def test_classifier_procedural_steps() -> None:
     """「ステップ構造（Step 1, Step 2）」→ PROCEDURAL。"""
-    raw = _make_raw("Step 1: リポジトリをクローン\nStep 2: 依存関係をインストール\nStep 3: テストを実行")
+    raw = _make_raw(
+        "Step 1: リポジトリをクローン\nStep 2: 依存関係をインストール\nStep 3: テストを実行"
+    )
     classifier = Classifier()
     result = classifier.classify(raw)
 
@@ -182,8 +186,10 @@ def test_classifier_fallback_warning_log(caplog: pytest.LogCaptureFixture) -> No
         result = classifier.classify(raw)
 
     assert result.is_fallback is True
-    assert any("fallback" in r.message.lower() or "未分類" in r.message or "フォールバック" in r.message
-               for r in caplog.records)
+    assert any(
+        "fallback" in r.message.lower() or "未分類" in r.message or "フォールバック" in r.message
+        for r in caplog.records
+    )
 
 
 # ===========================================================================

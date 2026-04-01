@@ -1,4 +1,5 @@
 """Vector Search - ベクトル検索"""
+
 from typing import Any
 from context_store.storage.protocols import StorageAdapter
 from context_store.models.search import ScoredMemory

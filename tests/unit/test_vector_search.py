@@ -1,13 +1,15 @@
 """Vector Search のテスト"""
+
 import pytest
 from typing import Protocol
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from context_store.retrieval.vector_search import VectorSearch
 from context_store.models.search import ScoredMemory
 
 
 class MockEmbeddingProvider(Protocol):
     """Embedding Provider のモック型"""
+
     async def embed(self, text: str) -> list[float]: ...
     @property
     def dimension(self) -> int: ...
@@ -69,7 +71,9 @@ class TestVectorSearch:
         embedding_provider.embed.assert_called_once_with(query)
 
     @pytest.mark.asyncio
-    async def test_search_calls_storage_adapter(self, vector_search, embedding_provider, storage_adapter):
+    async def test_search_calls_storage_adapter(
+        self, vector_search, embedding_provider, storage_adapter
+    ):
         """Storage Adapter の vector_search が呼ばれること"""
         query = "JWT認証"
         top_k = 5
@@ -79,9 +83,9 @@ class TestVectorSearch:
         # Storage Adapter の vector_search が呼ばれたことを確認
         storage_adapter.vector_search.assert_called_once()
         call_args = storage_adapter.vector_search.call_args
-        assert call_args[1]['top_k'] == top_k
+        assert call_args[1]["top_k"] == top_k
         # ベクトルは embed の戻り値と同じ
-        assert call_args[1]['embedding'] == [0.1, 0.2, 0.3, 0.4, 0.5]
+        assert call_args[1]["embedding"] == [0.1, 0.2, 0.3, 0.4, 0.5]
 
     @pytest.mark.asyncio
     async def test_search_returns_results(self, vector_search):
@@ -102,7 +106,7 @@ class TestVectorSearch:
         await vector_search.search("query", top_k=20)
 
         call_args = storage_adapter.vector_search.call_args
-        assert call_args[1]['top_k'] == 20
+        assert call_args[1]["top_k"] == 20
 
     @pytest.mark.asyncio
     async def test_search_default_top_k(self, vector_search, storage_adapter):
@@ -110,7 +114,7 @@ class TestVectorSearch:
         await vector_search.search("query")
 
         call_args = storage_adapter.vector_search.call_args
-        assert call_args[1]['top_k'] == 10
+        assert call_args[1]["top_k"] == 10
 
     @pytest.mark.asyncio
     async def test_search_handles_empty_results(self, vector_search, storage_adapter):

@@ -19,8 +19,8 @@ from context_store.storage.protocols import StorageAdapter
 logger = logging.getLogger(__name__)
 
 # 類似度閾値
-REPLACE_THRESHOLD = 0.90   # >= この値で Append-only 置換
-MERGE_THRESHOLD = 0.85     # >= この値で統合候補
+REPLACE_THRESHOLD = 0.90  # >= この値で Append-only 置換
+MERGE_THRESHOLD = 0.85  # >= この値で統合候補
 
 # vector_search の top_k
 DEDUP_TOP_K = 5
@@ -29,8 +29,8 @@ DEDUP_TOP_K = 5
 class DeduplicationAction(str, Enum):
     """重複排除の結果アクション。"""
 
-    INSERT = "insert"           # 新規挿入
-    REPLACE = "replace"         # Append-only 置換（既存を Archive）
+    INSERT = "insert"  # 新規挿入
+    REPLACE = "replace"  # Append-only 置換（既存を Archive）
     MERGE_CANDIDATE = "merge_candidate"  # 統合候補としてマーク
 
 

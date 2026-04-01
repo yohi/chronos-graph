@@ -1,6 +1,7 @@
 """Query Analyzer のテスト"""
+
 import pytest
-from context_store.retrieval.query_analyzer import QueryAnalyzer, SearchStrategy
+from context_store.retrieval.query_analyzer import QueryAnalyzer
 
 
 @pytest.fixture

@@ -7,7 +7,7 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import numpy as np
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,7 @@ def SentenceTransformer(model_name: str) -> object:  # noqa: N802
     """
     try:
         from sentence_transformers import SentenceTransformer as ST  # type: ignore[import]
+
         return ST(model_name)
     except ImportError as e:
         raise ImportError(

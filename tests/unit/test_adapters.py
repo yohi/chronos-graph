@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import ipaddress
 import socket
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpcore
 import httpx
 import pytest
 
@@ -131,7 +129,9 @@ async def test_url_adapter_rejects_loopback_ip() -> None:
 
     with patch("socket.getaddrinfo") as mock_dns:
         mock_dns.return_value = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 80))]
-        with pytest.raises(ValueError, match="[Pp]rivate|[Ll]oopback|[Bb]locked|[Ss]SRF|[Rr]estricted"):
+        with pytest.raises(
+            ValueError, match="[Pp]rivate|[Ll]oopback|[Bb]locked|[Ss]SRF|[Rr]estricted"
+        ):
             await adapter.adapt("http://example.com/")
 
 
@@ -157,7 +157,9 @@ async def test_url_adapter_rejects_link_local_169() -> None:
         mock_dns.return_value = [
             (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("169.254.169.254", 80))
         ]
-        with pytest.raises(ValueError, match="[Pp]rivate|[Ll]ink.local|[Bb]locked|[Ss]SRF|[Rr]estricted"):
+        with pytest.raises(
+            ValueError, match="[Pp]rivate|[Ll]ink.local|[Bb]locked|[Ss]SRF|[Rr]estricted"
+        ):
             await adapter.adapt("http://example.com/")
 
 
@@ -169,7 +171,9 @@ async def test_url_adapter_rejects_ipv6_loopback() -> None:
 
     with patch("socket.getaddrinfo") as mock_dns:
         mock_dns.return_value = [(socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("::1", 80, 0, 0))]
-        with pytest.raises(ValueError, match="[Pp]rivate|[Ll]oopback|[Bb]locked|[Ss]SRF|[Rr]estricted"):
+        with pytest.raises(
+            ValueError, match="[Pp]rivate|[Ll]oopback|[Bb]locked|[Ss]SRF|[Rr]estricted"
+        ):
             await adapter.adapt("http://example.com/")
 
 
@@ -183,7 +187,9 @@ async def test_url_adapter_rejects_ipv6_link_local() -> None:
         mock_dns.return_value = [
             (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("fe80::1", 80, 0, 0))
         ]
-        with pytest.raises(ValueError, match="[Pp]rivate|[Ll]ink.local|[Bb]locked|[Ss]SRF|[Rr]estricted"):
+        with pytest.raises(
+            ValueError, match="[Pp]rivate|[Ll]ink.local|[Bb]locked|[Ss]SRF|[Rr]estricted"
+        ):
             await adapter.adapt("http://example.com/")
 
 
@@ -265,7 +271,9 @@ async def test_url_adapter_rejects_too_many_redirects() -> None:
         redirect_count += 1
         response = MagicMock(spec=httpx.Response)
         response.status_code = 302
-        response.headers = httpx.Headers({"location": f"http://other.example.com/redirect{redirect_count}"})
+        response.headers = httpx.Headers(
+            {"location": f"http://other.example.com/redirect{redirect_count}"}
+        )
         return response
 
     with (

@@ -32,7 +32,6 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator
 import aiosqlite
 
 from context_store.models.graph import Edge, GraphResult
-
 from context_store.utils.sqlite_interrupt import SafeSqliteInterruptCtx
 
 if TYPE_CHECKING:
@@ -225,13 +224,16 @@ class SQLiteGraphAdapter:
             ctx.interrupt()
             logger.warning(
                 "graph_traversal_timeout: traversal from seeds=%s "
-                "exceeded %.2fs; returning empty result.",
+                "exceeded %.2fs; returning partial result.",
                 seed_ids,
                 self._timeout,
             )
             if partial_container:
-                return partial_container[0]
-            return GraphResult(nodes=[], edges=[], traversal_depth=0)
+                res = partial_container[0]
+                res.partial = True
+                res.timeout = True
+                return res
+            return GraphResult(nodes=[], edges=[], traversal_depth=0, partial=True, timeout=True)
 
     async def _traverse_inner(
         self,
@@ -358,14 +360,23 @@ class SQLiteGraphAdapter:
         # We pass ctx from outside now
         rows: list[Any] = []
         max_physical_reached = False
+        cursor = None
 
         try:
             async with ctx:
                 async with conn.execute(sql, params) as cursor:
                     async for row in cursor:
                         rows.append(row)
-        except (Exception, asyncio.CancelledError):
-            pass
+        except (Exception, asyncio.CancelledError) as exc:
+            logger.debug(
+                "Query execution failed or interrupted. sql=%s, params=%s, ctx=%s, cursor=%s, error=%s",
+                sql,
+                params,
+                ctx,
+                cursor,
+                exc,
+                exc_info=True,
+            )
 
         # --- Parse results ---
         node_map: dict[str, dict[str, Any]] = {}

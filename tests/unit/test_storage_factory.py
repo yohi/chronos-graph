@@ -5,14 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-
 from context_store.config import Settings
 from context_store.storage.factory import create_storage
 from context_store.storage.inmemory import InMemoryCacheAdapter
 from context_store.storage.protocols import CacheAdapter, GraphAdapter, StorageAdapter
 from context_store.storage.sqlite import SQLiteStorageAdapter
 from context_store.storage.sqlite_graph import SQLiteGraphAdapter
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -127,8 +125,9 @@ class TestCacheBackend:
             redis_url="redis://localhost:6379",
         )
 
-        from context_store.storage.redis import RedisCacheAdapter
         from unittest.mock import AsyncMock, patch
+
+        from context_store.storage.redis import RedisCacheAdapter
 
         mock_adapter = AsyncMock(spec=RedisCacheAdapter)
 
@@ -137,7 +136,7 @@ class TestCacheBackend:
         ):
             storage, graph_adp, cache_adp = await create_storage(settings)
             try:
-                assert isinstance(cache_adp, RedisCacheAdapter)
+                assert cache_adp is mock_adapter
             finally:
                 await storage.dispose()
                 if graph_adp:

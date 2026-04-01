@@ -12,7 +12,6 @@ from context_store.config import Settings
 from context_store.models.graph import GraphResult
 from context_store.storage.sqlite_graph import SQLiteGraphAdapter
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -343,5 +342,11 @@ class TestTimeout:
         # Should not raise even if timeout hits
         result = await adp.traverse(["t1"], [], depth=5)
         assert isinstance(result, GraphResult)
+        assert result.partial is True
+        assert result.timeout is True
+        # In this specific test, because we sleep BEFORE calling the actual traversal,
+        # the result will be empty.
+        assert len(result.nodes) == 0
+        assert len(result.edges) == 0
 
         await adp.dispose()

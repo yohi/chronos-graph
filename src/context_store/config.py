@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     wal_passive_fail_window_count_threshold: int = Field(default=5, ge=1)
     wal_checkpoint_mode_passive: str = "PASSIVE"
     wal_checkpoint_mode_truncate: str = "TRUNCATE"
+    cache_coherence_poll_interval_seconds: float = Field(default=5.0, gt=0.0)
 
     # --- URL Fetch (SSRF 対策) ---
     url_fetch_concurrency: int = Field(default=3, ge=1)

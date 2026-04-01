@@ -19,6 +19,12 @@ class SourceType(str, Enum):
     URL = "url"
 
 
+class MemorySource(str, Enum):
+    VECTOR = "vector"
+    KEYWORD = "keyword"
+    GRAPH = "graph"
+
+
 class Memory(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     content: str
@@ -26,9 +32,9 @@ class Memory(BaseModel):
     source_type: SourceType
     source_metadata: dict[str, object] = Field(default_factory=dict)
     embedding: list[float] = Field(default_factory=list)
-    semantic_relevance: float = 0.5
-    importance_score: float = 0.5
-    access_count: int = 0
+    semantic_relevance: float = Field(default=0.5, ge=0.0, le=1.0)
+    importance_score: float = Field(default=0.5, ge=0.0, le=1.0)
+    access_count: int = Field(default=0, ge=0)
     last_accessed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -40,4 +46,4 @@ class Memory(BaseModel):
 class ScoredMemory(BaseModel):
     memory: Memory
     score: float
-    source: str = ""  # "vector" | "keyword" | "graph"
+    source: MemorySource = MemorySource.VECTOR

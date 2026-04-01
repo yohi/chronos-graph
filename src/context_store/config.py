@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from typing import Literal
+from urllib.parse import quote
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -24,7 +25,7 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
     postgres_db: str = "context_store"
     postgres_user: str = "context_store"
-    postgres_password: str = ""
+    postgres_password: SecretStr = SecretStr("")
 
     # --- Neo4j (graph_enabled=true の場合) ---
     neo4j_uri: str = "bolt://localhost:7687"
@@ -79,15 +80,27 @@ class Settings(BaseSettings):
 
     @property
     def postgres_dsn(self) -> str:
+        encoded_user = quote(self.postgres_user, safe="")
+        encoded_password = quote(self.postgres_password.get_secret_value(), safe="")
         return (
-            f"postgresql://{self.postgres_user}:{self.postgres_password}"
+            f"postgresql://{encoded_user}:{encoded_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
 
     @model_validator(mode="after")
     def validate_credentials(self) -> "Settings":
-        if self.storage_backend == "postgres" and not self.postgres_password:
+        postgres_password = self.postgres_password.get_secret_value()
+
+        if self.storage_backend == "postgres" and not postgres_password:
             raise ValueError("POSTGRES_PASSWORD は storage_backend=postgres の場合に必須です。")
         if self.graph_enabled and not self.neo4j_password:
             raise ValueError("NEO4J_PASSWORD は graph_enabled=true の場合に必須です。")
+        if self.embedding_provider == "openai" and not self.openai_api_key:
+            raise ValueError("OPENAI_API_KEY は embedding_provider=openai の場合に必須です。")
+        if self.embedding_provider == "local-model" and not self.local_model_name:
+            raise ValueError("LOCAL_MODEL_NAME は embedding_provider=local-model の場合に必須です。")
+        if self.embedding_provider == "litellm" and not self.litellm_api_base:
+            raise ValueError("LITELLM_API_BASE は embedding_provider=litellm の場合に必須です。")
+        if self.embedding_provider == "custom-api" and not self.custom_api_endpoint:
+            raise ValueError("CUSTOM_API_ENDPOINT は embedding_provider=custom-api の場合に必須です。")
         return self

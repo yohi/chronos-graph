@@ -40,3 +40,18 @@ def test_stderr_fatal_errors(capsys):
     output = json.loads(captured.err)
     assert output["level"] == "WARNING"
     assert output["message"] == "this is a warning"
+
+
+def test_context_cannot_override_reserved_fields(capsys):
+    clear_context()
+    set_context(level="DEBUG", logger="fake", message="bad", request_id="req-123")
+    logger = get_logger("test_reserved")
+    logger.info("actual message")
+
+    captured = capsys.readouterr()
+    output = json.loads(captured.out)
+
+    assert output["level"] == "INFO"
+    assert output["logger"] == "test_reserved"
+    assert output["message"] == "actual message"
+    assert output["request_id"] == "req-123"

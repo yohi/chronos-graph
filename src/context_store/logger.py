@@ -5,17 +5,19 @@ from contextvars import ContextVar
 from typing import Any
 
 # ContextVars for request/operation context
-_context: ContextVar[dict[str, Any]] = ContextVar("_log_context", default={})
+_context: ContextVar[dict[str, Any] | None] = ContextVar("_log_context", default=None)
+_RESERVED_FIELDS = frozenset({"exception", "level", "logger", "message"})
 
 
 class StructuredFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
-        ctx = _context.get()
+        ctx = _context.get() or {}
+        ctx_filtered = {key: value for key, value in ctx.items() if key not in _RESERVED_FIELDS}
         data = {
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
-            **ctx,
+            **ctx_filtered,
         }
         if record.exc_info:
             data["exception"] = self.formatException(record.exc_info)
@@ -44,10 +46,10 @@ def get_logger(name: str) -> logging.Logger:
 
 def set_context(**kwargs: Any) -> None:
     """Set context variables (request_id, agent_id, memory_id, etc.) via ContextVar."""
-    current = _context.get()
+    current = _context.get() or {}
     _context.set({**current, **kwargs})
 
 
 def clear_context() -> None:
     """Clear all context variables."""
-    _context.set({})
+    _context.set(None)

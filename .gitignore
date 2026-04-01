@@ -20,6 +20,8 @@ wheels/
 
 # Environment variables
 .env
+.env.*
+!.env.example
 # Note: .env.example is NOT ignored
 
 # Type checker and linter caches

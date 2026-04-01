@@ -13,4 +13,4 @@ class Edge(BaseModel):
 class GraphResult(BaseModel):
     nodes: list[dict[str, object]]
     edges: list[Edge]
-    traversal_depth: int
+    traversal_depth: int = Field(..., ge=0)

@@ -11,7 +11,6 @@ from typing import Any
 from unittest.mock import MagicMock, AsyncMock
 
 import pytest
-import asyncpg
 
 from context_store.models.memory import Memory, MemoryType, SourceType
 from context_store.storage.postgres import PostgresStorageAdapter
@@ -205,5 +204,4 @@ class TestGetVectorDimension:
     async def test_returns_none_when_empty(self, adapter):
         # No memories saved in this transaction yet
         dim = await adapter.get_vector_dimension()
-        # May be None or an integer depending on prior test data
-        assert dim is None or isinstance(dim, int)
+        assert dim is None

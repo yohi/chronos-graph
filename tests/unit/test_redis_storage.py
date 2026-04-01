@@ -7,7 +7,7 @@ redis.asyncio.Redis をモックして get/set/invalidate/invalidate_prefix/clea
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -30,8 +30,7 @@ def redis_mock():
 @pytest.fixture
 def adapter(redis_mock):
     from context_store.storage.redis import RedisCacheAdapter
-    adp = RedisCacheAdapter.__new__(RedisCacheAdapter)
-    adp._redis = redis_mock
+    adp = RedisCacheAdapter(redis_mock)
     return adp, redis_mock
 
 
@@ -142,9 +141,30 @@ class TestInvalidatePrefix:
 
     async def test_does_not_raise_on_failure(self, adapter):
         adp, r = adapter
-        r.scan_iter = AsyncMock(side_effect=Exception("redis down"))
+        async def _scan_iter(*args, **kwargs):
+            raise Exception("redis down")
+            yield b"unused"
+
+        r.scan_iter = _scan_iter
 
         await adp.invalidate_prefix("prefix:")
+
+    async def test_deletes_in_batches(self, adapter):
+        adp, r = adapter
+
+        async def _scan_iter(*args, **kwargs):
+            for idx in range(1203):
+                yield f"prefix:key{idx}".encode()
+
+        r.scan_iter = _scan_iter
+        r.delete = AsyncMock(return_value=500)
+
+        await adp.invalidate_prefix("prefix:")
+
+        assert r.delete.await_count == 3
+        assert len(r.delete.await_args_list[0].args) == 500
+        assert len(r.delete.await_args_list[1].args) == 500
+        assert len(r.delete.await_args_list[2].args) == 203
 
 
 # ---------------------------------------------------------------------------

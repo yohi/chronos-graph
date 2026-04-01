@@ -9,11 +9,13 @@ force-delete the file and retry acquisition.
 """
 from __future__ import annotations
 
-import os
+import logging
 import time
 from pathlib import Path
 
 import filelock
+
+logger = logging.getLogger(__name__)
 
 
 class StaleAwareFileLock:
@@ -75,8 +77,8 @@ class StaleAwareFileLock:
         """Release the lock."""
         try:
             self._lock.release()
-        except Exception:
-            pass
+        except RuntimeError as exc:
+            logger.warning("Failed to release file lock %s: %s", self._lock_path, exc)
 
     def __enter__(self) -> "StaleAwareFileLock":
         self.acquire()

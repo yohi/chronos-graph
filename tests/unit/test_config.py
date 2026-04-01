@@ -155,6 +155,8 @@ def test_postgres_dsn_url_encodes_credentials(default_settings):
         ("graph_max_logical_depth", 0),
         ("graph_max_physical_hops", 0),
         ("graph_traversal_timeout_seconds", 0.0),
+        ("stale_lock_timeout_seconds", 0),
+        ("stale_lock_timeout_seconds", -1),
         ("sqlite_max_concurrent_connections", 0),
         ("sqlite_max_queued_requests", 0),
         ("sqlite_acquire_timeout", 0.0),

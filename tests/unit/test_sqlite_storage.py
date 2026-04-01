@@ -8,7 +8,6 @@ sqlite-vec (コサイン類似度) と FTS5 の動作も検証する。
 from __future__ import annotations
 
 import asyncio
-import math
 import struct
 from typing import Any
 from uuid import uuid4
@@ -37,6 +36,15 @@ def _make_memory(**kwargs: Any) -> Memory:
 
 def _make_memory_with_embedding(embedding: list[float], **kwargs: Any) -> Memory:
     return _make_memory(embedding=embedding, **kwargs)
+
+
+async def _fetch_one_value(adapter, sql: str) -> Any:
+    async with adapter._db() as conn:
+        async with conn.execute(sql) as cursor:
+            row = await cursor.fetchone()
+    if row is None:
+        return None
+    return row[0]
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +163,40 @@ class TestSaveMemory:
         for m in memories:
             retrieved = await adapter.get_memory(str(m.id))
             assert retrieved is not None
+
+    async def test_vectors_metadata_dimension_is_unique(self, adapter):
+        count = await _fetch_one_value(
+            adapter,
+            """
+            SELECT COUNT(*)
+            FROM pragma_table_info('vectors_metadata')
+            WHERE name = 'dimension' AND pk = 0
+            """,
+        )
+
+        assert count == 1
+
+        async with adapter._db() as conn:
+            async with conn.execute(
+                "PRAGMA index_list('vectors_metadata')"
+            ) as cursor:
+                rows = await cursor.fetchall()
+
+        assert any(row["unique"] == 1 for row in rows)
+
+    async def test_first_embedding_metadata_insert_is_idempotent(self, adapter):
+        memory1 = _make_memory_with_embedding([0.1, 0.2, 0.3], content="vector one")
+        memory2 = _make_memory_with_embedding([0.1, 0.2, 0.3], content="vector two")
+
+        await adapter.save_memory(memory1)
+        adapter._vector_dim = None
+        await adapter.save_memory(memory2)
+
+        count = await _fetch_one_value(
+            adapter, "SELECT COUNT(*) FROM vectors_metadata"
+        )
+
+        assert count == 1
 
 
 class TestGetMemory:
@@ -583,12 +625,10 @@ class TestBackpressureControl:
         # バックプレッシャーを観察するために遅延を持つ操作を使用
 
         results: list[str | StorageError] = []
-        started = asyncio.Event()
-        release = asyncio.Event()
 
         async def slow_request(i: int) -> None:
             try:
-                result = await adp.get_memory(str(uuid4()))
+                await adp.get_memory(str(uuid4()))
                 results.append("ok")
             except StorageError as e:
                 results.append(e)
@@ -613,8 +653,6 @@ class TestBackpressureControl:
         max_concurrent=2, max_queued=3、同時10件では必ず一部が STORAGE_BUSY になる。
         成功=5, 拒否=5 の厳密テスト（遅い操作で保証）。
         """
-        import time
-
         from context_store.config import Settings
         from context_store.storage.sqlite import SQLiteStorageAdapter
 
@@ -650,8 +688,6 @@ class TestBackpressureControl:
         await asyncio.sleep(0.05)
 
         # BUSY になったタスクはすでに完了しているはず
-        busy_now = [r for r in results if isinstance(r, StorageError)]
-
         # hold_event を解放して残りを完了させる
         hold_event.set()
         await asyncio.gather(*tasks)
@@ -742,7 +778,7 @@ class TestBackpressureControl:
         for i in range(20):
             tasks.append(asyncio.create_task(adp.get_memory(str(uuid4()))))
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
         # カウンタがリークしていないこと
         assert adp._waiting_count == 0

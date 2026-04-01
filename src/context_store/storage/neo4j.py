@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from context_store.models.graph import Edge, GraphResult
 
 logger = logging.getLogger(__name__)
+_EDGE_TYPE_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def _is_valid_edge_type(edge_type: str) -> bool:
+    return bool(_EDGE_TYPE_PATTERN.fullmatch(edge_type))
 
 
 class Neo4jGraphAdapter:
@@ -56,6 +62,9 @@ class Neo4jGraphAdapter:
         self, from_id: str, to_id: str, edge_type: str, props: dict[str, Any]
     ) -> None:
         """Create a directed edge between two nodes."""
+        if not _is_valid_edge_type(edge_type):
+            logger.warning("Neo4j create_edge skipped invalid edge_type: %s", edge_type)
+            return
         cypher = f"""
             MATCH (a:Memory {{id: $from_id}})
             MATCH (b:Memory {{id: $to_id}})
@@ -79,7 +88,13 @@ class Neo4jGraphAdapter:
         batches: dict[str, list[dict[str, Any]]] = {}
         for edge in edges:
             t = edge["edge_type"]
+            if not _is_valid_edge_type(t):
+                logger.warning("Neo4j create_edges_batch skipped invalid edge_type: %s", t)
+                continue
             batches.setdefault(t, []).append(edge)
+
+        if not batches:
+            return
 
         try:
             async with self._driver.session() as session:
@@ -101,8 +116,13 @@ class Neo4jGraphAdapter:
     ) -> GraphResult:
         """Traverse the graph from seed nodes up to the given depth."""
         if edge_types:
-            rel_filter = "|".join(edge_types)
-            rel_pattern = f"[*1..{depth}:{rel_filter}]"
+            valid_edge_types = [edge_type for edge_type in edge_types if _is_valid_edge_type(edge_type)]
+            invalid_edge_types = [edge_type for edge_type in edge_types if not _is_valid_edge_type(edge_type)]
+            for edge_type in invalid_edge_types:
+                logger.warning("Neo4j traverse skipped invalid edge_type: %s", edge_type)
+
+            rel_filter = "|".join(valid_edge_types)
+            rel_pattern = f"[*1..{depth}:{rel_filter}]" if rel_filter else f"[*1..{depth}]"
         else:
             rel_pattern = f"[*1..{depth}]"
 

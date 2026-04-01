@@ -8,10 +8,9 @@ asyncpg.Pool をモックして SQL クエリの組み立てロジックと
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import UUID, uuid4
+from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
 
@@ -238,6 +237,18 @@ class TestUpdateMemory:
         assert "importance_score" in sql
         assert "access_count" in sql
 
+    async def test_casts_embedding_to_vector(self, adapter):
+        adp, conn = adapter
+        conn.execute = AsyncMock(return_value="UPDATE 1")
+
+        await adp.update_memory(str(uuid4()), {"embedding": [0.1, 0.2, 0.3]})
+
+        call_args = conn.execute.call_args
+        sql: str = call_args[0][0]
+        params = call_args[0][1:]
+        assert "::vector" in sql
+        assert params[0] == "[0.1,0.2,0.3]"
+
 
 # ---------------------------------------------------------------------------
 # vector_search
@@ -436,7 +447,7 @@ class TestGetVectorDimension:
 
 class TestDispose:
     async def test_closes_pool(self, adapter):
-        adp, conn = adapter
+        adp, _conn = adapter
         adp._pool.close = AsyncMock()
 
         await adp.dispose()

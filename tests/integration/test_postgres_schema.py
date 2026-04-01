@@ -8,15 +8,17 @@ They verify the schema was applied correctly.
 import pytest
 import asyncpg
 
+from tests.integration.conftest import PG_DB, PG_HOST, PG_PASSWORD, PG_PORT, PG_USER
+
 
 @pytest.fixture
 async def pg_conn():
     conn = await asyncpg.connect(
-        host="localhost",
-        port=5433,
-        database="context_store",
-        user="context_store",
-        password="dev_password",
+        host=PG_HOST,
+        port=PG_PORT,
+        database=PG_DB,
+        user=PG_USER,
+        password=PG_PASSWORD,
     )
     yield conn
     await conn.close()
@@ -59,6 +61,5 @@ async def test_indexes_exist(pg_conn):
     rows = await pg_conn.fetch(
         "SELECT indexname FROM pg_indexes WHERE tablename = 'memories'"
     )
-    index_names_str = str([r["indexname"] for r in rows])
     # Should have at least the primary key and a few indexes
     assert len(rows) >= 2

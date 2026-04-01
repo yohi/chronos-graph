@@ -6,12 +6,11 @@ neo4j.AsyncDriver をモックして Cypher クエリ組み立てロジックを
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch, call
-from uuid import uuid4
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from context_store.models.graph import Edge, GraphResult
+from context_store.models.graph import GraphResult
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +104,14 @@ class TestCreateEdge:
 
         await adp.create_edge("a", "b", "RELATES_TO", {})
 
+    async def test_rejects_invalid_edge_type(self, adapter_and_session):
+        adp, session = adapter_and_session
+        session.run = AsyncMock()
+
+        await adp.create_edge("a", "b", "BAD-TYPE", {})
+
+        session.run.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # create_edges_batch
@@ -141,6 +148,21 @@ class TestCreateEdgesBatch:
         edges = [{"from_id": "a", "to_id": "b", "edge_type": "X", "props": {}}]
 
         await adp.create_edges_batch(edges)
+
+    async def test_skips_invalid_edge_types(self, adapter_and_session):
+        adp, session = adapter_and_session
+        session.run = AsyncMock()
+        edges = [
+            {"from_id": "a", "to_id": "b", "edge_type": "RELATES_TO", "props": {}},
+            {"from_id": "b", "to_id": "c", "edge_type": "BAD-TYPE", "props": {}},
+        ]
+
+        await adp.create_edges_batch(edges)
+
+        session.run.assert_called_once()
+        cypher: str = session.run.call_args[0][0]
+        assert "RELATES_TO" in cypher
+        assert "BAD-TYPE" not in cypher
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +208,18 @@ class TestTraverse:
         cypher: str = session.run.call_args[0][0]
         assert "3" in cypher or "depth" in cypher.lower()
 
+    async def test_skips_invalid_edge_types_in_filter(self, adapter_and_session):
+        adp, session = adapter_and_session
+        result_mock = AsyncMock()
+        result_mock.__aiter__ = MagicMock(return_value=iter([]))
+        session.run = AsyncMock(return_value=result_mock)
+
+        await adp.traverse(["a"], ["RELATES_TO", "BAD-TYPE"], depth=2)
+
+        cypher: str = session.run.call_args[0][0]
+        assert "RELATES_TO" in cypher
+        assert "BAD-TYPE" not in cypher
+
 
 # ---------------------------------------------------------------------------
 # delete_node
@@ -215,7 +249,7 @@ class TestDeleteNode:
 
 class TestDispose:
     async def test_closes_driver(self, adapter_and_session):
-        adp, session = adapter_and_session
+        adp, _session = adapter_and_session
         adp._driver.close = AsyncMock()
 
         await adp.dispose()

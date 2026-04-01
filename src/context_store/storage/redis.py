@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 logger = logging.getLogger(__name__)
+_DELETE_BATCH_SIZE = 500
 
 
 class RedisCacheAdapter:
@@ -70,6 +71,9 @@ class RedisCacheAdapter:
             keys_to_delete: list[str] = []
             async for key in self._redis.scan_iter(match=f"{prefix}*"):
                 keys_to_delete.append(key)
+                if len(keys_to_delete) >= _DELETE_BATCH_SIZE:
+                    await self._redis.delete(*keys_to_delete)
+                    keys_to_delete.clear()
             if keys_to_delete:
                 await self._redis.delete(*keys_to_delete)
         except Exception as exc:
@@ -84,4 +88,7 @@ class RedisCacheAdapter:
 
     async def dispose(self) -> None:
         """Close the Redis connection."""
-        await self._redis.close()
+        try:
+            await self._redis.close()
+        except Exception as exc:
+            logger.warning("Redis dispose failed (degraded): %s", exc)

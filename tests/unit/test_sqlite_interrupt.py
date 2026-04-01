@@ -1,8 +1,6 @@
 import asyncio
 from unittest.mock import MagicMock
 
-import pytest
-
 from context_store.utils.sqlite_interrupt import SafeSqliteInterruptCtx
 
 

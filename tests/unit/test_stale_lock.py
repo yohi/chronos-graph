@@ -12,8 +12,8 @@ def test_normal_acquisition(tmp_path):
     lock_path = tmp_path / "test.lock"
     lock = StaleAwareFileLock(lock_path, stale_timeout_seconds=600)
     with lock:
-        assert lock._lock_path.exists() or True  # Lock acquired
-    # After release, lock is free
+        assert lock._lock_path.exists()
+    assert not lock._lock_path.exists()
 
 
 def test_stale_lock_recovery(tmp_path):

@@ -17,7 +17,7 @@
 
 ### 実装済みファイル一覧
 
-```
+```text
 src/context_store/storage/
 ├── protocols.py        # StorageAdapter / GraphAdapter / CacheAdapter Protocol
 ├── postgres.py         # PostgresStorageAdapter (asyncpg + pgvector + pg_bigm)

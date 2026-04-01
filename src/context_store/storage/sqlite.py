@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import math
 import os
@@ -18,6 +17,7 @@ import aiosqlite
 from context_store.config import Settings
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
 from context_store.storage.protocols import MemoryFilters, StorageError
+from context_store.utils.stale_lock import StaleAwareFileLock
 
 # ---------------------------------------------------------------------------
 # sqlite-vec integration
@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS memories (
 
 _DDL_VECTORS_METADATA = """
 CREATE TABLE IF NOT EXISTS vectors_metadata (
-    dimension INTEGER NOT NULL
+    dimension INTEGER NOT NULL UNIQUE
 );
 """
 
@@ -227,7 +227,13 @@ class SQLiteStorageAdapter:
         db_path = os.path.expanduser(settings.sqlite_db_path)
         os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True)
         adapter = cls(db_path, settings)
-        await adapter._migrate()
+        lock = StaleAwareFileLock(
+            f"{db_path}.lock",
+            timeout=settings.sqlite_acquire_timeout,
+            stale_timeout_seconds=settings.stale_lock_timeout_seconds,
+        )
+        with lock:
+            await adapter._migrate()
         return adapter
 
     # ------------------------------------------------------------------
@@ -344,9 +350,14 @@ class SQLiteStorageAdapter:
     @asynccontextmanager
     async def _db(self) -> AsyncGenerator[aiosqlite.Connection, None]:
         """Semaphore-guarded connection context manager."""
+        self._ensure_not_disposed()
         async with self._with_semaphore():
             async with self._connect() as conn:
                 yield conn
+
+    def _ensure_not_disposed(self) -> None:
+        if self._disposed:
+            raise RuntimeError("storage disposed")
 
     # ------------------------------------------------------------------
     # StorageAdapter: save_memory
@@ -407,7 +418,7 @@ class SQLiteStorageAdapter:
                     # Update dimension metadata if this is the first embedding
                     if self._vector_dim is None:
                         await conn.execute(
-                            "INSERT INTO vectors_metadata (dimension) VALUES (?)",
+                            "INSERT OR IGNORE INTO vectors_metadata (dimension) VALUES (?)",
                             (dim,),
                         )
                         self._vector_dim = dim
@@ -494,8 +505,6 @@ class SQLiteStorageAdapter:
 
         set_parts: list[str] = []
         params: list[Any] = []
-        content_updated = False
-
         for col, val in updates.items():
             if col not in allowed_columns:
                 continue
@@ -510,8 +519,6 @@ class SQLiteStorageAdapter:
                 val = _dt_to_str(val)
             set_parts.append(f"{col} = ?")
             params.append(val)
-            if col == "content":
-                content_updated = True
 
         if not set_parts:
             return False
@@ -612,9 +619,10 @@ class SQLiteStorageAdapter:
             try:
                 if project is not None:
                     sql = """
-                        SELECT m.*, (-bm25(memories_fts)) AS score
+                        SELECT m.*, me.embedding, (-bm25(memories_fts)) AS score
                         FROM memories_fts f
                         JOIN memories m ON m.rowid = f.rowid
+                        LEFT JOIN memory_embeddings me ON me.memory_id = m.id
                         WHERE memories_fts MATCH ?
                           AND m.archived_at IS NULL
                           AND m.project = ?
@@ -624,9 +632,10 @@ class SQLiteStorageAdapter:
                     params_kw: tuple[Any, ...] = (query, project, top_k)
                 else:
                     sql = """
-                        SELECT m.*, (-bm25(memories_fts)) AS score
+                        SELECT m.*, me.embedding, (-bm25(memories_fts)) AS score
                         FROM memories_fts f
                         JOIN memories m ON m.rowid = f.rowid
+                        LEFT JOIN memory_embeddings me ON me.memory_id = m.id
                         WHERE memories_fts MATCH ?
                           AND m.archived_at IS NULL
                         ORDER BY score DESC
@@ -641,14 +650,8 @@ class SQLiteStorageAdapter:
                 for row in rows:
                     row_dict = dict(row)
                     score = float(row_dict.pop("score", 0.0))
-                    # Fetch embedding separately
-                    memory_id = row_dict["id"]
-                    async with conn.execute(
-                        "SELECT embedding FROM memory_embeddings WHERE memory_id = ?",
-                        (memory_id,),
-                    ) as ecursor:
-                        erow = await ecursor.fetchone()
-                    emb = decode_embedding(bytes(erow["embedding"])) if erow else []
+                    emb_blob = row_dict.pop("embedding", None)
+                    emb = decode_embedding(bytes(emb_blob)) if emb_blob else []
                     memory = _row_to_memory(row_dict, emb)
                     results.append(
                         ScoredMemory(memory=memory, score=score, source=MemorySource.KEYWORD)
@@ -690,7 +693,13 @@ class SQLiteStorageAdapter:
             conditions.append("(" + " OR ".join(tag_conditions) + ")")
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        sql = f"SELECT * FROM memories {where_clause} ORDER BY created_at DESC"
+        sql = (
+            "SELECT m.*, me.embedding "
+            "FROM memories m "
+            "LEFT JOIN memory_embeddings me ON me.memory_id = m.id "
+            f"{where_clause.replace('archived_at', 'm.archived_at').replace('project', 'm.project').replace('memory_type', 'm.memory_type').replace('tags', 'm.tags')} "
+            "ORDER BY m.created_at DESC"
+        )
 
         async with self._db() as conn:
             try:
@@ -699,13 +708,8 @@ class SQLiteStorageAdapter:
                 memories: list[Memory] = []
                 for row in rows:
                     row_dict = dict(row)
-                    memory_id = row_dict["id"]
-                    async with conn.execute(
-                        "SELECT embedding FROM memory_embeddings WHERE memory_id = ?",
-                        (memory_id,),
-                    ) as ecursor:
-                        erow = await ecursor.fetchone()
-                    emb = decode_embedding(bytes(erow["embedding"])) if erow else []
+                    emb_blob = row_dict.pop("embedding", None)
+                    emb = decode_embedding(bytes(emb_blob)) if emb_blob else []
                     memories.append(_row_to_memory(row_dict, emb))
                 return memories
             except aiosqlite.OperationalError as exc:

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
-import re
 from typing import Any
 
 import asyncpg
@@ -107,7 +107,6 @@ class PostgresStorageAdapter:
             RETURNING id
         """
 
-        import hashlib
         content_hash = hashlib.sha256(memory.content.encode()).hexdigest()
 
         try:
@@ -171,6 +170,16 @@ class PostgresStorageAdapter:
         params: list[Any] = []
         for col, val in updates.items():
             if col not in allowed_columns:
+                continue
+            if col == "embedding":
+                val = _embedding_to_pg(val) if isinstance(val, list) else val
+                params.append(val)
+                set_parts.append(f"{col} = ${len(params)}::vector")
+                continue
+            if col == "source_metadata" and isinstance(val, dict):
+                val = json.dumps(val)
+                params.append(val)
+                set_parts.append(f"{col} = ${len(params)}::jsonb")
                 continue
             params.append(val)
             set_parts.append(f"{col} = ${len(params)}")

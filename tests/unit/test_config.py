@@ -63,7 +63,12 @@ def test_neo4j_password_required_when_graph_enabled():
 
 def test_openai_api_key_required_when_provider_selected():
     with pytest.raises(ValueError, match="OPENAI_API_KEY"):
-        Settings(postgres_password="test", neo4j_password="test", openai_api_key="")
+        Settings(
+            postgres_password="test",
+            neo4j_password="test",
+            openai_api_key="",
+            embedding_provider="openai",
+        )
 
 
 def test_provider_specific_settings_are_required():

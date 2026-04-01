@@ -1,4 +1,6 @@
 import pytest
+from pydantic import SecretStr
+
 from context_store.config import Settings
 
 
@@ -23,6 +25,9 @@ def test_default_settings():
     assert settings.sqlite_max_queued_requests == 20
     assert isinstance(settings.sqlite_acquire_timeout, float)
     assert settings.sqlite_acquire_timeout == 2.0  # seconds
+    assert isinstance(settings.postgres_password, SecretStr)
+    assert isinstance(settings.neo4j_password, SecretStr)
+    assert isinstance(settings.openai_api_key, SecretStr)
 
 
 def test_embedding_provider_validation():
@@ -92,6 +97,7 @@ def test_provider_specific_settings_are_required():
 
 def test_postgres_dsn_url_encodes_credentials():
     settings = Settings(
+        postgres_db="context/store prod",
         postgres_user="user+name@example.com",
         postgres_password="p@ss word:/",
         neo4j_password="test",
@@ -99,5 +105,5 @@ def test_postgres_dsn_url_encodes_credentials():
     )
 
     assert settings.postgres_dsn == (
-        "postgresql://user%2Bname%40example.com:p%40ss%20word%3A%2F@localhost:5432/context_store"
+        "postgresql://user%2Bname%40example.com:p%40ss%20word%3A%2F@localhost:5432/context%2Fstore%20prod"
     )

@@ -4,7 +4,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 
 from context_store.config import Settings
 from context_store.storage.factory import create_storage
@@ -128,19 +127,19 @@ class TestCacheBackend:
         )
 
         from context_store.storage.redis import RedisCacheAdapter
+        from unittest.mock import AsyncMock, patch
 
-        storage, graph_adp, cache_adp = await create_storage(settings)
-        try:
-            assert isinstance(cache_adp, RedisCacheAdapter)
-        finally:
-            await storage.dispose()
-            if graph_adp:
-                await graph_adp.dispose()
-            # RedisCacheAdapter.dispose() may fail if Redis isn't running; ignore
+        mock_adapter = AsyncMock(spec=RedisCacheAdapter)
+        
+        with patch("context_store.storage.redis.RedisCacheAdapter.create", return_value=mock_adapter):
+            storage, graph_adp, cache_adp = await create_storage(settings)
             try:
+                assert isinstance(cache_adp, RedisCacheAdapter)
+            finally:
+                await storage.dispose()
+                if graph_adp:
+                    await graph_adp.dispose()
                 await cache_adp.dispose()
-            except Exception:
-                pass
 
 
 # ---------------------------------------------------------------------------

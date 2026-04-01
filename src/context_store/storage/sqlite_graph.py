@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator
 import aiosqlite
 
 from context_store.models.graph import Edge, GraphResult
-from context_store.storage.protocols import GraphAdapter
+
 from context_store.utils.sqlite_interrupt import SafeSqliteInterruptCtx
 
 if TYPE_CHECKING:
@@ -96,7 +96,12 @@ class SQLiteGraphAdapter:
         async with self._connect() as conn:
             await conn.execute(_DDL_NODES)
             await conn.execute(_DDL_EDGES)
-            await conn.executescript(_DDL_EDGES_IDX)
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS memory_edges_to_idx ON memory_edges (to_id)"
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS memory_edges_type_idx ON memory_edges (edge_type)"
+            )
             await conn.commit()
 
     @asynccontextmanager
@@ -198,35 +203,47 @@ class SQLiteGraphAdapter:
             return GraphResult(nodes=[], edges=[], traversal_depth=0)
 
         effective_depth = min(depth, self._max_logical_depth)
+        partial_container: list[GraphResult] = []
 
         try:
-            result = await asyncio.wait_for(
-                self._traverse_inner(seed_ids, edge_types, effective_depth),
-                timeout=self._timeout,
-            )
-            return result
+            async with self._connect() as conn:
+                raw_conn = getattr(conn, "_conn", None)
+                if raw_conn is None:
+                    raise RuntimeError("aiosqlite._conn attribute not found; interrupt-based timeout unavailable")
+                
+                ctx = SafeSqliteInterruptCtx(raw_conn)
+                
+                result = await asyncio.wait_for(
+                    self._traverse_inner(conn, ctx, seed_ids, edge_types, effective_depth, partial_container),
+                    timeout=self._timeout,
+                )
+                return result
         except asyncio.TimeoutError:
+            ctx.interrupt()
             logger.warning(
                 "graph_traversal_timeout: traversal from seeds=%s "
                 "exceeded %.2fs; returning empty result.",
                 seed_ids,
                 self._timeout,
             )
+            if partial_container:
+                return partial_container[0]
             return GraphResult(nodes=[], edges=[], traversal_depth=0)
 
     async def _traverse_inner(
-        self, seed_ids: list[str], edge_types: list[str], effective_depth: int
+        self, conn: aiosqlite.Connection, ctx: SafeSqliteInterruptCtx, seed_ids: list[str], edge_types: list[str], effective_depth: int, partial_container: list[GraphResult]
     ) -> GraphResult:
         """Execute the recursive CTE traversal query."""
-        async with self._connect() as conn:
-            return await self._run_traversal(conn, seed_ids, edge_types, effective_depth)
+        return await self._run_traversal(conn, ctx, seed_ids, edge_types, effective_depth, partial_container)
 
     async def _run_traversal(
         self,
         conn: aiosqlite.Connection,
+        ctx: SafeSqliteInterruptCtx,
         seed_ids: list[str],
         edge_types: list[str],
         effective_depth: int,
+        partial_container: list[GraphResult],
     ) -> GraphResult:
         """Build and execute a recursive CTE; return GraphResult.
 
@@ -277,7 +294,7 @@ class SQLiteGraphAdapter:
                 NULL      AS props,
                 0         AS logical_depth,
                 0         AS physical_depth,
-                n.id      AS visited_ids
+                json_array(n.id) AS visited_ids
             FROM memory_nodes n
             WHERE n.id IN ({seed_placeholders})
 
@@ -295,7 +312,7 @@ class SQLiteGraphAdapter:
                     ELSE cte.logical_depth + 1
                 END       AS logical_depth,
                 cte.physical_depth + 1 AS physical_depth,
-                cte.visited_ids || ',' || e.to_id AS visited_ids
+                json_insert(cte.visited_ids, '$[' || json_array_length(cte.visited_ids) || ']', e.to_id) AS visited_ids
             FROM graph_cte cte
             JOIN memory_edges e ON e.from_id = cte.node_id
             WHERE
@@ -307,9 +324,7 @@ class SQLiteGraphAdapter:
                 -- physical hop guard
                 AND cte.physical_depth + 1 <= ?
                 -- cycle guard
-                AND (
-                    ',' || cte.visited_ids || ','
-                ) NOT LIKE ('%,' || e.to_id || ',%')
+                AND e.to_id NOT IN (SELECT value FROM json_each(cte.visited_ids))
                 {edge_type_filter}
         )
         SELECT DISTINCT
@@ -331,13 +346,17 @@ class SQLiteGraphAdapter:
             + edge_type_params
         )
 
-        ctx = SafeSqliteInterruptCtx(conn._conn)  # type: ignore[attr-defined]
+        # We pass ctx from outside now
         rows: list[Any] = []
         max_physical_reached = False
 
-        async with ctx:
-            async with conn.execute(sql, params) as cursor:
-                rows = await cursor.fetchall()
+        try:
+            async with ctx:
+                async with conn.execute(sql, params) as cursor:
+                    async for row in cursor:
+                        rows.append(row)
+        except (Exception, asyncio.CancelledError):
+            pass
 
         # --- Parse results ---
         node_map: dict[str, dict[str, Any]] = {}
@@ -390,11 +409,13 @@ class SQLiteGraphAdapter:
                 self._max_physical_hops,
             )
 
-        return GraphResult(
+        res = GraphResult(
             nodes=list(node_map.values()),
             edges=list(edge_set.values()),
             traversal_depth=max_logical,
         )
+        partial_container.append(res)
+        return res
 
     # ------------------------------------------------------------------
     # GraphAdapter: delete_node

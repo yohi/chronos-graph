@@ -65,14 +65,18 @@ class SQLiteCacheCoherenceChecker:
 
     def start(self) -> None:
         """Start the background polling task."""
-        self._task = asyncio.get_event_loop().create_task(
+        self._task = asyncio.get_running_loop().create_task(
             self._poll_loop(), name="cache-coherence-checker"
         )
 
-    def stop(self) -> None:
-        """Cancel the background task (best-effort)."""
+    async def stop(self) -> None:
+        """Cancel the background task (best-effort) and await completion."""
         if self._task and not self._task.done():
             self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
 
     async def _poll_loop(self) -> None:
         """Poll until cancelled."""
@@ -133,26 +137,42 @@ async def create_storage(
     Returns:
         (StorageAdapter, GraphAdapter | None, CacheAdapter)
     """
-    storage = await _create_storage_adapter(settings)
-    graph_adp = await _create_graph_adapter(settings)
-    cache_adp = await _create_cache_adapter(settings)
+    storage = None
+    graph_adp = None
+    cache_adp = None
+    try:
+        storage = await _create_storage_adapter(settings)
+        graph_adp = await _create_graph_adapter(settings)
+        cache_adp = await _create_cache_adapter(settings)
 
-    # Start cache coherence checker for SQLite + InMemory combination
-    if (
-        settings.storage_backend == "sqlite"
-        and settings.cache_backend == "inmemory"
-    ):
-        import os
+        # Start cache coherence checker for SQLite + InMemory combination
+        if (
+            settings.storage_backend == "sqlite"
+            and settings.cache_backend == "inmemory"
+        ):
+            import os
 
-        db_path = os.path.expanduser(settings.sqlite_db_path)
-        checker = SQLiteCacheCoherenceChecker(
-            db_path=db_path,
-            cache=cache_adp,
-            poll_interval=settings.cache_coherence_poll_interval_seconds,
-        )
-        checker.start()
+            from context_store.storage.inmemory import InMemoryCacheAdapter
 
-    return storage, graph_adp, cache_adp
+            db_path = os.path.expanduser(settings.sqlite_db_path)
+            checker = SQLiteCacheCoherenceChecker(
+                db_path=db_path,
+                cache=cache_adp,
+                poll_interval=settings.cache_coherence_poll_interval_seconds,
+            )
+            checker.start()
+            if isinstance(cache_adp, InMemoryCacheAdapter):
+                cache_adp.set_coherence_checker(checker)
+
+        return storage, graph_adp, cache_adp
+    except Exception:
+        if cache_adp:
+            await cache_adp.dispose()
+        if graph_adp:
+            await graph_adp.dispose()
+        if storage:
+            await storage.dispose()
+        raise
 
 
 async def _create_storage_adapter(settings: "Settings") -> "StorageAdapter":

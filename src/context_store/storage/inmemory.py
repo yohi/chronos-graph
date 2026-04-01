@@ -31,6 +31,11 @@ class InMemoryCacheAdapter:
         # expiry_monotonic == float("inf") means no expiry
         self._store: dict[str, tuple[Any, float]] = {}
         self._lock = asyncio.Lock()
+        self._checker: Any | None = None
+
+    def set_coherence_checker(self, checker: Any) -> None:
+        """Attach a coherence checker that will be stopped during dispose()."""
+        self._checker = checker
 
     # ------------------------------------------------------------------
     # CacheAdapter: get
@@ -75,16 +80,16 @@ class InMemoryCacheAdapter:
     async def invalidate_prefix(self, prefix: str) -> None:
         """Remove all entries whose keys start with *prefix*.
 
-        Uses a snapshot (short lock window) to avoid blocking the event loop
-        for large caches (O(N) matching is done outside the lock).
+        Uses a snapshot approach to avoid O(N) filtering under lock,
+        then deletes all matching keys in a single lock-held block.
         """
-        # Step 1: Snapshot matching keys under a short lock window
         async with self._lock:
-            matching_keys = [k for k in self._store if k.startswith(prefix)]
+            snapshot = list(self._store.keys())
 
-        # Step 2: Delete each key individually (re-acquire lock per key)
-        for key in matching_keys:
-            async with self._lock:
+        matching_keys = [k for k in snapshot if k.startswith(prefix)]
+
+        async with self._lock:
+            for key in matching_keys:
                 self._store.pop(key, None)
 
     # ------------------------------------------------------------------
@@ -102,5 +107,7 @@ class InMemoryCacheAdapter:
 
     async def dispose(self) -> None:
         """Release resources (clears the store)."""
+        if self._checker:
+            await self._checker.stop()
         async with self._lock:
             self._store.clear()

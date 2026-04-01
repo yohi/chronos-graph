@@ -2,16 +2,13 @@
 from __future__ import annotations
 
 import asyncio
-import tempfile
 from pathlib import Path
 from typing import AsyncGenerator
-from unittest.mock import AsyncMock, MagicMock, patch
 
-import aiosqlite
 import pytest
 
 from context_store.config import Settings
-from context_store.models.graph import Edge, GraphResult
+from context_store.models.graph import GraphResult
 from context_store.storage.sqlite_graph import SQLiteGraphAdapter
 
 
@@ -282,9 +279,12 @@ class TestDeleteNode:
         await adapter.create_edge("p", "q", "TEMPORAL_NEXT", {})
         await adapter.delete_node("p")
 
-        result = await adapter.traverse(["q"], [], depth=0)
-        edges = [e for e in result.edges if e.from_id == "p"]
-        assert edges == []
+        async with adapter._connect() as conn:
+            async with conn.execute(
+                "SELECT COUNT(*) FROM memory_edges WHERE from_id = ? OR to_id = ?", ("p", "p")
+            ) as cursor:
+                count = (await cursor.fetchone())[0]
+        assert count == 0
 
     async def test_delete_nonexistent_node(self, adapter: SQLiteGraphAdapter) -> None:
         """存在しないノードの削除でも例外が発生しない."""
@@ -337,6 +337,14 @@ class TestTimeout:
             await adp.create_node(nid, {})
         await adp.create_edge("t1", "t2", "TEMPORAL_NEXT", {})
         await adp.create_edge("t2", "t3", "TEMPORAL_NEXT", {})
+
+        # Monkeypatch to force timeout
+        original_inner = adp._traverse_inner
+        async def slow_inner(*args, **kwargs):
+            await asyncio.sleep(0.01)
+            return await original_inner(*args, **kwargs)
+        
+        adp._traverse_inner = slow_inner
 
         # Should not raise even if timeout hits
         result = await adp.traverse(["t1"], [], depth=5)

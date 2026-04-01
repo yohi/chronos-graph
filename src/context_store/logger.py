@@ -1,12 +1,14 @@
 import json
 import logging
 import sys
+import threading
 from contextvars import ContextVar
 from typing import Any
 
 # ContextVars for request/operation context
 _context: ContextVar[dict[str, Any] | None] = ContextVar("_log_context", default=None)
 _RESERVED_FIELDS = frozenset({"exception", "level", "logger", "message"})
+logger_init_lock = threading.Lock()
 
 
 class StructuredFormatter(logging.Formatter):
@@ -27,20 +29,22 @@ class StructuredFormatter(logging.Formatter):
 def get_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     if not logger.handlers:
-        # stdout for DEBUG/INFO, stderr for WARNING and above
-        stdout_handler = logging.StreamHandler(sys.stdout)
-        stdout_handler.setLevel(logging.DEBUG)
-        stdout_handler.setFormatter(StructuredFormatter())
-        stdout_handler.addFilter(lambda r: r.levelno < logging.WARNING)
+        with logger_init_lock:
+            if not logger.handlers:
+                # stdout for DEBUG/INFO, stderr for WARNING and above
+                stdout_handler = logging.StreamHandler(sys.stdout)
+                stdout_handler.setLevel(logging.DEBUG)
+                stdout_handler.setFormatter(StructuredFormatter())
+                stdout_handler.addFilter(lambda r: r.levelno < logging.WARNING)
 
-        stderr_handler = logging.StreamHandler(sys.stderr)
-        stderr_handler.setLevel(logging.WARNING)
-        stderr_handler.setFormatter(StructuredFormatter())
+                stderr_handler = logging.StreamHandler(sys.stderr)
+                stderr_handler.setLevel(logging.WARNING)
+                stderr_handler.setFormatter(StructuredFormatter())
 
-        logger.addHandler(stdout_handler)
-        logger.addHandler(stderr_handler)
-        logger.setLevel(logging.DEBUG)
-        logger.propagate = False
+                logger.addHandler(stdout_handler)
+                logger.addHandler(stderr_handler)
+                logger.setLevel(logging.DEBUG)
+                logger.propagate = False
     return logger
 
 

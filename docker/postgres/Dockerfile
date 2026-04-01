@@ -20,3 +20,5 @@ RUN apt-get update \
     && apt-get remove -y build-essential postgresql-server-dev-16 curl \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
+
+USER postgres

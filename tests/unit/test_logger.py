@@ -55,3 +55,4 @@ def test_context_cannot_override_reserved_fields(capsys):
     assert output["logger"] == "test_reserved"
     assert output["message"] == "actual message"
     assert output["request_id"] == "req-123"
+    clear_context()

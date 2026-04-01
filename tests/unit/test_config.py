@@ -99,6 +99,5 @@ def test_postgres_dsn_url_encodes_credentials():
     )
 
     assert settings.postgres_dsn == (
-        "postgresql://user%2Bname%40example.com:p%40ss%20word%3A%2F"
-        "@localhost:5432/context_store"
+        "postgresql://user%2Bname%40example.com:p%40ss%20word%3A%2F@localhost:5432/context_store"
     )

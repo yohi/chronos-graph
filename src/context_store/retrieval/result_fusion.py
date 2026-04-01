@@ -1,8 +1,7 @@
 """Result Fusion - RRF + 複合スコアリング"""
 
 from datetime import datetime, timezone
-from context_store.retrieval.query_analyzer import SearchStrategy
-from context_store.models.search import ScoredMemory
+from context_store.models.search import SearchStrategy, ScoredMemory
 from context_store.models.memory import MemorySource
 
 

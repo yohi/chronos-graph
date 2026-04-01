@@ -4,6 +4,8 @@ import logging
 from typing import Any
 from uuid import UUID
 
+from context_store.models.graph import GraphResult
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,36 +38,32 @@ class GraphTraversal:
         seed_ids: list[UUID],
         edge_types: list[str] | None = None,
         depth: int | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> GraphResult:
         """
         グラフをトラバース
 
         Args:
             seed_ids: 起点ノードID
-            edge_types: フィルタするエッジタイプ
-            depth: トラバーサルの深さ
+            edge_types: フィルタするエッジタイプ（Noneで全タイプ）
+            depth: トラバーサルの深さ（Noneでデフォルト値）
 
         Returns:
-            トラバーサル結果（ノードID、スコアなど）
+            GraphResult: トラバーサル結果
         """
         if depth is None:
             depth = self.default_depth
 
         try:
-            # Graph Adapter でトラバーサル
-            results = await self.graph_adapter.traverse(
-                seed_ids=seed_ids,
+            result: GraphResult = await self.graph_adapter.traverse(
+                seed_ids=[str(sid) for sid in seed_ids],
                 edge_types=edge_types or [],
                 depth=depth,
-                fanout_limit=self.fanout_limit,
-                max_physical_hops=self.max_physical_hops,
             )
-
-            return results
+            return result
 
         except Exception as e:
             # Graceful Degradation: グラフ検索失敗時は空結果を返す
             logger.warning(
                 f"Graph traversal failed: {type(e).__name__}: {str(e)}. Returning empty results."
             )
-            return []
+            return GraphResult(nodes=[], edges=[], traversal_depth=0)

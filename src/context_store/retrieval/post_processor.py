@@ -104,22 +104,16 @@ class PostProcessor:
 
         for result in results:
             content = result.memory.content
-            # ASCII文字比率を計算
+            # ASCII文字比率で言語を判定し、安全側（過大推定）でトークン数を推定
             ascii_count = sum(1 for c in content if ord(c) < 128)
             ascii_ratio = ascii_count / len(content) if content else 0
 
-            # トークン推定
             if ascii_ratio >= 0.9:
-                # 英語主体
-                estimated_tokens = len(content) // 4
-                safety_margin = 1.5
+                # 英語主体: 1トークン ≈ 4文字、1.5倍の安全マージン
+                estimated_tokens = int(len(content) / 4.0 * 1.5)
             else:
-                # 日本語等マルチバイト
-                estimated_tokens = len(content) // 3
-                safety_margin = 3.0
-
-            # 安全側（過大推定）
-            estimated_tokens = int(len(content) / 3.0 * safety_margin)
+                # 日本語等マルチバイト: 1トークン ≈ 3文字、3.0倍の安全マージン
+                estimated_tokens = int(len(content) / 3.0 * 3.0)
 
             if total_tokens + estimated_tokens <= max_tokens:
                 limited_results.append(result)

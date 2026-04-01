@@ -1,18 +1,8 @@
 """Query Analyzer - クエリ意図解析と検索戦略決定"""
 
 import re
-from dataclasses import dataclass
 
-
-@dataclass
-class SearchStrategy:
-    """検索戦略"""
-
-    vector_weight: float  # ベクトル検索の重み
-    keyword_weight: float  # キーワード検索の重み
-    graph_weight: float  # グラフ検索の重み
-    graph_depth: int  # グラフトラバーサルの深さ
-    time_decay_enabled: bool  # 時間減衰の有効化
+from context_store.models.search import SearchStrategy
 
 
 class QueryAnalyzer:
@@ -22,7 +12,6 @@ class QueryAnalyzer:
     ERROR_PATTERNS = [
         r"(ERROR|WARN|Exception|Error|TypeError|SyntaxError|ValueError)",
         r"(ENOENT|ECONNREFUSED|ETIMEDOUT|ER_\w+|ORA-\d+)",
-        r":\s*[A-Z][\w\s]+",  # "Error: message"
     ]
 
     CAUSALITY_PATTERNS = [
@@ -59,7 +48,6 @@ class QueryAnalyzer:
         Returns:
             SearchStrategy: 検索戦略
         """
-        # パターンマッチング
         has_error = bool(self._error_regex.search(query))
         has_causality = bool(self._causality_regex.search(query))
         has_time = bool(self._time_regex.search(query))
@@ -69,26 +57,19 @@ class QueryAnalyzer:
         keyword_weight = 0.2
         graph_weight = 0.3
         graph_depth = 2
-        time_decay_enabled = has_time
 
-        # パターンに基づいて戦略を調整
         if has_error:
             # エラー/コード片 → キーワード検索重視
             vector_weight = 0.2
             keyword_weight = 0.6
             graph_weight = 0.2
             graph_depth = 1
-
         elif has_causality:
             # 因果関係 → グラフ検索重視
             vector_weight = 0.2
             keyword_weight = 0.1
             graph_weight = 0.7
             graph_depth = 3
-
-        # 時間表現がある場合は時間減衰を有効化
-        if has_time:
-            time_decay_enabled = True
 
         # 重みを正規化（合計が1.0になるように）
         weights_sum = vector_weight + keyword_weight + graph_weight
@@ -102,5 +83,5 @@ class QueryAnalyzer:
             keyword_weight=keyword_weight,
             graph_weight=graph_weight,
             graph_depth=graph_depth,
-            time_decay_enabled=time_decay_enabled,
+            time_decay_enabled=has_time,
         )

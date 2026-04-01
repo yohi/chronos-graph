@@ -159,3 +159,39 @@ def test_postgres_dsn_url_encodes_credentials():
     assert settings.postgres_dsn == (
         "postgresql://user%2Bname%40example.com:p%40ss%20word%3A%2F@localhost:5432/context%2Fstore%20prod"
     )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("decay_half_life_days", 0),
+        ("archive_threshold", -0.01),
+        ("archive_threshold", 1.01),
+        ("consolidation_threshold", -0.01),
+        ("consolidation_threshold", 1.01),
+        ("purge_retention_days", -1),
+        ("default_top_k", 0),
+        ("similarity_threshold", -0.01),
+        ("similarity_threshold", 1.01),
+        ("dedup_threshold", -0.01),
+        ("dedup_threshold", 1.01),
+        ("graph_fanout_limit", 0),
+        ("graph_max_logical_depth", 0),
+        ("graph_max_physical_hops", 0),
+        ("graph_traversal_timeout_seconds", 0.0),
+        ("url_fetch_concurrency", 0),
+        ("url_max_redirects", -1),
+        ("url_max_response_bytes", -1),
+        ("url_timeout_seconds", 0),
+    ],
+)
+def test_numeric_settings_reject_out_of_range_values(field_name, value):
+    kwargs = {
+        "postgres_password": "test",
+        "neo4j_password": "test",
+        "openai_api_key": "sk-test",
+        field_name: value,
+    }
+
+    with pytest.raises(ValueError):
+        Settings(**kwargs)

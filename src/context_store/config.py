@@ -43,16 +43,16 @@ class Settings(BaseSettings):
     custom_api_endpoint: str = ""
 
     # --- Lifecycle ---
-    decay_half_life_days: int = 30
-    archive_threshold: float = 0.05
-    consolidation_threshold: float = 0.85
-    purge_retention_days: int = 90
+    decay_half_life_days: int = Field(default=30, ge=1)
+    archive_threshold: float = Field(default=0.05, ge=0.0, le=1.0)
+    consolidation_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
+    purge_retention_days: int = Field(default=90, ge=0)
 
     # --- Search ---
-    default_top_k: int = 10
-    similarity_threshold: float = 0.70
-    dedup_threshold: float = 0.90
-    graph_fanout_limit: int = 50
+    default_top_k: int = Field(default=10, ge=1)
+    similarity_threshold: float = Field(default=0.70, ge=0.0, le=1.0)
+    dedup_threshold: float = Field(default=0.90, ge=0.0, le=1.0)
+    graph_fanout_limit: int = Field(default=50, ge=1)
     graph_max_logical_depth: int = Field(default=5, ge=1)
     graph_max_physical_hops: int = Field(default=50, ge=1)
     graph_traversal_timeout_seconds: float = Field(default=2.0, gt=0.0)
@@ -69,11 +69,11 @@ class Settings(BaseSettings):
     wal_checkpoint_mode_truncate: str = "TRUNCATE"
 
     # --- URL Fetch (SSRF 対策) ---
-    url_fetch_concurrency: int = 3
+    url_fetch_concurrency: int = Field(default=3, ge=1)
     allow_private_urls: bool = False
-    url_max_redirects: int = 3
-    url_max_response_bytes: int = 10 * 1024 * 1024  # 10MB
-    url_timeout_seconds: int = 30
+    url_max_redirects: int = Field(default=3, ge=0)
+    url_max_response_bytes: int = Field(default=10 * 1024 * 1024, ge=0)  # 10MB
+    url_timeout_seconds: int = Field(default=30, gt=0)
     url_allowed_content_types: list[str] = Field(
         default_factory=lambda: ["text/*", "application/json", "application/pdf"]
     )

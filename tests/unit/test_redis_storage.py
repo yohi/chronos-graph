@@ -16,6 +16,7 @@ import pytest
 # Fixture
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def redis_mock():
     """redis.asyncio.Redis のモック。"""
@@ -30,6 +31,7 @@ def redis_mock():
 @pytest.fixture
 def adapter(redis_mock):
     from context_store.storage.redis import RedisCacheAdapter
+
     adp = RedisCacheAdapter(redis_mock)
     return adp, redis_mock
 
@@ -37,6 +39,7 @@ def adapter(redis_mock):
 # ---------------------------------------------------------------------------
 # get
 # ---------------------------------------------------------------------------
+
 
 class TestGet:
     async def test_returns_none_on_cache_miss(self, adapter):
@@ -49,6 +52,7 @@ class TestGet:
 
     async def test_returns_deserialized_value(self, adapter):
         import json
+
         adp, r = adapter
         r.get = AsyncMock(return_value=json.dumps({"x": 1}).encode())
 
@@ -69,6 +73,7 @@ class TestGet:
 # set
 # ---------------------------------------------------------------------------
 
+
 class TestSet:
     async def test_serializes_and_stores(self, adapter):
         adp, r = adapter
@@ -80,6 +85,7 @@ class TestSet:
         call_args = r.set.call_args
         assert call_args[0][0] == "key1"
         import json
+
         stored = json.loads(call_args[0][1])
         assert stored == {"data": 42}
 
@@ -103,6 +109,7 @@ class TestSet:
 # invalidate
 # ---------------------------------------------------------------------------
 
+
 class TestInvalidate:
     async def test_deletes_key(self, adapter):
         adp, r = adapter
@@ -123,10 +130,12 @@ class TestInvalidate:
 # invalidate_prefix
 # ---------------------------------------------------------------------------
 
+
 class TestInvalidatePrefix:
     async def test_uses_scan_not_keys(self, adapter):
         """Redis KEYS コマンドを使わず SCAN を使うことを検証。"""
         adp, r = adapter
+
         # scan_iter を使う実装を想定してモック
         async def _scan_iter(*args, **kwargs):
             yield b"prefix:key1"
@@ -141,6 +150,7 @@ class TestInvalidatePrefix:
 
     async def test_does_not_raise_on_failure(self, adapter):
         adp, r = adapter
+
         async def _scan_iter(*args, **kwargs):
             raise Exception("redis down")
             yield b"unused"
@@ -171,18 +181,34 @@ class TestInvalidatePrefix:
 # clear
 # ---------------------------------------------------------------------------
 
+
 class TestClear:
-    async def test_flushes_all_entries(self, adapter):
+    async def test_clears_only_managed_prefix(self, adapter):
         adp, r = adapter
+
+        async def _scan_iter(*args, **kwargs):
+            yield b"cache:key1"
+            yield b"cache:key2"
+
+        adp._prefix = "cache:"
+        r.scan_iter = _scan_iter
+        r.delete = AsyncMock(return_value=2)
         r.flushdb = AsyncMock(return_value=True)
 
         await adp.clear()
 
-        r.flushdb.assert_called_once()
+        r.delete.assert_called_once_with(b"cache:key1", b"cache:key2")
+        r.flushdb.assert_not_called()
 
     async def test_does_not_raise_on_failure(self, adapter):
         adp, r = adapter
-        r.flushdb = AsyncMock(side_effect=Exception("redis down"))
+        adp._prefix = "cache:"
+
+        async def _scan_iter(*args, **kwargs):
+            raise Exception("redis down")
+            yield b"unused"
+
+        r.scan_iter = _scan_iter
 
         await adp.clear()
 
@@ -190,6 +216,7 @@ class TestClear:
 # ---------------------------------------------------------------------------
 # dispose
 # ---------------------------------------------------------------------------
+
 
 class TestDispose:
     async def test_closes_connection(self, adapter):

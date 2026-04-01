@@ -9,7 +9,7 @@ from typing import Any
 from context_store.models.graph import Edge, GraphResult
 
 logger = logging.getLogger(__name__)
-_EDGE_TYPE_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
+_EDGE_TYPE_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _is_valid_edge_type(edge_type: str) -> bool:
@@ -36,9 +36,7 @@ class Neo4jGraphAdapter:
         """Create a new adapter by connecting to Neo4j."""
         import neo4j
 
-        driver = neo4j.AsyncGraphDatabase.driver(
-            uri, auth=(user, password)
-        )
+        driver = neo4j.AsyncGraphDatabase.driver(uri, auth=(user, password))
         return cls(driver)
 
     # ------------------------------------------------------------------
@@ -111,18 +109,20 @@ class Neo4jGraphAdapter:
         except Exception as exc:
             logger.warning("Neo4j create_edges_batch failed (degraded): %s", exc)
 
-    async def traverse(
-        self, seed_ids: list[str], edge_types: list[str], depth: int
-    ) -> GraphResult:
+    async def traverse(self, seed_ids: list[str], edge_types: list[str], depth: int) -> GraphResult:
         """Traverse the graph from seed nodes up to the given depth."""
         if edge_types:
-            valid_edge_types = [edge_type for edge_type in edge_types if _is_valid_edge_type(edge_type)]
-            invalid_edge_types = [edge_type for edge_type in edge_types if not _is_valid_edge_type(edge_type)]
+            valid_edge_types = [
+                edge_type for edge_type in edge_types if _is_valid_edge_type(edge_type)
+            ]
+            invalid_edge_types = [
+                edge_type for edge_type in edge_types if not _is_valid_edge_type(edge_type)
+            ]
             for edge_type in invalid_edge_types:
                 logger.warning("Neo4j traverse skipped invalid edge_type: %s", edge_type)
 
             rel_filter = "|".join(valid_edge_types)
-            rel_pattern = f"[*1..{depth}:{rel_filter}]" if rel_filter else f"[*1..{depth}]"
+            rel_pattern = f"[:{rel_filter}*1..{depth}]" if rel_filter else f"[*1..{depth}]"
         else:
             rel_pattern = f"[*1..{depth}]"
 
@@ -142,6 +142,7 @@ class Neo4jGraphAdapter:
                 nodes: list[dict[str, Any]] = []
                 edges: list[Edge] = []
                 seen_node_ids: set[str] = set()
+                seen_edge_keys: set[object] = set()
                 async for record in result:
                     for node in record["nodes"]:
                         node_dict = dict(node)
@@ -150,12 +151,24 @@ class Neo4jGraphAdapter:
                             seen_node_ids.add(nid)
                             nodes.append(node_dict)
                     for rel in record["rels"]:
+                        properties = dict(rel)
+                        edge_key = getattr(rel, "id", None) or getattr(rel, "identity", None)
+                        if edge_key is None:
+                            edge_key = (
+                                str(rel.start_node["id"]),
+                                str(rel.end_node["id"]),
+                                rel.type,
+                                tuple(sorted(properties.items())),
+                            )
+                        if edge_key in seen_edge_keys:
+                            continue
+                        seen_edge_keys.add(edge_key)
                         edges.append(
                             Edge(
                                 from_id=str(rel.start_node["id"]),
                                 to_id=str(rel.end_node["id"]),
                                 edge_type=rel.type,
-                                properties=dict(rel),
+                                properties=properties,
                             )
                         )
         except Exception as exc:

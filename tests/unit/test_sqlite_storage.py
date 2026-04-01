@@ -177,9 +177,7 @@ class TestSaveMemory:
         assert count == 1
 
         async with adapter._db() as conn:
-            async with conn.execute(
-                "PRAGMA index_list('vectors_metadata')"
-            ) as cursor:
+            async with conn.execute("PRAGMA index_list('vectors_metadata')") as cursor:
                 rows = await cursor.fetchall()
 
         assert any(row["unique"] == 1 for row in rows)
@@ -192,9 +190,7 @@ class TestSaveMemory:
         adapter._vector_dim = None
         await adapter.save_memory(memory2)
 
-        count = await _fetch_one_value(
-            adapter, "SELECT COUNT(*) FROM vectors_metadata"
-        )
+        count = await _fetch_one_value(adapter, "SELECT COUNT(*) FROM vectors_metadata")
 
         assert count == 1
 
@@ -535,9 +531,7 @@ class TestListByFilter:
         await adapter.save_memory(ep)
         await adapter.save_memory(sem)
 
-        results = await adapter.list_by_filter(
-            MemoryFilters(memory_type=MemoryType.EPISODIC.value)
-        )
+        results = await adapter.list_by_filter(MemoryFilters(memory_type=MemoryType.EPISODIC.value))
         assert all(r.memory_type == MemoryType.EPISODIC for r in results)
 
     async def test_list_by_tags(self, adapter):
@@ -550,6 +544,18 @@ class TestListByFilter:
         ids = [str(r.id) for r in results]
         assert str(tagged.id) in ids
         assert str(untagged.id) not in ids
+
+    async def test_list_by_tags_does_not_corrupt_values_containing_column_names(self, adapter):
+        tagged = _make_memory(content="tagged", tags=["archived_at"])
+        other = _make_memory(content="other", tags=["different"])
+        await adapter.save_memory(tagged)
+        await adapter.save_memory(other)
+
+        results = await adapter.list_by_filter(MemoryFilters(tags=["archived_at"]))
+
+        ids = [str(r.id) for r in results]
+        assert str(tagged.id) in ids
+        assert str(other.id) not in ids
 
 
 # ---------------------------------------------------------------------------
@@ -775,7 +781,7 @@ class TestBackpressureControl:
 
         # 複数のリクエストを実行（成功・失敗混在）
         tasks = []
-        for i in range(20):
+        for _ in range(20):
             tasks.append(asyncio.create_task(adp.get_memory(str(uuid4()))))
 
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -800,7 +806,7 @@ class TestEmbeddingSerDes:
         retrieved = await adapter.get_memory(str(memory.id))
         assert retrieved is not None
         # float32 キャストで誤差が出るため approx で比較
-        for orig, ret in zip(emb, retrieved.embedding):
+        for orig, ret in zip(emb, retrieved.embedding, strict=True):
             assert ret == pytest.approx(orig, abs=1e-6)
 
     async def test_round_trip_float32_precision(self, adapter):
@@ -811,7 +817,7 @@ class TestEmbeddingSerDes:
         await adapter.save_memory(memory)
         retrieved = await adapter.get_memory(str(memory.id))
         assert retrieved is not None
-        for orig, ret in zip(emb, retrieved.embedding):
+        for orig, ret in zip(emb, retrieved.embedding, strict=True):
             assert ret == pytest.approx(orig, abs=1e-7)
 
     async def test_dimension_mismatch_raises_error(self, adapter):

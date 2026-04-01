@@ -7,6 +7,7 @@ asyncpg.Pool をモックして SQL クエリの組み立てロジックと
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -21,6 +22,7 @@ from context_store.storage.protocols import MemoryFilters, StorageError
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_memory(**kwargs: Any) -> Memory:
     defaults: dict[str, Any] = {
@@ -58,15 +60,18 @@ def _make_record(memory: Memory) -> dict[str, Any]:
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def mock_pool():
     """asyncpg.Pool のモック。"""
     pool = MagicMock()
     conn = AsyncMock()
-    pool.acquire = MagicMock(return_value=AsyncMock(
-        __aenter__=AsyncMock(return_value=conn),
-        __aexit__=AsyncMock(return_value=None),
-    ))
+    pool.acquire = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=conn),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
     pool.close = AsyncMock()
     return pool, conn
 
@@ -75,6 +80,7 @@ def mock_pool():
 def adapter(mock_pool):
     """PostgresStorageAdapter をプール注入済みで返す。"""
     from context_store.storage.postgres import PostgresStorageAdapter
+
     pool, conn = mock_pool
     adapter = PostgresStorageAdapter.__new__(PostgresStorageAdapter)
     adapter._pool = pool
@@ -84,6 +90,7 @@ def adapter(mock_pool):
 # ---------------------------------------------------------------------------
 # save_memory
 # ---------------------------------------------------------------------------
+
 
 class TestSaveMemory:
     async def test_returns_memory_id(self, adapter):
@@ -134,11 +141,10 @@ class TestSaveMemory:
 
     async def test_raises_storage_error_on_unique_violation(self, adapter):
         import asyncpg
+
         adp, conn = adapter
         memory = _make_memory()
-        exc = asyncpg.UniqueViolationError(
-            "duplicate key value violates unique constraint"
-        )
+        exc = asyncpg.UniqueViolationError("duplicate key value violates unique constraint")
         conn.fetchval = AsyncMock(side_effect=exc)
 
         with pytest.raises(StorageError) as exc_info:
@@ -149,6 +155,7 @@ class TestSaveMemory:
 # ---------------------------------------------------------------------------
 # get_memory
 # ---------------------------------------------------------------------------
+
 
 class TestGetMemory:
     async def test_returns_none_when_not_found(self, adapter):
@@ -186,6 +193,7 @@ class TestGetMemory:
 # delete_memory
 # ---------------------------------------------------------------------------
 
+
 class TestDeleteMemory:
     async def test_returns_true_when_deleted(self, adapter):
         adp, conn = adapter
@@ -207,6 +215,7 @@ class TestDeleteMemory:
 # ---------------------------------------------------------------------------
 # update_memory
 # ---------------------------------------------------------------------------
+
 
 class TestUpdateMemory:
     async def test_returns_true_on_success(self, adapter):
@@ -249,10 +258,23 @@ class TestUpdateMemory:
         assert "::vector" in sql
         assert params[0] == "[0.1,0.2,0.3]"
 
+    async def test_updates_content_hash_when_content_changes(self, adapter):
+        adp, conn = adapter
+        conn.execute = AsyncMock(return_value="UPDATE 1")
+
+        await adp.update_memory(str(uuid4()), {"content": "updated content"})
+
+        call_args = conn.execute.call_args
+        sql: str = call_args[0][0]
+        params = call_args[0][1:]
+        assert "content_hash" in sql
+        assert hashlib.sha256("updated content".encode()).hexdigest() in params
+
 
 # ---------------------------------------------------------------------------
 # vector_search
 # ---------------------------------------------------------------------------
+
 
 class TestVectorSearch:
     async def test_returns_empty_list_when_no_results(self, adapter):
@@ -297,6 +319,16 @@ class TestVectorSearch:
         sql: str = call_args[0][0]
         assert "project" in sql
 
+    async def test_excludes_rows_without_embeddings(self, adapter):
+        adp, conn = adapter
+        conn.fetch = AsyncMock(return_value=[])
+
+        await adp.vector_search([0.1, 0.2], top_k=5)
+
+        call_args = conn.fetch.call_args
+        sql: str = call_args[0][0]
+        assert "embedding IS NOT NULL" in sql
+
     async def test_respects_top_k(self, adapter):
         adp, conn = adapter
         conn.fetch = AsyncMock(return_value=[])
@@ -310,6 +342,7 @@ class TestVectorSearch:
 # ---------------------------------------------------------------------------
 # keyword_search
 # ---------------------------------------------------------------------------
+
 
 class TestKeywordSearch:
     async def test_returns_empty_list_when_no_results(self, adapter):
@@ -357,6 +390,7 @@ class TestKeywordSearch:
 # ---------------------------------------------------------------------------
 # list_by_filter
 # ---------------------------------------------------------------------------
+
 
 class TestListByFilter:
     async def test_no_filter_returns_active_memories(self, adapter):
@@ -413,6 +447,7 @@ class TestListByFilter:
 # get_vector_dimension
 # ---------------------------------------------------------------------------
 
+
 class TestGetVectorDimension:
     async def test_returns_dimension_when_exists(self, adapter):
         adp, conn = adapter
@@ -444,6 +479,7 @@ class TestGetVectorDimension:
 # ---------------------------------------------------------------------------
 # dispose
 # ---------------------------------------------------------------------------
+
 
 class TestDispose:
     async def test_closes_pool(self, adapter):

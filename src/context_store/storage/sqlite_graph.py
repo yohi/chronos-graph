@@ -231,9 +231,9 @@ class SQLiteGraphAdapter:
                         raise
         except asyncio.TimeoutError:
             logger.warning(
-                "graph_traversal_timeout: traversal from seeds=%s "
+                "graph_traversal_timeout: traversal from seed_count=%d "
                 "exceeded %.2fs; returning partial result.",
-                seed_ids,
+                len(seed_ids),
                 self._timeout,
             )
             if partial_container:
@@ -254,6 +254,64 @@ class SQLiteGraphAdapter:
             conn, ctx, seed_ids, edge_types, effective_depth, partial_container
         )
 
+    def _parse_rows_to_graph_result(self, rows: list[Any]) -> GraphResult:
+        """Helper to convert raw SQL rows into a GraphResult."""
+        node_map: dict[str, dict[str, Any]] = {}
+        edge_set: dict[tuple[str, str, str], Edge] = {}
+        max_logical = 0
+        max_physical_reached = False
+
+        for row in rows:
+            rd = dict(row)
+            node_id: str = rd["node_id"]
+            physical_depth: int = rd.get("physical_depth") or 0
+            logical_depth: int = rd.get("logical_depth") or 0
+
+            if physical_depth >= self._max_physical_hops:
+                max_physical_reached = True
+
+            # Collect node
+            if node_id not in node_map:
+                meta: dict[str, Any] = {}
+                if rd.get("metadata"):
+                    try:
+                        meta = json.loads(rd["metadata"])
+                    except (json.JSONDecodeError, TypeError):
+                        meta = {}
+                meta["id"] = node_id
+                node_map[node_id] = meta
+
+            max_logical = max(max_logical, logical_depth)
+
+            # Collect edge (skip seed rows where from_id is NULL)
+            if rd.get("from_id") and rd.get("to_id") and rd.get("edge_type"):
+                key = (rd["from_id"], rd["to_id"], rd["edge_type"])
+                if key not in edge_set:
+                    props: dict[str, Any] = {}
+                    if rd.get("props"):
+                        try:
+                            props = json.loads(rd["props"])
+                        except (json.JSONDecodeError, TypeError):
+                            props = {}
+                    edge_set[key] = Edge(
+                        from_id=rd["from_id"],
+                        to_id=rd["to_id"],
+                        edge_type=rd["edge_type"],
+                        properties=props,
+                    )
+
+        if max_physical_reached:
+            logger.warning(
+                "Physical hops limit (%d) reached during graph traversal.",
+                self._max_physical_hops,
+            )
+
+        return GraphResult(
+            nodes=list(node_map.values()),
+            edges=list(edge_set.values()),
+            traversal_depth=max_logical,
+        )
+
     async def _run_traversal(
         self,
         conn: aiosqlite.Connection,
@@ -263,17 +321,7 @@ class SQLiteGraphAdapter:
         effective_depth: int,
         partial_container: list[GraphResult],
     ) -> GraphResult:
-        """Build and execute a recursive CTE; return GraphResult.
-
-        The CTE dual-depth strategy:
-        - physical_depth: always +1 per hop (guard against cycle / runaway).
-        - logical_depth : +1 per hop UNLESS the edge_type is 'SUPERSEDES'.
-
-        Stopping conditions:
-        - logical_depth >= effective_depth
-        - physical_depth >= graph_max_physical_hops
-        - cycle detection via visited_ids (comma-separated path string)
-        """
+        """Build and execute a recursive CTE; return GraphResult."""
         seed_placeholders = ",".join("?" * len(seed_ids))
 
         # Build edge-type filter fragment
@@ -284,11 +332,6 @@ class SQLiteGraphAdapter:
         else:
             edge_type_filter = ""
             edge_type_params = []
-
-        # Parameters: [seed_ids..., effective_depth, max_physical_hops,
-        #              edge_type_params..., effective_depth, max_physical_hops,
-        #              seed_ids... (for final SELECT)]
-        # We construct this carefully below.
 
         seed_params: list[Any] = list(seed_ids)
 
@@ -365,83 +408,38 @@ class SQLiteGraphAdapter:
             *edge_type_params,
         ]
 
-        # We pass ctx from outside now
         rows: list[Any] = []
-        max_physical_reached = False
         cursor = None
 
         try:
             async with conn.execute(sql, params) as cursor:
                 async for row in cursor:
                     rows.append(row)
+                    # Regularly update partial result if requested
+                    if len(rows) % 100 == 0:
+                        partial_container.clear()
+                        partial_container.append(self._parse_rows_to_graph_result(rows))
         except asyncio.CancelledError:
+            # On cancel, still try to save what we have
+            if rows:
+                partial_container.clear()
+                partial_container.append(self._parse_rows_to_graph_result(rows))
             raise
         except Exception:
+            # Sanitize params for logging
+            safe_params = [f"<{type(p).__name__}>" for p in params]
             logger.exception(
-                "Query execution failed. sql=%s, params=%s, ctx=%s, cursor=%s",
-                sql,
-                params,
-                ctx,
-                cursor,
+                "Query execution failed. seed_count=%d, params_summary=%s",
+                len(seed_ids),
+                safe_params,
             )
+            if rows:
+                partial_container.clear()
+                partial_container.append(self._parse_rows_to_graph_result(rows))
             raise
 
-        # --- Parse results ---
-        node_map: dict[str, dict[str, Any]] = {}
-        edge_set: dict[tuple[str, str, str], Edge] = {}
-        max_logical = 0
-
-        for row in rows:
-            rd = dict(row)
-            node_id: str = rd["node_id"]
-            physical_depth: int = rd.get("physical_depth") or 0
-            logical_depth: int = rd.get("logical_depth") or 0
-
-            if physical_depth >= self._max_physical_hops:
-                max_physical_reached = True
-
-            # Collect node
-            if node_id not in node_map:
-                meta: dict[str, Any] = {}
-                if rd.get("metadata"):
-                    try:
-                        meta = json.loads(rd["metadata"])
-                    except (json.JSONDecodeError, TypeError):
-                        meta = {}
-                meta["id"] = node_id
-                node_map[node_id] = meta
-
-            max_logical = max(max_logical, logical_depth)
-
-            # Collect edge (skip seed rows where from_id is NULL)
-            if rd.get("from_id") and rd.get("to_id") and rd.get("edge_type"):
-                key = (rd["from_id"], rd["to_id"], rd["edge_type"])
-                if key not in edge_set:
-                    props: dict[str, Any] = {}
-                    if rd.get("props"):
-                        try:
-                            props = json.loads(rd["props"])
-                        except (json.JSONDecodeError, TypeError):
-                            props = {}
-                    edge_set[key] = Edge(
-                        from_id=rd["from_id"],
-                        to_id=rd["to_id"],
-                        edge_type=rd["edge_type"],
-                        properties=props,
-                    )
-
-        if max_physical_reached:
-            logger.warning(
-                "Physical hops limit (%d) reached during graph traversal. "
-                "Result may be incomplete.",
-                self._max_physical_hops,
-            )
-
-        res = GraphResult(
-            nodes=list(node_map.values()),
-            edges=list(edge_set.values()),
-            traversal_depth=max_logical,
-        )
+        res = self._parse_rows_to_graph_result(rows)
+        partial_container.clear()
         partial_container.append(res)
         return res
 

@@ -19,8 +19,9 @@ def default_settings(monkeypatch):
     }
 
 
-def test_default_settings(default_settings):
-    settings = make_settings()
+def test_default_settings():
+    # 直接インスタンス化して、真のデフォルト値を検証する
+    settings = Settings(openai_api_key="sk-test")
     assert settings.postgres_port == 5432
     assert settings.embedding_provider == "openai"
     assert settings.decay_half_life_days == 30

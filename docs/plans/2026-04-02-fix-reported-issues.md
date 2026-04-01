@@ -1,7 +1,5 @@
 # Fix Reported Issues Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
 **Goal:** Fix various minor issues reported in code, documentation, and tests.
 
 **Architecture:** Surgical updates to existing files to address specific nitpicks and bugs including exception handling, timeout logic, and test assertions.
@@ -17,12 +15,11 @@
 
 **Step 1: Fix heading hierarchy and remove AI-only instruction**
 
-Change `### Task 1` to `## Task 1` and remove the `> **For Claude:**` line.
+Change task headings to use appropriate levels and remove any embedded agent-specific instructions.
 
 **Step 2: Verify with markdownlint**
 
-Run: `markdownlint-cli2 docs/plans/2026-04-01-config-wal-validation-test-update.md`
-Expected: No MD001 error.
+Ensure the document passes standard markdown linting checks.
 
 ## Task 2: Fix mypy ignore in postgres.py
 
@@ -31,12 +28,11 @@ Expected: No MD001 error.
 
 **Step 1: Update type ignore tag**
 
-Change `# type: ignore[import-untyped]` to `# type: ignore[import-not-found]` for `asyncpg`.
+Adjust the `type: ignore` tag for `asyncpg` to match current environment capabilities.
 
-**Step 2: Verify with mypy (optional if env allows)**
+**Step 2: Verify with mypy**
 
-Run: `mypy src/context_store/storage/postgres.py`
-Expected: No "import-not-found" for asyncpg.
+Ensure the project passes strict typing validation.
 
 ## Task 3: Refactor sqlite_graph.py (Exception Handling & List Unpacking)
 
@@ -45,16 +41,15 @@ Expected: No "import-not-found" for asyncpg.
 
 **Step 1: Update exception handling in query execution**
 
-Re-raise `asyncio.CancelledError` and log other exceptions with `logger.exception`.
+Improve robustness by handling cancellation and logging errors with context.
 
 **Step 2: Update list concatenation to unpacking**
 
-Use `[*seed_params, ...]` syntax for `params`.
+Use modern Python unpacking syntax for SQL parameters.
 
 **Step 3: Verify tests pass**
 
-Run: `pytest tests/unit/test_sqlite_graph.py`
-Expected: PASS
+Ensure all graph traversal unit tests remain green.
 
 ## Task 4: Fix Timeout Logic & Add Comments in sqlite_graph.py
 
@@ -63,16 +58,15 @@ Expected: PASS
 
 **Step 1: Move asyncio.wait_for inside the interrupt context**
 
-Ensure `asyncio.wait_for` is called within `async with ctx:`.
+Correct the nesting of timeout logic and interrupt handling.
 
 **Step 2: Add explanatory comments for private attribute access**
 
-Document `conn._conn` usage and aiosqlite version dependency.
+Document the rationale for using non-public API elements.
 
 **Step 3: Verify tests pass**
 
-Run: `pytest tests/unit/test_sqlite_graph.py`
-Expected: PASS
+Confirm that the fixes do not introduce regressions in existing graph tests.
 
 ## Task 5: Update Tests (Assertions & Mocking)
 
@@ -82,17 +76,16 @@ Expected: PASS
 
 **Step 1: Add traversal_depth assertion in test_sqlite_graph.py**
 
-Ensure `result.traversal_depth == 0` is checked in timeout cases.
+Extend test coverage to include result depth verification in edge cases.
 
 **Step 2: Fix mock pool in test_storage_factory.py**
 
-Replace `storage._pool = None` with a mock pool having an `AsyncMock` close method.
+Improve the accuracy of storage cleanup mocking.
 
 **Step 3: Remove redundant imports in test_storage_factory.py**
 
-Clean up duplicated `AsyncMock` and `patch` imports.
+Clean up unused or duplicate imports across test files.
 
 **Step 4: Run all unit tests**
 
-Run: `pytest tests/unit/`
-Expected: ALL PASS
+Execute the full unit test suite to ensure overall stability.

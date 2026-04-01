@@ -1,5 +1,6 @@
 from context_store.config import Settings
 
+
 def make_settings(**kwargs) -> Settings:
     """Settings オブジェクトを作成するヘルパー。"""
     defaults: dict = {

@@ -8,7 +8,6 @@ from typing import AsyncGenerator
 
 import pytest
 
-from context_store.config import Settings
 from context_store.models.graph import GraphResult
 from context_store.storage.sqlite_graph import SQLiteGraphAdapter
 from tests.unit.conftest import make_settings

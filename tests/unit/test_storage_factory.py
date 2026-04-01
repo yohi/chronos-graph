@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from context_store.config import Settings
 from context_store.storage.factory import create_storage
 from context_store.storage.inmemory import InMemoryCacheAdapter
 from context_store.storage.protocols import CacheAdapter, GraphAdapter, StorageAdapter

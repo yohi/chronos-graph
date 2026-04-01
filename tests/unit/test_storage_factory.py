@@ -106,7 +106,8 @@ class TestCacheBackend:
         mock_adapter = AsyncMock(spec=RedisCacheAdapter)
 
         with patch(
-            "context_store.storage.redis.RedisCacheAdapter.create", return_value=mock_adapter
+            "context_store.storage.redis.RedisCacheAdapter.create",
+            new=AsyncMock(return_value=mock_adapter),
         ):
             storage, graph_adp, cache_adp = await create_storage(settings)
             try:

@@ -24,7 +24,7 @@ from context_store.utils.stale_lock import StaleAwareFileLock
 # ---------------------------------------------------------------------------
 
 try:
-    import sqlite_vec as _sqlite_vec  # type: ignore[import-untyped]
+    import sqlite_vec as _sqlite_vec
 
     _USE_SQLITE_VEC_SERIALIZE = True
 except ImportError:  # pragma: no cover

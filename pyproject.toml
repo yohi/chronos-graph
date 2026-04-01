@@ -56,5 +56,14 @@ line-length = 100
 python_version = "3.12"
 strict = true
 
+[[tool.mypy.overrides]]
+module = [
+    "asyncpg.*",
+    "neo4j.*",
+    "redis.*",
+    "sqlite_vec.*",
+]
+ignore_missing_imports = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/context_store"]

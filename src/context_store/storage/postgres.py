@@ -6,7 +6,7 @@ import hashlib
 import json
 from typing import Any
 
-import asyncpg  # type: ignore[import-untyped]
+import asyncpg
 
 from context_store.config import Settings
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType

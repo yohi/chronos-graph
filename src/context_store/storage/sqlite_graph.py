@@ -60,12 +60,6 @@ CREATE TABLE IF NOT EXISTS memory_edges (
 );
 """
 
-_DDL_EDGES_IDX = """
-CREATE INDEX IF NOT EXISTS memory_edges_to_idx ON memory_edges (to_id);
-CREATE INDEX IF NOT EXISTS memory_edges_type_idx ON memory_edges (edge_type);
-"""
-
-
 # ---------------------------------------------------------------------------
 # SQLiteGraphAdapter
 # ---------------------------------------------------------------------------
@@ -377,10 +371,9 @@ class SQLiteGraphAdapter:
         cursor = None
 
         try:
-            async with ctx:
-                async with conn.execute(sql, params) as cursor:
-                    async for row in cursor:
-                        rows.append(row)
+            async with conn.execute(sql, params) as cursor:
+                async for row in cursor:
+                    rows.append(row)
         except asyncio.CancelledError:
             raise
         except Exception:

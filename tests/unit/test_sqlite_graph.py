@@ -334,7 +334,9 @@ class TestTimeout:
 
         await adp.dispose()
 
-    async def test_traverse_interrupt_called_on_timeout(self, tmp_db_path: str, monkeypatch) -> None:
+    async def test_traverse_interrupt_called_on_timeout(
+        self, tmp_db_path: str, monkeypatch
+    ) -> None:
         """タイムアウト時に SafeSqliteInterruptCtx.interrupt() が呼ばれることを確認."""
         from context_store.storage.sqlite_graph import SafeSqliteInterruptCtx
 

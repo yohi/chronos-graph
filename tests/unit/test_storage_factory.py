@@ -139,6 +139,7 @@ class TestPostgresBackend:
 
         # Mock asyncpg.create_pool and postgres_dsn to avoid real DB connection
         mock_pool = MagicMock()
+        mock_pool.close = AsyncMock()
         create_pool_mock = AsyncMock(return_value=mock_pool)
         with (
             patch("asyncpg.create_pool", create_pool_mock),
@@ -157,8 +158,6 @@ class TestPostgresBackend:
                 assert isinstance(storage, PostgresStorageAdapter)
                 assert graph_adp is None  # postgres + graph_enabled=False
             finally:
-                mock_pool = MagicMock()
-                mock_pool.close = AsyncMock()
                 storage._pool = mock_pool
                 await storage.dispose()
                 await cache_adp.dispose()
@@ -176,6 +175,7 @@ class TestPostgresBackend:
         )
 
         mock_pool = MagicMock()
+        mock_pool.close = AsyncMock()
         create_pool_mock = AsyncMock(return_value=mock_pool)
         with (
             patch("asyncpg.create_pool", create_pool_mock),
@@ -191,8 +191,6 @@ class TestPostgresBackend:
             try:
                 assert graph_adp is None
             finally:
-                mock_pool = MagicMock()
-                mock_pool.close = AsyncMock()
                 storage._pool = mock_pool
                 await storage.dispose()
                 await cache_adp.dispose()
@@ -218,4 +216,6 @@ class TestReturnTypes:
         assert isinstance(cache_adp, CacheAdapter)
 
         await storage.dispose()
+        if graph_adp:
+            await graph_adp.dispose()
         await cache_adp.dispose()

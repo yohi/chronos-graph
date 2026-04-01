@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Update Documentation (MD001 & AI Instructions)
+## Task 1: Update Documentation (MD001 & AI Instructions)
 
 **Files:**
 - Modify: `docs/plans/2026-04-01-config-wal-validation-test-update.md`
@@ -24,7 +24,7 @@ Change `### Task 1` to `## Task 1` and remove the `> **For Claude:**` line.
 Run: `markdownlint-cli2 docs/plans/2026-04-01-config-wal-validation-test-update.md`
 Expected: No MD001 error.
 
-### Task 2: Fix mypy ignore in postgres.py
+## Task 2: Fix mypy ignore in postgres.py
 
 **Files:**
 - Modify: `src/context_store/storage/postgres.py`
@@ -38,7 +38,7 @@ Change `# type: ignore[import-untyped]` to `# type: ignore[import-not-found]` fo
 Run: `mypy src/context_store/storage/postgres.py`
 Expected: No "import-not-found" for asyncpg.
 
-### Task 3: Refactor sqlite_graph.py (Exception Handling & List Unpacking)
+## Task 3: Refactor sqlite_graph.py (Exception Handling & List Unpacking)
 
 **Files:**
 - Modify: `src/context_store/storage/sqlite_graph.py`
@@ -56,7 +56,7 @@ Use `[*seed_params, ...]` syntax for `params`.
 Run: `pytest tests/unit/test_sqlite_graph.py`
 Expected: PASS
 
-### Task 4: Fix Timeout Logic & Add Comments in sqlite_graph.py
+## Task 4: Fix Timeout Logic & Add Comments in sqlite_graph.py
 
 **Files:**
 - Modify: `src/context_store/storage/sqlite_graph.py`
@@ -74,7 +74,7 @@ Document `conn._conn` usage and aiosqlite version dependency.
 Run: `pytest tests/unit/test_sqlite_graph.py`
 Expected: PASS
 
-### Task 5: Update Tests (Assertions & Mocking)
+## Task 5: Update Tests (Assertions & Mocking)
 
 **Files:**
 - Modify: `tests/unit/test_sqlite_graph.py`

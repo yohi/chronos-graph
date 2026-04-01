@@ -62,7 +62,9 @@ def test_scored_memory_source_uses_enum():
 
 
 def test_search_models_validate_constraints():
-    strategy = SearchStrategy(vector_weight=0.4, keyword_weight=0.3, graph_weight=0.3, graph_depth=1)
+    strategy = SearchStrategy(
+        vector_weight=0.4, keyword_weight=0.3, graph_weight=0.3, graph_depth=1
+    )
     filters = SearchFilters(memory_type="episodic", top_k=5, max_tokens=1000)
 
     assert filters.memory_type == MemoryType.EPISODIC
@@ -86,4 +88,8 @@ def test_search_models_validate_constraints():
 
 def test_graph_result_rejects_negative_depth():
     with pytest.raises(ValidationError):
-        GraphResult(nodes=[], edges=[Edge(from_id="a", to_id="b", edge_type="refers_to")], traversal_depth=-1)
+        GraphResult(
+            nodes=[],
+            edges=[Edge(from_id="a", to_id="b", edge_type="refers_to")],
+            traversal_depth=-1,
+        )

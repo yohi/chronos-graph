@@ -98,9 +98,13 @@ class Settings(BaseSettings):
         if self.embedding_provider == "openai" and not self.openai_api_key:
             raise ValueError("OPENAI_API_KEY は embedding_provider=openai の場合に必須です。")
         if self.embedding_provider == "local-model" and not self.local_model_name:
-            raise ValueError("LOCAL_MODEL_NAME は embedding_provider=local-model の場合に必須です。")
+            raise ValueError(
+                "LOCAL_MODEL_NAME は embedding_provider=local-model の場合に必須です。"
+            )
         if self.embedding_provider == "litellm" and not self.litellm_api_base:
             raise ValueError("LITELLM_API_BASE は embedding_provider=litellm の場合に必須です。")
         if self.embedding_provider == "custom-api" and not self.custom_api_endpoint:
-            raise ValueError("CUSTOM_API_ENDPOINT は embedding_provider=custom-api の場合に必須です。")
+            raise ValueError(
+                "CUSTOM_API_ENDPOINT は embedding_provider=custom-api の場合に必須です。"
+            )
         return self

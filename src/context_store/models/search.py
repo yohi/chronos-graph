@@ -16,7 +16,9 @@ class SearchStrategy(BaseModel):
     def validate_weights(self) -> "SearchStrategy":
         total_weight = self.vector_weight + self.keyword_weight + self.graph_weight
         if abs(total_weight - 1.0) > 1e-6:
-            raise ValueError(f"検索ウェイトの合計は 1.0 である必要があります。現在値: {total_weight}")
+            raise ValueError(
+                f"検索ウェイトの合計は 1.0 である必要があります。現在値: {total_weight}"
+            )
         return self
 
 

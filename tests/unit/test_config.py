@@ -55,7 +55,11 @@ def test_default_settings(default_settings):
 
 
 def test_embedding_provider_validation(default_settings):
-    settings_kwargs = {**default_settings, "embedding_provider": "local-model", "openai_api_key": ""}
+    settings_kwargs = {
+        **default_settings,
+        "embedding_provider": "local-model",
+        "openai_api_key": "",
+    }
     settings = Settings(**settings_kwargs)
     assert settings.embedding_provider == "local-model"
 

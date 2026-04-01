@@ -4,6 +4,8 @@ import re
 
 from context_store.models.search import SearchStrategy
 
+__all__ = ["QueryAnalyzer", "SearchStrategy"]
+
 
 class QueryAnalyzer:
     """クエリの意図を解析し、最適な検索戦略を決定"""
@@ -26,14 +28,14 @@ class QueryAnalyzer:
         r"(\d+\s*days?\s+ago|previous\s+week)",
     ]
 
-    def __init__(self):
+    def __init__(self) -> None:
         """初期化"""
         self._error_regex = self._compile_patterns(self.ERROR_PATTERNS)
         self._causality_regex = self._compile_patterns(self.CAUSALITY_PATTERNS)
         self._time_regex = self._compile_patterns(self.TIME_PATTERNS)
 
     @staticmethod
-    def _compile_patterns(patterns: list[str]) -> re.Pattern:
+    def _compile_patterns(patterns: list[str]) -> re.Pattern[str]:
         """複数のパターンを1つの正規表現に結合"""
         combined = "|".join(f"({p})" for p in patterns)
         return re.compile(combined, re.IGNORECASE)

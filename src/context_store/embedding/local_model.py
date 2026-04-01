@@ -72,7 +72,7 @@ class LocalModelEmbeddingProvider:
 
         def _encode() -> list[list[float]]:
             model = self._get_model()
-            embeddings = model.encode(texts, show_progress_bar=False)  # type: ignore[union-attr]
+            embeddings = model.encode(texts, show_progress_bar=False)
             return [emb.tolist() for emb in embeddings]
 
         return await asyncio.to_thread(_encode)

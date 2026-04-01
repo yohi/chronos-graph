@@ -95,6 +95,58 @@ def test_provider_specific_settings_are_required():
         )
 
 
+def test_whitespace_only_required_settings_are_rejected():
+    with pytest.raises(ValueError, match="POSTGRES_PASSWORD"):
+        Settings(
+            storage_backend="postgres",
+            postgres_password="   ",
+            neo4j_password="test",
+            openai_api_key="sk-test",
+        )
+
+    with pytest.raises(ValueError, match="NEO4J_PASSWORD"):
+        Settings(
+            graph_enabled=True,
+            neo4j_password="   ",
+            postgres_password="test",
+            openai_api_key="sk-test",
+        )
+
+    with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+        Settings(
+            postgres_password="test",
+            neo4j_password="test",
+            openai_api_key="   ",
+        )
+
+    with pytest.raises(ValueError, match="LOCAL_MODEL_NAME"):
+        Settings(
+            postgres_password="test",
+            neo4j_password="test",
+            embedding_provider="local-model",
+            local_model_name="   ",
+            openai_api_key="",
+        )
+
+    with pytest.raises(ValueError, match="LITELLM_API_BASE"):
+        Settings(
+            postgres_password="test",
+            neo4j_password="test",
+            embedding_provider="litellm",
+            litellm_api_base="   ",
+            openai_api_key="",
+        )
+
+    with pytest.raises(ValueError, match="CUSTOM_API_ENDPOINT"):
+        Settings(
+            postgres_password="test",
+            neo4j_password="test",
+            embedding_provider="custom-api",
+            custom_api_endpoint="   ",
+            openai_api_key="",
+        )
+
+
 def test_postgres_dsn_url_encodes_credentials():
     settings = Settings(
         postgres_db="context/store prod",

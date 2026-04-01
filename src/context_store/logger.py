@@ -3,12 +3,22 @@ import logging
 import sys
 import threading
 from contextvars import ContextVar
+from datetime import date, datetime
 from typing import Any
+from uuid import UUID
 
 # ContextVars for request/operation context
 _context: ContextVar[dict[str, Any] | None] = ContextVar("_log_context", default=None)
 _RESERVED_FIELDS = frozenset({"exception", "level", "logger", "message"})
 logger_init_lock = threading.Lock()
+
+
+def _serialize_context_value(value: Any) -> str:
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, UUID):
+        return str(value)
+    return str(value)
 
 
 class StructuredFormatter(logging.Formatter):
@@ -23,7 +33,7 @@ class StructuredFormatter(logging.Formatter):
         }
         if record.exc_info:
             data["exception"] = self.formatException(record.exc_info)
-        return json.dumps(data, ensure_ascii=False)
+        return json.dumps(data, ensure_ascii=False, default=_serialize_context_value)
 
 
 def get_logger(name: str) -> logging.Logger:

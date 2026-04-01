@@ -1,4 +1,6 @@
 import json
+from datetime import datetime
+from uuid import uuid4
 
 
 from context_store.logger import clear_context, get_logger, set_context
@@ -55,4 +57,20 @@ def test_context_cannot_override_reserved_fields(capsys):
     assert output["logger"] == "test_reserved"
     assert output["message"] == "actual message"
     assert output["request_id"] == "req-123"
+    clear_context()
+
+
+def test_context_serializes_non_json_values(capsys):
+    clear_context()
+    uid = uuid4()
+    set_context(timestamp=datetime(2026, 4, 1, 12, 34, 56), uid=uid, custom=object())
+    logger = get_logger("test_non_json_context")
+    logger.info("serialized context")
+
+    captured = capsys.readouterr()
+    output = json.loads(captured.out)
+
+    assert output["timestamp"] == "2026-04-01T12:34:56"
+    assert output["uid"] == str(uid)
+    assert isinstance(output["custom"], str)
     clear_context()

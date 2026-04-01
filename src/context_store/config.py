@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     graph_traversal_timeout_seconds: float = Field(default=2.0, gt=0.0)
 
     # --- SQLite specific ---
+    stale_lock_timeout_seconds: int = Field(default=600, ge=1)  # 10 minutes
     sqlite_max_concurrent_connections: int = Field(default=5, ge=1)
     sqlite_max_queued_requests: int = Field(default=20, ge=1)
     sqlite_acquire_timeout: float = Field(default=2.0, gt=0.0)  # seconds

@@ -11,30 +11,7 @@ from context_store.storage.inmemory import InMemoryCacheAdapter
 from context_store.storage.protocols import CacheAdapter, GraphAdapter, StorageAdapter
 from context_store.storage.sqlite import SQLiteStorageAdapter
 from context_store.storage.sqlite_graph import SQLiteGraphAdapter
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def make_settings(**kwargs) -> Settings:
-    defaults: dict = {
-        "storage_backend": "sqlite",
-        "graph_enabled": False,
-        "cache_backend": "inmemory",
-        "sqlite_db_path": ":memory:",
-        "sqlite_max_concurrent_connections": 5,
-        "sqlite_max_queued_requests": 20,
-        "sqlite_acquire_timeout": 2.0,
-        "stale_lock_timeout_seconds": 600,
-        "graph_max_logical_depth": 5,
-        "graph_max_physical_hops": 50,
-        "graph_traversal_timeout_seconds": 2.0,
-        "cache_coherence_poll_interval_seconds": 5.0,
-    }
-    defaults.update(kwargs)
-    return Settings.model_construct(**defaults)
-
+from tests.unit.conftest import make_settings
 
 # ---------------------------------------------------------------------------
 # Tests: SQLite backend
@@ -157,6 +134,7 @@ class TestPostgresBackend:
             postgres_db="test_db",
             postgres_user="test_user",
             postgres_password="secret",
+            graph_enabled=False,
         )
 
         # Mock asyncpg.create_pool and postgres_dsn to avoid real DB connection

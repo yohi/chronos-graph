@@ -228,7 +228,11 @@ class SQLiteGraphAdapter:
                             timeout=self._timeout,
                         )
                         return result
-                    except asyncio.TimeoutError:
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        if partial_container:
+                            res = partial_container[0]
+                            res.partial = True
+                            res.timeout = True
                         ctx.interrupt()
                         raise
         except asyncio.TimeoutError:
@@ -239,10 +243,7 @@ class SQLiteGraphAdapter:
                 self._timeout,
             )
             if partial_container:
-                res = partial_container[0]
-                res.partial = True
-                res.timeout = True
-                return res
+                return partial_container[0]
             return GraphResult(nodes=[], edges=[], traversal_depth=0, partial=True, timeout=True)
 
     async def _traverse_inner(

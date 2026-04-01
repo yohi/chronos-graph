@@ -11,28 +11,11 @@ import pytest
 from context_store.config import Settings
 from context_store.models.graph import GraphResult
 from context_store.storage.sqlite_graph import SQLiteGraphAdapter
+from tests.unit.conftest import make_settings
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-def make_settings(**kwargs) -> Settings:
-    defaults: dict = {
-        "storage_backend": "sqlite",
-        "graph_enabled": True,
-        "cache_backend": "inmemory",
-        "sqlite_db_path": ":memory:",
-        "graph_max_logical_depth": 5,
-        "graph_max_physical_hops": 50,
-        "graph_traversal_timeout_seconds": 2.0,
-        "sqlite_max_concurrent_connections": 5,
-        "sqlite_max_queued_requests": 20,
-        "sqlite_acquire_timeout": 2.0,
-        "stale_lock_timeout_seconds": 600,
-    }
-    defaults.update(kwargs)
-    return Settings.model_construct(**defaults)
 
 
 @pytest.fixture

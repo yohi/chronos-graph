@@ -6,24 +6,9 @@ from context_store.config import Settings
 
 @pytest.fixture
 def default_settings(monkeypatch):
-    for env_name in (
-        "POSTGRES_HOST",
-        "POSTGRES_PASSWORD",
-        "POSTGRES_PORT",
-        "POSTGRES_DB",
-        "POSTGRES_USER",
-        "NEO4J_PASSWORD",
-        "NEO4J_URI",
-        "NEO4J_USER",
-        "OPENAI_API_KEY",
-        "EMBEDDING_PROVIDER",
-        "LOCAL_MODEL_NAME",
-        "LITELLM_API_BASE",
-        "CUSTOM_API_ENDPOINT",
-        "STORAGE_BACKEND",
-        "GRAPH_ENABLED",
-    ):
-        monkeypatch.delenv(env_name, raising=False)
+    # Settings のフィールドから自動的に環境変数をクリアする
+    for field_name in Settings.model_fields.keys():
+        monkeypatch.delenv(field_name.upper(), raising=False)
 
     return {
         "postgres_host": "localhost",
@@ -34,7 +19,7 @@ def default_settings(monkeypatch):
 
 
 def test_default_settings(default_settings):
-    settings = Settings(**default_settings)
+    settings = Settings(_env_file=None, **default_settings)
     assert settings.postgres_port == 5432
     assert settings.embedding_provider == "openai"
     assert settings.decay_half_life_days == 30
@@ -60,7 +45,7 @@ def test_embedding_provider_validation(default_settings):
         "embedding_provider": "local-model",
         "openai_api_key": "",
     }
-    settings = Settings(**settings_kwargs)
+    settings = Settings(_env_file=None, **settings_kwargs)
     assert settings.embedding_provider == "local-model"
 
 
@@ -132,7 +117,7 @@ def test_embedding_provider_validation(default_settings):
 def test_required_settings_validation(default_settings, kwargs_overrides, expected_error_match):
     settings_kwargs = {**default_settings, **kwargs_overrides}
     with pytest.raises(ValueError, match=expected_error_match):
-        Settings(**settings_kwargs)
+        Settings(_env_file=None, **settings_kwargs)
 
 
 def test_postgres_dsn_url_encodes_credentials(default_settings):
@@ -142,7 +127,7 @@ def test_postgres_dsn_url_encodes_credentials(default_settings):
         "postgres_user": "user+name@example.com",
         "postgres_password": "p@ss word:/",
     }
-    settings = Settings(**settings_kwargs)
+    settings = Settings(_env_file=None, **settings_kwargs)
 
     assert settings.postgres_dsn == (
         "postgresql://user%2Bname%40example.com:p%40ss%20word%3A%2F@localhost:5432/context%2Fstore%20prod"
@@ -167,6 +152,10 @@ def test_postgres_dsn_url_encodes_credentials(default_settings):
         ("graph_max_logical_depth", 0),
         ("graph_max_physical_hops", 0),
         ("graph_traversal_timeout_seconds", 0.0),
+        ("sqlite_max_concurrent_connections", 0),
+        ("sqlite_max_queued_requests", 0),
+        ("sqlite_acquire_timeout", 0.0),
+        ("wal_passive_fail_window_seconds", 0),
         ("url_fetch_concurrency", 0),
         ("url_max_redirects", -1),
         ("url_max_response_bytes", -1),
@@ -177,4 +166,4 @@ def test_numeric_settings_reject_out_of_range_values(default_settings, field_nam
     kwargs = {**default_settings, field_name: value}
 
     with pytest.raises(ValueError):
-        Settings(**kwargs)
+        Settings(_env_file=None, **kwargs)

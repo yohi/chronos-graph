@@ -5,8 +5,12 @@
 CREATE TABLE IF NOT EXISTS memories (
     id                 UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     content            TEXT         NOT NULL,
-    memory_type        VARCHAR(20)  NOT NULL,
-    source_type        VARCHAR(20)  NOT NULL,
+    memory_type        VARCHAR(20)  NOT NULL CHECK (
+        memory_type IN ('episodic', 'semantic', 'procedural')
+    ),
+    source_type        VARCHAR(20)  NOT NULL CHECK (
+        source_type IN ('conversation', 'manual', 'url')
+    ),
     source_metadata    JSONB        DEFAULT '{}',
     embedding          vector(768),
     semantic_relevance FLOAT        DEFAULT 0.5,

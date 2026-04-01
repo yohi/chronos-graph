@@ -13,6 +13,11 @@ from context_store.models.memory import Memory, MemorySource, MemoryType, Scored
 from context_store.storage.protocols import MemoryFilters, StorageError
 
 
+def _content_hash(content: str) -> str:
+    """Create the canonical content hash stored in PostgreSQL."""
+    return hashlib.sha256(content.encode()).hexdigest()
+
+
 def _parse_embedding(raw: object) -> list[float]:
     """Parse embedding value returned from asyncpg into list[float].
 
@@ -107,7 +112,7 @@ class PostgresStorageAdapter:
             RETURNING id
         """
 
-        content_hash = hashlib.sha256(memory.content.encode()).hexdigest()
+        content_hash = _content_hash(memory.content)
 
         try:
             async with self._pool.acquire() as conn:
@@ -162,14 +167,30 @@ class PostgresStorageAdapter:
 
         # Build dynamic SET clause: $1=val1, $2=val2, ...
         allowed_columns = {
-            "content", "memory_type", "source_type", "source_metadata",
-            "embedding", "semantic_relevance", "importance_score", "access_count",
-            "last_accessed_at", "updated_at", "archived_at", "tags", "project",
+            "content",
+            "memory_type",
+            "source_type",
+            "source_metadata",
+            "embedding",
+            "semantic_relevance",
+            "importance_score",
+            "access_count",
+            "last_accessed_at",
+            "updated_at",
+            "archived_at",
+            "tags",
+            "project",
         }
         set_parts = []
         params: list[Any] = []
         for col, val in updates.items():
             if col not in allowed_columns:
+                continue
+            if col == "content":
+                params.append(val)
+                set_parts.append(f"{col} = ${len(params)}")
+                params.append(_content_hash(str(val)))
+                set_parts.append(f"content_hash = ${len(params)}")
                 continue
             if col == "embedding":
                 val = _embedding_to_pg(val) if isinstance(val, list) else val
@@ -206,7 +227,7 @@ class PostgresStorageAdapter:
             sql = """
                 SELECT *, 1 - (embedding <=> $1::vector) AS score
                 FROM memories
-                WHERE archived_at IS NULL AND project = $3
+                WHERE archived_at IS NULL AND embedding IS NOT NULL AND project = $3
                 ORDER BY embedding <=> $1::vector
                 LIMIT $2
             """
@@ -215,7 +236,7 @@ class PostgresStorageAdapter:
             sql = """
                 SELECT *, 1 - (embedding <=> $1::vector) AS score
                 FROM memories
-                WHERE archived_at IS NULL
+                WHERE archived_at IS NULL AND embedding IS NOT NULL
                 ORDER BY embedding <=> $1::vector
                 LIMIT $2
             """

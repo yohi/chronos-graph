@@ -17,8 +17,9 @@ class RedisCacheAdapter:
     silently ignored so the application continues without caching.
     """
 
-    def __init__(self, redis: Any) -> None:
+    def __init__(self, redis: Any, prefix: str = "") -> None:
         self._redis = redis
+        self._prefix = prefix
 
     # ------------------------------------------------------------------
     # Factory
@@ -68,7 +69,7 @@ class RedisCacheAdapter:
         Uses SCAN instead of KEYS to avoid blocking the Redis server.
         """
         try:
-            keys_to_delete: list[str] = []
+            keys_to_delete: list[bytes] = []
             async for key in self._redis.scan_iter(match=f"{prefix}*"):
                 keys_to_delete.append(key)
                 if len(keys_to_delete) >= _DELETE_BATCH_SIZE:
@@ -82,7 +83,7 @@ class RedisCacheAdapter:
     async def clear(self) -> None:
         """Remove all cache entries."""
         try:
-            await self._redis.flushdb()
+            await self.invalidate_prefix(self._prefix)
         except Exception as exc:
             logger.warning("Redis clear failed (degraded): %s", exc)
 

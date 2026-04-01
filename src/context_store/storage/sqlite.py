@@ -337,9 +337,7 @@ class SQLiteStorageAdapter:
 
     async def _load_vector_dim(self) -> int | None:
         async with self._connect() as conn:
-            async with conn.execute(
-                "SELECT dimension FROM vectors_metadata LIMIT 1"
-            ) as cursor:
+            async with conn.execute("SELECT dimension FROM vectors_metadata LIMIT 1") as cursor:
                 row = await cursor.fetchone()
         return int(row["dimension"]) if row else None
 
@@ -693,11 +691,23 @@ class SQLiteStorageAdapter:
             conditions.append("(" + " OR ".join(tag_conditions) + ")")
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        prefixed_where = ""
+        if where_clause:
+            prefixed_where = where_clause
+            replacements = {
+                "archived_at IS NULL": "m.archived_at IS NULL",
+                "archived_at IS NOT NULL": "m.archived_at IS NOT NULL",
+                "project = ?": "m.project = ?",
+                "memory_type = ?": "m.memory_type = ?",
+                "tags LIKE ?": "m.tags LIKE ?",
+            }
+            for original, prefixed in replacements.items():
+                prefixed_where = prefixed_where.replace(original, prefixed)
         sql = (
             "SELECT m.*, me.embedding "
             "FROM memories m "
             "LEFT JOIN memory_embeddings me ON me.memory_id = m.id "
-            f"{where_clause.replace('archived_at', 'm.archived_at').replace('project', 'm.project').replace('memory_type', 'm.memory_type').replace('tags', 'm.tags')} "
+            f"{prefixed_where} "
             "ORDER BY m.created_at DESC"
         )
 

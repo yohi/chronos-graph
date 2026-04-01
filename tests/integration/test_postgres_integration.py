@@ -57,6 +57,7 @@ def adapter(db_session):
 # CRUD
 # ---------------------------------------------------------------------------
 
+
 class TestCRUD:
     async def test_save_and_get(self, adapter):
         memory = _make_memory(content="save and get test")
@@ -79,6 +80,7 @@ class TestCRUD:
 
     async def test_delete_nonexistent_returns_false(self, adapter):
         from uuid import uuid4
+
         result = await adapter.delete_memory(str(uuid4()))
         assert result is False
 
@@ -107,6 +109,7 @@ class TestCRUD:
 # Search
 # ---------------------------------------------------------------------------
 
+
 class TestSearch:
     async def test_vector_search_returns_results(self, adapter):
         memory = _make_memory(content="vector search target", embedding=[0.5] * 768)
@@ -126,7 +129,9 @@ class TestSearch:
 
         results = await adapter.vector_search([0.1] * 768, top_k=10, project="proj_a")
 
+        assert len(results) > 0
         projects = {r.memory.project for r in results}
+        assert "proj_a" in projects
         assert "proj_b" not in projects
 
     async def test_keyword_search_returns_results(self, adapter):
@@ -147,13 +152,16 @@ class TestSearch:
 
         results = await adapter.keyword_search("apple", top_k=10, project="proj_x")
 
+        assert len(results) > 0
         projects = {r.memory.project for r in results}
+        assert "proj_x" in projects
         assert "proj_y" not in projects
 
 
 # ---------------------------------------------------------------------------
 # list_by_filter
 # ---------------------------------------------------------------------------
+
 
 class TestListByFilter:
     async def test_lists_active_memories(self, adapter):
@@ -166,11 +174,10 @@ class TestListByFilter:
 
     async def test_lists_archived_memories(self, adapter):
         from datetime import datetime, timezone
+
         memory = _make_memory(content="archived memory")
         memory_id = await adapter.save_memory(memory)
-        await adapter.update_memory(
-            memory_id, {"archived_at": datetime.now(timezone.utc)}
-        )
+        await adapter.update_memory(memory_id, {"archived_at": datetime.now(timezone.utc)})
 
         results = await adapter.list_by_filter(MemoryFilters(archived=True))
 
@@ -184,13 +191,16 @@ class TestListByFilter:
 
         results = await adapter.list_by_filter(MemoryFilters(memory_type="semantic"))
 
+        assert len(results) > 0
         types = {m.memory_type for m in results}
+        assert MemoryType.SEMANTIC in types
         assert MemoryType.EPISODIC not in types
 
 
 # ---------------------------------------------------------------------------
 # get_vector_dimension
 # ---------------------------------------------------------------------------
+
 
 class TestGetVectorDimension:
     async def test_returns_768_after_save(self, adapter):

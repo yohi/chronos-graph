@@ -17,6 +17,7 @@ from context_store.models.graph import GraphResult
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_driver_mock():
     """Return a neo4j.AsyncDriver mock with a session context manager."""
     driver = MagicMock()
@@ -34,6 +35,7 @@ def _make_driver_mock():
 @pytest.fixture
 def adapter_and_session():
     from context_store.storage.neo4j import Neo4jGraphAdapter
+
     driver, session = _make_driver_mock()
     adapter = Neo4jGraphAdapter.__new__(Neo4jGraphAdapter)
     adapter._driver = driver
@@ -43,6 +45,7 @@ def adapter_and_session():
 # ---------------------------------------------------------------------------
 # create_node
 # ---------------------------------------------------------------------------
+
 
 class TestCreateNode:
     async def test_runs_merge_cypher(self, adapter_and_session):
@@ -78,6 +81,7 @@ class TestCreateNode:
 # create_edge
 # ---------------------------------------------------------------------------
 
+
 class TestCreateEdge:
     async def test_runs_create_edge_cypher(self, adapter_and_session):
         adp, session = adapter_and_session
@@ -112,10 +116,19 @@ class TestCreateEdge:
 
         session.run.assert_not_called()
 
+    async def test_rejects_edge_type_starting_with_digit(self, adapter_and_session):
+        adp, session = adapter_and_session
+        session.run = AsyncMock()
+
+        await adp.create_edge("a", "b", "1INVALID", {})
+
+        session.run.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # create_edges_batch
 # ---------------------------------------------------------------------------
+
 
 class TestCreateEdgesBatch:
     async def test_uses_unwind_for_batch(self, adapter_and_session):
@@ -169,16 +182,19 @@ class TestCreateEdgesBatch:
 # traverse
 # ---------------------------------------------------------------------------
 
+
 class TestTraverse:
     async def test_returns_graph_result(self, adapter_and_session):
         adp, session = adapter_and_session
 
         # neo4j result mock
         record = MagicMock()
-        record.__getitem__ = MagicMock(side_effect=lambda k: {
-            "nodes": [{"id": "a"}, {"id": "b"}],
-            "rels": [{"from": "a", "to": "b", "type": "RELATES_TO", "props": {}}],
-        }[k])
+        record.__getitem__ = MagicMock(
+            side_effect=lambda k: {
+                "nodes": [{"id": "a"}, {"id": "b"}],
+                "rels": [{"from": "a", "to": "b", "type": "RELATES_TO", "props": {}}],
+            }[k]
+        )
         result_mock = AsyncMock()
         result_mock.__aiter__ = MagicMock(return_value=iter([record]))
         session.run = AsyncMock(return_value=result_mock)
@@ -220,10 +236,57 @@ class TestTraverse:
         assert "RELATES_TO" in cypher
         assert "BAD-TYPE" not in cypher
 
+    async def test_places_relationship_types_before_depth_range(self, adapter_and_session):
+        adp, session = adapter_and_session
+        result_mock = AsyncMock()
+        result_mock.__aiter__ = MagicMock(return_value=iter([]))
+        session.run = AsyncMock(return_value=result_mock)
+
+        await adp.traverse(["a"], ["RELATES_TO", "CITES"], depth=2)
+
+        cypher: str = session.run.call_args[0][0]
+        assert "[:RELATES_TO|CITES*1..2]" in cypher
+
+    async def test_deduplicates_returned_edges(self, adapter_and_session):
+        adp, session = adapter_and_session
+
+        class _Rel:
+            def __init__(self):
+                self.start_node = {"id": "a"}
+                self.end_node = {"id": "b"}
+                self.type = "RELATES_TO"
+                self.identity = 42
+
+            def __iter__(self):
+                return iter({"weight": 1}.items())
+
+        rel = _Rel()
+        record = MagicMock()
+        record.__getitem__ = MagicMock(
+            side_effect=lambda k: {
+                "nodes": [{"id": "a"}, {"id": "b"}],
+                "rels": [rel, rel],
+            }[k]
+        )
+
+        class _Result:
+            def __aiter__(self):
+                async def _iter():
+                    yield record
+
+                return _iter()
+
+        session.run = AsyncMock(return_value=_Result())
+
+        result = await adp.traverse(["a"], ["RELATES_TO"], depth=2)
+
+        assert len(result.edges) == 1
+
 
 # ---------------------------------------------------------------------------
 # delete_node
 # ---------------------------------------------------------------------------
+
 
 class TestDeleteNode:
     async def test_runs_detach_delete(self, adapter_and_session):
@@ -246,6 +309,7 @@ class TestDeleteNode:
 # ---------------------------------------------------------------------------
 # dispose
 # ---------------------------------------------------------------------------
+
 
 class TestDispose:
     async def test_closes_driver(self, adapter_and_session):

@@ -125,8 +125,6 @@ class TestCacheBackend:
             redis_url="redis://localhost:6379",
         )
 
-        from unittest.mock import AsyncMock, patch
-
         from context_store.storage.redis import RedisCacheAdapter
 
         mock_adapter = AsyncMock(spec=RedisCacheAdapter)
@@ -181,7 +179,10 @@ class TestPostgresBackend:
                 assert isinstance(storage, PostgresStorageAdapter)
                 assert graph_adp is None  # postgres + graph_enabled=False
             finally:
-                storage._pool = None  # prevent real dispose
+                mock_pool = MagicMock()
+                mock_pool.close = AsyncMock()
+                storage._pool = mock_pool
+                await storage.dispose()
                 await cache_adp.dispose()
 
     async def test_postgres_graph_disabled(self, tmp_path: Path) -> None:
@@ -212,7 +213,10 @@ class TestPostgresBackend:
             try:
                 assert graph_adp is None
             finally:
-                storage._pool = None
+                mock_pool = MagicMock()
+                mock_pool.close = AsyncMock()
+                storage._pool = mock_pool
+                await storage.dispose()
                 await cache_adp.dispose()
 
 

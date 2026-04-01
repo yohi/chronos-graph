@@ -350,3 +350,38 @@ class TestTimeout:
         assert len(result.edges) == 0
 
         await adp.dispose()
+
+    async def test_traverse_interrupt_called_on_timeout(self, tmp_db_path: str, monkeypatch) -> None:
+        """タイムアウト時に SafeSqliteInterruptCtx.interrupt() が呼ばれることを確認."""
+        from context_store.storage.sqlite_graph import SafeSqliteInterruptCtx
+
+        settings = make_settings(
+            sqlite_db_path=tmp_db_path,
+            graph_traversal_timeout_seconds=0.01,
+        )
+        adp = SQLiteGraphAdapter(db_path=tmp_db_path, settings=settings)
+        await adp.initialize()
+
+        interrupt_called = False
+
+        def mock_interrupt(self):
+            nonlocal interrupt_called
+            interrupt_called = True
+
+        monkeypatch.setattr(SafeSqliteInterruptCtx, "interrupt", mock_interrupt)
+
+        # Mock _traverse_inner to sleep longer than timeout
+        async def slow_inner(*args, **kwargs):
+            await asyncio.sleep(0.1)
+            return GraphResult(nodes=[], edges=[], traversal_depth=0)
+
+        monkeypatch.setattr(adp, "_traverse_inner", slow_inner)
+
+        # Run traverse
+        result = await adp.traverse(["seed"], [], depth=1)
+
+        # Verify interrupt was called
+        assert interrupt_called is True
+        assert result.timeout is True
+
+        await adp.dispose()

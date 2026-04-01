@@ -205,6 +205,12 @@ class SQLiteGraphAdapter:
 
         try:
             async with self._connect() as conn:
+                # NOTE: We access the private '_conn' attribute of aiosqlite.Connection
+                # to obtain the underlying sqlite3.Connection. This is required for
+                # low-level interrupt handling (sqlite3_interrupt). This dependency
+                # on aiosqlite internals should be revisited if aiosqlite provides
+                # an official API for accessing the raw connection or for
+                # interrupt-based query cancellation.
                 raw_conn = getattr(conn, "_conn", None)
                 if raw_conn is None:
                     raise RuntimeError(
@@ -213,15 +219,19 @@ class SQLiteGraphAdapter:
 
                 ctx = SafeSqliteInterruptCtx(raw_conn)
 
-                result = await asyncio.wait_for(
-                    self._traverse_inner(
-                        conn, ctx, seed_ids, edge_types, effective_depth, partial_container
-                    ),
-                    timeout=self._timeout,
-                )
-                return result
+                async with ctx:
+                    try:
+                        result = await asyncio.wait_for(
+                            self._traverse_inner(
+                                conn, ctx, seed_ids, edge_types, effective_depth, partial_container
+                            ),
+                            timeout=self._timeout,
+                        )
+                        return result
+                    except asyncio.TimeoutError:
+                        ctx.interrupt()
+                        raise
         except asyncio.TimeoutError:
-            ctx.interrupt()
             logger.warning(
                 "graph_traversal_timeout: traversal from seeds=%s "
                 "exceeded %.2fs; returning partial result.",
@@ -353,9 +363,12 @@ class SQLiteGraphAdapter:
         LEFT JOIN memory_nodes n ON n.id = cte.node_id
         """
 
-        params: list[Any] = (
-            seed_params + [effective_depth, self._max_physical_hops] + edge_type_params
-        )
+        params: list[Any] = [
+            *seed_params,
+            effective_depth,
+            self._max_physical_hops,
+            *edge_type_params,
+        ]
 
         # We pass ctx from outside now
         rows: list[Any] = []
@@ -367,16 +380,17 @@ class SQLiteGraphAdapter:
                 async with conn.execute(sql, params) as cursor:
                     async for row in cursor:
                         rows.append(row)
-        except (Exception, asyncio.CancelledError) as exc:
-            logger.debug(
-                "Query execution failed or interrupted. sql=%s, params=%s, ctx=%s, cursor=%s, error=%s",
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "Query execution failed. sql=%s, params=%s, ctx=%s, cursor=%s",
                 sql,
                 params,
                 ctx,
                 cursor,
-                exc,
-                exc_info=True,
             )
+            raise
 
         # --- Parse results ---
         node_map: dict[str, dict[str, Any]] = {}

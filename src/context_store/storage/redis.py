@@ -26,12 +26,12 @@ class RedisCacheAdapter:
     # ------------------------------------------------------------------
 
     @classmethod
-    async def create(cls, url: str) -> "RedisCacheAdapter":
+    async def create(cls, url: str, prefix: str = "") -> "RedisCacheAdapter":
         """Create a new adapter connected to Redis."""
         import redis.asyncio as aioredis
 
         r = aioredis.from_url(url, decode_responses=False)
-        return cls(r)
+        return cls(r, prefix=prefix)
 
     # ------------------------------------------------------------------
     # CacheAdapter Protocol

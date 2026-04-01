@@ -213,6 +213,20 @@ class TestClear:
         await adp.clear()
 
 
+class TestCreate:
+    async def test_create_preserves_prefix_for_clear(self):
+        from unittest.mock import patch
+
+        from context_store.storage.redis import RedisCacheAdapter
+
+        redis_mock = AsyncMock()
+
+        with patch("redis.asyncio.from_url", return_value=redis_mock):
+            adp = await RedisCacheAdapter.create("redis://localhost:6379/0", prefix="cache:")
+
+        assert adp._prefix == "cache:"
+
+
 # ---------------------------------------------------------------------------
 # dispose
 # ---------------------------------------------------------------------------

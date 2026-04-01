@@ -669,45 +669,33 @@ class SQLiteStorageAdapter:
         params: list[Any] = []
 
         if filters.archived is None:
-            conditions.append("archived_at IS NULL")
+            conditions.append("m.archived_at IS NULL")
         elif filters.archived is True:
-            conditions.append("archived_at IS NOT NULL")
+            conditions.append("m.archived_at IS NOT NULL")
         # archived=False → both active and archived, no condition
 
         if filters.project is not None:
             params.append(filters.project)
-            conditions.append("project = ?")
+            conditions.append("m.project = ?")
 
         if filters.memory_type is not None:
             params.append(filters.memory_type)
-            conditions.append("memory_type = ?")
+            conditions.append("m.memory_type = ?")
 
         if filters.tags:
             # SQLite JSON tag matching: check if any tag is present
             tag_conditions = []
             for tag in filters.tags:
                 params.append(f'%"{tag}"%')
-                tag_conditions.append("tags LIKE ?")
+                tag_conditions.append("m.tags LIKE ?")
             conditions.append("(" + " OR ".join(tag_conditions) + ")")
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        prefixed_where = ""
-        if where_clause:
-            prefixed_where = where_clause
-            replacements = {
-                "archived_at IS NULL": "m.archived_at IS NULL",
-                "archived_at IS NOT NULL": "m.archived_at IS NOT NULL",
-                "project = ?": "m.project = ?",
-                "memory_type = ?": "m.memory_type = ?",
-                "tags LIKE ?": "m.tags LIKE ?",
-            }
-            for original, prefixed in replacements.items():
-                prefixed_where = prefixed_where.replace(original, prefixed)
         sql = (
             "SELECT m.*, me.embedding "
             "FROM memories m "
             "LEFT JOIN memory_embeddings me ON me.memory_id = m.id "
-            f"{prefixed_where} "
+            f"{where_clause} "
             "ORDER BY m.created_at DESC"
         )
 

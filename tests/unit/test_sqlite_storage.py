@@ -885,7 +885,7 @@ class TestEmbeddingSerDes:
         assert isinstance(blob, bytes)
         decoded = decode_embedding(blob)
         assert len(decoded) == 4
-        for orig, dec in zip(emb, decoded):
+        for orig, dec in zip(emb, decoded, strict=True):
             assert dec == pytest.approx(orig, abs=1e-6)
 
     async def test_encode_uses_serialize_float32(self, tmp_path):

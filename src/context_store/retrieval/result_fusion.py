@@ -1,6 +1,7 @@
 """Result Fusion - RRF + 複合スコアリング"""
 
 from datetime import datetime, timezone
+from typing import Any, cast
 from context_store.models.search import SearchStrategy, ScoredMemory
 from context_store.models.memory import MemorySource
 
@@ -110,14 +111,14 @@ class ResultFusion:
         delta = now - last_accessed_at
         days_elapsed = delta.days
 
-        recency = 0.5 ** (days_elapsed / self.half_life_days)
+        recency: float = 0.5 ** (days_elapsed / self.half_life_days)
         return recency
 
     def fuse(
         self,
         results: list[ScoredMemory],
         strategy: SearchStrategy,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """
         検索結果を統合（単一ソース用）
 
@@ -158,7 +159,7 @@ class ResultFusion:
             )
 
         # スコアの降順でソート
-        fused_results.sort(key=lambda x: x["final_score"], reverse=True)
+        fused_results.sort(key=lambda x: cast(float, x["final_score"]), reverse=True)
 
         return fused_results
 
@@ -166,7 +167,7 @@ class ResultFusion:
         self,
         results_dict: dict[MemorySource, list[ScoredMemory]],
         strategy: SearchStrategy,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """
         複数ソースの検索結果を統合
 
@@ -178,7 +179,7 @@ class ResultFusion:
             統合されたスコア付き結果
         """
         # メモリIDごとに結果を集計
-        memory_scores = {}
+        memory_scores: dict[str, dict[str, Any]] = {}
 
         # ベクトル検索結果
         for rank, result in enumerate(results_dict.get(MemorySource.VECTOR, [])):
@@ -251,6 +252,6 @@ class ResultFusion:
             )
 
         # スコアの降順でソート
-        fused_results.sort(key=lambda x: x["final_score"], reverse=True)
+        fused_results.sort(key=lambda x: cast(float, x["final_score"]), reverse=True)
 
         return fused_results

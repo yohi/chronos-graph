@@ -4,6 +4,8 @@ from pydantic import BaseModel, Field, model_validator
 
 from context_store.models.memory import MemoryType, ScoredMemory
 
+__all__ = ["SearchStrategy", "SearchFilters", "SearchResult", "ScoredMemory"]
+
 
 class SearchStrategy(BaseModel):
     vector_weight: float = Field(default=0.5, ge=0.0, le=1.0)

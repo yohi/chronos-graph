@@ -2,6 +2,7 @@ import pytest
 from pydantic import SecretStr
 
 from context_store.config import Settings
+from tests.unit.conftest import make_settings
 
 
 @pytest.fixture
@@ -18,14 +19,9 @@ def default_settings(monkeypatch):
     }
 
 
-def make_settings(default_settings, **overrides):
-    """Settings オブジェクトを作成するヘルパー。"""
-    merged_settings = {**default_settings, **overrides}
-    return Settings(_env_file=None, **merged_settings)
-
-
-def test_default_settings(default_settings):
-    settings = make_settings(default_settings)
+def test_default_settings():
+    # 直接インスタンス化して、真のデフォルト値を検証する
+    settings = Settings(openai_api_key="sk-test")
     assert settings.postgres_port == 5432
     assert settings.embedding_provider == "openai"
     assert settings.decay_half_life_days == 30
@@ -47,7 +43,6 @@ def test_default_settings(default_settings):
 
 def test_embedding_provider_validation(default_settings):
     settings = make_settings(
-        default_settings,
         embedding_provider="local-model",
         openai_api_key="",
     )
@@ -121,12 +116,11 @@ def test_embedding_provider_validation(default_settings):
 )
 def test_required_settings_validation(default_settings, kwargs_overrides, expected_error_match):
     with pytest.raises(ValueError, match=expected_error_match):
-        make_settings(default_settings, **kwargs_overrides)
+        make_settings(**kwargs_overrides)
 
 
 def test_postgres_dsn_url_encodes_credentials(default_settings):
     settings = make_settings(
-        default_settings,
         postgres_db="context/store prod",
         postgres_user="user+name@example.com",
         postgres_password="p@ss word:/",
@@ -172,4 +166,4 @@ def test_postgres_dsn_url_encodes_credentials(default_settings):
 )
 def test_numeric_settings_reject_out_of_range_values(default_settings, field_name, value):
     with pytest.raises(ValueError):
-        make_settings(default_settings, **{field_name: value})
+        make_settings(**{field_name: value})

@@ -4,23 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    import numpy as np
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MODEL_NAME = "cl-nagoya/ruri-v3-310m"
 
 
-def SentenceTransformer(model_name: str) -> object:  # noqa: N802
+def SentenceTransformer(model_name: str) -> Any:  # noqa: N802
     """sentence_transformers.SentenceTransformer を遅延ロードして初期化する。
 
     テストでパッチ可能にするためモジュールレベルの関数として定義。
     """
     try:
         from sentence_transformers import SentenceTransformer as ST  # type: ignore[import]
+
         return ST(model_name)
     except ImportError as e:
         raise ImportError(
@@ -38,15 +36,15 @@ class LocalModelEmbeddingProvider:
 
     def __init__(self, model_name: str = _DEFAULT_MODEL_NAME) -> None:
         self._model_name = model_name
-        self._model: object | None = None
+        self._model: Any = None
         self._dimension: int | None = None
 
-    def _get_model(self) -> object:
+    def _get_model(self) -> Any:
         """モデルを遅延ロードして返す。"""
         if self._model is None:
             logger.info(f"ローカルモデルをロード中: {self._model_name}")
             self._model = SentenceTransformer(self._model_name)
-            self._dimension = self._model.get_sentence_embedding_dimension()  # type: ignore[union-attr]
+            self._dimension = int(self._model.get_sentence_embedding_dimension())
             logger.info(f"モデルのロード完了: dimension={self._dimension}")
         return self._model
 
@@ -71,7 +69,7 @@ class LocalModelEmbeddingProvider:
 
         def _encode() -> list[list[float]]:
             model = self._get_model()
-            embeddings = model.encode(texts, show_progress_bar=False)  # type: ignore[union-attr]
+            embeddings = model.encode(texts, show_progress_bar=False)
             return [emb.tolist() for emb in embeddings]
 
         return await asyncio.to_thread(_encode)

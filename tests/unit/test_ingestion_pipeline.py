@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
 
 from context_store.ingestion.adapters import RawContent
-from context_store.ingestion.classifier import ClassificationResult
-from context_store.ingestion.deduplicator import DeduplicationAction, DeduplicationResult
+from context_store.ingestion.deduplicator import DeduplicationAction
 from context_store.ingestion.pipeline import IngestionPipeline, IngestionResult
 from context_store.models.memory import Memory, MemoryType, SourceType
 from context_store.storage.protocols import GraphAdapter, StorageAdapter
@@ -165,7 +164,9 @@ async def test_pipeline_embed_completes_before_save() -> None:
             call_order.append("save_memory")
             return str(memory.id)
 
-        async def vector_search(self, embedding: list[float], top_k: int, project: Any = None) -> list:
+        async def vector_search(
+            self, embedding: list[float], top_k: int, project: Any = None
+        ) -> list:
             return []
 
         async def update_memory(self, memory_id: str, updates: dict) -> bool:
@@ -212,8 +213,7 @@ async def test_pipeline_embed_completes_before_save() -> None:
     save_idx = call_order.index("save_memory")
 
     assert embed_done_idx < save_idx, (
-        f"embed が完了する前に save_memory が呼ばれました。\n"
-        f"call_order: {call_order}"
+        f"embed が完了する前に save_memory が呼ばれました。\ncall_order: {call_order}"
     )
 
 

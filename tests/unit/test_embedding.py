@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from context_store.embedding.protocols import EmbeddingProvider, TokenCounter
+from context_store.embedding.protocols import EmbeddingProvider
 from context_store.embedding.openai import OpenAIEmbeddingProvider
 
 
@@ -63,9 +63,7 @@ class TestOpenAIEmbeddingProvider:
         vectors = [[float(i)] * 1536 for i in range(5)]
 
         # API returns in different order to test order preservation
-        shuffled_data = [
-            {"embedding": vectors[i], "index": i} for i in range(4, -1, -1)
-        ]
+        shuffled_data = [{"embedding": vectors[i], "index": i} for i in range(4, -1, -1)]
         mock_response = {
             "data": shuffled_data,
             "model": "text-embedding-3-small",
@@ -100,7 +98,10 @@ class TestOpenAIEmbeddingProvider:
                     for j in range(len(input_texts))
                 ],
                 "model": "text-embedding-3-small",
-                "usage": {"prompt_tokens": 5 * len(input_texts), "total_tokens": 5 * len(input_texts)},
+                "usage": {
+                    "prompt_tokens": 5 * len(input_texts),
+                    "total_tokens": 5 * len(input_texts),
+                },
             }
 
         with patch.object(provider, "_post", side_effect=mock_post):
@@ -111,11 +112,14 @@ class TestOpenAIEmbeddingProvider:
 
         # 順序が保持されていることを確認
         for i, result in enumerate(results):
-            assert result[0] == float(i), f"Order mismatch at index {i}: expected {float(i)}, got {result[0]}"
+            assert result[0] == float(i), (
+                f"Order mismatch at index {i}: expected {float(i)}, got {result[0]}"
+            )
 
     def test_is_retryable_rate_limit(self) -> None:
         """429エラーがリトライ対象として判定されることを検証。"""
         from context_store.embedding.openai import _is_retryable
+
         exc = httpx.HTTPStatusError(
             "Rate limit exceeded",
             request=MagicMock(),
@@ -126,6 +130,7 @@ class TestOpenAIEmbeddingProvider:
     def test_is_retryable_server_error(self) -> None:
         """5xx エラーがリトライ対象として判定されることを検証。"""
         from context_store.embedding.openai import _is_retryable
+
         for status in (500, 502, 503, 504):
             exc = httpx.HTTPStatusError(
                 f"Server error {status}",
@@ -137,12 +142,14 @@ class TestOpenAIEmbeddingProvider:
     def test_is_retryable_timeout(self) -> None:
         """タイムアウトエラーがリトライ対象として判定されることを検証。"""
         from context_store.embedding.openai import _is_retryable
+
         exc = httpx.TimeoutException("timeout")
         assert _is_retryable(exc) is True
 
     def test_is_not_retryable_client_error(self) -> None:
         """4xx (429以外) エラーがリトライ非対象として判定されることを検証。"""
         from context_store.embedding.openai import _is_retryable
+
         exc = httpx.HTTPStatusError(
             "Bad request",
             request=MagicMock(),

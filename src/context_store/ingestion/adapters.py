@@ -190,9 +190,11 @@ class _SSRFBlockingBackend(httpcore.AsyncNetworkBackend):
         # デフォルトのバックエンドを取得
         try:
             from httpcore._backends.asyncio import AsyncIOBackend
+
             self._inner = AsyncIOBackend()
         except ImportError:
             from httpcore._backends.anyio import AnyIOBackend
+
             self._inner = AnyIOBackend()
 
     async def connect_tcp(
@@ -419,4 +421,6 @@ class URLAdapter:
             ]
 
         # ループを抜けた場合（通常はリダイレクト上限エラーで終了しているはず）
-        raise ValueError(f"Too many redirects: exceeded url_max_redirects={self.settings.url_max_redirects}")
+        raise ValueError(
+            f"Too many redirects: exceeded url_max_redirects={self.settings.url_max_redirects}"
+        )

@@ -67,9 +67,9 @@ _EPISODIC_VERB_RE = re.compile("|".join(_EPISODIC_VERB_PATTERNS), re.IGNORECASE)
 # 分類ルール: SEMANTIC パターン
 # ===========================================================================
 _SEMANTIC_PATTERNS = [
-    r"とは",       # 〜とは
-    r"という",     # 〜という概念
-    r"の仕様",     # 〜の仕様は
+    r"とは",  # 〜とは
+    r"という",  # 〜という概念
+    r"の仕様",  # 〜の仕様は
     r"の概要",
     r"の定義",
     r"について",
@@ -81,7 +81,7 @@ _SEMANTIC_PATTERNS = [
     r"is a type of",
     r"is an abbreviation",
     r"stands for",
-    r"# ",         # Markdown 見出し（ドキュメント）
+    r"# ",  # Markdown 見出し（ドキュメント）
     r"## ",
 ]
 
@@ -91,15 +91,15 @@ _SEMANTIC_RE = re.compile("|".join(_SEMANTIC_PATTERNS))
 # 分類ルール: PROCEDURAL パターン
 # ===========================================================================
 _PROCEDURAL_PATTERNS = [
-    r"する方法",       # 〜する方法
+    r"する方法",  # 〜する方法
     r"のやり方",
-    r"手順",           # 手順：
-    r"ステップ",       # ステップ構造
-    r"step \d+",       # Step 1, Step 2
-    r"^\d+\. ",       # 番号付きリスト (1. 〜)
-    r"^\$ ",          # シェルコマンド
-    r"^> ",           # コマンドプロンプト
-    r"```",           # コードブロック（コマンド例）
+    r"手順",  # 手順：
+    r"ステップ",  # ステップ構造
+    r"step \d+",  # Step 1, Step 2
+    r"^\d+\. ",  # 番号付きリスト (1. 〜)
+    r"^\$ ",  # シェルコマンド
+    r"^> ",  # コマンドプロンプト
+    r"```",  # コードブロック（コマンド例）
     r"how to",
     r"instructions",
     r"procedure",

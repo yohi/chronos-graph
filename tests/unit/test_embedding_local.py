@@ -46,7 +46,7 @@ class TestLocalModelEmbeddingProvider:
 
         with patch("context_store.embedding.local_model.SentenceTransformer") as mock_cls:
             mock_cls.return_value = self._make_mock_model()
-            provider = LocalModelEmbeddingProvider(model_name="test-model")
+            LocalModelEmbeddingProvider(model_name="test-model")
             # インスタンス作成時点では SentenceTransformer は呼ばれない
             mock_cls.assert_not_called()
 
@@ -57,7 +57,9 @@ class TestLocalModelEmbeddingProvider:
         expected = [0.1] * 768
         mock_model = self._make_mock_model(dim=768, values=expected)
 
-        with patch("context_store.embedding.local_model.SentenceTransformer", return_value=mock_model):
+        with patch(
+            "context_store.embedding.local_model.SentenceTransformer", return_value=mock_model
+        ):
             provider = LocalModelEmbeddingProvider(model_name="test-model")
             result = await provider.embed("Hello world")
 
@@ -80,7 +82,9 @@ class TestLocalModelEmbeddingProvider:
             mock_embeddings.append(m)
         mock_model.encode.return_value = mock_embeddings
 
-        with patch("context_store.embedding.local_model.SentenceTransformer", return_value=mock_model):
+        with patch(
+            "context_store.embedding.local_model.SentenceTransformer", return_value=mock_model
+        ):
             provider = LocalModelEmbeddingProvider(model_name="test-model")
             results = await provider.embed_batch(texts)
 

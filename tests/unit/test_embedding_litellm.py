@@ -16,6 +16,7 @@ class TestLiteLLMEmbeddingProvider:
     @pytest.fixture
     def provider(self):
         from context_store.embedding.litellm import LiteLLMEmbeddingProvider
+
         return LiteLLMEmbeddingProvider(model="text-embedding-3-small", dimension=1536)
 
     def test_implements_protocol(self, provider) -> None:
@@ -86,6 +87,7 @@ class TestLiteLLMEmbeddingProvider:
 
     def test_is_retryable_rate_limit(self, provider) -> None:
         from context_store.embedding.litellm import _is_retryable
+
         exc = httpx.HTTPStatusError(
             "Rate limit",
             request=MagicMock(),
@@ -95,10 +97,12 @@ class TestLiteLLMEmbeddingProvider:
 
     def test_is_retryable_timeout(self, provider) -> None:
         from context_store.embedding.litellm import _is_retryable
+
         assert _is_retryable(httpx.TimeoutException("timeout")) is True
 
     def test_is_not_retryable_value_error(self, provider) -> None:
         from context_store.embedding.litellm import _is_retryable
+
         assert _is_retryable(ValueError("bad input")) is False
 
 
@@ -108,6 +112,7 @@ class TestCustomAPIEmbeddingProvider:
     @pytest.fixture
     def provider(self):
         from context_store.embedding.custom_api import CustomAPIEmbeddingProvider
+
         return CustomAPIEmbeddingProvider(
             endpoint="http://localhost:8080/embeddings",
             dimension=768,
@@ -169,6 +174,7 @@ class TestCustomAPIEmbeddingProvider:
 
     def test_is_retryable_rate_limit(self, provider) -> None:
         from context_store.embedding.custom_api import _is_retryable
+
         exc = httpx.HTTPStatusError(
             "Rate limit",
             request=MagicMock(),
@@ -178,6 +184,7 @@ class TestCustomAPIEmbeddingProvider:
 
     def test_is_retryable_server_error(self, provider) -> None:
         from context_store.embedding.custom_api import _is_retryable
+
         for status in (500, 502, 503, 504):
             exc = httpx.HTTPStatusError(
                 f"Server error {status}",
@@ -188,6 +195,7 @@ class TestCustomAPIEmbeddingProvider:
 
     def test_is_not_retryable_client_error(self, provider) -> None:
         from context_store.embedding.custom_api import _is_retryable
+
         exc = httpx.HTTPStatusError(
             "Bad request",
             request=MagicMock(),

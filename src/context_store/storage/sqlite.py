@@ -24,11 +24,11 @@ from context_store.utils.stale_lock import StaleAwareFileLock
 # ---------------------------------------------------------------------------
 
 try:
-    import sqlite_vec as _sqlite_vec
+    import sqlite_vec as _sqlite_vec  # type: ignore
 
     _USE_SQLITE_VEC_SERIALIZE = True
 except ImportError:  # pragma: no cover
-    _sqlite_vec = None  # type: ignore[assignment]
+    _sqlite_vec = None
     _USE_SQLITE_VEC_SERIALIZE = False
 
 
@@ -39,7 +39,9 @@ def encode_embedding(embedding: list[float]) -> bytes:
     ``struct.pack`` for portability.
     """
     if _USE_SQLITE_VEC_SERIALIZE and _sqlite_vec is not None:
-        return _sqlite_vec.serialize_float32(embedding)
+        from typing import cast
+
+        return cast(bytes, _sqlite_vec.serialize_float32(embedding))
     return struct.pack("<" + "f" * len(embedding), *embedding)
 
 

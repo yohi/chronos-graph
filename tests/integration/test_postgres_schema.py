@@ -9,11 +9,11 @@ import pytest
 import asyncpg
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 async def pg_conn():
     conn = await asyncpg.connect(
         host="localhost",
-        port=5432,
+        port=5433,
         database="context_store",
         user="context_store",
         password="dev_password",

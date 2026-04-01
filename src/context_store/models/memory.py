@@ -24,7 +24,7 @@ class Memory(BaseModel):
     content: str
     memory_type: MemoryType
     source_type: SourceType
-    source_metadata: dict = Field(default_factory=dict)
+    source_metadata: dict[str, object] = Field(default_factory=dict)
     embedding: list[float] = Field(default_factory=list)
     semantic_relevance: float = 0.5
     importance_score: float = 0.5

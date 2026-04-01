@@ -1,6 +1,7 @@
 import pytest
 from context_store.config import Settings
 
+
 def test_default_settings():
     settings = Settings(
         postgres_host="localhost",
@@ -22,6 +23,7 @@ def test_default_settings():
     assert isinstance(settings.sqlite_acquire_timeout, float)
     assert settings.sqlite_acquire_timeout == 2.0  # seconds
 
+
 def test_embedding_provider_validation():
     settings = Settings(
         postgres_host="localhost",
@@ -31,9 +33,11 @@ def test_embedding_provider_validation():
     )
     assert settings.embedding_provider == "local-model"
 
+
 def test_postgres_password_required_when_backend_selected():
     with pytest.raises(ValueError, match="POSTGRES_PASSWORD"):
         Settings(storage_backend="postgres", postgres_password="", neo4j_password="test")
+
 
 def test_neo4j_password_required_when_graph_enabled():
     with pytest.raises(ValueError, match="NEO4J_PASSWORD"):

@@ -10,7 +10,9 @@ from context_store.models.memory import Memory, ScoredMemory
 class StorageError(Exception):
     """Base exception for all storage adapter errors."""
 
-    def __init__(self, message: str, code: str = "STORAGE_ERROR", recoverable: bool = False) -> None:
+    def __init__(
+        self, message: str, code: str = "STORAGE_ERROR", recoverable: bool = False
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.recoverable = recoverable
@@ -95,9 +97,7 @@ class GraphAdapter(Protocol):
         """Create multiple edges in a single operation for efficiency."""
         ...
 
-    async def traverse(
-        self, seed_ids: list[str], edge_types: list[str], depth: int
-    ) -> GraphResult:
+    async def traverse(self, seed_ids: list[str], edge_types: list[str], depth: int) -> GraphResult:
         """Traverse the graph from seed nodes up to the given depth.
 
         Args:

@@ -6,7 +6,7 @@ import hashlib
 import json
 from typing import Any
 
-import asyncpg
+import asyncpg  # type: ignore[import-untyped]
 
 from context_store.config import Settings
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
@@ -158,7 +158,7 @@ class PostgresStorageAdapter:
         sql = "DELETE FROM memories WHERE id = $1"
         async with self._pool.acquire() as conn:
             status = await conn.execute(sql, memory_id)
-        return status == "DELETE 1"
+        return status == "DELETE 1"  # type: ignore[no-any-return]
 
     async def update_memory(self, memory_id: str, updates: dict[str, Any]) -> bool:
         """Apply partial updates to a memory."""
@@ -213,7 +213,7 @@ class PostgresStorageAdapter:
 
         async with self._pool.acquire() as conn:
             status = await conn.execute(sql, *params)
-        return status == "UPDATE 1"
+        return status == "UPDATE 1"  # type: ignore[no-any-return]
 
     async def vector_search(
         self, embedding: list[float], top_k: int, project: str | None = None
@@ -240,7 +240,7 @@ class PostgresStorageAdapter:
                 ORDER BY embedding <=> $1::vector
                 LIMIT $2
             """
-            params = (embedding_str, top_k)
+            params = (embedding_str, top_k)  # type: ignore[assignment]
 
         async with self._pool.acquire() as conn:
             records = await conn.fetch(sql, *params)
@@ -278,7 +278,7 @@ class PostgresStorageAdapter:
                   AND content LIKE $1
                 LIMIT $2
             """
-            params = (like_query, top_k)
+            params = (like_query, top_k)  # type: ignore[assignment]
 
         async with self._pool.acquire() as conn:
             records = await conn.fetch(sql, *params)
@@ -328,7 +328,7 @@ class PostgresStorageAdapter:
         sql = "SELECT vector_dims(embedding) FROM memories WHERE embedding IS NOT NULL LIMIT 1"
         async with self._pool.acquire() as conn:
             result = await conn.fetchval(sql)
-        return result
+        return None if result is None else int(result)
 
     async def dispose(self) -> None:
         """Release the connection pool."""

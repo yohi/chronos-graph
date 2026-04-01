@@ -1,4 +1,5 @@
 """Unit tests for SQLiteGraphAdapter."""
+
 from __future__ import annotations
 
 import asyncio
@@ -237,9 +238,7 @@ class TestTraverse:
 
         await adp.dispose()
 
-    async def test_traverse_supersedes_no_logical_depth(
-        self, adapter: SQLiteGraphAdapter
-    ) -> None:
+    async def test_traverse_supersedes_no_logical_depth(self, adapter: SQLiteGraphAdapter) -> None:
         """SUPERSEDES エッジは論理深さをカウントしない."""
         # a -SUPERSEDES-> b -SUPERSEDES-> c -TEMPORAL_NEXT-> d
         for nid in ["a", "b", "c", "d"]:
@@ -297,17 +296,13 @@ class TestDeleteNode:
 
 
 class TestProtocolCompliance:
-    async def test_implements_graph_adapter_protocol(
-        self, adapter: SQLiteGraphAdapter
-    ) -> None:
+    async def test_implements_graph_adapter_protocol(self, adapter: SQLiteGraphAdapter) -> None:
         """GraphAdapter Protocol を実装しているか確認."""
         from context_store.storage.protocols import GraphAdapter
 
         assert isinstance(adapter, GraphAdapter)
 
-    async def test_traverse_returns_graph_result(
-        self, adapter: SQLiteGraphAdapter
-    ) -> None:
+    async def test_traverse_returns_graph_result(self, adapter: SQLiteGraphAdapter) -> None:
         """traverse の戻り値は GraphResult."""
         result = await adapter.traverse([], [], depth=1)
         assert isinstance(result, GraphResult)
@@ -321,9 +316,7 @@ class TestProtocolCompliance:
 
 
 class TestTimeout:
-    async def test_traverse_timeout_returns_partial_result(
-        self, tmp_db_path: str
-    ) -> None:
+    async def test_traverse_timeout_returns_partial_result(self, tmp_db_path: str) -> None:
         """タイムアウト発生時に例外を送出せず部分/空結果を返す."""
         settings = make_settings(
             sqlite_db_path=tmp_db_path,
@@ -340,10 +333,11 @@ class TestTimeout:
 
         # Monkeypatch to force timeout
         original_inner = adp._traverse_inner
+
         async def slow_inner(*args, **kwargs):
             await asyncio.sleep(0.01)
             return await original_inner(*args, **kwargs)
-        
+
         adp._traverse_inner = slow_inner
 
         # Should not raise even if timeout hits

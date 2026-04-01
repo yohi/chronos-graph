@@ -1,4 +1,5 @@
 """Unit tests for InMemoryCacheAdapter."""
+
 from __future__ import annotations
 
 import asyncio
@@ -114,9 +115,7 @@ class TestInvalidatePrefix:
         await cache.invalidate_prefix("no-match:")
         assert await cache.get("other:key") == "val"
 
-    async def test_invalidate_prefix_empty_cache(
-        self, cache: InMemoryCacheAdapter
-    ) -> None:
+    async def test_invalidate_prefix_empty_cache(self, cache: InMemoryCacheAdapter) -> None:
         """空のキャッシュにプレフィックス削除を呼んでも例外が発生しない."""
         await cache.invalidate_prefix("any:")  # no exception
 
@@ -158,8 +157,6 @@ class TestDispose:
 
 
 class TestProtocolCompliance:
-    def test_implements_cache_adapter_protocol(
-        self, cache: InMemoryCacheAdapter
-    ) -> None:
+    def test_implements_cache_adapter_protocol(self, cache: InMemoryCacheAdapter) -> None:
         """CacheAdapter Protocol を実装しているか."""
         assert isinstance(cache, CacheAdapter)

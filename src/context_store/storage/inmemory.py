@@ -16,6 +16,7 @@ TTL is stored as an absolute expiry timestamp (``time.monotonic() + ttl``).
 ``get`` checks expiry inline and returns ``None`` for expired entries.
 Expired entries are lazily removed on access.
 """
+
 from __future__ import annotations
 
 import asyncio

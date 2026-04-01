@@ -25,11 +25,12 @@ stale cache entries can accumulate.  The factory starts a background
 
 The ``system_metadata`` table is created lazily if it does not exist.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from context_store.config import Settings
@@ -61,7 +62,7 @@ class SQLiteCacheCoherenceChecker:
         self._cache = cache
         self._poll_interval = poll_interval
         self._last_seen: str | None = None
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[Any] | None = None
 
     def start(self) -> None:
         """Start the background polling task."""
@@ -117,9 +118,7 @@ class SQLiteCacheCoherenceChecker:
                                 updated_at,
                             )
                 except Exception as exc:
-                    logger.warning(
-                        "SQLiteCacheCoherenceChecker poll failed: %s", exc
-                    )
+                    logger.warning("SQLiteCacheCoherenceChecker poll failed: %s", exc)
         except asyncio.CancelledError:
             pass
 
@@ -146,10 +145,7 @@ async def create_storage(
         cache_adp = await _create_cache_adapter(settings)
 
         # Start cache coherence checker for SQLite + InMemory combination
-        if (
-            settings.storage_backend == "sqlite"
-            and settings.cache_backend == "inmemory"
-        ):
+        if settings.storage_backend == "sqlite" and settings.cache_backend == "inmemory":
             import os
 
             from context_store.storage.inmemory import InMemoryCacheAdapter
@@ -209,7 +205,15 @@ async def _create_graph_adapter(settings: "Settings") -> "GraphAdapter | None":
         # Neo4j is used as the graph backend for PostgreSQL mode
         from context_store.storage.neo4j import Neo4jGraphAdapter
 
-        return await Neo4jGraphAdapter.create(settings)
+        if not settings.neo4j_uri or not settings.neo4j_user or not settings.neo4j_password:
+            raise ValueError(
+                "Neo4j uri, user, and password must be provided when graph is enabled with postgres backend."
+            )
+        return await Neo4jGraphAdapter.create(
+            uri=settings.neo4j_uri,
+            user=settings.neo4j_user,
+            password=settings.neo4j_password.get_secret_value(),
+        )
 
     raise ValueError(f"Unsupported storage_backend for graph: {settings.storage_backend!r}")
 

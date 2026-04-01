@@ -1,4 +1,5 @@
 """Unit tests for StorageFactory."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -130,8 +131,10 @@ class TestCacheBackend:
         from unittest.mock import AsyncMock, patch
 
         mock_adapter = AsyncMock(spec=RedisCacheAdapter)
-        
-        with patch("context_store.storage.redis.RedisCacheAdapter.create", return_value=mock_adapter):
+
+        with patch(
+            "context_store.storage.redis.RedisCacheAdapter.create", return_value=mock_adapter
+        ):
             storage, graph_adp, cache_adp = await create_storage(settings)
             try:
                 assert isinstance(cache_adp, RedisCacheAdapter)
@@ -167,7 +170,9 @@ class TestPostgresBackend:
             patch.object(
                 type(settings),
                 "postgres_dsn",
-                new_callable=lambda: property(lambda self: "postgresql://test_user:secret@localhost:5432/test_db"),
+                new_callable=lambda: property(
+                    lambda self: "postgresql://test_user:secret@localhost:5432/test_db"
+                ),
             ),
         ):
             from context_store.storage.postgres import PostgresStorageAdapter
@@ -199,7 +204,9 @@ class TestPostgresBackend:
             patch.object(
                 type(settings),
                 "postgres_dsn",
-                new_callable=lambda: property(lambda self: "postgresql://test_user:secret@localhost:5432/test_db"),
+                new_callable=lambda: property(
+                    lambda self: "postgresql://test_user:secret@localhost:5432/test_db"
+                ),
             ),
         ):
             storage, graph_adp, cache_adp = await create_storage(settings)

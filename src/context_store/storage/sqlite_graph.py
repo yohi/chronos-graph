@@ -20,6 +20,7 @@ the thread.  To interrupt the underlying sqlite3 connection we use
 ``Connection.interrupt()`` only while a query is actually running.
 On timeout, a partial (possibly empty) GraphResult is returned — no exception.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -182,9 +183,7 @@ class SQLiteGraphAdapter:
     # GraphAdapter: traverse
     # ------------------------------------------------------------------
 
-    async def traverse(
-        self, seed_ids: list[str], edge_types: list[str], depth: int
-    ) -> GraphResult:
+    async def traverse(self, seed_ids: list[str], edge_types: list[str], depth: int) -> GraphResult:
         """Traverse the graph using a recursive CTE.
 
         Args:
@@ -209,12 +208,16 @@ class SQLiteGraphAdapter:
             async with self._connect() as conn:
                 raw_conn = getattr(conn, "_conn", None)
                 if raw_conn is None:
-                    raise RuntimeError("aiosqlite._conn attribute not found; interrupt-based timeout unavailable")
-                
+                    raise RuntimeError(
+                        "aiosqlite._conn attribute not found; interrupt-based timeout unavailable"
+                    )
+
                 ctx = SafeSqliteInterruptCtx(raw_conn)
-                
+
                 result = await asyncio.wait_for(
-                    self._traverse_inner(conn, ctx, seed_ids, edge_types, effective_depth, partial_container),
+                    self._traverse_inner(
+                        conn, ctx, seed_ids, edge_types, effective_depth, partial_container
+                    ),
                     timeout=self._timeout,
                 )
                 return result
@@ -231,10 +234,18 @@ class SQLiteGraphAdapter:
             return GraphResult(nodes=[], edges=[], traversal_depth=0)
 
     async def _traverse_inner(
-        self, conn: aiosqlite.Connection, ctx: SafeSqliteInterruptCtx, seed_ids: list[str], edge_types: list[str], effective_depth: int, partial_container: list[GraphResult]
+        self,
+        conn: aiosqlite.Connection,
+        ctx: SafeSqliteInterruptCtx,
+        seed_ids: list[str],
+        edge_types: list[str],
+        effective_depth: int,
+        partial_container: list[GraphResult],
     ) -> GraphResult:
         """Execute the recursive CTE traversal query."""
-        return await self._run_traversal(conn, ctx, seed_ids, edge_types, effective_depth, partial_container)
+        return await self._run_traversal(
+            conn, ctx, seed_ids, edge_types, effective_depth, partial_container
+        )
 
     async def _run_traversal(
         self,
@@ -341,9 +352,7 @@ class SQLiteGraphAdapter:
         """
 
         params: list[Any] = (
-            seed_params
-            + [effective_depth, self._max_physical_hops]
-            + edge_type_params
+            seed_params + [effective_depth, self._max_physical_hops] + edge_type_params
         )
 
         # We pass ctx from outside now

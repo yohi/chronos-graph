@@ -448,6 +448,41 @@ class TestListByFilter:
         assert "tags" in sql
 
 
+class TestGetMemoriesValidation:
+    @pytest.mark.asyncio
+    async def test_get_memories_invalid_order_by(self, adapter):
+        adp, _ = adapter
+        filters = MemoryFilters(order_by="invalid_col ASC")
+        with pytest.raises(StorageError) as exc:
+            await adp.list_by_filter(filters)
+        assert exc.value.code == "INVALID_PARAMETER"
+
+    @pytest.mark.asyncio
+    async def test_get_memories_invalid_direction(self, adapter):
+        adp, _ = adapter
+        filters = MemoryFilters(order_by="created_at NOT_A_DIRECTION")
+        with pytest.raises(StorageError) as exc:
+            await adp.list_by_filter(filters)
+        assert exc.value.code == "INVALID_PARAMETER"
+
+    @pytest.mark.asyncio
+    async def test_get_memories_invalid_limit_type(self, adapter):
+        adp, _ = adapter
+        filters = MemoryFilters()
+        filters.limit = "not-an-int"
+        with pytest.raises(StorageError) as exc:
+            await adp.list_by_filter(filters)
+        assert exc.value.code == "INVALID_PARAMETER"
+
+    @pytest.mark.asyncio
+    async def test_get_memories_negative_limit(self, adapter):
+        adp, _ = adapter
+        filters = MemoryFilters(limit=-1)
+        with pytest.raises(StorageError) as exc:
+            await adp.list_by_filter(filters)
+        assert exc.value.code == "INVALID_PARAMETER"
+
+
 # ---------------------------------------------------------------------------
 # get_vector_dimension
 # ---------------------------------------------------------------------------

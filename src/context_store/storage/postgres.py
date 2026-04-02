@@ -356,11 +356,21 @@ class PostgresStorageAdapter:
                 tokens = part.strip().split()
                 if tokens:
                     col = tokens[0].lower()
-                    if col in allowed_order_cols:
-                        direction = (
-                            "ASC" if len(tokens) > 1 and tokens[1].upper() == "ASC" else "DESC"
+                    if col not in allowed_order_cols:
+                        raise StorageError(
+                            message=f"Invalid sort column: {col}",
+                            code="INVALID_PARAMETER",
                         )
-                        order_parts.append(f"{col} {direction}")
+                    direction = "DESC"
+                    if len(tokens) > 1:
+                        dir_token = tokens[1].upper()
+                        if dir_token not in ("ASC", "DESC"):
+                            raise StorageError(
+                                message=f"Invalid sort direction: {dir_token}",
+                                code="INVALID_PARAMETER",
+                            )
+                        direction = dir_token
+                    order_parts.append(f"{col} {direction}")
             if order_parts:
                 order_clause = f"ORDER BY {', '.join(order_parts)}"
 
@@ -370,11 +380,18 @@ class PostgresStorageAdapter:
         if limit_val is not None:
             try:
                 limit_int = int(limit_val)
-                if limit_int >= 0:
-                    params.append(limit_int)
-                    limit_clause = f"LIMIT ${len(params)}"
-            except (ValueError, TypeError):
-                pass
+                if limit_int < 0:
+                    raise StorageError(
+                        message=f"Invalid limit value: {limit_int}",
+                        code="INVALID_PARAMETER",
+                    )
+                params.append(limit_int)
+                limit_clause = f"LIMIT ${len(params)}"
+            except (ValueError, TypeError) as e:
+                raise StorageError(
+                    message=f"Invalid limit type: {type(limit_val)}",
+                    code="INVALID_PARAMETER",
+                ) from e
 
         sql = f"SELECT * FROM memories {where_clause} {order_clause} {limit_clause}".strip()
 

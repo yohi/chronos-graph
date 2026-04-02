@@ -27,6 +27,8 @@ class MemoryFilters:
     # None = active only, True = archived only, False = both
     archived: bool | None = None
     tags: list[str] = field(default_factory=list)
+    limit: int | None = None
+    order_by: str | None = None
 
 
 @runtime_checkable

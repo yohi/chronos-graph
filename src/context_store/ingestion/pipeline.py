@@ -349,14 +349,12 @@ class IngestionPipeline:
     async def _get_previous_memories(self, memory: Memory) -> list[Memory]:
         """時系列エッジ用に同一セッションまたはプロジェクトの直前候補を取得する。"""
         session_id = memory.source_metadata.get("session_id")
-        # プロジェクト内のメモリを全件取得（フィルタ条件が緩いので、ストレージ側で
-        # 本来は ORDER BY されるべきだが、プロトコルにないためアプリ側でソートする）
-        candidates = await self._storage.list_by_filter(MemoryFilters(project=memory.project))
+        candidates = await self._storage.list_by_filter(
+            MemoryFilters(project=memory.project, limit=1, order_by="created_at DESC")
+        )
 
-        # IDを除外し、作成日時（降順）でソート
         previous_memories: list[Memory] = []
         candidates = [c for c in candidates if str(c.id) != str(memory.id)]
-        candidates.sort(key=lambda x: x.created_at, reverse=True)
 
         for candidate in candidates:
             candidate_session_id = candidate.source_metadata.get("session_id")

@@ -18,11 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for fast package management
-ARG UV_VERSION=0.4.0
-RUN curl -LsSf https://astral.sh/uv/uv-${UV_VERSION}-x86_64-unknown-linux-musl.tar.gz | tar xzf - -C /usr/local/bin && \
-    mv /usr/local/bin/uv-${UV_VERSION}-x86_64-unknown-linux-musl/uv /usr/local/bin/uv && \
-    mv /usr/local/bin/uv-${UV_VERSION}-x86_64-unknown-linux-musl/uvx /usr/local/bin/uvx && \
-    rm -rf /usr/local/bin/uv-${UV_VERSION}-x86_64-unknown-linux-musl
+COPY --from=ghcr.io/astral-sh/uv:0.4.0 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.4.0 /uvx /usr/local/bin/uvx
 
 # Install the project dependencies using uv
 WORKDIR /workspaces/chronos-graph
@@ -37,10 +34,9 @@ RUN uv sync --frozen --no-install-project
 COPY src/ src/
 COPY tests/ tests/
 
-# Install the project in editable mode with all dev dependencies
-RUN uv sync --frozen --all-extras
-
 # Set up the default user (VS Code will use this)
+RUN groupadd -g 1000 vscode && \
+    useradd -m -u 1000 -g vscode -s /bin/bash vscode
 USER vscode
 
 # Set up shell initialization for uv

@@ -95,6 +95,7 @@ class IngestionPipeline:
 
         # コンテンツハッシュ別の Lock（排他制御）
         self._content_locks: dict[str, asyncio.Lock] = {}
+        self._content_lock_refs: dict[str, int] = {}
         self._content_results: dict[Any, asyncio.Task[IngestionResult | None]] = {}
         self._locks_mutex = asyncio.Lock()
 
@@ -103,14 +104,18 @@ class IngestionPipeline:
         async with self._locks_mutex:
             if content_hash not in self._content_locks:
                 self._content_locks[content_hash] = asyncio.Lock()
+                self._content_lock_refs[content_hash] = 0
+            self._content_lock_refs[content_hash] += 1
             return self._content_locks[content_hash]
 
     async def _release_content_lock(self, content_hash: str, lock: asyncio.Lock) -> None:
         """不要になったコンテンツロックを辞書から取り除く。"""
         async with self._locks_mutex:
-            current_lock = self._content_locks.get(content_hash)
-            if current_lock is lock and not lock.locked():
-                self._content_locks.pop(content_hash, None)
+            if self._content_locks.get(content_hash) is lock:
+                self._content_lock_refs[content_hash] -= 1
+                if self._content_lock_refs[content_hash] <= 0:
+                    self._content_locks.pop(content_hash, None)
+                    self._content_lock_refs.pop(content_hash, None)
 
     def _compute_hash(self, content: str) -> str:
         """コンテンツのハッシュ値を計算する。"""
@@ -234,33 +239,36 @@ class IngestionPipeline:
         lock = await self._get_content_lock(content_hash)
         current_task: asyncio.Task[IngestionResult | None] | None = None
 
-        async with lock:
-            # 他の並行タスクがすでにこのチャンクを処理中であれば、そのタスクの完了を待つ
-            # （in-flight map として機能させる）
-            existing_task = self._content_results.get(memo_key)
-            if existing_task is None:
-                # 自分が処理を担当するため、Task を作成して登録
-                current_task = asyncio.create_task(
-                    self._process_chunk_locked_with_cleanup(
-                        chunk,
-                        base_metadata=base_metadata,
-                        prior_document_memories=prior_document_memories,
-                        memo_key=memo_key,
-                        content_hash=content_hash,
-                        lock=lock,
+        try:
+            async with lock:
+                # 他の並行タスクがすでにこのチャンクを処理中であれば、そのタスクの完了を待つ
+                # （in-flight map として機能させる）
+                existing_task = self._content_results.get(memo_key)
+                if existing_task is None:
+                    # 自分が処理を担当するため、Task を作成して登録
+                    current_task = asyncio.create_task(
+                        self._process_chunk_locked_with_cleanup(
+                            chunk,
+                            base_metadata=base_metadata,
+                            prior_document_memories=prior_document_memories,
+                            memo_key=memo_key,
+                            content_hash=content_hash,
+                            lock=lock,
+                        )
                     )
-                )
-                self._content_results[memo_key] = current_task
+                    self._content_results[memo_key] = current_task
 
-        if existing_task is not None:
-            # 他のタスクが処理中なので、その完了を待つ
-            # asyncio.shield を使い、呼び出し元のキャンセルが共有タスクに波及しないようにする
-            return await asyncio.shield(existing_task)
+            if existing_task is not None:
+                # 他のタスクが処理中なので、その完了を待つ
+                # asyncio.shield を使い、呼び出し元のキャンセルが共有タスクに波及しないようにする
+                return await asyncio.shield(existing_task)
 
-        # 自分が作成したタスクを実行（current_task は必ず非 None）
-        assert current_task is not None
-        # 自分が作成したタスクも shield で待機し、キャンセルから保護する
-        return await asyncio.shield(current_task)
+            # 自分が作成したタスクを実行（current_task は必ず非 None）
+            assert current_task is not None
+            # 自分が作成したタスクも shield で待機し、キャンセルから保護する
+            return await asyncio.shield(current_task)
+        finally:
+            await self._release_content_lock(content_hash, lock)
 
     async def _process_chunk_locked_with_cleanup(
         self,
@@ -284,7 +292,6 @@ class IngestionPipeline:
             async with lock:
                 if self._content_results.get(memo_key) is asyncio.current_task():
                     self._content_results.pop(memo_key, None)
-            await self._release_content_lock(content_hash, lock)
 
     async def _process_chunk_locked(
         self,

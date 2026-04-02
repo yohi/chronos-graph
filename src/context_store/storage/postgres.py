@@ -347,10 +347,37 @@ class PostgresStorageAdapter:
             conditions.append(f"source_metadata->>'session_id' = ${len(params)}")
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        order_clause = (
-            f"ORDER BY {filters.order_by}" if filters.order_by else "ORDER BY created_at DESC"
-        )
-        limit_clause = f"LIMIT {filters.limit}" if getattr(filters, "limit", None) else ""
+        # Validate and whitelist ORDER BY columns
+        allowed_order_cols = {
+            "id", "memory_type", "source_type", "semantic_relevance",
+            "importance_score", "access_count", "last_accessed_at",
+            "created_at", "updated_at", "archived_at", "project"
+        }
+        order_clause = "ORDER BY created_at DESC"
+        if filters.order_by:
+            order_parts = []
+            for part in str(filters.order_by).split(","):
+                tokens = part.strip().split()
+                if tokens:
+                    col = tokens[0].lower()
+                    if col in allowed_order_cols:
+                        direction = "ASC" if len(tokens) > 1 and tokens[1].upper() == "ASC" else "DESC"
+                        order_parts.append(f"{col} {direction}")
+            if order_parts:
+                order_clause = f"ORDER BY {', '.join(order_parts)}"
+
+        # Parameterize LIMIT
+        limit_clause = ""
+        limit_val = getattr(filters, "limit", None)
+        if limit_val is not None:
+            try:
+                limit_int = int(limit_val)
+                if limit_int >= 0:
+                    params.append(limit_int)
+                    limit_clause = f"LIMIT ${len(params)}"
+            except (ValueError, TypeError):
+                pass
+
         sql = f"SELECT * FROM memories {where_clause} {order_clause} {limit_clause}".strip()
 
         async with self._pool.acquire() as conn:

@@ -42,6 +42,7 @@ class Archiver:
         Returns:
             処理結果を格納した ArchiverResult。
         """
+        # archived=None はアクティブ記憶のみを取得する（protocols.py MemoryFilters 参照）
         filters = MemoryFilters(project=project, archived=None)
         memories = await self._storage.list_by_filter(filters)
 

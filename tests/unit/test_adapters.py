@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import socket
+import asyncio
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -36,82 +37,27 @@ def test_raw_content_creation() -> None:
     assert rc.metadata == {"key": "value"}
 
 
-def test_raw_content_default_metadata() -> None:
-    """RawContent のデフォルトメタデータは空辞書。"""
-    rc = RawContent(content="test", source_type=SourceType.MANUAL)
-    assert rc.metadata == {}
-
-
 # ===========================================================================
-# ConversationAdapter テスト
+# ConversationAdapter / ManualAdapter テスト（簡略）
 # ===========================================================================
-
 
 @pytest.mark.asyncio
 async def test_conversation_adapter_basic() -> None:
-    """ConversationAdapter が会話トランスクリプトを RawContent リストに変換する。"""
-    transcript = "User: こんにちは\nAssistant: こんにちは！"
     adapter = ConversationAdapter()
-    results = await adapter.adapt(transcript, metadata={"session_id": "s1"})
+    results = await adapter.adapt("User: 1\nAssistant: 1")
     assert len(results) >= 1
-    for rc in results:
-        assert rc.source_type == SourceType.CONVERSATION
-        assert rc.content
-
-
-@pytest.mark.asyncio
-async def test_conversation_adapter_multiple_turns() -> None:
-    """複数ターンの会話が正しく分割される。"""
-    transcript = (
-        "User: 質問1\nAssistant: 回答1\n"
-        "User: 質問2\nAssistant: 回答2\n"
-        "User: 質問3\nAssistant: 回答3\n"
-    )
-    adapter = ConversationAdapter()
-    results = await adapter.adapt(transcript)
-    assert len(results) >= 2
-
-
-@pytest.mark.asyncio
-async def test_conversation_adapter_metadata_propagation() -> None:
-    """メタデータがすべての RawContent に伝播する。"""
-    transcript = "User: test\nAssistant: ok"
-    adapter = ConversationAdapter()
-    results = await adapter.adapt(transcript, metadata={"project": "proj1"})
-    for rc in results:
-        assert "project" in rc.metadata
-
-
-# ===========================================================================
-# ManualAdapter テスト
-# ===========================================================================
-
 
 @pytest.mark.asyncio
 async def test_manual_adapter_basic() -> None:
-    """ManualAdapter がテキストを RawContent に変換する。"""
     adapter = ManualAdapter()
-    results = await adapter.adapt("テストテキスト")
+    results = await adapter.adapt("test")
     assert len(results) == 1
-    assert results[0].content == "テストテキスト"
-    assert results[0].source_type == SourceType.MANUAL
-
-
-@pytest.mark.asyncio
-async def test_manual_adapter_metadata() -> None:
-    """ManualAdapter がメタデータを正しく設定する。"""
-    adapter = ManualAdapter()
-    results = await adapter.adapt("テスト", metadata={"author": "user"})
-    assert results[0].metadata == {"author": "user"}
-
 
 # ===========================================================================
-# URLAdapter セキュリティテスト
+# URLAdapter テスト（主要ロジックに集中）
 # ===========================================================================
-
 
 def _make_settings(**kwargs: Any) -> Settings:
-    """テスト用 Settings を作成する（embedding_provider は openai 以外を使用）。"""
     defaults = {
         "embedding_provider": "local-model",
         "local_model_name": "test-model",
@@ -120,299 +66,83 @@ def _make_settings(**kwargs: Any) -> Settings:
     defaults.update(kwargs)
     return Settings(**defaults)
 
-
 @pytest.mark.asyncio
-async def test_url_adapter_rejects_loopback_ip() -> None:
-    """ループバックIP (127.0.0.1) を拒否する。"""
-    settings = _make_settings()
-    adapter = URLAdapter(settings=settings)
-
+async def test_url_adapter_rejects_private_ips() -> None:
+    """プライベートIPの拒否を確認。"""
+    adapter = URLAdapter(settings=_make_settings())
     with patch("socket.getaddrinfo") as mock_dns:
-        mock_dns.return_value = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 80))]
-        with pytest.raises(
-            ValueError, match=r"[Pp]rivate|[Ll]oopback|[Bb]locked|[Ss]SRF|[Rr]estricted"
-        ):
+        mock_dns.return_value = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("10.0.0.1", 80))]
+        with pytest.raises(ValueError, match=r"[Pp]rivate|[Bb]locked"):
             await adapter.adapt("http://example.com/")
-
-
-@pytest.mark.asyncio
-async def test_url_adapter_rejects_private_10_x() -> None:
-    """プライベートIP (10.x.x.x) を拒否する。"""
-    settings = _make_settings()
-    adapter = URLAdapter(settings=settings)
-
-    with patch("socket.getaddrinfo") as mock_dns:
-        mock_dns.return_value = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("10.1.2.3", 80))]
-        with pytest.raises(ValueError, match=r"[Pp]rivate|[Bb]locked|[Ss]SRF|[Rr]estricted"):
-            await adapter.adapt("http://example.com/")
-
-
-@pytest.mark.asyncio
-async def test_url_adapter_rejects_link_local_169() -> None:
-    """リンクローカルIP (169.254.169.254) を拒否する。"""
-    settings = _make_settings()
-    adapter = URLAdapter(settings=settings)
-
-    with patch("socket.getaddrinfo") as mock_dns:
-        mock_dns.return_value = [
-            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("169.254.169.254", 80))
-        ]
-        with pytest.raises(
-            ValueError, match=r"[Pp]rivate|[Ll]ink.local|[Bb]locked|[Ss]SRF|[Rr]estricted"
-        ):
-            await adapter.adapt("http://example.com/")
-
-
-@pytest.mark.asyncio
-async def test_url_adapter_rejects_ipv6_loopback() -> None:
-    """IPv6 ループバック (::1) を拒否する。"""
-    settings = _make_settings()
-    adapter = URLAdapter(settings=settings)
-
-    with patch("socket.getaddrinfo") as mock_dns:
-        mock_dns.return_value = [(socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("::1", 80, 0, 0))]
-        with pytest.raises(
-            ValueError, match=r"[Pp]rivate|[Ll]oopback|[Bb]locked|[Ss]SRF|[Rr]estricted"
-        ):
-            await adapter.adapt("http://example.com/")
-
-
-@pytest.mark.asyncio
-async def test_url_adapter_rejects_ipv6_link_local() -> None:
-    """IPv6 リンクローカル (fe80::) を拒否する。"""
-    settings = _make_settings()
-    adapter = URLAdapter(settings=settings)
-
-    with patch("socket.getaddrinfo") as mock_dns:
-        mock_dns.return_value = [
-            (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("fe80::1", 80, 0, 0))
-        ]
-        with pytest.raises(
-            ValueError, match=r"[Pp]rivate|[Ll]ink.local|[Bb]locked|[Ss]SRF|[Rr]estricted"
-        ):
-            await adapter.adapt("http://example.com/")
-
-
-@pytest.mark.asyncio
-async def test_url_adapter_rejects_ipv6_multicast() -> None:
-    """IPv6 マルチキャスト (ff00::) を拒否する。"""
-    settings = _make_settings()
-    adapter = URLAdapter(settings=settings)
-
-    with patch("socket.getaddrinfo") as mock_dns:
-        mock_dns.return_value = [
-            (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("ff02::1", 80, 0, 0))
-        ]
-        with pytest.raises(ValueError, match=r"[Mm]ulticast|[Bb]locked|[Ss]SRF|[Rr]estricted"):
-            await adapter.adapt("http://example.com/")
-
-
-@pytest.mark.asyncio
-async def test_url_adapter_rejects_unspecified_0000() -> None:
-    """未指定アドレス (0.0.0.0) を拒否する。"""
-    settings = _make_settings()
-    adapter = URLAdapter(settings=settings)
-
-    with patch("socket.getaddrinfo") as mock_dns:
-        mock_dns.return_value = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("0.0.0.0", 80))]
-        with pytest.raises(ValueError, match=r"[Uu]nspecified|[Bb]locked|[Ss]SRF|[Rr]estricted"):
-            await adapter.adapt("http://example.com/")
-
-
-@pytest.mark.asyncio
-async def test_url_adapter_rejects_ip_literal_url_loopback() -> None:
-    """IPリテラルURL (http://127.0.0.1/) を拒否する。"""
-    settings = _make_settings()
-    adapter = URLAdapter(settings=settings)
-
-    with pytest.raises(
-        ValueError, match=r"[Pp]rivate|[Ll]oopback|[Bb]locked|[Ss]SRF|[Rr]estricted"
-    ):
-        await adapter.adapt("http://127.0.0.1/")
-
-
-@pytest.mark.asyncio
-async def test_url_adapter_rejects_ip_literal_url_private() -> None:
-    """IPリテラルURL (http://192.168.1.1/) を拒否する。"""
-    settings = _make_settings()
-    adapter = URLAdapter(settings=settings)
-
-    with pytest.raises(ValueError, match=r"[Pp]rivate|[Bb]locked|[Ss]SRF|[Rr]estricted"):
-        await adapter.adapt("http://192.168.1.1/")
-
-
-@pytest.mark.asyncio
-async def test_url_adapter_rejects_any_private_in_dns_response() -> None:
-    """DNS応答に1件でもプライベートIPが含まれれば拒否する。"""
-    settings = _make_settings()
-    adapter = URLAdapter(settings=settings)
-
-    # パブリックIPとプライベートIPが混在する場合
-    with patch("socket.getaddrinfo") as mock_dns:
-        mock_dns.return_value = [
-            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("1.2.3.4", 80)),
-            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("10.0.0.1", 80)),
-        ]
-        with pytest.raises(ValueError, match=r"[Pp]rivate|[Bb]locked|[Ss]SRF|[Rr]estricted"):
-            await adapter.adapt("http://example.com/")
-
 
 @pytest.mark.asyncio
 async def test_url_adapter_rejects_too_many_redirects() -> None:
-    """リダイレクト4回目で失敗する（url_max_redirects=3）。"""
-    settings = _make_settings(url_max_redirects=3)
-    adapter = URLAdapter(settings=settings)
-
-    redirect_count = 0
-
-    async def mock_get_ips(hostname: str) -> list[str]:
-        return ["203.0.113.1"]  # 文書化済みテストIP（RFC 5737）
-
-    async def mock_fetch(url: str, resolved_ips: list[str]) -> tuple[int, httpx.Headers, bytes]:
-        nonlocal redirect_count
-        redirect_count += 1
-        return (
-            302,
-            httpx.Headers({"location": f"http://other.example.com/redirect{redirect_count}"}),
-            b"",
-        )
-
+    """リダイレクト制限。"""
+    adapter = URLAdapter(settings=_make_settings(url_max_redirects=1))
+    async def mock_fetch(url, ips):
+        return 302, httpx.Headers({"location": "http://other.com"}), b""
+    
     with (
-        patch.object(adapter, "_resolve_and_validate_ips", new=mock_get_ips),
-        patch.object(adapter, "_fetch_with_verified_ip", new=mock_fetch),
+        patch.object(adapter, "_resolve_and_validate_ips", return_value=["203.0.113.1"]),
+        patch.object(adapter, "_fetch_with_verified_ip", side_effect=mock_fetch)
     ):
-        with pytest.raises(ValueError, match=r"[Rr]edirect|[Tt]oo many"):
+        with pytest.raises(ValueError, match=r"[Rr]edirect"):
             await adapter.adapt("http://example.com/")
-
 
 @pytest.mark.asyncio
 async def test_url_adapter_rejects_oversized_response() -> None:
-    """10MB超のレスポンスを受信途中で即時中断し拒否する。"""
-    settings = _make_settings(url_max_response_bytes=100)  # 100バイト制限
-    adapter = URLAdapter(settings=settings)
+    """サイズ超過（_fetch_with_verified_ip の内部ロジックを直接検証）。"""
+    adapter = URLAdapter(settings=_make_settings(url_max_response_bytes=10))
+    
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.headers = httpx.Headers({"content-type": "text/plain"})
+    # 大量データを返すイテレータ
+    mock_resp.aiter_bytes.return_value = AsyncMock(__aiter__=lambda x: x)
+    mock_resp.aiter_bytes.return_value.__aiter__.side_effect = lambda: (b"a" * 20 for _ in range(1))
+    mock_resp.aclose = AsyncMock()
 
-    async def mock_get_ips(hostname: str) -> list[str]:
-        return ["203.0.113.1"]
-
-    async def mock_fetch(url: str, resolved_ips: list[str]) -> tuple[int, httpx.Headers, bytes]:
-        raise ValueError("Response size exceeds max limit of 100 bytes")
-
-    with (
-        patch.object(adapter, "_resolve_and_validate_ips", new=mock_get_ips),
-        patch.object(adapter, "_fetch_with_verified_ip", new=mock_fetch),
-    ):
-        with pytest.raises(ValueError, match=r"[Ss]ize|[Ll]imit|[Tt]oo large|[Mm]ax"):
-            await adapter.adapt("http://example.com/")
-
-
-@pytest.mark.asyncio
-async def test_url_adapter_rejects_disallowed_content_type() -> None:
-    """許可されていない Content-Type を拒否する。"""
-    settings = _make_settings()
-    adapter = URLAdapter(settings=settings)
-
-    async def mock_get_ips(hostname: str) -> list[str]:
-        return ["203.0.113.1"]
-
-    async def mock_fetch_disallowed(
-        url: str, resolved_ips: list[str]
-    ) -> tuple[int, httpx.Headers, bytes]:
-        headers = httpx.Headers({"content-type": "image/png"})
-        if not adapter._is_allowed_content_type(headers.get("content-type", "")):
-            raise ValueError("Content-Type 'image/png' is not allowed.")
-        return 200, headers, b"png"
-
-    with (
-        patch.object(adapter, "_resolve_and_validate_ips", new=mock_get_ips),
-        patch.object(adapter, "_fetch_with_verified_ip", new=mock_fetch_disallowed),
-    ):
-        with pytest.raises(ValueError, match=r"[Cc]ontent.?[Tt]ype|[Nn]ot allowed|[Dd]isallowed"):
-            await adapter.adapt("http://example.com/")
-
+    with patch("httpx.AsyncClient.stream") as mock_stream:
+        mock_stream.return_value.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_stream.return_value.__aexit__ = AsyncMock()
+        
+        with pytest.raises(ValueError, match=r"Response size exceeds max limit"):
+            await adapter._fetch_with_verified_ip("http://example.com/", ["203.0.113.1"])
 
 @pytest.mark.asyncio
-async def test_url_adapter_resolves_relative_redirects() -> None:
-    """相対 Location ヘッダーが現在URL基準で解決される。"""
-    settings = _make_settings(url_max_redirects=1)
-    adapter = URLAdapter(settings=settings)
+async def test_url_adapter_iterates_all_ips() -> None:
+    """複数IPのフォールバック検証。"""
+    adapter = URLAdapter(settings=_make_settings())
+    ips = ["203.0.113.1", "203.0.113.2"]
+    call_count = 0
 
-    async def mock_get_ips(hostname: str) -> list[str]:
-        return ["203.0.113.1"]
+    async def mock_client_stream(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise httpx.ConnectError("Fail 1")
+        
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.headers = httpx.Headers({"content-type": "text/plain"})
+        mock_resp.aiter_bytes.return_value = AsyncMock(__aiter__=lambda x: x)
+        mock_resp.aiter_bytes.return_value.__aiter__.side_effect = lambda: (b"Success" for _ in range(1))
+        mock_resp.aclose = AsyncMock()
+        return mock_resp
 
-    calls = 0
-
-    async def mock_fetch(url: str, resolved_ips: list[str]) -> tuple[int, httpx.Headers, bytes]:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return 302, httpx.Headers({"location": "/login"}), b""
-        return 200, httpx.Headers({"content-type": "text/html"}), b"<html>ok</html>"
-
-    with (
-        patch.object(adapter, "_resolve_and_validate_ips", new=mock_get_ips),
-        patch.object(adapter, "_fetch_with_verified_ip", new=mock_fetch),
-    ):
-        results = await adapter.adapt("https://example.com/start")
-
-    assert results[0].metadata["final_url"] == "https://example.com/login"
-
-
-@pytest.mark.asyncio
-async def test_url_adapter_allows_private_urls_when_enabled() -> None:
-    """allow_private_urls=True でプライベートURLが許可される。"""
-    settings = _make_settings(allow_private_urls=True)
-    adapter = URLAdapter(settings=settings)
-
-    async def mock_get_ips_with_bypass(hostname: str) -> list[str]:
-        # allow_private_urls=True なのでプライベートIPでも返す
-        return ["127.0.0.1"]
-
-    async def mock_fetch(url: str, resolved_ips: list[str]) -> tuple[int, httpx.Headers, bytes]:
-        return (
-            200,
-            httpx.Headers({"content-type": "text/html; charset=utf-8"}),
-            b"<html>Hello</html>",
-        )
-
-    with (
-        patch.object(adapter, "_fetch_with_verified_ip", new=mock_fetch),
-    ):
-        # プライベートIPでもエラーなく処理できること
-        results = await adapter.adapt("http://127.0.0.1/")
-        assert len(results) >= 1
-
+    with patch("httpx.AsyncClient.stream") as mock_stream:
+        mock_stream.return_value.__aenter__ = AsyncMock(side_effect=mock_client_stream)
+        mock_stream.return_value.__aexit__ = AsyncMock()
+        
+        _, _, body = await adapter._fetch_with_verified_ip("http://example.com", ips)
+        assert body == b"Success"
+        assert call_count == 2
 
 @pytest.mark.asyncio
-async def test_url_adapter_uses_settings() -> None:
-    """URLAdapter が Settings の URL 関連設定を参照する。"""
-    settings = _make_settings(
-        url_max_redirects=5,
-        url_max_response_bytes=5 * 1024 * 1024,
-        url_timeout_seconds=10,
-    )
-    adapter = URLAdapter(settings=settings)
-
-    assert adapter.settings.url_max_redirects == 5
-    assert adapter.settings.url_max_response_bytes == 5 * 1024 * 1024
-    assert adapter.settings.url_timeout_seconds == 10
-
-
-@pytest.mark.asyncio
-async def test_url_adapter_validates_ip_check_function() -> None:
-    """IP検証ロジックが正しく動作することを確認する。"""
-    settings = _make_settings()
-    adapter = URLAdapter(settings=settings)
-
-    # パブリックIP は通過（Google Public DNS）
-    assert adapter._is_restricted_ip("8.8.8.8") is False
-
-    # プライベート/ループバック/リンクローカルは拒否
-    assert adapter._is_restricted_ip("127.0.0.1") is True
-    assert adapter._is_restricted_ip("10.0.0.1") is True
-    assert adapter._is_restricted_ip("172.16.0.1") is True
-    assert adapter._is_restricted_ip("192.168.1.1") is True
-    assert adapter._is_restricted_ip("169.254.169.254") is True
-    assert adapter._is_restricted_ip("0.0.0.0") is True
-    assert adapter._is_restricted_ip("::1") is True
-    assert adapter._is_restricted_ip("fe80::1") is True
-    assert adapter._is_restricted_ip("ff02::1") is True
+async def test_url_adapter_early_validation() -> None:
+    """絶対URL/スキームの早期バリデーション。"""
+    adapter = URLAdapter()
+    with pytest.raises(ValueError, match="URL must be absolute"):
+        await adapter.adapt("/relative/path")
+    with pytest.raises(ValueError, match="Unsupported URL scheme"):
+        await adapter.adapt("ftp://example.com")

@@ -81,6 +81,12 @@ class RetrievalPipeline:
         Returns:
             検索結果
         """
+        # ステップ 0: 入力バリデーションとクランプ
+        if not isinstance(top_k, int) or top_k < 1:
+            top_k = 10
+        if max_tokens is not None and (not isinstance(max_tokens, int) or max_tokens <= 0):
+            max_tokens = None
+
         # ステップ 1: クエリ分析
         strategy = self.query_analyzer.analyze(query)
         logger.info(
@@ -99,18 +105,22 @@ class RetrievalPipeline:
         )
         vector_results, keyword_results = await asyncio.gather(vector_task, keyword_task)
 
-        # ステップ 3: グラフ検索（ベクトル結果の上位3件を起点に実行）
+        # ステップ 3: グラフ検索 (ベクトル結果の上位3件を起点に実行)
         graph_memories: list[ScoredMemory] = []
         if strategy.graph_weight > 0 and vector_results:
             seed_ids = [r.memory.id for r in vector_results[:3]]
-            graph_result = await self.graph_traversal.traverse(
-                seed_ids=seed_ids,
-                edge_types=None,
-                depth=strategy.graph_depth,
-            )
-            # GraphResult のノードからメモリを取得し ScoredMemory に変換
-            if graph_result.nodes:
-                graph_memories = await self._resolve_graph_nodes(graph_result.nodes)
+            try:
+                graph_result = await self.graph_traversal.traverse(
+                    seed_ids=seed_ids,
+                    edge_types=None,
+                    depth=strategy.graph_depth,
+                )
+                # GraphResult のノードからメモリを取得し ScoredMemory に変換
+                if graph_result.nodes:
+                    graph_memories = await self._resolve_graph_nodes(graph_result.nodes)
+            except Exception as exc:
+                logger.error("Graph traversal failed: %s", exc, exc_info=True)
+                # グラフ検索失敗時は空リストのまま続行 (degraded behavior)
 
         logger.info(
             "Search completed. Vector: %d, Keyword: %d, Graph: %d",
@@ -127,7 +137,7 @@ class RetrievalPipeline:
         }
         fused = self.result_fusion.fuse_multiple_sources(results_dict, strategy)
 
-        # ステップ 5: fused_results を ScoredMemory に戻す（ID で lookup）
+        # ステップ 5: fused_results を ScoredMemory に戻す (ID で lookup)
         all_memories: dict[str, ScoredMemory] = {
             str(m.memory.id): m for src in results_dict.values() for m in src
         }
@@ -144,7 +154,7 @@ class RetrievalPipeline:
                     )
                 )
 
-        # ステップ 6: 後処理（トークン制限・アクセス記録更新）
+        # ステップ 6: 後処理 (トークン制限・アクセス記録更新)
         scored = await self.post_processor.process(
             results=scored,
             project=None,  # すでに _filter_fused_by_project でフィルタ済み

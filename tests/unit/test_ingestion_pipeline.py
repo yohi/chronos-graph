@@ -418,12 +418,12 @@ async def test_pipeline_metadata_propagation() -> None:
     )
 
     assert len(saved_memories) >= 1
+    # ステップ10: 最終検証
+    # 全ての保存済みメモリが正しいプロジェクトに属していることを確認
+    assert len(saved_memories) >= 1
     for memory in saved_memories:
-        if memory.project == "my-project":
-            assert memory.project == "my-project"
-            continue
-        if isinstance(memory.source_metadata, dict):
-            assert memory.source_metadata.get("project") == "my-project"
-            continue
-        assert hasattr(memory.source_metadata, "project")
-        assert getattr(memory.source_metadata, "project") == "my-project"
+        # Memory.project が最優先。常に設定されているはず。
+        assert memory.project == "my-project"
+        # セッションIDもメタデータにあれば検証
+        if "session_id" in memory.source_metadata:
+            assert memory.source_metadata["session_id"] == "sess-001"

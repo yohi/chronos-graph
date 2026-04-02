@@ -207,6 +207,7 @@ class _SSRFBlockingTransport(httpx.AsyncBaseTransport):
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         """検証済みIPへ接続するため、URLだけを差し替えて内部 transport に転送する。"""
+        # 元のURLからホスト名（およびポート番号を含む authority）を取得
         host = request.url.host
         if host is None:
             raise ValueError("request.url.host must not be None")
@@ -218,9 +219,14 @@ class _SSRFBlockingTransport(httpx.AsyncBaseTransport):
                 f"self._verified_ip must be a valid IP address: {self._verified_ip}"
             ) from exc
 
+        # ヘッダーの Host は元のリクエストから引き継ぐ（ポート番号等も維持される）
         headers = httpx.Headers(request.headers)
-        headers["Host"] = host
+        # もし Host ヘッダーがなければ URL の authority を使う
+        if "Host" not in headers:
+            headers["Host"] = request.url.netloc.decode("ascii")
+
         new_extensions = dict(request.extensions or {})
+        # SNI はポートを含まない純粋なホスト名を使用
         new_extensions["sni_hostname"] = host
         forwarded_request = httpx.Request(
             request.method,
@@ -319,49 +325,68 @@ class URLAdapter:
         """
         parsed = httpx.URL(url)
         hostname = parsed.host
-        first_ip = resolved_ips[0]
+        last_exception: Exception | None = None
 
-        # カスタムトランスポートで検証済みIPへルーティング
-        transport = _SSRFBlockingTransport(verified_ip=first_ip)
+        # 検証済みIPリストを順に試行する
+        for ip in resolved_ips:
+            # カスタムトランスポートで検証済みIPへルーティング
+            transport = _SSRFBlockingTransport(verified_ip=ip)
 
-        async with httpx.AsyncClient(
-            transport=transport,
-            follow_redirects=False,
-            timeout=float(self.settings.url_timeout_seconds),
-            verify=True,  # TLS証明書検証を強制
-        ) as client:
-            async with client.stream("GET", url, headers={"Host": hostname}) as response:
-                # リダイレクトまたは 2xx 以外はボディを読まずにステータスのみ返す
-                if response.status_code in (301, 302, 303, 307, 308) or not (
-                    200 <= response.status_code < 300
-                ):
-                    return response.status_code, response.headers, b""
+            try:
+                async with httpx.AsyncClient(
+                    transport=transport,
+                    follow_redirects=False,
+                    timeout=float(self.settings.url_timeout_seconds),
+                    verify=True,  # TLS証明書検証を強制
+                ) as client:
+                    async with client.stream(
+                        "GET", url, headers={"Host": hostname}
+                    ) as response:
+                        # リダイレクトまたは 2xx 以外はボディを読まずにステータスのみ返す
+                        if response.status_code in (301, 302, 303, 307, 308) or not (
+                            200 <= response.status_code < 300
+                        ):
+                            return response.status_code, response.headers, b""
 
-                # Content-Type チェック（ボディ読み込み前に実施）
-                content_type = response.headers.get("content-type", "")
-                if not self._is_allowed_content_type(content_type):
-                    raise ValueError(
-                        f"Content-Type '{content_type}' is not allowed. "
-                        f"Allowed types: {self.settings.url_allowed_content_types}"
-                    )
-
-                body_chunks: list[bytes] = []
-                total_bytes = 0
-                try:
-                    async for chunk in response.aiter_bytes():
-                        total_bytes += len(chunk)
-                        if total_bytes > self.settings.url_max_response_bytes:
+                        # Content-Type チェック（ボディ読み込み前に実施）
+                        content_type = response.headers.get("content-type", "")
+                        if not self._is_allowed_content_type(content_type):
                             raise ValueError(
-                                f"Response size exceeds max limit of "
-                                f"{self.settings.url_max_response_bytes} bytes"
+                                f"Content-Type '{content_type}' is not allowed. "
+                                f"Allowed types: {self.settings.url_allowed_content_types}"
                             )
-                        body_chunks.append(chunk)
-                except ValueError:
-                    raise
-                except Exception as exc:
-                    raise ValueError(f"Failed to read response body: {exc}") from exc
 
-                return response.status_code, response.headers, b"".join(body_chunks)
+                        body_chunks: list[bytes] = []
+                        total_bytes = 0
+                        async for chunk in response.aiter_bytes():
+                            total_bytes += len(chunk)
+                            if total_bytes > self.settings.url_max_response_bytes:
+                                raise ValueError(
+                                    f"Response size exceeds max limit of "
+                                    f"{self.settings.url_max_response_bytes} bytes"
+                                )
+                            body_chunks.append(chunk)
+
+                        return response.status_code, response.headers, b"".join(body_chunks)
+
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                # ネットワーク接続エラーの場合は次のIPを試す
+                last_exception = exc
+                continue
+            except ValueError:
+                # バリデーションエラー（サイズ超過等）は即座に再送
+                raise
+            except Exception as exc:
+                # その他のエラーも記録して次へ（または終了）
+                last_exception = exc
+                continue
+
+        # 全てのIPで失敗した場合
+        if last_exception:
+            raise ValueError(
+                f"Failed to connect to '{hostname}' via any resolved IPs: {last_exception}"
+            ) from last_exception
+        raise ValueError(f"Failed to connect to '{hostname}' (no valid IPs)")
 
     def _is_allowed_content_type(self, content_type: str) -> bool:
         """Content-Typeがホワイトリストに含まれるかを確認する。"""
@@ -385,7 +410,15 @@ class URLAdapter:
         # リダイレクト処理ループ
         for redirect_count in range(self.settings.url_max_redirects + 1):
             parsed_url = httpx.URL(url)
+
+            # バリデーション: 絶対URL、http/https、ホスト名の存在
+            if not parsed_url.is_absolute_url:
+                raise ValueError(f"URL must be absolute: {url}")
+            if parsed_url.scheme not in ("http", "https"):
+                raise ValueError(f"Unsupported URL scheme: {parsed_url.scheme}")
             hostname = parsed_url.host
+            if not hostname:
+                raise ValueError(f"URL must have a host: {url}")
 
             # DNS解決と検証
             resolved_ips = await self._resolve_and_validate_ips(hostname)

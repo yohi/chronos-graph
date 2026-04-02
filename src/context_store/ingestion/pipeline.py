@@ -15,6 +15,7 @@ import asyncio
 import hashlib
 import inspect
 import logging
+from uuid import UUID
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -288,12 +289,14 @@ class IngestionPipeline:
         # ========================================================
 
         # ステップ6: 永続化
-        memory_id = await self._storage.save_memory(memory)
+        raw_id = await self._storage.save_memory(memory)
+        # IDをUUIDに正規化（ストレージが文字列を返す場合があるため）
+        memory_id = UUID(raw_id) if isinstance(raw_id, str) else raw_id
         persisted_memory = memory.model_copy(update={"id": memory_id})
 
         # ステップ7: グラフノード作成
         await self._graph.create_node(
-            memory_id,
+            str(memory_id),
             {
                 "memory_type": persisted_memory.memory_type.value,
                 "source_type": persisted_memory.source_type.value,
@@ -335,12 +338,16 @@ class IngestionPipeline:
     async def _get_previous_memories(self, memory: Memory) -> list[Memory]:
         """時系列エッジ用に同一セッションまたはプロジェクトの直前候補を取得する。"""
         session_id = memory.source_metadata.get("session_id")
+        # プロジェクト内のメモリを全件取得（フィルタ条件が緩いので、ストレージ側で
+        # 本来は ORDER BY されるべきだが、プロトコルにないためアプリ側でソートする）
         candidates = await self._storage.list_by_filter(MemoryFilters(project=memory.project))
 
+        # IDを除外し、作成日時（降順）でソート
         previous_memories: list[Memory] = []
+        candidates = [c for c in candidates if str(c.id) != str(memory.id)]
+        candidates.sort(key=lambda x: x.created_at, reverse=True)
+
         for candidate in candidates:
-            if str(candidate.id) == str(memory.id):
-                continue
             candidate_session_id = candidate.source_metadata.get("session_id")
             if session_id and candidate_session_id == session_id:
                 previous_memories.append(candidate)

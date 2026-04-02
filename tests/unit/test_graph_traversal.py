@@ -5,15 +5,18 @@ from unittest.mock import AsyncMock, MagicMock
 from context_store.models.graph import GraphResult
 from context_store.retrieval.graph_traversal import GraphTraversal
 
+
 @pytest.fixture
 def graph_adapter():
     mock = MagicMock()
     mock.traverse = AsyncMock()
     return mock
 
+
 @pytest.fixture
 def graph_traversal(graph_adapter):
     return GraphTraversal(graph_adapter=graph_adapter)
+
 
 @pytest.mark.asyncio
 async def test_traverse_calls_adapter(graph_traversal, graph_adapter):
@@ -40,6 +43,7 @@ async def test_traverse_calls_adapter(graph_traversal, graph_adapter):
         depth=3,
     )
 
+
 @pytest.mark.asyncio
 async def test_traverse_handles_empty_results(graph_traversal, graph_adapter):
     """結果が空の場合に対応"""
@@ -52,6 +56,7 @@ async def test_traverse_handles_empty_results(graph_traversal, graph_adapter):
     assert result.nodes == []
     assert result.edges == []
 
+
 @pytest.mark.asyncio
 async def test_traverse_with_default_depth(graph_traversal, graph_adapter):
     """デフォルトのグラフ深さを使用"""
@@ -60,6 +65,7 @@ async def test_traverse_with_default_depth(graph_traversal, graph_adapter):
 
     call_args = graph_adapter.traverse.call_args
     assert call_args[1]["depth"] == 2  # デフォルト
+
 
 @pytest.mark.asyncio
 async def test_traverse_graceful_degradation_on_error(graph_traversal, graph_adapter):
@@ -76,6 +82,7 @@ async def test_traverse_graceful_degradation_on_error(graph_traversal, graph_ada
     assert result.partial is True
     assert result.timeout is False
 
+
 @pytest.mark.asyncio
 async def test_traverse_graceful_degradation_on_timeout(graph_traversal, graph_adapter):
     """タイムアウト時に partial と timeout が立った GraphResult を返す。"""
@@ -91,6 +98,7 @@ async def test_traverse_graceful_degradation_on_timeout(graph_traversal, graph_a
     assert result.partial is True
     assert result.timeout is True
 
+
 @pytest.mark.asyncio
 async def test_traverse_graceful_degradation_on_oserror(graph_traversal, graph_adapter):
     """OSError 時も graceful degradation で空結果を返す。"""
@@ -105,6 +113,7 @@ async def test_traverse_graceful_degradation_on_oserror(graph_traversal, graph_a
     assert result.traversal_depth == 0
     assert result.partial is True
     assert result.timeout is False
+
 
 @pytest.mark.asyncio
 async def test_traverse_seed_ids_converted_to_str(graph_traversal, graph_adapter):

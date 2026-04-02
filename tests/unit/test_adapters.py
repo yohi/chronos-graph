@@ -40,11 +40,13 @@ def test_raw_content_creation() -> None:
 # ConversationAdapter / ManualAdapter テスト（簡略）
 # ===========================================================================
 
+
 @pytest.mark.asyncio
 async def test_conversation_adapter_basic() -> None:
     adapter = ConversationAdapter()
     results = await adapter.adapt("User: 1\nAssistant: 1")
     assert len(results) >= 1
+
 
 @pytest.mark.asyncio
 async def test_manual_adapter_basic() -> None:
@@ -52,9 +54,11 @@ async def test_manual_adapter_basic() -> None:
     results = await adapter.adapt("test")
     assert len(results) == 1
 
+
 # ===========================================================================
 # URLAdapter テスト（主要ロジックに集中）
 # ===========================================================================
+
 
 def _make_settings(**kwargs: Any) -> Settings:
     defaults = {
@@ -65,6 +69,7 @@ def _make_settings(**kwargs: Any) -> Settings:
     defaults.update(kwargs)
     return Settings(**defaults)
 
+
 @pytest.mark.asyncio
 async def test_url_adapter_rejects_private_ips() -> None:
     """プライベートIPの拒否を確認。"""
@@ -74,25 +79,28 @@ async def test_url_adapter_rejects_private_ips() -> None:
         with pytest.raises(ValueError, match=r"[Pp]rivate|[Bb]locked"):
             await adapter.adapt("http://example.com/")
 
+
 @pytest.mark.asyncio
 async def test_url_adapter_rejects_too_many_redirects() -> None:
     """リダイレクト制限。"""
     adapter = URLAdapter(settings=_make_settings(url_max_redirects=1))
+
     async def mock_fetch(url, ips):
         return 302, httpx.Headers({"location": "http://other.com"}), b""
-    
+
     with (
         patch.object(adapter, "_resolve_and_validate_ips", return_value=["203.0.113.1"]),
-        patch.object(adapter, "_fetch_with_verified_ip", side_effect=mock_fetch)
+        patch.object(adapter, "_fetch_with_verified_ip", side_effect=mock_fetch),
     ):
         with pytest.raises(ValueError, match=r"[Rr]edirect"):
             await adapter.adapt("http://example.com/")
+
 
 @pytest.mark.asyncio
 async def test_url_adapter_rejects_oversized_response() -> None:
     """サイズ超過（_fetch_with_verified_ip の内部ロジックを直接検証）。"""
     adapter = URLAdapter(settings=_make_settings(url_max_response_bytes=10))
-    
+
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.headers = httpx.Headers({"content-type": "text/plain"})
@@ -104,9 +112,10 @@ async def test_url_adapter_rejects_oversized_response() -> None:
     with patch("httpx.AsyncClient.stream") as mock_stream:
         mock_stream.return_value.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_stream.return_value.__aexit__ = AsyncMock()
-        
+
         with pytest.raises(ValueError, match=r"Response size exceeds max limit"):
             await adapter._fetch_with_verified_ip("http://example.com/", ["203.0.113.1"])
+
 
 @pytest.mark.asyncio
 async def test_url_adapter_iterates_all_ips() -> None:
@@ -120,22 +129,25 @@ async def test_url_adapter_iterates_all_ips() -> None:
         call_count += 1
         if call_count == 1:
             raise httpx.ConnectError("Fail 1")
-        
+
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.headers = httpx.Headers({"content-type": "text/plain"})
         mock_resp.aiter_bytes.return_value = AsyncMock(__aiter__=lambda x: x)
-        mock_resp.aiter_bytes.return_value.__aiter__.side_effect = lambda: (b"Success" for _ in range(1))
+        mock_resp.aiter_bytes.return_value.__aiter__.side_effect = lambda: (
+            b"Success" for _ in range(1)
+        )
         mock_resp.aclose = AsyncMock()
         return mock_resp
 
     with patch("httpx.AsyncClient.stream") as mock_stream:
         mock_stream.return_value.__aenter__ = AsyncMock(side_effect=mock_client_stream)
         mock_stream.return_value.__aexit__ = AsyncMock()
-        
+
         _, _, body = await adapter._fetch_with_verified_ip("http://example.com", ips)
         assert body == b"Success"
         assert call_count == 2
+
 
 @pytest.mark.asyncio
 async def test_url_adapter_early_validation() -> None:

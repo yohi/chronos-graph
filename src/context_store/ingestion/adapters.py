@@ -339,9 +339,7 @@ class URLAdapter:
                     timeout=float(self.settings.url_timeout_seconds),
                     verify=True,  # TLS証明書検証を強制
                 ) as client:
-                    async with client.stream(
-                        "GET", url, headers={"Host": hostname}
-                    ) as response:
+                    async with client.stream("GET", url, headers={"Host": hostname}) as response:
                         # リダイレクトまたは 2xx 以外はボディを読まずにステータスのみ返す
                         if response.status_code in (301, 302, 303, 307, 308) or not (
                             200 <= response.status_code < 300

@@ -16,7 +16,7 @@ import hashlib
 import inspect
 import logging
 from dataclasses import dataclass
-from typing import Any, Protocol, Union, cast, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from context_store.embedding.protocols import EmbeddingProvider as BaseEmbeddingProvider
 from context_store.ingestion.adapters import ConversationAdapter, RawContent, URLAdapter

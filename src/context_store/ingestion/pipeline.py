@@ -220,7 +220,6 @@ class IngestionPipeline:
         session_id = base_metadata.get("session_id", "")
         source_type = chunk.source_type.value
         # 追加のメタデータを含めてキーを精緻化
-        document_id = chunk.metadata.get("document_id", "")
         url = chunk.metadata.get("url") or chunk.metadata.get("source_id", "")
         chunk_index = chunk.metadata.get("chunk_index", 0)
         memo_key = (
@@ -228,7 +227,6 @@ class IngestionPipeline:
             project_id,
             session_id,
             source_type,
-            document_id,
             url,
             chunk_index,
         )

@@ -27,11 +27,9 @@ WORKDIR /workspaces/chronos-graph
 # Copy dependency files first for better caching
 COPY pyproject.toml uv.lock ./
 
-# Install dependencies with uv (faster than pip)
-RUN uv sync --frozen --no-install-project
-
-# Install pre-commit for git hooks
-RUN uv pip install --system pre-commit
+# Install all dependencies at system level (for git hooks with volume mounts)
+# Note: --system required because volume mounts override .venv
+RUN UV_SYSTEM_PYTHON=1 uv sync --frozen --all-extras --system
 
 # Copy source code
 COPY src/ src/

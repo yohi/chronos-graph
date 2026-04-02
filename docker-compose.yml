@@ -6,7 +6,7 @@ services:
     volumes:
       - .:/workspaces/chronos-graph
     working_dir: /workspaces/chronos-graph
-    command: ["bash", "-c", "ruff check src/ tests/ && ruff format --check src/ tests/ && mypy src/"]
+    command: ["bash", "-c", "ruff check --no-cache src/ tests/ && ruff format --no-cache src/ tests/ && mypy src/"]
     profiles:
       - lint
 

@@ -45,35 +45,25 @@ class SourceAdapter(Protocol):
 
 
 class ConversationAdapter:
-    """会話トランスクリプトを RawContent リストに変換するアダプター。
-
-    1〜3ターンずつグループ化して RawContent を生成する。
-    """
-
-    MAX_TURNS_PER_CHUNK = 3
+    """会話トランスクリプトを RawContent に変換するアダプター。"""
 
     async def adapt(
         self, source: str, *, metadata: dict[str, Any] | None = None
     ) -> list[RawContent]:
-        """会話トランスクリプトを分割して RawContent リストを返す。"""
+        """会話トランスクリプト全体を1つの RawContent として返す。"""
         meta = metadata or {}
         turns = self._parse_turns(source)
 
         if not turns:
             return [RawContent(content=source, source_type=SourceType.CONVERSATION, metadata=meta)]
 
-        results: list[RawContent] = []
-        for i in range(0, len(turns), self.MAX_TURNS_PER_CHUNK):
-            chunk_turns = turns[i : i + self.MAX_TURNS_PER_CHUNK]
-            chunk_text = "\n".join(chunk_turns)
-            results.append(
-                RawContent(
-                    content=chunk_text,
-                    source_type=SourceType.CONVERSATION,
-                    metadata={**meta, "turn_start": i, "turn_end": i + len(chunk_turns) - 1},
-                )
+        return [
+            RawContent(
+                content="\n".join(turns),
+                source_type=SourceType.CONVERSATION,
+                metadata={**meta, "turn_start": 0, "turn_end": len(turns) - 1},
             )
-        return results
+        ]
 
     def _parse_turns(self, transcript: str) -> list[str]:
         """トランスクリプトを個々のターンに分割する。
@@ -258,21 +248,14 @@ class URLAdapter:
     def _is_restricted_ip(self, ip_str: str) -> bool:
         """IPアドレスが制限されたアドレスかどうかを判定する。
 
-        プライベート/ループバック/リンクローカル/マルチキャスト/未指定アドレスをブロック。
+        グローバルIP以外をブロック。
         """
         try:
             addr = ipaddress.ip_address(ip_str)
         except ValueError:
             return True  # 解析できない場合は拒否
 
-        return (
-            addr.is_private
-            or addr.is_loopback
-            or addr.is_link_local
-            or addr.is_multicast
-            or addr.is_unspecified
-            or addr.is_reserved
-        )
+        return not addr.is_global
 
     async def _resolve_and_validate_ips(self, hostname: str) -> list[str]:
         """ホスト名をDNS解決し、すべてのIPが安全かを検証する。
@@ -325,7 +308,7 @@ class URLAdapter:
         """
         parsed = httpx.URL(url)
         hostname = parsed.host
-        host_header = f"{hostname}:{parsed.port}" if parsed.port else hostname
+        host_header = parsed.netloc.decode("ascii")
         last_exception: Exception | None = None
 
         # 検証済みIPリストを順に試行する
@@ -453,10 +436,21 @@ class URLAdapter:
             # HTMLを Markdown/テキストに変換
             content_type = headers.get("content-type", "")
             content_type_main = content_type.split(";")[0].strip().lower()
+
+            charset = "utf-8"
+            match = re.search(r"charset=([\w-]+)", content_type, re.IGNORECASE)
+            if match:
+                charset = match.group(1)
+
+            try:
+                decoded_body = raw_body.decode(charset)
+            except (LookupError, UnicodeDecodeError):
+                decoded_body = raw_body.decode("utf-8", errors="replace")
+
             if "html" in content_type_main:
-                text_content = _html_to_text(raw_body.decode("utf-8", errors="replace"))
+                text_content = _html_to_text(decoded_body)
             else:
-                text_content = raw_body.decode("utf-8", errors="replace")
+                text_content = decoded_body
 
             return [
                 RawContent(

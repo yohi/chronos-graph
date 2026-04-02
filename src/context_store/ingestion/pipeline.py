@@ -364,7 +364,7 @@ class IngestionPipeline:
     async def _get_previous_memories(self, memory: Memory) -> list[Memory]:
         """時系列エッジ用に同一セッションまたはプロジェクトの直前候補を取得する。"""
         session_id = memory.source_metadata.get("session_id")
-        
+
         filters = MemoryFilters(
             project=memory.project,
             limit=1,

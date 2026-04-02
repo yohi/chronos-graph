@@ -37,7 +37,7 @@ def test_raw_content_creation() -> None:
 
 
 # ===========================================================================
-# ConversationAdapter / ManualAdapter テスト（簡略）
+# ConversationAdapter / ManualAdapter テスト(簡略)
 # ===========================================================================
 
 
@@ -56,7 +56,7 @@ async def test_manual_adapter_basic() -> None:
 
 
 # ===========================================================================
-# URLAdapter テスト（主要ロジックに集中）
+# URLAdapter テスト(主要ロジックに集中)
 # ===========================================================================
 
 
@@ -98,7 +98,7 @@ async def test_url_adapter_rejects_too_many_redirects() -> None:
 
 @pytest.mark.asyncio
 async def test_url_adapter_rejects_oversized_response() -> None:
-    """サイズ超過（_fetch_with_verified_ip の内部ロジックを直接検証）。"""
+    """サイズ超過(_fetch_with_verified_ip の内部ロジックを直接検証)。"""
     adapter = URLAdapter(settings=_make_settings(url_max_response_bytes=10))
 
     mock_resp = MagicMock()

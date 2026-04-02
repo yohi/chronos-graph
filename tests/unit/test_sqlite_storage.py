@@ -558,6 +558,28 @@ class TestListByFilter:
         assert str(other.id) not in ids
 
 
+class TestSqlInjection:
+    async def test_list_by_filter_order_by_injection(self, adapter):
+        # Malicious order_by to drop a table or cause syntax error
+        malicious_order = "id; DROP TABLE memories;"
+        filters = MemoryFilters(order_by=malicious_order)
+
+        # Before fix, this will likely raise aiosqlite.OperationalError (syntax error)
+        # We expect a StorageError with code 'INVALID_PARAMETER' after our fix.
+        with pytest.raises(StorageError) as exc_info:
+            await adapter.list_by_filter(filters)
+        assert exc_info.value.code == "INVALID_PARAMETER"
+
+    async def test_list_by_filter_limit_injection(self, adapter):
+        malicious_limit = "1; DROP TABLE memories;"
+        filters = MemoryFilters()
+        filters.limit = malicious_limit
+
+        with pytest.raises(StorageError) as exc_info:
+            await adapter.list_by_filter(filters)
+        assert exc_info.value.code == "INVALID_PARAMETER"
+
+
 # ---------------------------------------------------------------------------
 # GetVectorDimension Tests
 # ---------------------------------------------------------------------------

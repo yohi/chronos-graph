@@ -717,10 +717,56 @@ class SQLiteStorageAdapter:
             for original, prefixed in replacements.items():
                 prefixed_where = prefixed_where.replace(original, prefixed)
 
-        order_clause = (
-            f"ORDER BY {filters.order_by}" if filters.order_by else "ORDER BY m.created_at DESC"
-        )
-        limit_clause = f"LIMIT {filters.limit}" if getattr(filters, "limit", None) else ""
+        # ------------------------------------------------------------------
+        # ORDER BY validation (whitelist)
+        # ------------------------------------------------------------------
+        allowed_sort_columns = {
+            "id",
+            "content",
+            "memory_type",
+            "source_type",
+            "semantic_relevance",
+            "importance_score",
+            "access_count",
+            "last_accessed_at",
+            "created_at",
+            "updated_at",
+            "archived_at",
+            "project",
+        }
+
+        raw_order = (filters.order_by or "m.created_at DESC").strip()
+        parts = raw_order.split()
+        if not parts:
+            order_clause = "ORDER BY m.created_at DESC"
+        else:
+            # First part: Column name
+            col = parts[0].replace("m.", "")
+            if col not in allowed_sort_columns:
+                raise StorageError(f"Invalid sort column: {col}", code="INVALID_PARAMETER")
+
+            # Second part: ASC / DESC (optional)
+            direction = ""
+            if len(parts) > 1:
+                dir_part = parts[1].upper()
+                if dir_part not in ("ASC", "DESC"):
+                    raise StorageError(f"Invalid sort direction: {dir_part}", code="INVALID_PARAMETER")
+                direction = dir_part
+
+            order_clause = f"ORDER BY m.{col} {direction}".strip()
+
+        # ------------------------------------------------------------------
+        # LIMIT validation (integer check)
+        # ------------------------------------------------------------------
+        limit_clause = ""
+        if filters.limit is not None:
+            limit_val = filters.limit
+            if not isinstance(limit_val, int) or limit_val < 0:
+                raise StorageError(
+                    message="Limit must be a non-negative integer",
+                    code="INVALID_PARAMETER",
+                )
+            limit_clause = f"LIMIT {limit_val}"
 
         sql = (
             "SELECT m.*, me.embedding "

@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 import httpx
+from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,13 @@ class LiteLLMEmbeddingProvider:
         litellm = _get_litellm()
         all_results: list[list[float]] = []
 
+        retryer = AsyncRetrying(
+            stop=stop_after_attempt(3),
+            wait=wait_exponential(multiplier=1, min=2, max=10),
+            retry=retry_if_exception(_is_retryable),
+            reraise=True,
+        )
+
         for chunk_start in range(0, len(texts), self._chunk_size):
             chunk = texts[chunk_start : chunk_start + self._chunk_size]
             kwargs: dict[str, Any] = {"model": self._model, "input": chunk}
@@ -86,7 +94,10 @@ class LiteLLMEmbeddingProvider:
             if self._api_key:
                 kwargs["api_key"] = self._api_key
 
-            response = await litellm.aembedding(**kwargs)
+            async for attempt in retryer:
+                with attempt:
+                    response = await litellm.aembedding(**kwargs)
+
             chunk_embeddings = [item.embedding for item in response.data]
             all_results.extend(chunk_embeddings)
 

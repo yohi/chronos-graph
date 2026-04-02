@@ -105,6 +105,64 @@ class TestLiteLLMEmbeddingProvider:
 
         assert _is_retryable(ValueError("bad input")) is False
 
+    @pytest.mark.asyncio
+    async def test_embed_batch_retries_on_rate_limit(self, provider) -> None:
+        """Rate limit (429) エラー時にリトライが行われ、成功することを検証。"""
+        texts = ["Hello world"]
+        expected = [[0.1] * 1536]
+        
+        mock_response = MagicMock()
+        mock_response.data = [MagicMock(embedding=expected[0])]
+
+        call_count = 0
+        
+        async def mock_aembedding(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                # 1, 2回目は 429 エラー
+                raise httpx.HTTPStatusError(
+                    "Rate limit",
+                    request=MagicMock(),
+                    response=MagicMock(status_code=429),
+                )
+            return mock_response
+
+        mock_litellm = MagicMock()
+        mock_litellm.aembedding = mock_aembedding
+
+        with patch("context_store.embedding.litellm._get_litellm", return_value=mock_litellm):
+            # min=2 の exponential backoff のためテストに少し時間がかかる
+            results = await provider.embed_batch(texts)
+
+        assert call_count == 3
+        assert results == expected
+
+    @pytest.mark.asyncio
+    async def test_embed_batch_fails_after_max_retries(self, provider) -> None:
+        """最大リトライ回数を超えた場合は例外が送出されることを検証。"""
+        texts = ["Hello world"]
+        
+        call_count = 0
+        
+        async def mock_aembedding(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            raise httpx.HTTPStatusError(
+                "Rate limit",
+                request=MagicMock(),
+                response=MagicMock(status_code=429),
+            )
+
+        mock_litellm = MagicMock()
+        mock_litellm.aembedding = mock_aembedding
+
+        with patch("context_store.embedding.litellm._get_litellm", return_value=mock_litellm):
+            with pytest.raises(httpx.HTTPStatusError):
+                await provider.embed_batch(texts)
+
+        assert call_count == 3
+
 
 class TestCustomAPIEmbeddingProvider:
     """CustomAPIEmbeddingProvider のテスト。"""

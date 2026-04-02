@@ -132,6 +132,20 @@ class TestGraphTraversal:
         assert result.timeout is True
 
     @pytest.mark.asyncio
+    async def test_traverse_graceful_degradation_on_oserror(self, graph_traversal, graph_adapter):
+        """OSError 時も graceful degradation で空結果を返す。"""
+        graph_adapter.traverse.side_effect = OSError("Connection reset")
+        seed_ids = [UUID("00000000-0000-0000-0000-000000000010")]
+
+        result = await graph_traversal.traverse(seed_ids=seed_ids, edge_types=None, depth=2)
+
+        assert isinstance(result, GraphResult)
+        assert result.nodes == []
+        assert result.edges == []
+        assert result.partial is True
+        assert result.timeout is False
+
+    @pytest.mark.asyncio
     async def test_traverse_seed_ids_converted_to_str(self, graph_traversal, graph_adapter):
         """UUID が文字列に変換されてアダプターに渡されること"""
         seed_ids = [UUID("00000000-0000-0000-0000-000000000010")]

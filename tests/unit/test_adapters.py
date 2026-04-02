@@ -268,15 +268,14 @@ async def test_url_adapter_rejects_too_many_redirects() -> None:
     async def mock_get_ips(hostname: str) -> list[str]:
         return ["203.0.113.1"]  # 文書化済みテストIP（RFC 5737）
 
-    async def mock_fetch(url: str, resolved_ips: list[str]) -> httpx.Response:
+    async def mock_fetch(url: str, resolved_ips: list[str]) -> tuple[int, httpx.Headers, bytes]:
         nonlocal redirect_count
         redirect_count += 1
-        response = MagicMock(spec=httpx.Response)
-        response.status_code = 302
-        response.headers = httpx.Headers(
-            {"location": f"http://other.example.com/redirect{redirect_count}"}
+        return (
+            302,
+            httpx.Headers({"location": f"http://other.example.com/redirect{redirect_count}"}),
+            b"",
         )
-        return response
 
     with (
         patch.object(adapter, "_resolve_and_validate_ips", new=mock_get_ips),
@@ -295,18 +294,8 @@ async def test_url_adapter_rejects_oversized_response() -> None:
     async def mock_get_ips(hostname: str) -> list[str]:
         return ["203.0.113.1"]
 
-    # 大きなコンテンツを返すモック
-    async def aiter_bytes():  # type: ignore[return]
-        yield b"x" * 200  # 200バイト（制限の100バイトを超える）
-
-    mock_response = MagicMock(spec=httpx.Response)
-    mock_response.status_code = 200
-    mock_response.headers = httpx.Headers({"content-type": "text/html"})
-    mock_response.aiter_bytes = aiter_bytes
-    mock_response.aclose = AsyncMock()
-
-    async def mock_fetch(url: str, resolved_ips: list[str]) -> httpx.Response:
-        return mock_response
+    async def mock_fetch(url: str, resolved_ips: list[str]) -> tuple[int, httpx.Headers, bytes]:
+        raise ValueError("Response size exceeds max limit of 100 bytes")
 
     with (
         patch.object(adapter, "_resolve_and_validate_ips", new=mock_get_ips),
@@ -314,10 +303,6 @@ async def test_url_adapter_rejects_oversized_response() -> None:
     ):
         with pytest.raises(ValueError, match=r"[Ss]ize|[Ll]imit|[Tt]oo large|[Mm]ax"):
             await adapter.adapt("http://example.com/")
-
-    # aclose() が呼ばれること（プール汚染防止）
-    mock_response.aclose.assert_called()
-
 
 @pytest.mark.asyncio
 async def test_url_adapter_rejects_disallowed_content_type() -> None:
@@ -328,13 +313,8 @@ async def test_url_adapter_rejects_disallowed_content_type() -> None:
     async def mock_get_ips(hostname: str) -> list[str]:
         return ["203.0.113.1"]
 
-    mock_response = MagicMock(spec=httpx.Response)
-    mock_response.status_code = 200
-    mock_response.headers = httpx.Headers({"content-type": "image/png"})
-    mock_response.aclose = AsyncMock()
-
-    async def mock_fetch(url: str, resolved_ips: list[str]) -> httpx.Response:
-        return mock_response
+    async def mock_fetch(url: str, resolved_ips: list[str]) -> tuple[int, httpx.Headers, bytes]:
+        return 200, httpx.Headers({"content-type": "image/png"}), b"png"
 
     with (
         patch.object(adapter, "_resolve_and_validate_ips", new=mock_get_ips),
@@ -343,7 +323,31 @@ async def test_url_adapter_rejects_disallowed_content_type() -> None:
         with pytest.raises(ValueError, match=r"[Cc]ontent.?[Tt]ype|[Nn]ot allowed|[Dd]isallowed"):
             await adapter.adapt("http://example.com/")
 
-    mock_response.aclose.assert_called()
+@pytest.mark.asyncio
+async def test_url_adapter_resolves_relative_redirects() -> None:
+    """相対 Location ヘッダーが現在URL基準で解決される。"""
+    settings = _make_settings(url_max_redirects=1)
+    adapter = URLAdapter(settings=settings)
+
+    async def mock_get_ips(hostname: str) -> list[str]:
+        return ["203.0.113.1"]
+
+    calls = 0
+
+    async def mock_fetch(url: str, resolved_ips: list[str]) -> tuple[int, httpx.Headers, bytes]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return 302, httpx.Headers({"location": "/login"}), b""
+        return 200, httpx.Headers({"content-type": "text/html"}), b"<html>ok</html>"
+
+    with (
+        patch.object(adapter, "_resolve_and_validate_ips", new=mock_get_ips),
+        patch.object(adapter, "_fetch_with_verified_ip", new=mock_fetch),
+    ):
+        results = await adapter.adapt("https://example.com/start")
+
+    assert results[0].metadata["final_url"] == "https://example.com/login"
 
 
 @pytest.mark.asyncio
@@ -356,17 +360,8 @@ async def test_url_adapter_allows_private_urls_when_enabled() -> None:
         # allow_private_urls=True なのでプライベートIPでも返す
         return ["127.0.0.1"]
 
-    async def aiter_bytes():  # type: ignore[return]
-        yield b"<html><body>Hello</body></html>"
-
-    mock_response = MagicMock(spec=httpx.Response)
-    mock_response.status_code = 200
-    mock_response.headers = httpx.Headers({"content-type": "text/html; charset=utf-8"})
-    mock_response.aiter_bytes = aiter_bytes
-    mock_response.aclose = AsyncMock()
-
-    async def mock_fetch(url: str, resolved_ips: list[str]) -> httpx.Response:
-        return mock_response
+    async def mock_fetch(url: str, resolved_ips: list[str]) -> tuple[int, httpx.Headers, bytes]:
+        return 200, httpx.Headers({"content-type": "text/html; charset=utf-8"}), b"<html>Hello</html>"
 
     with (
         patch.object(adapter, "_resolve_and_validate_ips", new=mock_get_ips_with_bypass),

@@ -131,11 +131,18 @@ class RetrievalPipeline:
         all_memories: dict[str, ScoredMemory] = {
             str(m.memory.id): m for src in results_dict.values() for m in src
         }
+        filtered = self._filter_fused_by_project(fused, all_memories, project)
         scored: list[ScoredMemory] = []
-        for item in fused[:top_k]:
+        for item in filtered[:top_k]:
             base = all_memories.get(item["memory_id"])
             if base:
-                scored.append(base)
+                scored.append(
+                    ScoredMemory(
+                        memory=base.memory,
+                        score=float(item["final_score"]),
+                        source=base.source,
+                    )
+                )
 
         # ステップ 6: 後処理（プロジェクトフィルタ・トークン制限・アクセス記録更新）
         scored = await self.post_processor.process(
@@ -157,8 +164,23 @@ class RetrievalPipeline:
                 {"memory_id": str(m.memory.id), "content": m.memory.content, "score": m.score}
                 for m in scored
             ],
-            "total_count": len(fused),
+            "total_count": len(filtered),
         }
+
+    def _filter_fused_by_project(
+        self,
+        fused: list[dict[str, Any]],
+        all_memories: dict[str, ScoredMemory],
+        project: str | None,
+    ) -> list[dict[str, Any]]:
+        """project フィルタを top_k 適用前の fused 結果へ反映する。"""
+        if project is None:
+            return fused
+        return [
+            item
+            for item in fused
+            if (base := all_memories.get(item["memory_id"])) is not None and base.memory.project == project
+        ]
 
     async def _safe_search(
         self,

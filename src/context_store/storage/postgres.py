@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import Any
+from uuid import UUID
 
 import asyncpg  # type: ignore
 
@@ -157,9 +158,17 @@ class PostgresStorageAdapter:
         """Retrieve multiple memories by ID."""
         if not memory_ids:
             return []
+        cleaned_ids: list[str] = []
+        for memory_id in memory_ids:
+            try:
+                cleaned_ids.append(str(UUID(str(memory_id))))
+            except (TypeError, ValueError, AttributeError):
+                continue
+        if not cleaned_ids:
+            return []
         sql = "SELECT * FROM memories WHERE id = ANY($1::uuid[])"
         async with self._pool.acquire() as conn:
-            records = await conn.fetch(sql, memory_ids)
+            records = await conn.fetch(sql, cleaned_ids)
         memory_map = {str(record["id"]): _record_to_memory(dict(record)) for record in records}
         return [memory_map[memory_id] for memory_id in memory_ids if memory_id in memory_map]
 

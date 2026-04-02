@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 import logging
 from typing import Any, cast
 
@@ -81,11 +81,16 @@ class CustomAPIEmbeddingProvider:
         for chunk_start in range(0, len(texts), self._chunk_size):
             chunk = texts[chunk_start : chunk_start + self._chunk_size]
             response = await self._post({"texts": chunk})
+            if not isinstance(response, Mapping):
+                raise ValueError(
+                    "response must be a mapping containing response[\"embeddings\"]; "
+                    f"got {type(response).__name__}"
+                )
             embeddings = response.get("embeddings")
             if not isinstance(embeddings, list):
                 raise ValueError(
                     'response["embeddings"] must be a list before all_results.extend(...); '
-                    f"got {type(embeddings).__name__} for chunk size len(chunk)={len(chunk)}"
+                    f'got {type(embeddings).__name__} in response for len(chunk)={len(chunk)}'
                 )
             if len(embeddings) != len(chunk):
                 raise ValueError(
@@ -97,10 +102,17 @@ class CustomAPIEmbeddingProvider:
                 if not isinstance(embedding, Iterable) or isinstance(embedding, (str, bytes)):
                     raise ValueError(
                         'Each item in response["embeddings"] must be an iterable with length '
-                        f"self._dimension={self._dimension}; invalid item at index {index} "
+                        f"self._dimension={self._dimension}; invalid response[\"embeddings\"][{index}] "
                         f"for len(chunk)={len(chunk)}"
                     )
                 vector = list(embedding)
+                for element_index, value in enumerate(vector):
+                    if isinstance(value, bool) or not isinstance(value, (int, float)):
+                        raise ValueError(
+                            'Each value in response["embeddings"] must be an int or float; '
+                            f'invalid response["embeddings"][{index}][{element_index}]={value!r} '
+                            f"for self._dimension={self._dimension}"
+                        )
                 if len(vector) != self._dimension:
                     raise ValueError(
                         'Each vector in response["embeddings"] must match '

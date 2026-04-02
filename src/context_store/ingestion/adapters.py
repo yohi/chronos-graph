@@ -13,6 +13,7 @@ import socket
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Any, ClassVar, Protocol, cast, runtime_checkable
+from urllib.parse import urljoin
 
 import httpx
 
@@ -218,12 +219,14 @@ class _SSRFBlockingTransport(httpx.AsyncBaseTransport):
 
         headers = httpx.Headers(request.headers)
         headers["Host"] = host
+        new_extensions = dict(request.extensions or {})
+        new_extensions["sni_hostname"] = host
         forwarded_request = httpx.Request(
             request.method,
             request.url.copy_with(host=self._verified_ip),
             headers=headers,
             stream=request.stream,
-            extensions=request.extensions,
+            extensions=new_extensions,
         )
         return await self._transport.handle_async_request(forwarded_request)
 
@@ -306,7 +309,9 @@ class URLAdapter:
 
         return resolved_ips
 
-    async def _fetch_with_verified_ip(self, url: str, resolved_ips: list[str]) -> httpx.Response:
+    async def _fetch_with_verified_ip(
+        self, url: str, resolved_ips: list[str]
+    ) -> tuple[int, httpx.Headers, bytes]:
         """検証済みIPを使ってURLにHTTPリクエストを発行する。
 
         TLS SNI・Hostヘッダーは元のホスト名を維持する。
@@ -324,8 +329,24 @@ class URLAdapter:
             timeout=float(self.settings.url_timeout_seconds),
             verify=True,  # TLS証明書検証を強制
         ) as client:
-            response = await client.get(url, headers={"Host": hostname})
-            return response
+            async with client.stream("GET", url, headers={"Host": hostname}) as response:
+                body_chunks: list[bytes] = []
+                total_bytes = 0
+                try:
+                    async for chunk in response.aiter_bytes():
+                        total_bytes += len(chunk)
+                        if total_bytes > self.settings.url_max_response_bytes:
+                            raise ValueError(
+                                f"Response size exceeds max limit of "
+                                f"{self.settings.url_max_response_bytes} bytes"
+                            )
+                        body_chunks.append(chunk)
+                except ValueError:
+                    raise
+                except Exception as exc:
+                    raise ValueError(f"Failed to read response body: {exc}") from exc
+
+                return response.status_code, response.headers, b"".join(body_chunks)
 
     def _is_allowed_content_type(self, content_type: str) -> bool:
         """Content-Typeがホワイトリストに含まれるかを確認する。"""
@@ -355,52 +376,27 @@ class URLAdapter:
             resolved_ips = await self._resolve_and_validate_ips(hostname)
 
             # HTTPリクエスト発行
-            response = await self._fetch_with_verified_ip(url, resolved_ips)
+            status_code, headers, raw_body = await self._fetch_with_verified_ip(url, resolved_ips)
 
             # リダイレクト処理
-            if response.status_code in (301, 302, 303, 307, 308):
+            if status_code in (301, 302, 303, 307, 308):
                 if redirect_count >= self.settings.url_max_redirects:
-                    await response.aclose()
                     raise ValueError(
                         f"Too many redirects: exceeded url_max_redirects={self.settings.url_max_redirects}"
                     )
-                location = response.headers.get("location", "")
+                location = headers.get("location", "")
                 if not location:
-                    await response.aclose()
                     raise ValueError("Redirect response missing Location header")
-                await response.aclose()
-                url = location
+                url = urljoin(url, location)
                 continue
 
             # Content-Type 検証（ボディ読み込み前に実施）
-            content_type = response.headers.get("content-type", "")
+            content_type = headers.get("content-type", "")
             if not self._is_allowed_content_type(content_type):
-                await response.aclose()
                 raise ValueError(
                     f"Content-Type '{content_type}' is not allowed. "
                     f"Allowed types: {self.settings.url_allowed_content_types}"
                 )
-
-            # ストリーミング読み取り（サイズ上限チェック）
-            body_chunks: list[bytes] = []
-            total_bytes = 0
-            try:
-                async for chunk in response.aiter_bytes():
-                    total_bytes += len(chunk)
-                    if total_bytes > self.settings.url_max_response_bytes:
-                        await response.aclose()
-                        raise ValueError(
-                            f"Response size exceeds max limit of "
-                            f"{self.settings.url_max_response_bytes} bytes"
-                        )
-                    body_chunks.append(chunk)
-            except ValueError:
-                raise
-            except Exception as exc:
-                await response.aclose()
-                raise ValueError(f"Failed to read response body: {exc}") from exc
-
-            raw_body = b"".join(body_chunks)
 
             # HTMLを Markdown/テキストに変換
             content_type_main = content_type.split(";")[0].strip().lower()

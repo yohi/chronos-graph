@@ -240,6 +240,13 @@ class TestCustomAPIEmbeddingProvider:
                 await provider.embed_batch(["a"])
 
     @pytest.mark.asyncio
+    async def test_embed_batch_rejects_non_mapping_response(self, provider) -> None:
+        with patch.object(provider, "_post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = ["invalid"]
+            with pytest.raises(ValueError, match=r"response must be a mapping"):
+                await provider.embed_batch(["a"])
+
+    @pytest.mark.asyncio
     async def test_embed_batch_rejects_length_mismatch(self, provider) -> None:
         with patch.object(provider, "_post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = {"embeddings": [[0.1] * 768]}
@@ -251,4 +258,11 @@ class TestCustomAPIEmbeddingProvider:
         with patch.object(provider, "_post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = {"embeddings": [[0.1] * 767]}
             with pytest.raises(ValueError, match=r"dimension=768"):
+                await provider.embed_batch(["a"])
+
+    @pytest.mark.asyncio
+    async def test_embed_batch_rejects_non_numeric_embedding_values(self, provider) -> None:
+        with patch.object(provider, "_post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = {"embeddings": [[0.1] * 767 + ["bad"]]}
+            with pytest.raises(ValueError, match=r'response\["embeddings"\]\[0\]\[767\]'):
                 await provider.embed_batch(["a"])

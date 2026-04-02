@@ -57,6 +57,7 @@ def _make_mock_storage() -> StorageAdapter:
     storage = MagicMock(spec=StorageAdapter)
     storage.save_memory = AsyncMock(return_value=str(uuid4()))
     storage.vector_search = AsyncMock(return_value=[])
+    storage.list_by_filter = AsyncMock(return_value=[])
     storage.update_memory = AsyncMock(return_value=True)
     return storage
 
@@ -256,9 +257,8 @@ async def test_pipeline_concurrent_same_content_dedup() -> None:
 
     # 両方の呼び出しが完了すること
     assert len(results) == 2
-    # 排他制御により save_memory の呼び出し回数が制限されていること
-    # （最低1回は呼ばれる）
-    assert save_count >= 1
+    # 排他制御により save_memory が重複して呼ばれないこと
+    assert save_count == 1
 
 
 @pytest.mark.asyncio
@@ -319,6 +319,37 @@ async def test_pipeline_url_source() -> None:
         )
 
     assert len(results) >= 1
+
+
+@pytest.mark.asyncio
+async def test_pipeline_conversation_source_uses_conversation_adapter() -> None:
+    """会話ソースが ConversationAdapter 経由で turn メタデータを保持する。"""
+    saved_memories: list[Memory] = []
+
+    async def capture_save(memory: Memory) -> str:
+        saved_memories.append(memory)
+        return str(memory.id)
+
+    storage = _make_mock_storage()
+    storage.save_memory = capture_save
+    graph = _make_mock_graph()
+    embedding_provider = _make_mock_embedding_provider()
+
+    pipeline = IngestionPipeline(
+        storage=storage,
+        graph=graph,
+        embedding_provider=embedding_provider,
+    )
+
+    await pipeline.ingest(
+        "User: こんにちは\nAssistant: 了解です\nUser: 次へ",
+        source_type=SourceType.CONVERSATION,
+    )
+
+    assert saved_memories
+    assert saved_memories[0].source_type == SourceType.CONVERSATION
+    assert saved_memories[0].source_metadata["turn_start"] == 0
+    assert saved_memories[0].source_metadata["turn_end"] == 2
 
 
 # ===========================================================================

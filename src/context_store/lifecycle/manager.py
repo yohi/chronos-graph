@@ -461,7 +461,7 @@ class LifecycleManager:
         self._wal_checkpoint_fn = wal_checkpoint_fn
 
         if settings is not None:
-            self._save_count_threshold = _DEFAULT_SAVE_COUNT_THRESHOLD
+            self._save_count_threshold = settings.cleanup_save_count_threshold
             self._stale_lock_timeout_seconds = settings.stale_lock_timeout_seconds
             self._wal_truncate_size_bytes = settings.wal_truncate_size_bytes
             self._wal_passive_fail_consecutive_threshold = (
@@ -682,17 +682,19 @@ class LifecycleManager:
         wal_state.wal_failure_window.append(now)
 
         # TRUNCATE 判定:
-        # 連続失敗数が閾値超過 かつ WAL ファイルサイズが閾値超過
+        # (連続失敗数 OR ウィンドウ内失敗数 が閾値超過) かつ WAL ファイルサイズが閾値超過
         consecutive_exceeded = (
             wal_state.wal_consecutive_passive_failures
             >= self._wal_passive_fail_consecutive_threshold
         )
+        window_failure_count = len(wal_state.wal_failure_window)
+        window_exceeded = window_failure_count >= self._wal_passive_fail_window_count_threshold
         size_exceeded = (
             wal_state.wal_last_observed_size_bytes is not None
             and wal_state.wal_last_observed_size_bytes >= self._wal_truncate_size_bytes
         )
 
-        if consecutive_exceeded and size_exceeded:
+        if (consecutive_exceeded or window_exceeded) and size_exceeded:
             logger.warning(
                 "Attempting WAL TRUNCATE checkpoint (consecutive_failures=%d, size=%s).",
                 wal_state.wal_consecutive_passive_failures,

@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr = SecretStr("")
     local_model_name: str = "cl-nagoya/ruri-v3-310m"
     litellm_api_base: str = "http://localhost:4000"
+    litellm_model: str = "openai/text-embedding-3-small"
+    embedding_dimension: int = 1536
     custom_api_endpoint: str = ""
 
     # --- Lifecycle ---
@@ -97,6 +99,7 @@ class Settings(BaseSettings):
         openai_api_key = self.openai_api_key.get_secret_value()
         local_model_name = self.local_model_name.strip()
         litellm_api_base = self.litellm_api_base.strip()
+        litellm_model = self.litellm_model.strip()
         custom_api_endpoint = self.custom_api_endpoint.strip()
 
         if self.storage_backend == "postgres" and not postgres_password.strip():
@@ -109,8 +112,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 "LOCAL_MODEL_NAME は embedding_provider=local-model の場合に必須です。"
             )
-        if self.embedding_provider == "litellm" and not litellm_api_base:
-            raise ValueError("LITELLM_API_BASE は embedding_provider=litellm の場合に必須です。")
+        if self.embedding_provider == "litellm":
+            if not litellm_api_base:
+                raise ValueError("LITELLM_API_BASE は embedding_provider=litellm の場合に必須です。")
+            if not litellm_model:
+                raise ValueError("LITELLM_MODEL は embedding_provider=litellm の場合に必須です。")
         if self.embedding_provider == "custom-api" and not custom_api_endpoint:
             raise ValueError(
                 "CUSTOM_API_ENDPOINT は embedding_provider=custom-api の場合に必須です。"

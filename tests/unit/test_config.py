@@ -98,6 +98,22 @@ def test_embedding_provider_validation(default_settings):
         ),
         (
             {
+                "embedding_provider": "litellm",
+                "litellm_model": "",
+                "openai_api_key": "",
+            },
+            "LITELLM_MODEL",
+        ),
+        (
+            {
+                "embedding_provider": "litellm",
+                "litellm_model": "   ",
+                "openai_api_key": "",
+            },
+            "LITELLM_MODEL",
+        ),
+        (
+            {
                 "embedding_provider": "custom-api",
                 "custom_api_endpoint": "",
                 "openai_api_key": "",

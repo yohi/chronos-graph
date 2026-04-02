@@ -225,7 +225,9 @@ async def test_url_adapter_rejects_ip_literal_url_loopback() -> None:
     settings = _make_settings()
     adapter = URLAdapter(settings=settings)
 
-    with pytest.raises(ValueError, match=r"[Pp]rivate|[Ll]oopback|[Bb]locked|[Ss]SRF|[Rr]estricted"):
+    with pytest.raises(
+        ValueError, match=r"[Pp]rivate|[Ll]oopback|[Bb]locked|[Ss]SRF|[Rr]estricted"
+    ):
         await adapter.adapt("http://127.0.0.1/")
 
 

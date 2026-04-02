@@ -7,7 +7,7 @@ def make_settings(**kwargs) -> Settings:
         "storage_backend": "sqlite",
         "graph_enabled": True,
         "cache_backend": "inmemory",
-        "sqlite_db_path": None,  # Use None to avoid issues with individual :memory: DBs
+        "sqlite_db_path": "/tmp/context-store-test.db",
         "sqlite_max_concurrent_connections": 5,
         "sqlite_max_queued_requests": 20,
         "sqlite_acquire_timeout": 2.0,
@@ -21,13 +21,17 @@ def make_settings(**kwargs) -> Settings:
         "postgres_port": 5432,
         "postgres_user": "postgres",
         "postgres_db": "testdb",
-        "postgres_password": "test",
+        "redis_url": "redis://localhost:6379",
         "neo4j_uri": "bolt://localhost:7687",
         "neo4j_user": "neo4j",
         "neo4j_password": "test",
+        "embedding_provider": "openai",
         "openai_api_key": "sk-test",
+        "local_model_name": "cl-nagoya/ruri-v3-310m",
+        "litellm_api_base": "http://localhost:4000",
+        "custom_api_endpoint": "http://localhost:8080/embed",
     }
-    
+
     # Detect unknown override keys
     unknown = set(kwargs.keys()) - set(defaults.keys())
     if unknown:

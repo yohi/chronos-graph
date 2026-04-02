@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from context_store.storage.factory import create_storage
@@ -141,10 +140,8 @@ class TestPostgresBackend:
         mock_pool = MagicMock()
         mock_pool.close = AsyncMock()
         create_pool_mock = AsyncMock(return_value=mock_pool)
-        asyncpg_module = MagicMock(create_pool=create_pool_mock)
         with (
-            patch.dict(sys.modules, {"asyncpg": asyncpg_module}),
-            patch("asyncpg.create_pool", create_pool_mock),
+            patch("context_store.storage.postgres.asyncpg.create_pool", create_pool_mock),
             patch.object(
                 type(settings),
                 "postgres_dsn",
@@ -178,10 +175,8 @@ class TestPostgresBackend:
         mock_pool = MagicMock()
         mock_pool.close = AsyncMock()
         create_pool_mock = AsyncMock(return_value=mock_pool)
-        asyncpg_module = MagicMock(create_pool=create_pool_mock)
         with (
-            patch.dict(sys.modules, {"asyncpg": asyncpg_module}),
-            patch("asyncpg.create_pool", create_pool_mock),
+            patch("context_store.storage.postgres.asyncpg.create_pool", create_pool_mock),
             patch.object(
                 type(settings),
                 "postgres_dsn",

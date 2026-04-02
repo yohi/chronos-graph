@@ -22,8 +22,8 @@ class RetrievalResponse(TypedDict):
     results: list[dict[str, Any]]
     total_count: int
 
-SearchFunc = Callable[..., Awaitable[list[ScoredMemory]]]
 
+SearchFunc = Callable[..., Awaitable[list[ScoredMemory]]]
 
 
 class RetrievalPipeline:
@@ -74,8 +74,12 @@ class RetrievalPipeline:
         )
 
         # ステップ 2: ベクトル検索とキーワード検索を並列実行
-        vector_task = self._safe_search(self.vector_search.search, query, top_k, strategy.vector_weight)
-        keyword_task = self._safe_search(self.keyword_search.search, query, top_k, strategy.keyword_weight)
+        vector_task = self._safe_search(
+            self.vector_search.search, query, top_k, strategy.vector_weight
+        )
+        keyword_task = self._safe_search(
+            self.keyword_search.search, query, top_k, strategy.keyword_weight
+        )
         vector_results, keyword_results = await asyncio.gather(vector_task, keyword_task)
 
         # ステップ 3: グラフ検索（ベクトル結果の上位3件を起点に実行）
@@ -106,9 +110,7 @@ class RetrievalPipeline:
 
         # ステップ 5: fused_results を ScoredMemory に戻す（ID で lookup）
         all_memories: dict[str, ScoredMemory] = {
-            str(m.memory.id): m
-            for src in results_dict.values()
-            for m in src
+            str(m.memory.id): m for src in results_dict.values() for m in src
         }
         scored: list[ScoredMemory] = []
         for item in fused[:top_k]:
@@ -153,7 +155,9 @@ class RetrievalPipeline:
             results: list[ScoredMemory] = list(await search_func(query, top_k=top_k))
             return results
         except Exception as e:
-            logger.error("Search failed (%s): %s", getattr(search_func, "__qualname__", repr(search_func)), e)
+            logger.error(
+                "Search failed (%s): %s", getattr(search_func, "__qualname__", repr(search_func)), e
+            )
             return []
 
     async def _resolve_graph_nodes(

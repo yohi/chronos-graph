@@ -12,7 +12,7 @@ import re
 import socket
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
 import httpcore
 import httpx
@@ -189,11 +189,11 @@ class _SSRFBlockingBackend(httpcore.AsyncNetworkBackend):
         self._inner = inner or httpcore.AsyncConnectionPool()._network_backend  # type: ignore[attr-defined]
         # デフォルトのバックエンドを取得
         try:
-            from httpcore._backends.asyncio import AsyncIOBackend
+            from httpcore._backends.asyncio import AsyncIOBackend  # type: ignore[import-not-found]
 
             self._inner = AsyncIOBackend()
         except ImportError:
-            from httpcore._backends.anyio import AnyIOBackend
+            from httpcore._backends.anyio import AnyIOBackend  # type: ignore[import-not-found]
 
             self._inner = AnyIOBackend()
 
@@ -289,7 +289,7 @@ class URLAdapter:
         resolved_ips: list[str] = []
         for addr_info in addr_infos:
             # addr_info: (family, type, proto, canonname, sockaddr)
-            sockaddr = addr_info[4]
+            sockaddr = cast(tuple[str, object], addr_info[4])
             ip_str = sockaddr[0]  # IPv4: ("ip", port), IPv6: ("ip", port, flow, scope)
 
             if not self.settings.allow_private_urls and self._is_restricted_ip(ip_str):
@@ -314,7 +314,7 @@ class URLAdapter:
 
         # カスタムバックエンドで検証済みIPへルーティング
         backend = _SSRFBlockingBackend(verified_ip=first_ip)
-        transport = httpx.AsyncHTTPTransport(backend=backend)  # type: ignore[arg-type]
+        transport = httpx.AsyncHTTPTransport(backend=backend)  # type: ignore[call-arg]
 
         async with httpx.AsyncClient(
             transport=transport,

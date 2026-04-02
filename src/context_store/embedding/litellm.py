@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 import tenacity
-from tenacity import retry_if_exception, stop_after_attempt, wait_exponential
+from tenacity import retry_if_exception
 
 logger = logging.getLogger(__name__)
 

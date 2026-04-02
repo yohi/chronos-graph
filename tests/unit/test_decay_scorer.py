@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
-
 import pytest
 
 from context_store.lifecycle.decay_scorer import DecayScorer

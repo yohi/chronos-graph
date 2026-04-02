@@ -130,7 +130,7 @@ async def test_url_adapter_rejects_loopback_ip() -> None:
     with patch("socket.getaddrinfo") as mock_dns:
         mock_dns.return_value = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 80))]
         with pytest.raises(
-            ValueError, match="[Pp]rivate|[Ll]oopback|[Bb]locked|[Ss]SRF|[Rr]estricted"
+            ValueError, match=r"[Pp]rivate|[Ll]oopback|[Bb]locked|[Ss]SRF|[Rr]estricted"
         ):
             await adapter.adapt("http://example.com/")
 
@@ -143,7 +143,7 @@ async def test_url_adapter_rejects_private_10_x() -> None:
 
     with patch("socket.getaddrinfo") as mock_dns:
         mock_dns.return_value = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("10.1.2.3", 80))]
-        with pytest.raises(ValueError, match="[Pp]rivate|[Bb]locked|[Ss]SRF|[Rr]estricted"):
+        with pytest.raises(ValueError, match=r"[Pp]rivate|[Bb]locked|[Ss]SRF|[Rr]estricted"):
             await adapter.adapt("http://example.com/")
 
 
@@ -158,7 +158,7 @@ async def test_url_adapter_rejects_link_local_169() -> None:
             (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("169.254.169.254", 80))
         ]
         with pytest.raises(
-            ValueError, match="[Pp]rivate|[Ll]ink.local|[Bb]locked|[Ss]SRF|[Rr]estricted"
+            ValueError, match=r"[Pp]rivate|[Ll]ink.local|[Bb]locked|[Ss]SRF|[Rr]estricted"
         ):
             await adapter.adapt("http://example.com/")
 
@@ -172,7 +172,7 @@ async def test_url_adapter_rejects_ipv6_loopback() -> None:
     with patch("socket.getaddrinfo") as mock_dns:
         mock_dns.return_value = [(socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("::1", 80, 0, 0))]
         with pytest.raises(
-            ValueError, match="[Pp]rivate|[Ll]oopback|[Bb]locked|[Ss]SRF|[Rr]estricted"
+            ValueError, match=r"[Pp]rivate|[Ll]oopback|[Bb]locked|[Ss]SRF|[Rr]estricted"
         ):
             await adapter.adapt("http://example.com/")
 
@@ -188,7 +188,7 @@ async def test_url_adapter_rejects_ipv6_link_local() -> None:
             (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("fe80::1", 80, 0, 0))
         ]
         with pytest.raises(
-            ValueError, match="[Pp]rivate|[Ll]ink.local|[Bb]locked|[Ss]SRF|[Rr]estricted"
+            ValueError, match=r"[Pp]rivate|[Ll]ink.local|[Bb]locked|[Ss]SRF|[Rr]estricted"
         ):
             await adapter.adapt("http://example.com/")
 
@@ -203,7 +203,7 @@ async def test_url_adapter_rejects_ipv6_multicast() -> None:
         mock_dns.return_value = [
             (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("ff02::1", 80, 0, 0))
         ]
-        with pytest.raises(ValueError, match="[Mm]ulticast|[Bb]locked|[Ss]SRF|[Rr]estricted"):
+        with pytest.raises(ValueError, match=r"[Mm]ulticast|[Bb]locked|[Ss]SRF|[Rr]estricted"):
             await adapter.adapt("http://example.com/")
 
 
@@ -215,7 +215,7 @@ async def test_url_adapter_rejects_unspecified_0000() -> None:
 
     with patch("socket.getaddrinfo") as mock_dns:
         mock_dns.return_value = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("0.0.0.0", 80))]
-        with pytest.raises(ValueError, match="[Uu]nspecified|[Bb]locked|[Ss]SRF|[Rr]estricted"):
+        with pytest.raises(ValueError, match=r"[Uu]nspecified|[Bb]locked|[Ss]SRF|[Rr]estricted"):
             await adapter.adapt("http://example.com/")
 
 
@@ -225,7 +225,7 @@ async def test_url_adapter_rejects_ip_literal_url_loopback() -> None:
     settings = _make_settings()
     adapter = URLAdapter(settings=settings)
 
-    with pytest.raises(ValueError, match="[Pp]rivate|[Ll]oopback|[Bb]locked|[Ss]SRF|[Rr]estricted"):
+    with pytest.raises(ValueError, match=r"[Pp]rivate|[Ll]oopback|[Bb]locked|[Ss]SRF|[Rr]estricted"):
         await adapter.adapt("http://127.0.0.1/")
 
 
@@ -235,7 +235,7 @@ async def test_url_adapter_rejects_ip_literal_url_private() -> None:
     settings = _make_settings()
     adapter = URLAdapter(settings=settings)
 
-    with pytest.raises(ValueError, match="[Pp]rivate|[Bb]locked|[Ss]SRF|[Rr]estricted"):
+    with pytest.raises(ValueError, match=r"[Pp]rivate|[Bb]locked|[Ss]SRF|[Rr]estricted"):
         await adapter.adapt("http://192.168.1.1/")
 
 
@@ -251,7 +251,7 @@ async def test_url_adapter_rejects_any_private_in_dns_response() -> None:
             (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("1.2.3.4", 80)),
             (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("10.0.0.1", 80)),
         ]
-        with pytest.raises(ValueError, match="[Pp]rivate|[Bb]locked|[Ss]SRF|[Rr]estricted"):
+        with pytest.raises(ValueError, match=r"[Pp]rivate|[Bb]locked|[Ss]SRF|[Rr]estricted"):
             await adapter.adapt("http://example.com/")
 
 

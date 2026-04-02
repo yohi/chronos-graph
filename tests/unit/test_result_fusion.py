@@ -115,7 +115,6 @@ class TestResultFusion:
     def test_fusion_returns_sorted_results(self, result_fusion, sample_results, search_strategy):
         """結果がスコア順にソートされること"""
         # 複数の検索結果を作成（異なるスコアで）
-        datetime.now(timezone.utc)
         results_dict = {
             MemorySource.VECTOR: sample_results,
             MemorySource.KEYWORD: [],

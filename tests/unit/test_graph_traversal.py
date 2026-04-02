@@ -1,7 +1,9 @@
 """Graph Traversal のテスト"""
-import pytest
+
 from unittest.mock import AsyncMock
 from uuid import UUID
+
+import pytest
 
 from context_store.retrieval.graph_traversal import GraphTraversal
 from context_store.models.graph import GraphResult, Edge
@@ -77,6 +79,11 @@ class TestGraphTraversal:
         assert isinstance(result, GraphResult)
         assert len(result.nodes) == 2
         assert result.nodes[0]["score"] == 0.85
+        graph_traversal.graph_adapter.traverse.assert_called_once_with(
+            seed_ids=[str(seed_ids[0])],
+            edge_types=[],
+            depth=2,
+        )
 
     @pytest.mark.asyncio
     async def test_traverse_handles_empty_results(self, graph_traversal, graph_adapter):
@@ -101,7 +108,7 @@ class TestGraphTraversal:
     @pytest.mark.asyncio
     async def test_traverse_graceful_degradation_on_error(self, graph_traversal, graph_adapter):
         """グラフアダプター失敗時に空の GraphResult を返す（Graceful Degradation）"""
-        graph_adapter.traverse.side_effect = Exception("Connection failed")
+        graph_adapter.traverse.side_effect = ConnectionError("Connection failed")
         seed_ids = [UUID("00000000-0000-0000-0000-000000000010")]
 
         result = await graph_traversal.traverse(seed_ids=seed_ids, edge_types=None, depth=2)
@@ -109,6 +116,8 @@ class TestGraphTraversal:
         assert isinstance(result, GraphResult)
         assert result.nodes == []
         assert result.edges == []
+        assert result.partial is False
+        assert result.timeout is False
 
     @pytest.mark.asyncio
     async def test_traverse_seed_ids_converted_to_str(self, graph_traversal, graph_adapter):

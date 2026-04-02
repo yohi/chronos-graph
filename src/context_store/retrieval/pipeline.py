@@ -2,19 +2,28 @@
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Awaitable, Callable, TypedDict
 
-from context_store.retrieval.query_analyzer import QueryAnalyzer
-from context_store.retrieval.vector_search import VectorSearch
-from context_store.retrieval.keyword_search import KeywordSearch
-from context_store.retrieval.graph_traversal import GraphTraversal
-from context_store.retrieval.result_fusion import ResultFusion
-from context_store.retrieval.post_processor import PostProcessor
 from context_store.models.memory import MemorySource, ScoredMemory
-from context_store.models.search import SearchResult
+from context_store.retrieval.graph_traversal import GraphTraversal
+from context_store.retrieval.keyword_search import KeywordSearch
+from context_store.retrieval.post_processor import PostProcessor
+from context_store.retrieval.query_analyzer import QueryAnalyzer
+from context_store.retrieval.result_fusion import ResultFusion
+from context_store.retrieval.vector_search import VectorSearch
 from context_store.storage.protocols import StorageAdapter
 
 logger = logging.getLogger(__name__)
+
+
+class RetrievalResponse(TypedDict):
+    query: str
+    strategy: dict[str, Any]
+    results: list[dict[str, Any]]
+    total_count: int
+
+SearchFunc = Callable[..., Awaitable[list[ScoredMemory]]]
+
 
 
 class RetrievalPipeline:
@@ -44,7 +53,7 @@ class RetrievalPipeline:
         project: str | None = None,
         top_k: int = 10,
         max_tokens: int | None = None,
-    ) -> dict[str, Any]:
+    ) -> RetrievalResponse:
         """
         統合検索を実行
 
@@ -96,7 +105,6 @@ class RetrievalPipeline:
         fused = self.result_fusion.fuse_multiple_sources(results_dict, strategy)
 
         # ステップ 5: fused_results を ScoredMemory に戻す（ID で lookup）
-        fused_ids = [item["memory_id"] for item in fused[:top_k]]
         all_memories: dict[str, ScoredMemory] = {
             str(m.memory.id): m
             for src in results_dict.values()
@@ -133,7 +141,7 @@ class RetrievalPipeline:
 
     async def _safe_search(
         self,
-        search_func: Any,
+        search_func: SearchFunc,
         query: str,
         top_k: int,
         weight: float,
@@ -142,9 +150,10 @@ class RetrievalPipeline:
         if weight <= 0:
             return []
         try:
-            return await search_func(query, top_k=top_k)
+            results: list[ScoredMemory] = list(await search_func(query, top_k=top_k))
+            return results
         except Exception as e:
-            logger.error(f"Search failed ({search_func.__self__.__class__.__name__}): {e}")
+            logger.error("Search failed (%s): %s", getattr(search_func, "__qualname__", repr(search_func)), e)
             return []
 
     async def _resolve_graph_nodes(

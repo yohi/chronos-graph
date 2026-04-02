@@ -1,15 +1,23 @@
 """Result Fusion - RRF + 複合スコアリング"""
 
 from datetime import datetime, timezone
-from typing import Any, cast
-from context_store.models.search import SearchStrategy, ScoredMemory
-from context_store.models.memory import MemorySource
+from typing import Any, TypedDict, cast
+
+from context_store.models.memory import Memory, MemorySource, ScoredMemory
+from context_store.models.search import SearchStrategy
+
+
+class MemoryScore(TypedDict):
+    memory: Memory
+    vector_rank: int | None
+    keyword_rank: int | None
+    graph_rank: int | None
 
 
 class ResultFusion:
     """RRF (Reciprocal Rank Fusion) + 時間減衰 + 複合スコアリング"""
 
-    def __init__(self, k: int = 60, half_life_days: int = 30):
+    def __init__(self, k: int = 60, half_life_days: int = 30) -> None:
         """
         初期化
 
@@ -17,6 +25,8 @@ class ResultFusion:
             k: RRF定数
             half_life_days: 時間減衰の半減期（日）
         """
+        if half_life_days <= 0:
+            raise ValueError("half_life_days must be greater than zero")
         self.k = k
         self.half_life_days = half_life_days
 
@@ -44,7 +54,7 @@ class ResultFusion:
             return []
 
         # 理論上の最大スコアを計算
-        max_possible_score = weights_sum * (1.0 / (k + 2))
+        max_possible_score = weights_sum * (1.0 / (k + 1))
         if max_possible_score <= 0.0:
             return [0.0] * len(scores)
 
@@ -108,6 +118,10 @@ class ResultFusion:
             時間減衰スコア（[0.0, 1.0]）
         """
         now = datetime.now(timezone.utc)
+        if last_accessed_at.tzinfo is None:
+            last_accessed_at = last_accessed_at.replace(tzinfo=timezone.utc)
+        else:
+            last_accessed_at = last_accessed_at.astimezone(timezone.utc)
         delta = now - last_accessed_at
         days_elapsed = delta.days
 
@@ -179,7 +193,7 @@ class ResultFusion:
             統合されたスコア付き結果
         """
         # メモリIDごとに結果を集計
-        memory_scores: dict[str, dict[str, Any]] = {}
+        memory_scores: dict[str, MemoryScore] = {}
 
         # ベクトル検索結果
         for rank, result in enumerate(results_dict.get(MemorySource.VECTOR, [])):

@@ -45,10 +45,14 @@ class TestLocalModelEmbeddingProvider:
         from context_store.embedding.local_model import LocalModelEmbeddingProvider
 
         with patch("context_store.embedding.local_model.SentenceTransformer") as mock_cls:
-            mock_cls.return_value = self._make_mock_model()
-            LocalModelEmbeddingProvider(model_name="test-model")
+            mock_model = self._make_mock_model()
+            mock_cls.return_value = mock_model
+            provider = LocalModelEmbeddingProvider(model_name="test-model")
             # インスタンス作成時点では SentenceTransformer は呼ばれない
             mock_cls.assert_not_called()
+            loaded = provider._get_model()
+            mock_cls.assert_called_once_with("test-model")
+            assert loaded is mock_model
 
     @pytest.mark.asyncio
     async def test_embed_single_text(self) -> None:

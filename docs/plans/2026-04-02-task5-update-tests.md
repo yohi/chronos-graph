@@ -1,7 +1,5 @@
 # Task 5: Update Tests (Assertions & Mocking) Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
 **Goal:** Update unit tests to improve assertions and mocking reliability.
 
 **Architecture:** Surgical updates to existing test files. Adding `traversal_depth` check to SQLite graph tests, fixing mock pool disposal in Postgres storage factory tests, and cleaning up redundant imports.
@@ -10,7 +8,7 @@
 
 ---
 
-### Task 1: Update `tests/unit/test_sqlite_graph.py`
+## Task 1: Update `tests/unit/test_sqlite_graph.py`
 
 **Files:**
 - Modify: `tests/unit/test_sqlite_graph.py`
@@ -29,14 +27,14 @@ Expected: PASS
 
 ---
 
-### Task 2: Update `tests/unit/test_storage_factory.py`
+## Task 2: Update `tests/unit/test_storage_factory.py`
 
 **Files:**
 - Modify: `tests/unit/test_storage_factory.py`
 
-**Step 1: Remove redundant imports**
+**Step 1: Keep required imports**
 Around line 128:
-Remove `from unittest.mock import AsyncMock, patch`.
+Keep `from unittest.mock import AsyncMock, patch` because later steps use `AsyncMock`.
 
 **Step 2: Fix mock pool in `test_postgres_returns_postgres_adapter`**
 Around line 184:
@@ -64,7 +62,7 @@ Expected: PASS
 
 ---
 
-### Task 3: Run all unit tests
+## Task 3: Run all unit tests
 
 **Step 1: Run all unit tests**
 Run: `pytest tests/unit/`

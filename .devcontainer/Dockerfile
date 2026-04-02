@@ -28,8 +28,7 @@ WORKDIR /workspaces/chronos-graph
 COPY pyproject.toml uv.lock ./
 
 # Install all dependencies at system level (for git hooks with volume mounts)
-# Note: --system required because volume mounts override .venv
-RUN UV_SYSTEM_PYTHON=1 uv sync --frozen --all-extras --system
+RUN uv pip install --system -e ".[dev,storage-postgres]"
 
 # Copy source code
 COPY src/ src/

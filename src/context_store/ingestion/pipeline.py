@@ -203,10 +203,8 @@ class IngestionPipeline:
         lock = await self._get_content_lock(content_hash)
 
         async with lock:
-            cached_result = self._content_results.get(content_hash)
-            if cached_result is not None:
-                result = cached_result
-            else:
+            result: IngestionResult | None = self._content_results.get(content_hash)
+            if result is None:
                 result = await self._process_chunk_locked(
                     chunk,
                     base_metadata=base_metadata,

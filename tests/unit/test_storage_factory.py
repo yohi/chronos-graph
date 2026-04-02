@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+
+# Mock asyncpg if not installed to avoid ModuleNotFoundError during patch resolution
+if "asyncpg" not in sys.modules:
+    sys.modules["asyncpg"] = MagicMock()
 
 from context_store.storage.factory import create_storage
 from context_store.storage.inmemory import InMemoryCacheAdapter
@@ -140,8 +145,9 @@ class TestPostgresBackend:
         mock_pool = MagicMock()
         mock_pool.close = AsyncMock()
         create_pool_mock = AsyncMock(return_value=mock_pool)
+
         with (
-            patch("context_store.storage.postgres.asyncpg.create_pool", create_pool_mock),
+            patch("asyncpg.create_pool", create_pool_mock),
             patch.object(
                 type(settings),
                 "postgres_dsn",
@@ -157,7 +163,6 @@ class TestPostgresBackend:
                 assert isinstance(storage, PostgresStorageAdapter)
                 assert graph_adp is None  # postgres + graph_enabled=False
             finally:
-                storage._pool = mock_pool
                 await dispose_adapters(storage, graph_adp, cache_adp)
 
     async def test_postgres_graph_disabled(self, tmp_path: Path) -> None:
@@ -176,7 +181,7 @@ class TestPostgresBackend:
         mock_pool.close = AsyncMock()
         create_pool_mock = AsyncMock(return_value=mock_pool)
         with (
-            patch("context_store.storage.postgres.asyncpg.create_pool", create_pool_mock),
+            patch("asyncpg.create_pool", create_pool_mock),
             patch.object(
                 type(settings),
                 "postgres_dsn",
@@ -189,7 +194,6 @@ class TestPostgresBackend:
             try:
                 assert graph_adp is None
             finally:
-                storage._pool = mock_pool
                 await dispose_adapters(storage, graph_adp, cache_adp)
 
 

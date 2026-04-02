@@ -15,7 +15,7 @@ validation tests.
 
 **Files:**
 
-- Modify: `tests/unit/test_config.py:160-170`
+- Modify: `tests/unit/test_config.py`
 
 ### Step 1: Write the updated test cases
 
@@ -28,17 +28,5 @@ Add the following entries to the `parametrize` list in
 
 ### Step 2: Run test to verify it passes
 
-Since the `Settings` model already has `ge=0` or `ge=1` constraints for these
-fields, the tests should pass immediately if the implementation is correct.
-
-Run:
-`pytest tests/unit/test_config.py::\`
-`test_numeric_settings_reject_out_of_range_values -v`
-Expected: ALL PASS (including the newly added cases)
-
-### Step 3: Commit
-
-```bash
-git add tests/unit/test_config.py
-git commit -m "test: add missing WAL numeric boundary cases to config tests"
-```
+Verify with `pytest tests/unit/test_config.py`.
+Expected: ALL PASS (including the newly added cases).

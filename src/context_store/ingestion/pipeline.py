@@ -13,11 +13,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import inspect
 import logging
 from uuid import UUID
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 from context_store.config import Settings
 from context_store.embedding.protocols import EmbeddingProvider

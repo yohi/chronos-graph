@@ -48,6 +48,7 @@ class TestLocalModelEmbeddingProvider:
             mock_model = self._make_mock_model()
             mock_cls.return_value = mock_model
             provider = LocalModelEmbeddingProvider(model_name="test-model")
+            assert isinstance(provider, EmbeddingProvider)
             # インスタンス作成時点では SentenceTransformer は呼ばれない
             mock_cls.assert_not_called()
             loaded = provider._get_model()

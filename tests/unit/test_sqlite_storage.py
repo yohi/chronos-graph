@@ -579,6 +579,31 @@ class TestSqlInjection:
             await adapter.list_by_filter(filters)
         assert exc_info.value.code == "INVALID_PARAMETER"
 
+    async def test_list_by_filter_valid_parameters(self, adapter):
+        # 1. Whitelisted order_by (ASC/DESC)
+        filters = MemoryFilters(order_by="id ASC")
+        # Should NOT raise StorageError
+        await adapter.list_by_filter(filters)
+
+        filters = MemoryFilters(order_by="id DESC")
+        await adapter.list_by_filter(filters)
+
+        # 2. Valid integer limit
+        filters = MemoryFilters(limit=10)
+        # Should NOT raise StorageError
+        await adapter.list_by_filter(filters)
+
+        # 3. Valid session_id filter
+        memory = _make_memory(content="metadata search test")
+        memory.source_metadata = {"session_id": "test_session_id"}
+        await adapter.save_memory(memory)
+
+        filters = MemoryFilters(session_id="test_session_id")
+        results = await adapter.list_by_filter(filters)
+        # Verify success and check property (source_metadata is a dict in Memory)
+        assert len(results) >= 1
+        assert results[0].source_metadata["session_id"] == "test_session_id"
+
 
 # ---------------------------------------------------------------------------
 # GetVectorDimension Tests

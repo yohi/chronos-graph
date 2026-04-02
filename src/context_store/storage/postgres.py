@@ -11,7 +11,7 @@ import asyncpg  # type: ignore[import-not-found]
 
 from context_store.config import Settings
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
-from context_store.storage.protocols import MemoryFilters, StorageError
+from context_store.storage.protocols import ALLOWED_SORT_COLUMNS, MemoryFilters, StorageError
 
 
 def _content_hash(content: str) -> str:
@@ -348,19 +348,7 @@ class PostgresStorageAdapter:
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         # Validate and whitelist ORDER BY columns
-        allowed_order_cols = {
-            "id",
-            "memory_type",
-            "source_type",
-            "semantic_relevance",
-            "importance_score",
-            "access_count",
-            "last_accessed_at",
-            "created_at",
-            "updated_at",
-            "archived_at",
-            "project",
-        }
+        allowed_order_cols = ALLOWED_SORT_COLUMNS
         order_clause = "ORDER BY created_at DESC"
         if filters.order_by:
             order_parts = []

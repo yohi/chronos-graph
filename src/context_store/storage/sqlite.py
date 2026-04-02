@@ -16,7 +16,7 @@ import aiosqlite
 
 from context_store.config import Settings
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
-from context_store.storage.protocols import MemoryFilters, StorageError
+from context_store.storage.protocols import ALLOWED_SORT_COLUMNS, MemoryFilters, StorageError
 from context_store.utils.stale_lock import StaleAwareFileLock
 
 # ---------------------------------------------------------------------------
@@ -459,10 +459,40 @@ class SQLiteStorageAdapter:
                 raise
 
     async def get_memories_batch(self, memory_ids: list[str]) -> list[Memory]:
-        """Retrieve multiple memories by ID."""
+        """Retrieve multiple memories by ID efficiently."""
         if not memory_ids:
             return []
-        return [memory for memory_id in memory_ids if (memory := await self.get_memory(memory_id))]
+
+        # Unique IDs to avoid redundant fetching
+        unique_ids = list(dict.fromkeys(memory_ids))
+        all_found: dict[str, Memory] = {}
+
+        # Chunk to respect SQLite parameter limit (default ~999)
+        chunk_size = 900
+        for i in range(0, len(unique_ids), chunk_size):
+            chunk = unique_ids[i : i + chunk_size]
+            placeholders = ", ".join("?" * len(chunk))
+            sql = f"""
+                SELECT m.*, me.embedding
+                FROM memories m
+                LEFT JOIN memory_embeddings me ON me.memory_id = m.id
+                WHERE m.id IN ({placeholders})
+            """
+            async with self._db() as conn:
+                try:
+                    async with conn.execute(sql, chunk) as cursor:
+                        rows = await cursor.fetchall()
+                    for row in rows:
+                        row_dict = dict(row)
+                        emb_blob = row_dict.pop("embedding", None)
+                        emb = decode_embedding(bytes(emb_blob)) if emb_blob else []
+                        all_found[row_dict["id"]] = _row_to_memory(row_dict, emb)
+                except aiosqlite.OperationalError as exc:
+                    _raise_if_locked(exc)
+                    raise
+
+        # Return in the original order, omitting missing ones
+        return [all_found[mid] for mid in memory_ids if mid in all_found]
 
     # ------------------------------------------------------------------
     # StorageAdapter: delete_memory
@@ -515,9 +545,9 @@ class SQLiteStorageAdapter:
             if col not in allowed_columns:
                 continue
             # Serialise special types
-            if col == "tags" and isinstance(val, list):
+            if col == "tags" and not isinstance(val, str):
                 val = json.dumps(val)
-            elif col == "source_metadata" and isinstance(val, dict):
+            elif col == "source_metadata" and not isinstance(val, str):
                 val = json.dumps(val)
             elif col in ("last_accessed_at", "updated_at", "archived_at") and isinstance(
                 val, datetime
@@ -700,7 +730,10 @@ class SQLiteStorageAdapter:
 
         if getattr(filters, "session_id", None) is not None:
             params.append(filters.session_id)
-            conditions.append("json_extract(source_metadata, '$.session_id') = ?")
+            conditions.append(
+                "CASE WHEN json_valid(source_metadata) "
+                "THEN json_extract(source_metadata, '$.session_id') END = ?"
+            )
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         prefixed_where = ""
@@ -712,7 +745,13 @@ class SQLiteStorageAdapter:
                 "project = ?": "m.project = ?",
                 "memory_type = ?": "m.memory_type = ?",
                 "tags LIKE ?": "m.tags LIKE ?",
-                "json_extract(source_metadata, '$.session_id') = ?": "json_extract(m.source_metadata, '$.session_id') = ?",
+                (
+                    "CASE WHEN json_valid(source_metadata) "
+                    "THEN json_extract(source_metadata, '$.session_id') END = ?"
+                ): (
+                    "CASE WHEN json_valid(m.source_metadata) "
+                    "THEN json_extract(m.source_metadata, '$.session_id') END = ?"
+                ),
             }
             for original, prefixed in replacements.items():
                 prefixed_where = prefixed_where.replace(original, prefixed)
@@ -720,20 +759,7 @@ class SQLiteStorageAdapter:
         # ------------------------------------------------------------------
         # ORDER BY validation (whitelist)
         # ------------------------------------------------------------------
-        allowed_sort_columns = {
-            "id",
-            "content",
-            "memory_type",
-            "source_type",
-            "semantic_relevance",
-            "importance_score",
-            "access_count",
-            "last_accessed_at",
-            "created_at",
-            "updated_at",
-            "archived_at",
-            "project",
-        }
+        allowed_sort_columns = ALLOWED_SORT_COLUMNS
 
         raw_order = (filters.order_by or "m.created_at DESC").strip()
         parts = raw_order.split()

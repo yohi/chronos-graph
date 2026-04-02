@@ -32,6 +32,21 @@ class MemoryFilters:
     session_id: str | None = None
 
 
+ALLOWED_SORT_COLUMNS: set[str] = {
+    "id",
+    "memory_type",
+    "source_type",
+    "semantic_relevance",
+    "importance_score",
+    "access_count",
+    "last_accessed_at",
+    "created_at",
+    "updated_at",
+    "archived_at",
+    "project",
+}
+
+
 @runtime_checkable
 class StorageAdapter(Protocol):
     """Protocol for vector/document storage backends (SQLite, PostgreSQL, etc.)."""

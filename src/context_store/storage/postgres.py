@@ -170,7 +170,15 @@ class PostgresStorageAdapter:
         async with self._pool.acquire() as conn:
             records = await conn.fetch(sql, cleaned_ids)
         memory_map = {str(record["id"]): _record_to_memory(dict(record)) for record in records}
-        return [memory_map[memory_id] for memory_id in memory_ids if memory_id in memory_map]
+        results: list[Memory] = []
+        for memory_id in memory_ids:
+            try:
+                norm_id = str(UUID(str(memory_id)))
+                if norm_id in memory_map:
+                    results.append(memory_map[norm_id])
+            except (TypeError, ValueError, AttributeError):
+                continue
+        return results
 
     async def delete_memory(self, memory_id: str) -> bool:
         """Delete a memory. Returns True if deleted."""

@@ -199,10 +199,12 @@ class RetrievalPipeline:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.warning(
-                "Search failed (%s): %s",
+            logger.error(
+                "Search failed (%s, type=%s): %s",
                 getattr(search_func, "__qualname__", repr(search_func)),
+                type(e).__name__,
                 e,
+                exc_info=True,
             )
             return []
 

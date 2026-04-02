@@ -14,6 +14,7 @@ from context_store.ingestion.deduplicator import DeduplicationAction
 from context_store.ingestion.pipeline import IngestionPipeline, IngestionResult
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
 from context_store.storage.protocols import GraphAdapter, StorageAdapter
+from tests.unit.conftest import make_settings
 
 
 # ===========================================================================
@@ -103,8 +104,8 @@ async def test_pipeline_basic_flow() -> None:
         storage=storage,
         graph=graph,
         embedding_provider=embedding_provider,
+        settings=make_settings(),
     )
-
     results = await pipeline.ingest("テストコンテンツ", source_type=SourceType.MANUAL)
 
     assert len(results) >= 1
@@ -124,8 +125,8 @@ async def test_pipeline_calls_save_memory() -> None:
         storage=storage,
         graph=graph,
         embedding_provider=embedding_provider,
+        settings=make_settings(),
     )
-
     await pipeline.ingest("テストコンテンツ", source_type=SourceType.MANUAL)
 
     storage.save_memory.assert_called()
@@ -142,8 +143,8 @@ async def test_pipeline_calls_create_node() -> None:
         storage=storage,
         graph=graph,
         embedding_provider=embedding_provider,
+        settings=make_settings(),
     )
-
     await pipeline.ingest("テストコンテンツ", source_type=SourceType.MANUAL)
 
     graph.create_node.assert_called()
@@ -220,8 +221,8 @@ async def test_pipeline_embed_completes_before_save() -> None:
         storage=storage,
         graph=graph,
         embedding_provider=embedding_provider,
+        settings=make_settings(),
     )
-
     await pipeline.ingest("テストコンテンツ", source_type=SourceType.MANUAL)
 
     # embed_complete が save_memory より前に来ていることを確認
@@ -264,8 +265,8 @@ async def test_pipeline_concurrent_same_content_dedup() -> None:
         storage=storage,
         graph=graph,
         embedding_provider=embedding_provider,
+        settings=make_settings(),
     )
-
     # 同じコンテンツを同時に2回インジェスト
     same_content = "重複テストコンテンツ"
     results = await asyncio.gather(
@@ -292,8 +293,8 @@ async def test_pipeline_dispose_closes_embedding_provider_and_url_adapter() -> N
         storage=storage,
         graph=graph,
         embedding_provider=embedding_provider,
+        settings=make_settings(),
     )
-
     url_adapter = MagicMock()
     url_adapter.aclose = AsyncMock()
     pipeline._url_adapter = url_adapter
@@ -320,8 +321,8 @@ async def test_pipeline_url_source() -> None:
         storage=storage,
         graph=graph,
         embedding_provider=embedding_provider,
+        settings=make_settings(),
     )
-
     # URL アダプターのモック化
     with patch.object(pipeline, "_fetch_url_content") as mock_fetch:
         mock_fetch.return_value = [
@@ -357,8 +358,8 @@ async def test_pipeline_conversation_source_uses_conversation_adapter() -> None:
         storage=storage,
         graph=graph,
         embedding_provider=embedding_provider,
+        settings=make_settings(),
     )
-
     await pipeline.ingest(
         "User: こんにちは\nAssistant: 了解です\nUser: 次へ",
         source_type=SourceType.CONVERSATION,
@@ -408,8 +409,8 @@ async def test_pipeline_metadata_propagation() -> None:
         storage=storage,
         graph=graph,
         embedding_provider=embedding_provider,
+        settings=make_settings(),
     )
-
     await pipeline.ingest(
         "テストコンテンツ",
         source_type=SourceType.MANUAL,

@@ -375,7 +375,6 @@ async def test_url_adapter_allows_private_urls_when_enabled() -> None:
         )
 
     with (
-        patch.object(adapter, "_resolve_and_validate_ips", new=mock_get_ips_with_bypass),
         patch.object(adapter, "_fetch_with_verified_ip", new=mock_fetch),
     ):
         # プライベートIPでもエラーなく処理できること

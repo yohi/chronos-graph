@@ -368,7 +368,7 @@ class URLAdapter:
         ct_main = content_type.split(";")[0].strip().lower()
         for allowed in self.settings.url_allowed_content_types:
             if allowed.endswith("/*"):
-                prefix = allowed[:-2]
+                prefix = allowed[:-1]
                 if ct_main.startswith(prefix):
                     return True
             elif ct_main == allowed.lower():

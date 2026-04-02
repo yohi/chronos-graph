@@ -18,6 +18,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from context_store.config import Settings
 from context_store.embedding.protocols import EmbeddingProvider as BaseEmbeddingProvider
 from context_store.ingestion.adapters import ConversationAdapter, RawContent, URLAdapter
 from context_store.ingestion.chunker import Chunker
@@ -77,10 +78,12 @@ class IngestionPipeline:
         storage: StorageAdapter,
         graph: GraphAdapter,
         embedding_provider: EmbeddingProvider,
+        settings: Settings | None = None,
     ) -> None:
         self._storage = storage
         self._graph = graph
         self._embedding_provider = embedding_provider
+        self._settings = settings or Settings()
 
         self._chunker = Chunker()
         self._classifier = Classifier()
@@ -115,7 +118,7 @@ class IngestionPipeline:
     async def _fetch_url_content(self, url: str) -> list[RawContent]:
         """URL からコンテンツを取得する（テストでモック可能）。"""
         if self._url_adapter is None:
-            self._url_adapter = URLAdapter()
+            self._url_adapter = URLAdapter(settings=self._settings)
         return await self._url_adapter.adapt(url)
 
     async def dispose(self) -> None:
@@ -206,32 +209,36 @@ class IngestionPipeline:
         memo_key = (content_hash, project_id, session_id, source_type)
 
         lock = await self._get_content_lock(content_hash)
+        current_task: asyncio.Task[IngestionResult | None] | None = None
 
         async with lock:
             # 他の並行タスクがすでにこのチャンクを処理中であれば、そのタスクの完了を待つ
             # （in-flight map として機能させる）
             existing_task = self._content_results.get(memo_key)
-            if existing_task is not None:
-                # ロックを解放して待機（await 中に他のタスクもここに来る可能性がある）
-                return await existing_task
-
-            # 自分が処理を担当するため、Task を作成して登録
-            current_task = asyncio.create_task(
-                self._process_chunk_locked(
-                    chunk,
-                    base_metadata=base_metadata,
-                    prior_document_memories=prior_document_memories,
+            if existing_task is None:
+                # 自分が処理を担当するため、Task を作成して登録
+                current_task = asyncio.create_task(
+                    self._process_chunk_locked(
+                        chunk,
+                        base_metadata=base_metadata,
+                        prior_document_memories=prior_document_memories,
+                    )
                 )
-            )
-            self._content_results[memo_key] = current_task
+                self._content_results[memo_key] = current_task
 
+        if existing_task is not None:
+            # 他のタスクが処理中なので、その完了を待つ
+            return await existing_task
+
+        # 自分が作成したタスクを実行（current_task は必ず非 None）
+        assert current_task is not None
         try:
             return await current_task
         finally:
-            # 処理完了（成功・失敗問わず）後は、他の独立したリクエストのために
-            # メモから削除する（並行処理の待ち合わせが済んだら消去）
-            # これにより 'completed results are not permanently cached' を満たす
-            self._content_results.pop(memo_key, None)
+            # 自分が作成したタスクのみを削除する
+            async with lock:
+                if self._content_results.get(memo_key) is current_task:
+                    self._content_results.pop(memo_key, None)
             await self._release_content_lock(content_hash, lock)
 
     async def _process_chunk_locked(

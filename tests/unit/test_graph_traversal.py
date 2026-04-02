@@ -116,6 +116,7 @@ class TestGraphTraversal:
         assert isinstance(result, GraphResult)
         assert result.nodes == []
         assert result.edges == []
+        assert result.traversal_depth == 0
         assert result.partial is True
         assert result.timeout is False
 
@@ -145,6 +146,7 @@ class TestGraphTraversal:
         assert isinstance(result, GraphResult)
         assert result.nodes == []
         assert result.edges == []
+        assert result.traversal_depth == 0
         assert result.partial is True
         assert result.timeout is False
 

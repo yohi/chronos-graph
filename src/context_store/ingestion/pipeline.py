@@ -184,7 +184,9 @@ class IngestionPipeline:
                 if result:
                     results.append(result)
                     if document_id and result.persisted_memory is not None:
-                        document_memories.setdefault(document_id, []).append(result.persisted_memory)
+                        document_memories.setdefault(document_id, []).append(
+                            result.persisted_memory
+                        )
 
         return results
 
@@ -337,6 +339,9 @@ class IngestionPipeline:
             return None
 
         neighbors = [*prior_document_memories, memory]
-        if supersedes_memory and supersedes_memory.source_metadata.get("document_id") == document_id:
+        if (
+            supersedes_memory
+            and supersedes_memory.source_metadata.get("document_id") == document_id
+        ):
             neighbors.append(supersedes_memory)
         return {str(document_id): neighbors}

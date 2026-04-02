@@ -281,7 +281,7 @@ async def test_url_adapter_rejects_too_many_redirects() -> None:
         patch.object(adapter, "_resolve_and_validate_ips", new=mock_get_ips),
         patch.object(adapter, "_fetch_with_verified_ip", new=mock_fetch),
     ):
-        with pytest.raises((ValueError, Exception), match=r"[Rr]edirect|[Tt]oo many"):
+        with pytest.raises(ValueError, match=r"[Rr]edirect|[Tt]oo many"):
             await adapter.adapt("http://example.com/")
 
 
@@ -304,6 +304,7 @@ async def test_url_adapter_rejects_oversized_response() -> None:
         with pytest.raises(ValueError, match=r"[Ss]ize|[Ll]imit|[Tt]oo large|[Mm]ax"):
             await adapter.adapt("http://example.com/")
 
+
 @pytest.mark.asyncio
 async def test_url_adapter_rejects_disallowed_content_type() -> None:
     """許可されていない Content-Type を拒否する。"""
@@ -322,6 +323,7 @@ async def test_url_adapter_rejects_disallowed_content_type() -> None:
     ):
         with pytest.raises(ValueError, match=r"[Cc]ontent.?[Tt]ype|[Nn]ot allowed|[Dd]isallowed"):
             await adapter.adapt("http://example.com/")
+
 
 @pytest.mark.asyncio
 async def test_url_adapter_resolves_relative_redirects() -> None:
@@ -361,7 +363,11 @@ async def test_url_adapter_allows_private_urls_when_enabled() -> None:
         return ["127.0.0.1"]
 
     async def mock_fetch(url: str, resolved_ips: list[str]) -> tuple[int, httpx.Headers, bytes]:
-        return 200, httpx.Headers({"content-type": "text/html; charset=utf-8"}), b"<html>Hello</html>"
+        return (
+            200,
+            httpx.Headers({"content-type": "text/html; charset=utf-8"}),
+            b"<html>Hello</html>",
+        )
 
     with (
         patch.object(adapter, "_resolve_and_validate_ips", new=mock_get_ips_with_bypass),

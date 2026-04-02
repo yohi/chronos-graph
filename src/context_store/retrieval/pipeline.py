@@ -179,7 +179,8 @@ class RetrievalPipeline:
         return [
             item
             for item in fused
-            if (base := all_memories.get(item["memory_id"])) is not None and base.memory.project == project
+            if (base := all_memories.get(item["memory_id"])) is not None
+            and base.memory.project == project
         ]
 
     async def _safe_search(

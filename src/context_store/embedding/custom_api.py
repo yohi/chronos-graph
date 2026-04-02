@@ -83,14 +83,14 @@ class CustomAPIEmbeddingProvider:
             response = await self._post({"texts": chunk})
             if not isinstance(response, Mapping):
                 raise ValueError(
-                    "response must be a mapping containing response[\"embeddings\"]; "
+                    'response must be a mapping containing response["embeddings"]; '
                     f"got {type(response).__name__}"
                 )
             embeddings = response.get("embeddings")
             if not isinstance(embeddings, list):
                 raise ValueError(
                     'response["embeddings"] must be a list before all_results.extend(...); '
-                    f'got {type(embeddings).__name__} in response for len(chunk)={len(chunk)}'
+                    f"got {type(embeddings).__name__} in response for len(chunk)={len(chunk)}"
                 )
             if len(embeddings) != len(chunk):
                 raise ValueError(
@@ -102,7 +102,7 @@ class CustomAPIEmbeddingProvider:
                 if not isinstance(embedding, Iterable) or isinstance(embedding, (str, bytes)):
                     raise ValueError(
                         'Each item in response["embeddings"] must be an iterable with length '
-                        f"self._dimension={self._dimension}; invalid response[\"embeddings\"][{index}] "
+                        f'self._dimension={self._dimension}; invalid response["embeddings"][{index}] '
                         f"for len(chunk)={len(chunk)}"
                     )
                 vector = list(embedding)

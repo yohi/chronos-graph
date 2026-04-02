@@ -26,9 +26,10 @@ SEMANTIC_RELATION_THRESHOLD = 0.70
 
 # URL と ファイルパスの検出パターン
 _URL_PATTERN = re.compile(
-    r"https?://[^\s\"\'>)]+",
+    r"https?://[^\s\"\'<>()\[\]{}]+?(?<![.,!?:;)\]}'\"])",
     re.IGNORECASE,
 )
+# TODO: Expand _FILE_PATH_PATTERN to support Windows absolute paths and ./ ../ relative paths.
 _FILE_PATH_PATTERN = re.compile(
     r"(?:^|[\s\"\(])(/(?:[a-zA-Z0-9_\-./]+))",
     re.MULTILINE,
@@ -116,12 +117,14 @@ class GraphLinker:
                 # 自己参照を避ける
                 if scored.memory.id == new_memory.id:
                     continue
-                edges.append({
-                    "from_id": str(new_memory.id),
-                    "to_id": str(scored.memory.id),
-                    "edge_type": EdgeType.SEMANTICALLY_RELATED,
-                    "props": {"similarity": scored.score},
-                })
+                edges.append(
+                    {
+                        "from_id": str(new_memory.id),
+                        "to_id": str(scored.memory.id),
+                        "edge_type": EdgeType.SEMANTICALLY_RELATED,
+                        "props": {"similarity": scored.score},
+                    }
+                )
         return edges
 
     def _build_temporal_edges(
@@ -139,37 +142,47 @@ class GraphLinker:
 
             if new_session and prev_session and new_session == prev_session:
                 # TEMPORAL_NEXT: prev → new
-                edges.append({
-                    "from_id": str(prev.id),
-                    "to_id": str(new_memory.id),
-                    "edge_type": EdgeType.TEMPORAL_NEXT,
-                    "props": {},
-                })
+                edges.append(
+                    {
+                        "from_id": str(prev.id),
+                        "to_id": str(new_memory.id),
+                        "edge_type": EdgeType.TEMPORAL_NEXT,
+                        "props": {},
+                    }
+                )
                 # TEMPORAL_PREV: new → prev
-                edges.append({
-                    "from_id": str(new_memory.id),
-                    "to_id": str(prev.id),
-                    "edge_type": EdgeType.TEMPORAL_PREV,
-                    "props": {},
-                })
+                edges.append(
+                    {
+                        "from_id": str(new_memory.id),
+                        "to_id": str(prev.id),
+                        "edge_type": EdgeType.TEMPORAL_PREV,
+                        "props": {},
+                    }
+                )
             elif (
-                not new_session and not prev_session
-                and new_project and prev.project
+                not new_session
+                and not prev_session
+                and new_project
+                and prev.project
                 and new_project == prev.project
             ):
                 # セッションIDがない場合はプロジェクトで判断
-                edges.append({
-                    "from_id": str(prev.id),
-                    "to_id": str(new_memory.id),
-                    "edge_type": EdgeType.TEMPORAL_NEXT,
-                    "props": {},
-                })
-                edges.append({
-                    "from_id": str(new_memory.id),
-                    "to_id": str(prev.id),
-                    "edge_type": EdgeType.TEMPORAL_PREV,
-                    "props": {},
-                })
+                edges.append(
+                    {
+                        "from_id": str(prev.id),
+                        "to_id": str(new_memory.id),
+                        "edge_type": EdgeType.TEMPORAL_NEXT,
+                        "props": {},
+                    }
+                )
+                edges.append(
+                    {
+                        "from_id": str(new_memory.id),
+                        "to_id": str(prev.id),
+                        "edge_type": EdgeType.TEMPORAL_PREV,
+                        "props": {},
+                    }
+                )
 
         return edges
 
@@ -201,23 +214,27 @@ class GraphLinker:
         # URLの検出
         urls = _URL_PATTERN.findall(content)
         for url in urls:
-            edges.append({
-                "from_id": str(new_memory.id),
-                "to_id": f"url:{url}",  # 実際のノードIDに解決される前のスタブ
-                "edge_type": EdgeType.REFERENCES,
-                "props": {"reference_url": url, "stub": True},
-            })
+            edges.append(
+                {
+                    "from_id": str(new_memory.id),
+                    "to_id": f"url:{url}",  # 実際のノードIDに解決される前のスタブ
+                    "edge_type": EdgeType.REFERENCES,
+                    "props": {"reference_url": url, "stub": True},
+                }
+            )
 
         # ファイルパスの検出（最低3セグメント以上のパスのみ）
         file_paths = _FILE_PATH_PATTERN.findall(content)
         for path in file_paths:
             if path.count("/") >= 2:  # /a/b 以上のパス
-                edges.append({
-                    "from_id": str(new_memory.id),
-                    "to_id": f"file:{path}",
-                    "edge_type": EdgeType.REFERENCES,
-                    "props": {"reference_path": path, "stub": True},
-                })
+                edges.append(
+                    {
+                        "from_id": str(new_memory.id),
+                        "to_id": f"file:{path}",
+                        "edge_type": EdgeType.REFERENCES,
+                        "props": {"reference_path": path, "stub": True},
+                    }
+                )
 
         return edges
 
@@ -239,7 +256,7 @@ class GraphLinker:
         # chunk_index でソート
         sorted_chunks = sorted(
             chunks,
-            key=lambda m: m.source_metadata.get("chunk_index", 0),
+            key=self._get_chunk_index,
         )
 
         for i in range(len(sorted_chunks) - 1):
@@ -247,18 +264,42 @@ class GraphLinker:
             next_chunk = sorted_chunks[i + 1]
 
             # CHUNK_NEXT: curr → next
-            edges.append({
-                "from_id": str(curr.id),
-                "to_id": str(next_chunk.id),
-                "edge_type": EdgeType.CHUNK_NEXT,
-                "props": {"document_id": doc_id_str},
-            })
+            edges.append(
+                {
+                    "from_id": str(curr.id),
+                    "to_id": str(next_chunk.id),
+                    "edge_type": EdgeType.CHUNK_NEXT,
+                    "props": {"document_id": doc_id_str},
+                }
+            )
             # CHUNK_PREV: next → curr
-            edges.append({
-                "from_id": str(next_chunk.id),
-                "to_id": str(curr.id),
-                "edge_type": EdgeType.CHUNK_PREV,
-                "props": {"document_id": doc_id_str},
-            })
+            edges.append(
+                {
+                    "from_id": str(next_chunk.id),
+                    "to_id": str(curr.id),
+                    "edge_type": EdgeType.CHUNK_PREV,
+                    "props": {"document_id": doc_id_str},
+                }
+            )
 
         return edges
+
+    @staticmethod
+    def _get_chunk_index(memory: Memory) -> int:
+        """source_metadata の chunk_index を int に正規化する。"""
+        raw_value = memory.source_metadata.get("chunk_index", 0)
+        if isinstance(raw_value, bool):
+            return int(raw_value)
+        if isinstance(raw_value, int):
+            return raw_value
+        if isinstance(raw_value, float):
+            return int(raw_value)
+        if isinstance(raw_value, str):
+            try:
+                return int(raw_value)
+            except ValueError:
+                return 0
+        try:
+            return int(str(raw_value))
+        except (TypeError, ValueError):
+            return 0

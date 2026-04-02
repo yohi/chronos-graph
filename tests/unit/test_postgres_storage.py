@@ -8,12 +8,17 @@ asyncpg.Pool をモックして SQL クエリの組み立てロジックと
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+
+# Skip this module if asyncpg is not installed
+if importlib.util.find_spec("asyncpg") is None:
+    pytest.skip("asyncpg not installed", allow_module_level=True)
 
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
 from context_store.storage.protocols import MemoryFilters, StorageError
@@ -441,6 +446,41 @@ class TestListByFilter:
         call_args = conn.fetch.call_args
         sql: str = call_args[0][0]
         assert "tags" in sql
+
+
+class TestGetMemoriesValidation:
+    @pytest.mark.asyncio
+    async def test_get_memories_invalid_order_by(self, adapter):
+        adp, _ = adapter
+        filters = MemoryFilters(order_by="invalid_col ASC")
+        with pytest.raises(StorageError) as exc:
+            await adp.list_by_filter(filters)
+        assert exc.value.code == "INVALID_PARAMETER"
+
+    @pytest.mark.asyncio
+    async def test_get_memories_invalid_direction(self, adapter):
+        adp, _ = adapter
+        filters = MemoryFilters(order_by="created_at NOT_A_DIRECTION")
+        with pytest.raises(StorageError) as exc:
+            await adp.list_by_filter(filters)
+        assert exc.value.code == "INVALID_PARAMETER"
+
+    @pytest.mark.asyncio
+    async def test_get_memories_invalid_limit_type(self, adapter):
+        adp, _ = adapter
+        filters = MemoryFilters()
+        filters.limit = "not-an-int"
+        with pytest.raises(StorageError) as exc:
+            await adp.list_by_filter(filters)
+        assert exc.value.code == "INVALID_PARAMETER"
+
+    @pytest.mark.asyncio
+    async def test_get_memories_negative_limit(self, adapter):
+        adp, _ = adapter
+        filters = MemoryFilters(limit=-1)
+        with pytest.raises(StorageError) as exc:
+            await adp.list_by_filter(filters)
+        assert exc.value.code == "INVALID_PARAMETER"
 
 
 # ---------------------------------------------------------------------------

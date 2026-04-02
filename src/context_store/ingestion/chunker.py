@@ -49,7 +49,13 @@ def _assign_metadata(
             "chunk_index": i,
             "chunk_count": total,
         }
-        result.append(RawContent(content=content, source_type=base_metadata.get("_source_type", SourceType.MANUAL), metadata=meta))  # type: ignore[arg-type]
+        result.append(
+            RawContent(
+                content=content,
+                source_type=base_metadata.get("_source_type", SourceType.MANUAL),
+                metadata=meta,
+            )
+        )  # type: ignore[arg-type]
     return result
 
 

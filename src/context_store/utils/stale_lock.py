@@ -7,6 +7,7 @@ Subsequent processes wait indefinitely or fail to acquire.
 Solution: Check the lock file's mtime. If it's older than stale_timeout_seconds,
 force-delete the file and retry acquisition.
 """
+
 from __future__ import annotations
 
 import logging

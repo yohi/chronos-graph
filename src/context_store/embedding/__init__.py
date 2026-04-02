@@ -26,29 +26,34 @@ def create_embedding_provider(settings: "Settings") -> EmbeddingProvider:
 
     if provider_name == "openai":
         from context_store.embedding.openai import OpenAIEmbeddingProvider
+
         return OpenAIEmbeddingProvider(
             api_key=settings.openai_api_key.get_secret_value(),
         )
 
     if provider_name == "local-model":
         from context_store.embedding.local_model import LocalModelEmbeddingProvider
+
         return LocalModelEmbeddingProvider(
             model_name=settings.local_model_name,
+            dimension=settings.embedding_dimension,
         )
 
     if provider_name == "litellm":
         from context_store.embedding.litellm import LiteLLMEmbeddingProvider
+
         return LiteLLMEmbeddingProvider(
-            model=settings.local_model_name,
-            dimension=1536,
+            model=settings.litellm_model,
+            dimension=settings.embedding_dimension,
             api_base=settings.litellm_api_base or None,
         )
 
     if provider_name == "custom-api":
         from context_store.embedding.custom_api import CustomAPIEmbeddingProvider
+
         return CustomAPIEmbeddingProvider(
             endpoint=settings.custom_api_endpoint,
-            dimension=1536,
+            dimension=settings.embedding_dimension,
         )
 
     raise ValueError(

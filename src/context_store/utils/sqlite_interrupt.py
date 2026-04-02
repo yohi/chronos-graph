@@ -8,6 +8,7 @@ This can crash subsequent unrelated queries.
 Solution: Track execution state with a lock, only call interrupt() when query is
 confirmed to be running, ensure the flag is consumed before returning the connection.
 """
+
 from __future__ import annotations
 
 import asyncio

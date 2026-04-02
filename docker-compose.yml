@@ -1,4 +1,15 @@
 services:
+  app:
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+    volumes:
+      - .:/workspaces/chronos-graph
+    working_dir: /workspaces/chronos-graph
+    command: ["bash", "-c", "ruff check --no-cache src/ tests/ && ruff format --no-cache src/ tests/ && mypy src/"]
+    profiles:
+      - lint
+
   postgres:
     build:
       context: ./docker/postgres

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 
@@ -198,11 +197,7 @@ async def test_deduplicator_uses_top5_search() -> None:
     adapter.vector_search.assert_called_once()
     call_kwargs = adapter.vector_search.call_args
     # top_k=5 が指定されている
-    top_k = (
-        call_kwargs[0][1]
-        if len(call_kwargs[0]) > 1
-        else call_kwargs[1].get("top_k", None)
-    )
+    top_k = call_kwargs[0][1] if len(call_kwargs[0]) > 1 else call_kwargs[1].get("top_k", None)
     assert top_k == 5
 
 

@@ -36,8 +36,13 @@ class LocalModelEmbeddingProvider:
     - embed_batch は asyncio.to_thread で同期処理をノンブロッキングで実行
     """
 
-    def __init__(self, model_name: str = _DEFAULT_MODEL_NAME) -> None:
+    def __init__(
+        self,
+        model_name: str = _DEFAULT_MODEL_NAME,
+        dimension: int | None = None,
+    ) -> None:
         self._model_name = model_name
+        self._dimension_override = dimension
         self._model: Any = None
         self._dimension: int | None = None
         self._model_lock = threading.Lock()
@@ -49,7 +54,10 @@ class LocalModelEmbeddingProvider:
                 if self._model is None:
                     logger.info(f"ローカルモデルをロード中: {self._model_name}")
                     self._model = SentenceTransformer(self._model_name)
-                    self._dimension = int(self._model.get_sentence_embedding_dimension())
+                    if self._dimension_override:
+                        self._dimension = self._dimension_override
+                    else:
+                        self._dimension = int(self._model.get_sentence_embedding_dimension())
                     logger.info(f"モデルのロード完了: dimension={self._dimension}")
         return self._model
 

@@ -289,6 +289,7 @@ async def test_pipeline_dispose_closes_embedding_provider_and_url_adapter() -> N
     graph = _make_mock_graph()
 
     embedding_provider = MagicMock()
+    del embedding_provider.dispose
     embedding_provider.close = AsyncMock()
 
     pipeline = IngestionPipeline(

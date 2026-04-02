@@ -130,17 +130,25 @@ class IngestionPipeline:
                 await aclose()
 
         provider_dispose = getattr(self._embedding_provider, "dispose", None)
+        dispose_success = False
         if callable(provider_dispose):
-            dispose_result = provider_dispose()
-            if inspect.isawaitable(dispose_result):
-                await dispose_result
-                return
+            try:
+                dispose_result = provider_dispose()
+                if inspect.isawaitable(dispose_result):
+                    await dispose_result
+                dispose_success = True
+            except Exception:
+                pass
 
-        provider_close = getattr(self._embedding_provider, "close", None)
-        if callable(provider_close):
-            close_result = provider_close()
-            if inspect.isawaitable(close_result):
-                await close_result
+        if not dispose_success:
+            provider_close = getattr(self._embedding_provider, "close", None)
+            if callable(provider_close):
+                try:
+                    close_result = provider_close()
+                    if inspect.isawaitable(close_result):
+                        await close_result
+                except Exception:
+                    pass
 
     async def ingest(
         self,
@@ -354,11 +362,12 @@ class IngestionPipeline:
             candidate_session_id = candidate.source_metadata.get("session_id")
             if session_id and candidate_session_id == session_id:
                 previous_memories.append(candidate)
-                continue
+                break
             if not session_id and memory.project and candidate.project == memory.project:
                 previous_memories.append(candidate)
+                break
 
-        return previous_memories[:1]
+        return previous_memories
 
     def _build_chunk_neighbors(
         self,

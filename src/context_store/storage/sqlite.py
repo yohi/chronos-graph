@@ -16,7 +16,7 @@ import aiosqlite
 
 from context_store.config import Settings
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
-from context_store.storage.protocols import MemoryFilters, StorageError
+from context_store.storage.protocols import ALLOWED_SORT_COLUMNS, MemoryFilters, StorageError
 from context_store.utils.stale_lock import StaleAwareFileLock
 
 # ---------------------------------------------------------------------------
@@ -24,11 +24,11 @@ from context_store.utils.stale_lock import StaleAwareFileLock
 # ---------------------------------------------------------------------------
 
 try:
-    import sqlite_vec as _sqlite_vec
+    import sqlite_vec as _sqlite_vec  # type: ignore
 
     _USE_SQLITE_VEC_SERIALIZE = True
 except ImportError:  # pragma: no cover
-    _sqlite_vec = None  # type: ignore[assignment]
+    _sqlite_vec = None
     _USE_SQLITE_VEC_SERIALIZE = False
 
 
@@ -39,7 +39,9 @@ def encode_embedding(embedding: list[float]) -> bytes:
     ``struct.pack`` for portability.
     """
     if _USE_SQLITE_VEC_SERIALIZE and _sqlite_vec is not None:
-        return _sqlite_vec.serialize_float32(embedding)
+        from typing import cast
+
+        return cast(bytes, _sqlite_vec.serialize_float32(embedding))
     return struct.pack("<" + "f" * len(embedding), *embedding)
 
 
@@ -456,6 +458,42 @@ class SQLiteStorageAdapter:
                 _raise_if_locked(exc)
                 raise
 
+    async def get_memories_batch(self, memory_ids: list[str]) -> list[Memory]:
+        """Retrieve multiple memories by ID efficiently."""
+        if not memory_ids:
+            return []
+
+        # Unique IDs to avoid redundant fetching
+        unique_ids = list(dict.fromkeys(memory_ids))
+        all_found: dict[str, Memory] = {}
+
+        # Chunk to respect SQLite parameter limit (default ~999)
+        chunk_size = 900
+        async with self._db() as conn:
+            for i in range(0, len(unique_ids), chunk_size):
+                chunk = unique_ids[i : i + chunk_size]
+                placeholders = ", ".join("?" * len(chunk))
+                sql = f"""
+                    SELECT m.*, me.embedding
+                    FROM memories m
+                    LEFT JOIN memory_embeddings me ON me.memory_id = m.id
+                    WHERE m.id IN ({placeholders})
+                """
+                try:
+                    async with conn.execute(sql, chunk) as cursor:
+                        rows = await cursor.fetchall()
+                    for row in rows:
+                        row_dict = dict(row)
+                        emb_blob = row_dict.pop("embedding", None)
+                        emb = decode_embedding(bytes(emb_blob)) if emb_blob else []
+                        all_found[row_dict["id"]] = _row_to_memory(row_dict, emb)
+                except aiosqlite.OperationalError as exc:
+                    _raise_if_locked(exc)
+                    raise
+
+        # Return in the original order, omitting missing ones
+        return [all_found[mid] for mid in memory_ids if mid in all_found]
+
     # ------------------------------------------------------------------
     # StorageAdapter: delete_memory
     # ------------------------------------------------------------------
@@ -506,11 +544,45 @@ class SQLiteStorageAdapter:
         for col, val in updates.items():
             if col not in allowed_columns:
                 continue
-            # Serialise special types
-            if col == "tags" and isinstance(val, list):
-                val = json.dumps(val)
-            elif col == "source_metadata" and isinstance(val, dict):
-                val = json.dumps(val)
+            # Serialise and validate special types
+            if col in ("tags", "source_metadata"):
+                if isinstance(val, str):
+                    try:
+                        parsed = json.loads(val)
+                        if col == "tags" and not isinstance(parsed, list):
+                            raise StorageError(
+                                f"Invalid tags type: expected list, got {type(parsed).__name__}",
+                                code="INVALID_PARAMETER",
+                            )
+                        if col == "source_metadata" and not isinstance(parsed, dict):
+                            raise StorageError(
+                                f"Invalid source_metadata type: expected dict, got {type(parsed).__name__}",
+                                code="INVALID_PARAMETER",
+                            )
+                    except json.JSONDecodeError as exc:
+                        raise StorageError(
+                            f"Invalid JSON for {col}: {exc}",
+                            code="INVALID_PARAMETER",
+                        ) from exc
+                else:
+                    # Not a string, must be the actual object
+                    if col == "tags" and not isinstance(val, list):
+                        raise StorageError(
+                            f"Invalid tags type: expected list, got {type(val).__name__}",
+                            code="INVALID_PARAMETER",
+                        )
+                    if col == "source_metadata" and not isinstance(val, dict):
+                        raise StorageError(
+                            f"Invalid source_metadata type: expected dict, got {type(val).__name__}",
+                            code="INVALID_PARAMETER",
+                        )
+                    try:
+                        val = json.dumps(val)
+                    except (TypeError, ValueError) as exc:
+                        raise StorageError(
+                            f"Failed to serialise {col}: {exc}",
+                            code="INVALID_PARAMETER",
+                        ) from exc
             elif col in ("last_accessed_at", "updated_at", "archived_at") and isinstance(
                 val, datetime
             ):
@@ -690,6 +762,13 @@ class SQLiteStorageAdapter:
                 tag_conditions.append("tags LIKE ?")
             conditions.append("(" + " OR ".join(tag_conditions) + ")")
 
+        if getattr(filters, "session_id", None) is not None:
+            params.append(filters.session_id)
+            conditions.append(
+                "CASE WHEN json_valid(source_metadata) "
+                "THEN json_extract(source_metadata, '$.session_id') END = ?"
+            )
+
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         prefixed_where = ""
         if where_clause:
@@ -700,16 +779,73 @@ class SQLiteStorageAdapter:
                 "project = ?": "m.project = ?",
                 "memory_type = ?": "m.memory_type = ?",
                 "tags LIKE ?": "m.tags LIKE ?",
+                (
+                    "CASE WHEN json_valid(source_metadata) "
+                    "THEN json_extract(source_metadata, '$.session_id') END = ?"
+                ): (
+                    "CASE WHEN json_valid(m.source_metadata) "
+                    "THEN json_extract(m.source_metadata, '$.session_id') END = ?"
+                ),
             }
             for original, prefixed in replacements.items():
                 prefixed_where = prefixed_where.replace(original, prefixed)
+
+        # ------------------------------------------------------------------
+        # ORDER BY validation (whitelist)
+        # ------------------------------------------------------------------
+        allowed_sort_columns = ALLOWED_SORT_COLUMNS
+
+        raw_order = (filters.order_by or "m.created_at DESC").strip()
+        parts = raw_order.split()
+        if not parts:
+            order_clause = "ORDER BY m.created_at DESC"
+        else:
+            # First part: Column name
+            col = parts[0].replace("m.", "")
+            if col not in allowed_sort_columns:
+                raise StorageError(f"Invalid sort column: {col}", code="INVALID_PARAMETER")
+
+            # Second part: ASC / DESC (optional)
+            direction = ""
+            if len(parts) > 1:
+                dir_part = parts[1].upper()
+                if dir_part not in ("ASC", "DESC"):
+                    raise StorageError(
+                        f"Invalid sort direction: {dir_part}", code="INVALID_PARAMETER"
+                    )
+                direction = dir_part
+
+            # Reject additional tokens (length > 2)
+            if len(parts) > 2:
+                raise StorageError(
+                    f"Invalid order_by format: {raw_order}. Extra tokens detected.",
+                    code="INVALID_PARAMETER",
+                )
+
+            order_clause = f"ORDER BY m.{col} {direction}".strip()
+
+        # ------------------------------------------------------------------
+        # LIMIT validation (integer check)
+        # ------------------------------------------------------------------
+        limit_clause = ""
+        if filters.limit is not None:
+            limit_val = filters.limit
+            if not isinstance(limit_val, int) or limit_val < 0:
+                raise StorageError(
+                    message="Limit must be a non-negative integer",
+                    code="INVALID_PARAMETER",
+                )
+            limit_clause = "LIMIT ?"
+            params.append(limit_val)
+
         sql = (
             "SELECT m.*, me.embedding "
             "FROM memories m "
             "LEFT JOIN memory_embeddings me ON me.memory_id = m.id "
             f"{prefixed_where} "
-            "ORDER BY m.created_at DESC"
-        )
+            f"{order_clause} "
+            f"{limit_clause}"
+        ).strip()
 
         async with self._db() as conn:
             try:

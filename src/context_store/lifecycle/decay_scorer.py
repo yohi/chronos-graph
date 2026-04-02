@@ -45,7 +45,7 @@ class DecayScorer:
             + 0.3 * recency
             + 0.2 * memory.importance_score
         )
-        return composite
+        return float(composite)
 
     def is_below_archive_threshold(self, memory: Memory) -> bool:
         """記憶のスコアがアーカイブ閾値を下回るかどうかを判定する。

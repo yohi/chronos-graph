@@ -6,7 +6,8 @@ import logging
 from typing import Any
 
 import httpx
-from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_random_exponential
+import tenacity
+from tenacity import retry_if_exception, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
@@ -90,15 +91,7 @@ class LiteLLMEmbeddingProvider:
         if not texts:
             return []
 
-        litellm = _get_litellm()
         all_results: list[list[float]] = []
-
-        retryer = AsyncRetrying(
-            stop=stop_after_attempt(3),
-            wait=wait_random_exponential(multiplier=1, min=2, max=10),
-            retry=retry_if_exception(_is_retryable),
-            reraise=True,
-        )
 
         for chunk_start in range(0, len(texts), self._chunk_size):
             chunk = texts[chunk_start : chunk_start + self._chunk_size]
@@ -108,11 +101,20 @@ class LiteLLMEmbeddingProvider:
             if self._api_key:
                 kwargs["api_key"] = self._api_key
 
-            async for attempt in retryer:
-                with attempt:
-                    response = await litellm.aembedding(**kwargs)
+            response = await self._aembedding_with_retry(**kwargs)
 
             chunk_embeddings = [item.embedding for item in response.data]
             all_results.extend(chunk_embeddings)
 
         return all_results
+
+    @tenacity.retry(
+        retry=retry_if_exception(_is_retryable),
+        wait=wait_exponential(multiplier=1, min=1, max=60),
+        stop=stop_after_attempt(5),
+        before_sleep=tenacity.before_sleep_log(logger, logging.WARNING),
+    )
+    async def _aembedding_with_retry(self, **kwargs: Any) -> Any:
+        """LiteLLM aembedding をリトライ付きで呼び出す。"""
+        litellm = _get_litellm()
+        return await litellm.aembedding(**kwargs)

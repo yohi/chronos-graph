@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import tenacity
 
 from context_store.embedding.protocols import EmbeddingProvider
 
@@ -100,6 +101,18 @@ class TestLiteLLMEmbeddingProvider:
 
         assert _is_retryable(httpx.TimeoutException("timeout")) is True
 
+    def test_is_retryable_custom_exception_with_status_code(self, provider) -> None:
+        """status_code 属性を持つ汎用的な例外が正しく判定されることを検証。"""
+        from context_store.embedding.litellm import _is_retryable
+
+        class MockLiteLLMError(Exception):
+            def __init__(self, status_code: int):
+                self.status_code = status_code
+
+        assert _is_retryable(MockLiteLLMError(429)) is True
+        assert _is_retryable(MockLiteLLMError(500)) is True
+        assert _is_retryable(MockLiteLLMError(400)) is False
+
     def test_is_not_retryable_value_error(self, provider) -> None:
         from context_store.embedding.litellm import _is_retryable
 
@@ -158,10 +171,10 @@ class TestLiteLLMEmbeddingProvider:
         mock_litellm.aembedding = mock_aembedding
 
         with patch("context_store.embedding.litellm._get_litellm", return_value=mock_litellm):
-            with pytest.raises(httpx.HTTPStatusError):
+            with pytest.raises(tenacity.RetryError):
                 await provider.embed_batch(texts)
 
-        assert call_count == 3
+        assert call_count == 5
 
 
 class TestCustomAPIEmbeddingProvider:

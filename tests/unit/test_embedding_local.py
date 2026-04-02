@@ -127,3 +127,15 @@ class TestLocalModelEmbeddingProvider:
             mock_cls.assert_not_called()
             # 内部状態を確認（実装修正前は _get_model が呼ばれるため、mock_cls が呼ばれ、_model がセットされる）
             assert provider._model is None
+
+    def test_invalid_dimension(self) -> None:
+        from context_store.embedding.local_model import LocalModelEmbeddingProvider
+
+        with pytest.raises(ValueError, match="dimension must be a positive integer"):
+            LocalModelEmbeddingProvider(dimension=-1)
+
+        with pytest.raises(ValueError, match="dimension must be a positive integer"):
+            LocalModelEmbeddingProvider(dimension=0)
+
+        with pytest.raises(ValueError, match="dimension must be a positive integer"):
+            LocalModelEmbeddingProvider(dimension="768")  # type: ignore

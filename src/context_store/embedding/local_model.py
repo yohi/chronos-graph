@@ -41,6 +41,10 @@ class LocalModelEmbeddingProvider:
         model_name: str = _DEFAULT_MODEL_NAME,
         dimension: int | None = None,
     ) -> None:
+        if dimension is not None:
+            if not isinstance(dimension, int) or dimension <= 0:
+                raise ValueError(f"dimension must be a positive integer, got {dimension}")
+
         self._model_name = model_name
         self._model: Any = None
         self._dimension: int | None = dimension
@@ -93,3 +97,7 @@ class LocalModelEmbeddingProvider:
         loop = asyncio.get_running_loop()
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix="local-embedding") as executor:
             return await loop.run_in_executor(executor, _encode)
+
+    async def close(self) -> None:
+        """リソースを解放する (ローカルモデルでは特に無し)。"""
+        pass

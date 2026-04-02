@@ -750,7 +750,9 @@ class SQLiteStorageAdapter:
             if len(parts) > 1:
                 dir_part = parts[1].upper()
                 if dir_part not in ("ASC", "DESC"):
-                    raise StorageError(f"Invalid sort direction: {dir_part}", code="INVALID_PARAMETER")
+                    raise StorageError(
+                        f"Invalid sort direction: {dir_part}", code="INVALID_PARAMETER"
+                    )
                 direction = dir_part
 
             order_clause = f"ORDER BY m.{col} {direction}".strip()

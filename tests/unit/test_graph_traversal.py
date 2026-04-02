@@ -65,11 +65,12 @@ async def test_traverse_with_default_depth(graph_traversal, graph_adapter):
 
     call_args = graph_adapter.traverse.call_args
     assert call_args[1]["depth"] == 2  # デフォルト
+    assert call_args[1]["edge_types"] == []
 
 
 @pytest.mark.asyncio
 async def test_traverse_graceful_degradation_on_error(graph_traversal, graph_adapter):
-    """グラフアダプター失敗時に空の GraphResult を返す（Graceful Degradation）"""
+    """グラフアダプター失敗時に空の GraphResult を返す (Graceful Degradation)"""
     graph_adapter.traverse.side_effect = ConnectionError("Connection failed")
     seed_ids = [UUID("00000000-0000-0000-0000-000000000010")]
 

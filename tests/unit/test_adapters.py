@@ -104,14 +104,17 @@ async def test_url_adapter_rejects_oversized_response() -> None:
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.headers = httpx.Headers({"content-type": "text/plain"})
+
     # 大量データを返すイテレータ
-    mock_resp.aiter_bytes.return_value = AsyncMock(__aiter__=lambda x: x)
-    mock_resp.aiter_bytes.return_value.__aiter__.side_effect = lambda: (b"a" * 20 for _ in range(1))
+    async def async_gen():
+        yield b"a" * 20
+
+    mock_resp.aiter_bytes.side_effect = async_gen
     mock_resp.aclose = AsyncMock()
 
     with patch("httpx.AsyncClient.stream") as mock_stream:
         mock_stream.return_value.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_stream.return_value.__aexit__ = AsyncMock()
+        mock_stream.return_value.__aexit__ = AsyncMock(return_value=None)
 
         with pytest.raises(ValueError, match=r"Response size exceeds max limit"):
             await adapter._fetch_with_verified_ip("http://example.com/", ["203.0.113.1"])
@@ -133,16 +136,17 @@ async def test_url_adapter_iterates_all_ips() -> None:
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.headers = httpx.Headers({"content-type": "text/plain"})
-        mock_resp.aiter_bytes.return_value = AsyncMock(__aiter__=lambda x: x)
-        mock_resp.aiter_bytes.return_value.__aiter__.side_effect = lambda: (
-            b"Success" for _ in range(1)
-        )
+
+        async def async_gen():
+            yield b"Success"
+
+        mock_resp.aiter_bytes.side_effect = async_gen
         mock_resp.aclose = AsyncMock()
         return mock_resp
 
     with patch("httpx.AsyncClient.stream") as mock_stream:
         mock_stream.return_value.__aenter__ = AsyncMock(side_effect=mock_client_stream)
-        mock_stream.return_value.__aexit__ = AsyncMock()
+        mock_stream.return_value.__aexit__ = AsyncMock(return_value=None)
 
         _, _, body = await adapter._fetch_with_verified_ip("http://example.com", ips)
         assert body == b"Success"
@@ -152,7 +156,7 @@ async def test_url_adapter_iterates_all_ips() -> None:
 @pytest.mark.asyncio
 async def test_url_adapter_early_validation() -> None:
     """絶対URL/スキームの早期バリデーション。"""
-    adapter = URLAdapter()
+    adapter = URLAdapter(settings=_make_settings())
     with pytest.raises(ValueError, match="URL must be absolute"):
         await adapter.adapt("/relative/path")
     with pytest.raises(ValueError, match="Unsupported URL scheme"):

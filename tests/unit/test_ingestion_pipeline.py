@@ -258,6 +258,8 @@ async def test_pipeline_concurrent_same_content_dedup() -> None:
 
     storage = _make_mock_storage()
     storage.save_memory = slow_save
+    # Deduplicator による短絡を防ぎ、パイプラインのインプロセスロック機構を検証する
+    storage.vector_search = AsyncMock(return_value=[])
     graph = _make_mock_graph()
     embedding_provider = _make_mock_embedding_provider()
 

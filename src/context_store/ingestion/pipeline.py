@@ -236,7 +236,10 @@ class IngestionPipeline:
         try:
             return await current_task
         finally:
-            # 自分が作成したタスクのみを削除する
+            # 自分が作成したタスクのみを削除する。
+            # 注: asyncio.Lockは再入不可(non-reentrant)だが、先頭での async with ブロックは
+            # 既に抜けているため再取得してもデッドロックしない。
+            # _content_results の参照と pop をアトミックに実行するために意図的に再取得する。
             async with lock:
                 if self._content_results.get(memo_key) is current_task:
                     self._content_results.pop(memo_key, None)

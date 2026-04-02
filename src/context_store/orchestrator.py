@@ -76,14 +76,6 @@ class Orchestrator:
         self.reward_signal: "RewardSignal" = reward_signal if reward_signal is not None else NoOpRewardSignal()
         self.policy_hook: "PolicyHook" = policy_hook if policy_hook is not None else NoOpPolicyHook()
 
-    def __await__(self):  # type: ignore[override]
-        return self._async_init().__await__()
-
-    async def _async_init(self) -> "Orchestrator":
-        """非同期初期化（ベクトル次元フェイルファストチェック）。"""
-        await self._check_vector_dimension()
-        return self
-
     async def _check_vector_dimension(self) -> None:
         """ストレージに保存されたベクトル次元と現在の次元を比較する。
 
@@ -225,7 +217,8 @@ class Orchestrator:
             raise RuntimeError(
                 "グラフ機能が無効です。graph_enabled=true を設定してください。"
             )
-        # ベクトル検索で起点ノードを特定してからグラフ検索
+        # TODO(Phase 9): edge_types と depth を RetrievalPipeline の graph_traversal に渡す。
+        # 現時点ではベクトル検索でシードノードを特定し、グラフアダプターへの委譲は未実装。
         search_result = await self._retrieval_pipeline.search(
             query, project=project, top_k=5
         )

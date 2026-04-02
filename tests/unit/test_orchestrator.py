@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -366,7 +366,11 @@ class TestSearchGraphOperation:
 
     @pytest.mark.asyncio
     async def test_search_graph_delegates_to_retrieval_pipeline(self):
-        """グラフが有効な場合 RetrievalPipeline.search() に委譲される。"""
+        """グラフが有効な場合 RetrievalPipeline.search() に委譲される。
+
+        注意: edge_types と depth は現時点では RetrievalPipeline に渡されない。
+        Phase 9 で graph_traversal に委譲される予定（orchestrator.py の TODO 参照）。
+        """
         graph = _make_mock_graph()
         retrieval = _make_mock_retrieval_pipeline()
         orch, *_ = await _build_orchestrator(graph=graph, retrieval_pipeline=retrieval)

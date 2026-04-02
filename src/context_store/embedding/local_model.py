@@ -68,13 +68,13 @@ class LocalModelEmbeddingProvider:
         """埋め込みベクトルの次元数を返す。
 
         コンストラクタで指定されているか、既にロード済みの場合はその値を返す。
-        それ以外の場合はモデルをロードして取得する。
+        それ以外の場合はデフォルト値を返す（モデルのロードは embed 呼び出しまで遅延される）。
         """
         if self._dimension is not None:
             return self._dimension
 
-        self._get_model()
-        return self._dimension or 768
+        # モデル未ロードかつ次元数未定の場合は 768 をデフォルトとして返す
+        return 768
 
     async def embed(self, text: str) -> list[float]:
         """単一テキストを埋め込みベクトルに変換する。"""

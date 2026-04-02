@@ -185,7 +185,7 @@ class PostgresStorageAdapter:
         sql = "DELETE FROM memories WHERE id = $1"
         async with self._pool.acquire() as conn:
             status = await conn.execute(sql, memory_id)
-        return status == "DELETE 1"  # type: ignore[no-any-return]
+        return str(status) == "DELETE 1"
 
     async def update_memory(self, memory_id: str, updates: dict[str, Any]) -> bool:
         """Apply partial updates to a memory."""

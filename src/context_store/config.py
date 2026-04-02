@@ -102,8 +102,8 @@ class Settings(BaseSettings):
 
         if self.storage_backend == "postgres" and not postgres_password.strip():
             raise ValueError("POSTGRES_PASSWORD は storage_backend=postgres の場合に必須です。")
-        if self.graph_enabled and not neo4j_password.strip():
-            raise ValueError("NEO4J_PASSWORD は graph_enabled=true の場合に必須です。")
+        if self.storage_backend == "postgres" and self.graph_enabled and not neo4j_password.strip():
+            raise ValueError("NEO4J_PASSWORD は graph_enabled=true かつ storage_backend=postgres の場合に必須です。")
         if self.embedding_provider == "openai" and not openai_api_key.strip():
             raise ValueError("OPENAI_API_KEY は embedding_provider=openai の場合に必須です。")
         if self.embedding_provider == "local-model" and not local_model_name:

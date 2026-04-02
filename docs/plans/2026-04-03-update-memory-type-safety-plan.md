@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Pre-fix verification
+## Task 1: Pre-fix verification
 
 **Files:**
 - Modify: `src/context_store/storage/postgres.py`

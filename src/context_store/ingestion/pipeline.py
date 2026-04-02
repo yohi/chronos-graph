@@ -33,7 +33,11 @@ logger = logging.getLogger(__name__)
 
 
 class EmbeddingLifecycle(Protocol):
-    """Lifecycle methods for EmbeddingProvider."""
+    """Lifecycle methods for EmbeddingProvider.
+
+    Implementations should prefer implementing dispose() for resource cleanup.
+    Callers may fall back to close() if dispose() is not available or raises an exception.
+    """
 
     async def close(self) -> None:
         """任意のクローズ処理。"""
@@ -46,7 +50,11 @@ class EmbeddingLifecycle(Protocol):
 
 @runtime_checkable
 class EmbeddingProvider(BaseEmbeddingProvider, EmbeddingLifecycle, Protocol):
-    """Protocol combining base embedding features and lifecycle methods."""
+    """Protocol combining base embedding features and lifecycle methods.
+
+    Inherits the EmbeddingLifecycle contract where callers and implementers expect
+    the concrete dispose implementation to try dispose() first, then fall back to close().
+    """
 
     ...
 

@@ -828,7 +828,8 @@ class SQLiteStorageAdapter:
                     message="Limit must be a non-negative integer",
                     code="INVALID_PARAMETER",
                 )
-            limit_clause = f"LIMIT {limit_val}"
+            limit_clause = "LIMIT ?"
+            params.append(limit_val)
 
         sql = (
             "SELECT m.*, me.embedding "

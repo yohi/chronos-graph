@@ -1082,19 +1082,20 @@ class TestGetMemoriesBatch:
     async def test_get_memories_batch_large(self, adapter):
         # Trigger chunking (chunk_size=900)
         ids = []
-        # Using 1000 to trigger 2 chunks (900 + 100)
-        for i in range(1000):
+        # Using 950 to trigger 2 chunks (900 + 50)
+        # 1000 items save one-by-one is slow in CI
+        for i in range(950):
             m = _make_memory(content=f"test{i}")
             await adapter.save_memory(m)
             ids.append(str(m.id))
 
         # This should trigger chunking (chunk_size=900)
         results = await adapter.get_memories_batch(ids)
-        assert len(results) == 1000
+        assert len(results) == 950
         for i, m in enumerate(results):
             assert str(m.id) == ids[i]
         assert results[0].content == "test0"
-        assert results[-1].content == "test999"
+        assert results[-1].content == "test949"
 
     @pytest.mark.asyncio
     async def test_get_memories_batch_empty(self, adapter):

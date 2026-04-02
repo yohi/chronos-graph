@@ -123,12 +123,12 @@ class TestLiteLLMEmbeddingProvider:
         """Rate limit (429) エラー時にリトライが行われ、成功することを検証。"""
         texts = ["Hello world"]
         expected = [[0.1] * 1536]
-        
+
         mock_response = MagicMock()
         mock_response.data = [MagicMock(embedding=expected[0])]
 
         call_count = 0
-        
+
         async def mock_aembedding(**kwargs):
             nonlocal call_count
             call_count += 1
@@ -155,9 +155,9 @@ class TestLiteLLMEmbeddingProvider:
     async def test_embed_batch_fails_after_max_retries(self, provider) -> None:
         """最大リトライ回数を超えた場合は例外が送出されることを検証。"""
         texts = ["Hello world"]
-        
+
         call_count = 0
-        
+
         async def mock_aembedding(**kwargs):
             nonlocal call_count
             call_count += 1

@@ -114,7 +114,9 @@ class Settings(BaseSettings):
             )
         if self.embedding_provider == "litellm":
             if not litellm_api_base:
-                raise ValueError("LITELLM_API_BASE は embedding_provider=litellm の場合に必須です。")
+                raise ValueError(
+                    "LITELLM_API_BASE は embedding_provider=litellm の場合に必須です。"
+                )
             if not litellm_model:
                 raise ValueError("LITELLM_MODEL は embedding_provider=litellm の場合に必須です。")
         if self.embedding_provider == "custom-api" and not custom_api_endpoint:

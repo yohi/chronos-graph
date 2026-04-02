@@ -125,7 +125,7 @@ class TestLocalModelEmbeddingProvider:
             # dimension プロパティを呼び出しても SentenceTransformer は呼ばれないはず
             assert provider.dimension == 512
             mock_cls.assert_not_called()
-            # 内部状態を確認（実装修正前は _get_model が呼ばれるため、mock_cls が呼ばれ、_model がセットされる）
+            # 内部状態を確認(実装修正前は _get_model が呼ばれるため、mock_cls が呼ばれ、_model がセットされる)
             assert provider._model is None
 
     def test_invalid_dimension(self) -> None:

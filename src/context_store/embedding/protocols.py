@@ -26,6 +26,10 @@ class EmbeddingProvider(Protocol):
         """埋め込みベクトルの次元数。"""
         ...
 
+    async def close(self) -> None:
+        """任意のクローズ処理。"""
+        ...
+
 
 @runtime_checkable
 class TokenCounter(Protocol):

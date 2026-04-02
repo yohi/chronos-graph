@@ -110,11 +110,15 @@ class LiteLLMEmbeddingProvider:
 
     @tenacity.retry(
         retry=retry_if_exception(_is_retryable),
-        wait=wait_exponential(multiplier=1, min=1, max=60),
-        stop=stop_after_attempt(5),
+        wait=tenacity.wait_random_exponential(multiplier=1, min=1, max=60),
+        stop=tenacity.stop_after_attempt(5),
         before_sleep=tenacity.before_sleep_log(logger, logging.WARNING),
     )
     async def _aembedding_with_retry(self, **kwargs: Any) -> Any:
         """LiteLLM aembedding をリトライ付きで呼び出す。"""
         litellm = _get_litellm()
         return await litellm.aembedding(**kwargs)
+
+    async def close(self) -> None:
+        """リソースを解放する (LiteLLM では特に無し)。"""
+        pass

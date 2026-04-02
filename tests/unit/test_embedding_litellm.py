@@ -145,7 +145,7 @@ class TestLiteLLMEmbeddingProvider:
         mock_litellm.aembedding = mock_aembedding
 
         with patch("context_store.embedding.litellm._get_litellm", return_value=mock_litellm):
-            # min=2 の exponential backoff のためテストに少し時間がかかる
+            # min=1 の exponential backoff のためテストに少し時間がかかる
             results = await provider.embed_batch(texts)
 
         assert call_count == 3

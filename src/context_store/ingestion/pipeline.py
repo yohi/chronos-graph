@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from context_store.config import Settings
-from context_store.embedding.protocols import EmbeddingProvider as BaseEmbeddingProvider
+from context_store.embedding.protocols import EmbeddingProvider
 from context_store.ingestion.adapters import ConversationAdapter, RawContent, URLAdapter
 from context_store.ingestion.chunker import Chunker
 from context_store.ingestion.classifier import Classifier
@@ -30,35 +30,6 @@ from context_store.models.memory import Memory, MemoryType, SourceType
 from context_store.storage.protocols import GraphAdapter, MemoryFilters, StorageAdapter
 
 logger = logging.getLogger(__name__)
-
-
-class EmbeddingLifecycle(Protocol):
-    """Lifecycle methods for EmbeddingProvider.
-
-    Implementations should prefer implementing dispose() for resource cleanup.
-    Callers may fall back to close() if dispose() is not available or raises
-    an exception.
-    """
-
-    async def close(self) -> None:
-        """任意のクローズ処理。"""
-        ...
-
-    async def dispose(self) -> None:
-        """任意の破棄処理。"""
-        ...
-
-
-@runtime_checkable
-class EmbeddingProvider(BaseEmbeddingProvider, EmbeddingLifecycle, Protocol):
-    """Protocol combining base embedding features and lifecycle methods.
-
-    Inherits the EmbeddingLifecycle contract where callers and implementers
-    expect the concrete dispose implementation to try dispose() first, then
-    fall back to close().
-    """
-
-    ...
 
 
 @dataclass
@@ -140,34 +111,9 @@ class IngestionPipeline:
     async def dispose(self) -> None:
         """保持しているクローズ可能リソースを解放する。"""
         if self._url_adapter is not None:
-            aclose = getattr(self._url_adapter, "aclose", None)
-            if callable(aclose):
-                await aclose()
+            await self._url_adapter.aclose()
 
-        provider_dispose = getattr(self._embedding_provider, "dispose", None)
-        dispose_success = False
-        if callable(provider_dispose):
-            try:
-                dispose_result = provider_dispose()
-                if inspect.isawaitable(dispose_result):
-                    await dispose_result
-                dispose_success = True
-            except Exception as e:
-                logger.error(
-                    "Error during provider_dispose in IngestionPipeline: %s", e, exc_info=True
-                )
-
-        if not dispose_success:
-            provider_close = getattr(self._embedding_provider, "close", None)
-            if callable(provider_close):
-                try:
-                    close_result = provider_close()
-                    if inspect.isawaitable(close_result):
-                        await close_result
-                except Exception as e:
-                    logger.error(
-                        "Error during provider_close in IngestionPipeline: %s", e, exc_info=True
-                    )
+        await self._embedding_provider.close()
 
     async def ingest(
         self,

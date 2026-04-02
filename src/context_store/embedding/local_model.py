@@ -57,7 +57,7 @@ class LocalModelEmbeddingProvider:
                 if self._model is None:
                     logger.info(f"ローカルモデルをロード中: {self._model_name}")
                     self._model = SentenceTransformer(self._model_name)
-                    # モデルから次元数を取得（コンストラクタで指定されていない場合のみ）
+                    # モデルから次元数を取得(コンストラクタで指定されていない場合のみ)
                     if self._dimension is None:
                         self._dimension = int(self._model.get_sentence_embedding_dimension())
                     logger.info(f"モデルのロード完了: dimension={self._dimension}")

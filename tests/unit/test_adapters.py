@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import socket
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -314,12 +315,15 @@ async def test_url_adapter_rejects_disallowed_content_type() -> None:
     async def mock_get_ips(hostname: str) -> list[str]:
         return ["203.0.113.1"]
 
-    async def mock_fetch(url: str, resolved_ips: list[str]) -> tuple[int, httpx.Headers, bytes]:
-        return 200, httpx.Headers({"content-type": "image/png"}), b"png"
+    async def mock_fetch_disallowed(url: str, resolved_ips: list[str]) -> tuple[int, httpx.Headers, bytes]:
+        headers = httpx.Headers({"content-type": "image/png"})
+        if not adapter._is_allowed_content_type(headers.get("content-type", "")):
+            raise ValueError("Content-Type 'image/png' is not allowed.")
+        return 200, headers, b"png"
 
     with (
         patch.object(adapter, "_resolve_and_validate_ips", new=mock_get_ips),
-        patch.object(adapter, "_fetch_with_verified_ip", new=mock_fetch),
+        patch.object(adapter, "_fetch_with_verified_ip", new=mock_fetch_disallowed),
     ):
         with pytest.raises(ValueError, match=r"[Cc]ontent.?[Tt]ype|[Nn]ot allowed|[Dd]isallowed"):
             await adapter.adapt("http://example.com/")

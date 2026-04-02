@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     url_max_response_bytes: int = Field(default=10 * 1024 * 1024, ge=0)  # 10MB
     url_timeout_seconds: int = Field(default=30, gt=0)
     url_allowed_content_types: list[str] = Field(
-        default_factory=lambda: ["text/*", "application/json", "application/pdf"]
+        default_factory=lambda: ["text/*", "application/json"]
     )
 
     @property

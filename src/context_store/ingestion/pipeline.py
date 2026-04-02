@@ -16,8 +16,9 @@ import hashlib
 import inspect
 import logging
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, Union, cast, runtime_checkable
 
+from context_store.embedding.protocols import EmbeddingProvider as BaseEmbeddingProvider
 from context_store.ingestion.adapters import ConversationAdapter, RawContent, URLAdapter
 from context_store.ingestion.chunker import Chunker
 from context_store.ingestion.classifier import Classifier
@@ -29,16 +30,8 @@ from context_store.storage.protocols import GraphAdapter, MemoryFilters, Storage
 logger = logging.getLogger(__name__)
 
 
-class EmbeddingProvider(Protocol):
-    """IngestionPipeline が依存する最小限の埋め込み契約。"""
-
-    async def embed(self, text: str) -> list[float]:
-        """単一テキストを埋め込む。"""
-        ...
-
-    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """複数テキストを埋め込む。"""
-        ...
+class EmbeddingLifecycle(Protocol):
+    """Lifecycle methods for EmbeddingProvider."""
 
     async def close(self) -> None:
         """任意のクローズ処理。"""
@@ -47,6 +40,13 @@ class EmbeddingProvider(Protocol):
     async def dispose(self) -> None:
         """任意の破棄処理。"""
         ...
+
+
+@runtime_checkable
+class EmbeddingProvider(BaseEmbeddingProvider, EmbeddingLifecycle, Protocol):
+    """Protocol combining base embedding features and lifecycle methods."""
+
+    ...
 
 
 @dataclass
@@ -91,7 +91,7 @@ class IngestionPipeline:
 
         # コンテンツハッシュ別の Lock（排他制御）
         self._content_locks: dict[str, asyncio.Lock] = {}
-        self._content_results: dict[str, IngestionResult] = {}
+        self._content_results: dict[Any, asyncio.Task[IngestionResult | None]] = {}
         self._locks_mutex = asyncio.Lock()
 
     async def _get_content_lock(self, content_hash: str) -> asyncio.Lock:
@@ -198,23 +198,41 @@ class IngestionPipeline:
         prior_document_memories: list[Memory],
     ) -> IngestionResult | None:
         """単一チャンクの処理パイプラインを実行する。"""
-        # コンテンツハッシュで排他制御
+        # コンテンツハッシュ + メタデータでキーイング
         content_hash = self._compute_hash(chunk.content)
+        project_id = base_metadata.get("project", "")
+        session_id = base_metadata.get("session_id", "")
+        source_type = chunk.source_type.value
+        memo_key = (content_hash, project_id, session_id, source_type)
+
         lock = await self._get_content_lock(content_hash)
 
         async with lock:
-            result: IngestionResult | None = self._content_results.get(content_hash)
-            if result is None:
-                result = await self._process_chunk_locked(
+            # 他の並行タスクがすでにこのチャンクを処理中であれば、そのタスクの完了を待つ
+            # （in-flight map として機能させる）
+            existing_task = self._content_results.get(memo_key)
+            if existing_task is not None:
+                # ロックを解放して待機（await 中に他のタスクもここに来る可能性がある）
+                return await existing_task
+
+            # 自分が処理を担当するため、Task を作成して登録
+            current_task = asyncio.create_task(
+                self._process_chunk_locked(
                     chunk,
                     base_metadata=base_metadata,
                     prior_document_memories=prior_document_memories,
                 )
-                if result is not None:
-                    self._content_results[content_hash] = result
+            )
+            self._content_results[memo_key] = current_task
 
-        await self._release_content_lock(content_hash, lock)
-        return result
+        try:
+            return await current_task
+        finally:
+            # 処理完了（成功・失敗問わず）後は、他の独立したリクエストのために
+            # メモから削除する（並行処理の待ち合わせが済んだら消去）
+            # これにより 'completed results are not permanently cached' を満たす
+            self._content_results.pop(memo_key, None)
+            await self._release_content_lock(content_hash, lock)
 
     async def _process_chunk_locked(
         self,

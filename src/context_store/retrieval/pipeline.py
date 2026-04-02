@@ -144,10 +144,10 @@ class RetrievalPipeline:
                     )
                 )
 
-        # ステップ 6: 後処理（プロジェクトフィルタ・トークン制限・アクセス記録更新）
+        # ステップ 6: 後処理（トークン制限・アクセス記録更新）
         scored = await self.post_processor.process(
             results=scored,
-            project=project,
+            project=None,  # すでに _filter_fused_by_project でフィルタ済み
             max_tokens=max_tokens,
         )
 

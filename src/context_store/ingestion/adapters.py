@@ -6,6 +6,7 @@ SSRF対策として、URLAdapterはDNS解決後にプライベートIP/ループ
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
 import re
@@ -288,7 +289,7 @@ class URLAdapter:
 
         # DNS解決
         try:
-            addr_infos = socket.getaddrinfo(hostname, None)
+            addr_infos = await asyncio.to_thread(socket.getaddrinfo, hostname, None)
         except socket.gaierror as exc:
             raise ValueError(f"DNS resolution failed for '{hostname}': {exc}") from exc
 
@@ -330,6 +331,20 @@ class URLAdapter:
             verify=True,  # TLS証明書検証を強制
         ) as client:
             async with client.stream("GET", url, headers={"Host": hostname}) as response:
+                # リダイレクトまたは 2xx 以外はボディを読まずにステータスのみ返す
+                if response.status_code in (301, 302, 303, 307, 308) or not (
+                    200 <= response.status_code < 300
+                ):
+                    return response.status_code, response.headers, b""
+
+                # Content-Type チェック（ボディ読み込み前に実施）
+                content_type = response.headers.get("content-type", "")
+                if not self._is_allowed_content_type(content_type):
+                    raise ValueError(
+                        f"Content-Type '{content_type}' is not allowed. "
+                        f"Allowed types: {self.settings.url_allowed_content_types}"
+                    )
+
                 body_chunks: list[bytes] = []
                 total_bytes = 0
                 try:
@@ -390,15 +405,12 @@ class URLAdapter:
                 url = urljoin(url, location)
                 continue
 
-            # Content-Type 検証（ボディ読み込み前に実施）
-            content_type = headers.get("content-type", "")
-            if not self._is_allowed_content_type(content_type):
-                raise ValueError(
-                    f"Content-Type '{content_type}' is not allowed. "
-                    f"Allowed types: {self.settings.url_allowed_content_types}"
-                )
+            # 非 2xx の場合はエラー
+            if not (200 <= status_code < 300):
+                raise ValueError(f"HTTP request failed with status code {status_code}")
 
             # HTMLを Markdown/テキストに変換
+            content_type = headers.get("content-type", "")
             content_type_main = content_type.split(";")[0].strip().lower()
             if "html" in content_type_main:
                 text_content = _html_to_text(raw_body.decode("utf-8", errors="replace"))

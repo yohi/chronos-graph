@@ -12,7 +12,7 @@ import pytest
 from context_store.ingestion.adapters import RawContent
 from context_store.ingestion.deduplicator import DeduplicationAction
 from context_store.ingestion.pipeline import IngestionPipeline, IngestionResult
-from context_store.models.memory import Memory, MemoryType, SourceType
+from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
 from context_store.storage.protocols import GraphAdapter, StorageAdapter
 
 
@@ -55,8 +55,26 @@ def _make_mock_embedding_provider(
 
 def _make_mock_storage() -> StorageAdapter:
     storage = MagicMock(spec=StorageAdapter)
-    storage.save_memory = AsyncMock(return_value=str(uuid4()))
-    storage.vector_search = AsyncMock(return_value=[])
+    saved_memories: list[Memory] = []
+
+    async def save_memory(memory: Memory) -> str:
+        mid = str(uuid4())
+        persisted = memory.model_copy(update={"id": mid})
+        saved_memories.append(persisted)
+        return mid
+
+    async def vector_search(embedding, top_k, project=None, filters=None):
+        results = []
+        for m in saved_memories:
+            # プロジェクトフィルタのシミュレーション
+            if project and m.project != project:
+                continue
+            # 同一コンテンツ（または同一ベクトル）ならスコア1.0で返す
+            results.append(ScoredMemory(memory=m, score=1.0, source=MemorySource.VECTOR))
+        return results
+
+    storage.save_memory = AsyncMock(side_effect=save_memory)
+    storage.vector_search = AsyncMock(side_effect=vector_search)
     storage.list_by_filter = AsyncMock(return_value=[])
     storage.update_memory = AsyncMock(return_value=True)
     return storage

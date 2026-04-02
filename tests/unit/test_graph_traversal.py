@@ -128,6 +128,9 @@ class TestGraphTraversal:
         result = await graph_traversal.traverse(seed_ids=seed_ids, edge_types=None, depth=2)
 
         assert isinstance(result, GraphResult)
+        assert result.nodes == []
+        assert result.edges == []
+        assert result.traversal_depth == 0
         assert result.partial is True
         assert result.timeout is True
 

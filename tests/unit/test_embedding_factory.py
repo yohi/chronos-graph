@@ -44,7 +44,7 @@ class TestCreateEmbeddingProvider:
         assert isinstance(provider, LocalModelEmbeddingProvider)
         assert isinstance(provider, EmbeddingProvider)
         assert provider._model_name == "test-model"
-        assert provider._dimension_override == 384
+        assert provider._dimension == 384
 
     def test_creates_litellm_provider(self) -> None:
         from context_store.embedding import create_embedding_provider

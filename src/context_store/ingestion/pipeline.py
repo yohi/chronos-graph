@@ -326,7 +326,7 @@ class IngestionPipeline:
         )
 
         result = IngestionResult(
-            memory_id=memory_id,
+            memory_id=str(memory_id),
             action=dedup_result.action,
             memory_type=classification.memory_type,
             chunk_index=int(chunk.metadata.get("chunk_index", 0)),

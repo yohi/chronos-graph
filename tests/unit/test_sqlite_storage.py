@@ -1041,3 +1041,71 @@ class TestDispose:
         adp = await SQLiteStorageAdapter.create(settings)
         await adp.dispose()
         await adp.dispose()  # 2 回目もエラーなし
+
+
+# ---------------------------------------------------------------------------
+# get_memories_batch
+# ---------------------------------------------------------------------------
+
+
+class TestGetMemoriesBatch:
+    @pytest.mark.asyncio
+    async def test_get_memories_batch_basic(self, adapter):
+        # Save some memories
+        m1 = _make_memory(content="test1")
+        m2 = _make_memory(content="test2")
+        await adapter.save_memory(m1)
+        await adapter.save_memory(m2)
+
+        # Retrieve in batch
+        results = await adapter.get_memories_batch([str(m1.id), str(m2.id)])
+        assert len(results) == 2
+        ids = [str(m.id) for m in results]
+        assert str(m1.id) in ids
+        assert str(m2.id) in ids
+
+    @pytest.mark.asyncio
+    async def test_get_memories_batch_order_and_duplicates(self, adapter):
+        m1 = _make_memory(content="test1")
+        m2 = _make_memory(content="test2")
+        await adapter.save_memory(m1)
+        await adapter.save_memory(m2)
+
+        # Duplicate IDs and specific order
+        results = await adapter.get_memories_batch([str(m2.id), str(m1.id), str(m2.id)])
+        assert len(results) == 3
+        assert str(results[0].id) == str(m2.id)
+        assert str(results[1].id) == str(m1.id)
+        assert str(results[2].id) == str(m2.id)
+
+    @pytest.mark.asyncio
+    async def test_get_memories_batch_large(self, adapter):
+        # Trigger chunking (chunk_size=900)
+        ids = []
+        # Using 1000 to trigger 2 chunks (900 + 100)
+        for i in range(1000):
+            m = _make_memory(content=f"test{i}")
+            await adapter.save_memory(m)
+            ids.append(str(m.id))
+
+        # This should trigger chunking (chunk_size=900)
+        results = await adapter.get_memories_batch(ids)
+        assert len(results) == 1000
+        for i, m in enumerate(results):
+            assert str(m.id) == ids[i]
+        assert results[0].content == "test0"
+        assert results[-1].content == "test999"
+
+    @pytest.mark.asyncio
+    async def test_get_memories_batch_empty(self, adapter):
+        results = await adapter.get_memories_batch([])
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_get_memories_batch_missing_ids(self, adapter):
+        m1 = _make_memory(content="test1")
+        await adapter.save_memory(m1)
+
+        results = await adapter.get_memories_batch([str(m1.id), str(uuid4())])
+        assert len(results) == 1
+        assert str(results[0].id) == str(m1.id)

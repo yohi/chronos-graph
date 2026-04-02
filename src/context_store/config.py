@@ -97,10 +97,10 @@ class Settings(BaseSettings):
         postgres_password = self.postgres_password.get_secret_value()
         neo4j_password = self.neo4j_password.get_secret_value()
         openai_api_key = self.openai_api_key.get_secret_value()
-        local_model_name = self.local_model_name.strip()
-        litellm_api_base = self.litellm_api_base.strip()
-        litellm_model = self.litellm_model.strip()
-        custom_api_endpoint = self.custom_api_endpoint.strip()
+        self.local_model_name = self.local_model_name.strip()
+        self.litellm_api_base = self.litellm_api_base.strip()
+        self.litellm_model = self.litellm_model.strip()
+        self.custom_api_endpoint = self.custom_api_endpoint.strip()
 
         if self.storage_backend == "postgres" and not postgres_password.strip():
             raise ValueError("POSTGRES_PASSWORD は storage_backend=postgres の場合に必須です。")
@@ -108,18 +108,18 @@ class Settings(BaseSettings):
             raise ValueError("NEO4J_PASSWORD は graph_enabled=true の場合に必須です。")
         if self.embedding_provider == "openai" and not openai_api_key.strip():
             raise ValueError("OPENAI_API_KEY は embedding_provider=openai の場合に必須です。")
-        if self.embedding_provider == "local-model" and not local_model_name:
+        if self.embedding_provider == "local-model" and not self.local_model_name:
             raise ValueError(
                 "LOCAL_MODEL_NAME は embedding_provider=local-model の場合に必須です。"
             )
         if self.embedding_provider == "litellm":
-            if not litellm_api_base:
+            if not self.litellm_api_base:
                 raise ValueError(
                     "LITELLM_API_BASE は embedding_provider=litellm の場合に必須です。"
                 )
-            if not litellm_model:
+            if not self.litellm_model:
                 raise ValueError("LITELLM_MODEL は embedding_provider=litellm の場合に必須です。")
-        if self.embedding_provider == "custom-api" and not custom_api_endpoint:
+        if self.embedding_provider == "custom-api" and not self.custom_api_endpoint:
             raise ValueError(
                 "CUSTOM_API_ENDPOINT は embedding_provider=custom-api の場合に必須です。"
             )

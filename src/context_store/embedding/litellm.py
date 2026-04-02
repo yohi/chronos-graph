@@ -32,19 +32,16 @@ def _is_retryable(exc: BaseException) -> bool:
 
     LiteLLM や httpx が投げる例外のうち、リトライ可能なものを判定する。
     """
-    # 1. status_code を取得
-    status_code = None
     if isinstance(exc, httpx.HTTPStatusError):
-        status_code = exc.response.status_code
-    else:
-        # LiteLLM の例外などは status_code 属性を直接持つ場合がある
-        status_code = getattr(exc, "status_code", None)
+        return exc.response.status_code in (429, 500, 502, 503, 504)
 
-    if status_code in (429, 500, 502, 503, 504):
+    # ネットワーク関連のエラー (httpx)
+    if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError)):
         return True
 
-    # 2. ネットワーク関連のエラー (httpx)
-    if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError)):
+    # LiteLLM の例外などは status_code 属性を直接持つ場合がある
+    status_code = getattr(exc, "status_code", None)
+    if status_code in (429, 500, 502, 503, 504):
         return True
 
     return False
@@ -109,7 +106,7 @@ class LiteLLMEmbeddingProvider:
         return all_results
 
     @tenacity.retry(
-        retry=retry_if_exception(_is_retryable),
+        retry=tenacity.retry_if_exception(_is_retryable),
         wait=tenacity.wait_random_exponential(multiplier=1, min=1, max=60),
         stop=tenacity.stop_after_attempt(5),
         before_sleep=tenacity.before_sleep_log(logger, logging.WARNING),

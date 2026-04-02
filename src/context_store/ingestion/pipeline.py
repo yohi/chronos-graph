@@ -219,7 +219,19 @@ class IngestionPipeline:
         project_id = base_metadata.get("project", "")
         session_id = base_metadata.get("session_id", "")
         source_type = chunk.source_type.value
-        memo_key = (content_hash, project_id, session_id, source_type)
+        # 追加のメタデータを含めてキーを精緻化
+        document_id = chunk.metadata.get("document_id", "")
+        url = chunk.metadata.get("url") or chunk.metadata.get("source_id", "")
+        chunk_index = chunk.metadata.get("chunk_index", 0)
+        memo_key = (
+            content_hash,
+            project_id,
+            session_id,
+            source_type,
+            document_id,
+            url,
+            chunk_index,
+        )
 
         lock = await self._get_content_lock(content_hash)
         current_task: asyncio.Task[IngestionResult | None] | None = None
@@ -231,29 +243,48 @@ class IngestionPipeline:
             if existing_task is None:
                 # 自分が処理を担当するため、Task を作成して登録
                 current_task = asyncio.create_task(
-                    self._process_chunk_locked(
+                    self._process_chunk_locked_with_cleanup(
                         chunk,
                         base_metadata=base_metadata,
                         prior_document_memories=prior_document_memories,
+                        memo_key=memo_key,
+                        content_hash=content_hash,
+                        lock=lock,
                     )
                 )
                 self._content_results[memo_key] = current_task
 
         if existing_task is not None:
             # 他のタスクが処理中なので、その完了を待つ
-            return await existing_task
+            # asyncio.shield を使い、呼び出し元のキャンセルが共有タスクに波及しないようにする
+            return await asyncio.shield(existing_task)
 
         # 自分が作成したタスクを実行（current_task は必ず非 None）
         assert current_task is not None
+        # 自分が作成したタスクも shield で待機し、キャンセルから保護する
+        return await asyncio.shield(current_task)
+
+    async def _process_chunk_locked_with_cleanup(
+        self,
+        chunk: RawContent,
+        *,
+        base_metadata: dict[str, Any],
+        prior_document_memories: list[Memory],
+        memo_key: Any,
+        content_hash: str,
+        lock: asyncio.Lock,
+    ) -> IngestionResult | None:
+        """処理を実行し、完了後に確実にクリーンアップを行うラッパー。"""
         try:
-            return await current_task
+            return await self._process_chunk_locked(
+                chunk,
+                base_metadata=base_metadata,
+                prior_document_memories=prior_document_memories,
+            )
         finally:
-            # 自分が作成したタスクのみを削除する。
-            # 注: asyncio.Lockは再入不可(non-reentrant)だが、先頭での async with ブロックは
-            # 既に抜けているため再取得してもデッドロックしない。
-            # _content_results の参照と pop をアトミックに実行するために意図的に再取得する。
+            # タスク完了時のクリーンアップ
             async with lock:
-                if self._content_results.get(memo_key) is current_task:
+                if self._content_results.get(memo_key) is asyncio.current_task():
                     self._content_results.pop(memo_key, None)
             await self._release_content_lock(content_hash, lock)
 
@@ -336,12 +367,17 @@ class IngestionPipeline:
                 chunk_neighbors=chunk_neighbors,
             )
         except Exception:
+            # 補償処理（ロールバック）: delete_memory と delete_node を個別に試行
             try:
                 await self._storage.delete_memory(str(memory_id))
+            except Exception as e:
+                logger.error("Error during delete_memory for memory_id=%s: %s", memory_id, e)
+
+            try:
                 if node_created:
                     await self._graph.delete_node(str(memory_id))
-            except Exception as rollback_err:
-                logger.error("Rollback failed for memory_id=%s: %s", memory_id, rollback_err)
+            except Exception as e:
+                logger.error("Error during delete_node for memory_id=%s: %s", memory_id, e)
             raise
 
         logger.info(
@@ -365,9 +401,10 @@ class IngestionPipeline:
         """時系列エッジ用に同一セッションまたはプロジェクトの直前候補を取得する。"""
         session_id = memory.source_metadata.get("session_id")
 
+        # limit を 2 に増やし、自分自身が返ってきた場合でも直前の1件を取得できるようにする
         filters = MemoryFilters(
             project=memory.project,
-            limit=1,
+            limit=2,
             order_by="created_at DESC",
             session_id=str(session_id) if session_id else None,
         )

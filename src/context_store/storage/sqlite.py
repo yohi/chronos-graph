@@ -698,6 +698,10 @@ class SQLiteStorageAdapter:
                 tag_conditions.append("tags LIKE ?")
             conditions.append("(" + " OR ".join(tag_conditions) + ")")
 
+        if getattr(filters, "session_id", None) is not None:
+            params.append(filters.session_id)
+            conditions.append("json_extract(source_metadata, '$.session_id') = ?")
+
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         prefixed_where = ""
         if where_clause:
@@ -708,16 +712,24 @@ class SQLiteStorageAdapter:
                 "project = ?": "m.project = ?",
                 "memory_type = ?": "m.memory_type = ?",
                 "tags LIKE ?": "m.tags LIKE ?",
+                "json_extract(source_metadata, '$.session_id') = ?": "json_extract(m.source_metadata, '$.session_id') = ?",
             }
             for original, prefixed in replacements.items():
                 prefixed_where = prefixed_where.replace(original, prefixed)
+
+        order_clause = (
+            f"ORDER BY {filters.order_by}" if filters.order_by else "ORDER BY m.created_at DESC"
+        )
+        limit_clause = f"LIMIT {filters.limit}" if getattr(filters, "limit", None) else ""
+
         sql = (
             "SELECT m.*, me.embedding "
             "FROM memories m "
             "LEFT JOIN memory_embeddings me ON me.memory_id = m.id "
             f"{prefixed_where} "
-            "ORDER BY m.created_at DESC"
-        )
+            f"{order_clause} "
+            f"{limit_clause}"
+        ).strip()
 
         async with self._db() as conn:
             try:

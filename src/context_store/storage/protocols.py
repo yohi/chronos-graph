@@ -29,6 +29,7 @@ class MemoryFilters:
     tags: list[str] = field(default_factory=list)
     limit: int | None = None
     order_by: str | None = None
+    session_id: str | None = None
 
 
 @runtime_checkable
@@ -44,7 +45,12 @@ class StorageAdapter(Protocol):
         ...
 
     async def get_memories_batch(self, memory_ids: list[str]) -> list[Memory]:
-        """Retrieve multiple memories by ID."""
+        """Retrieve multiple memories by ID.
+
+        Returns a list of `Memory` objects containing only found memories.
+        Non-existent memory IDs are omitted from the returned list (i.e., no
+        placeholders or None entries). Callers must handle missing IDs client-side.
+        """
         ...
 
     async def delete_memory(self, memory_id: str) -> bool:

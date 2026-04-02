@@ -342,8 +342,16 @@ class PostgresStorageAdapter:
             params.append(filters.tags)
             conditions.append(f"tags && ${len(params)}")  # array overlap
 
+        if getattr(filters, "session_id", None) is not None:
+            params.append(filters.session_id)
+            conditions.append(f"source_metadata->>'session_id' = ${len(params)}")
+
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        sql = f"SELECT * FROM memories {where_clause} ORDER BY created_at DESC"
+        order_clause = (
+            f"ORDER BY {filters.order_by}" if filters.order_by else "ORDER BY created_at DESC"
+        )
+        limit_clause = f"LIMIT {filters.limit}" if getattr(filters, "limit", None) else ""
+        sql = f"SELECT * FROM memories {where_clause} {order_clause} {limit_clause}".strip()
 
         async with self._pool.acquire() as conn:
             records = await conn.fetch(sql, *params)

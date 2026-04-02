@@ -137,8 +137,10 @@ class IngestionPipeline:
                 if inspect.isawaitable(dispose_result):
                     await dispose_result
                 dispose_success = True
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(
+                    "Error during provider_dispose in IngestionPipeline: %s", e, exc_info=True
+                )
 
         if not dispose_success:
             provider_close = getattr(self._embedding_provider, "close", None)
@@ -147,8 +149,10 @@ class IngestionPipeline:
                     close_result = provider_close()
                     if inspect.isawaitable(close_result):
                         await close_result
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error(
+                        "Error during provider_close in IngestionPipeline: %s", e, exc_info=True
+                    )
 
     async def ingest(
         self,
@@ -306,28 +310,39 @@ class IngestionPipeline:
         persisted_memory = memory.model_copy(update={"id": memory_id})
 
         # ステップ7: グラフノード作成
-        await self._graph.create_node(
-            str(memory_id),
-            {
-                "memory_type": persisted_memory.memory_type.value,
-                "source_type": persisted_memory.source_type.value,
-                "project": persisted_memory.project,
-            },
-        )
+        node_created = False
+        try:
+            await self._graph.create_node(
+                str(memory_id),
+                {
+                    "memory_type": persisted_memory.memory_type.value,
+                    "source_type": persisted_memory.source_type.value,
+                    "project": persisted_memory.project,
+                },
+            )
+            node_created = True
 
-        # ステップ8: グラフリンク（エッジ作成）
-        previous_memories = await self._get_previous_memories(persisted_memory)
-        chunk_neighbors = self._build_chunk_neighbors(
-            persisted_memory,
-            prior_document_memories,
-            supersedes_memory,
-        )
-        await self._graph_linker.link(
-            persisted_memory,
-            supersedes=supersedes_memory,
-            previous_memories=previous_memories,
-            chunk_neighbors=chunk_neighbors,
-        )
+            # ステップ8: グラフリンク（エッジ作成）
+            previous_memories = await self._get_previous_memories(persisted_memory)
+            chunk_neighbors = self._build_chunk_neighbors(
+                persisted_memory,
+                prior_document_memories,
+                supersedes_memory,
+            )
+            await self._graph_linker.link(
+                persisted_memory,
+                supersedes=supersedes_memory,
+                previous_memories=previous_memories,
+                chunk_neighbors=chunk_neighbors,
+            )
+        except Exception:
+            try:
+                await self._storage.delete_memory(str(memory_id))
+                if node_created:
+                    await self._graph.delete_node(str(memory_id))
+            except Exception as rollback_err:
+                logger.error("Rollback failed for memory_id=%s: %s", memory_id, rollback_err)
+            raise
 
         logger.info(
             "Ingestion 完了: memory_id=%s, action=%s, type=%s",
@@ -349,9 +364,11 @@ class IngestionPipeline:
     async def _get_previous_memories(self, memory: Memory) -> list[Memory]:
         """時系列エッジ用に同一セッションまたはプロジェクトの直前候補を取得する。"""
         session_id = memory.source_metadata.get("session_id")
-        candidates = await self._storage.list_by_filter(
-            MemoryFilters(project=memory.project, limit=1, order_by="created_at DESC")
-        )
+        args = {"project": memory.project, "limit": 1, "order_by": "created_at DESC"}
+        if session_id:
+            args["session_id"] = session_id
+
+        candidates = await self._storage.list_by_filter(MemoryFilters(**args))
 
         previous_memories: list[Memory] = []
         candidates = [c for c in candidates if str(c.id) != str(memory.id)]

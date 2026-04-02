@@ -100,7 +100,7 @@ async def test_url_adapter_rejects_too_many_redirects() -> None:
 async def test_url_adapter_rejects_oversized_response() -> None:
     """サイズ超過(_fetch_with_verified_ip の内部ロジックを直接検証)。
 
-    Note: Validating internal size/IP behavior. This intentional call to the private API 
+    Note: Validating internal size/IP behavior. This intentional call to the private API
     maintains coverage of size rejection and must be updated if the private API is refactored.
     """
     adapter = URLAdapter(settings=_make_settings(url_max_response_bytes=10))

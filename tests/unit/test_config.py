@@ -183,3 +183,12 @@ def test_postgres_dsn_url_encodes_credentials(default_settings):
 def test_numeric_settings_reject_out_of_range_values(default_settings, field_name, value):
     with pytest.raises(ValueError):
         make_settings(**{field_name: value})
+
+
+def test_embedding_dimension_must_be_positive(default_settings):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        make_settings(embedding_dimension=0)
+    with pytest.raises(ValidationError):
+        make_settings(embedding_dimension=-1)

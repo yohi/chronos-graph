@@ -30,6 +30,9 @@ COPY pyproject.toml uv.lock ./
 # Install dependencies with uv (faster than pip)
 RUN uv sync --frozen --no-install-project
 
+# Install pre-commit for git hooks
+RUN uv pip install --system pre-commit
+
 # Copy source code
 COPY src/ src/
 COPY tests/ tests/

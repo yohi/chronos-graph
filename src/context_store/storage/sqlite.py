@@ -815,6 +815,13 @@ class SQLiteStorageAdapter:
                     )
                 direction = dir_part
 
+            # Reject additional tokens (length > 2)
+            if len(parts) > 2:
+                raise StorageError(
+                    f"Invalid order_by format: {raw_order}. Extra tokens detected.",
+                    code="INVALID_PARAMETER",
+                )
+
             order_clause = f"ORDER BY m.{col} {direction}".strip()
 
         # ------------------------------------------------------------------

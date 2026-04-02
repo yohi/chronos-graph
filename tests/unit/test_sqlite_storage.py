@@ -596,6 +596,14 @@ class TestSqlInjection:
             await adapter.list_by_filter(filters)
         assert exc_info.value.code == "INVALID_PARAMETER"
 
+    async def test_list_by_filter_order_by_extra_tokens(self, adapter):
+        # Even if columns are valid, extra tokens should be rejected
+        filters = MemoryFilters(order_by="id DESC extra")
+        with pytest.raises(StorageError) as exc_info:
+            await adapter.list_by_filter(filters)
+        assert exc_info.value.code == "INVALID_PARAMETER"
+        assert "Extra tokens detected" in str(exc_info.value)
+
     async def test_list_by_filter_limit_injection(self, adapter):
         malicious_limit = "1; DROP TABLE memories;"
         filters = MemoryFilters()

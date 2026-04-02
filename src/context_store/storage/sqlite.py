@@ -469,16 +469,16 @@ class SQLiteStorageAdapter:
 
         # Chunk to respect SQLite parameter limit (default ~999)
         chunk_size = 900
-        for i in range(0, len(unique_ids), chunk_size):
-            chunk = unique_ids[i : i + chunk_size]
-            placeholders = ", ".join("?" * len(chunk))
-            sql = f"""
-                SELECT m.*, me.embedding
-                FROM memories m
-                LEFT JOIN memory_embeddings me ON me.memory_id = m.id
-                WHERE m.id IN ({placeholders})
-            """
-            async with self._db() as conn:
+        async with self._db() as conn:
+            for i in range(0, len(unique_ids), chunk_size):
+                chunk = unique_ids[i : i + chunk_size]
+                placeholders = ", ".join("?" * len(chunk))
+                sql = f"""
+                    SELECT m.*, me.embedding
+                    FROM memories m
+                    LEFT JOIN memory_embeddings me ON me.memory_id = m.id
+                    WHERE m.id IN ({placeholders})
+                """
                 try:
                     async with conn.execute(sql, chunk) as cursor:
                         rows = await cursor.fetchall()

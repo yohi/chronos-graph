@@ -185,7 +185,12 @@ class Orchestrator:
             検索結果の dict。
         """
         base_strategy = SearchStrategy()
-        adjusted_strategy = await self.policy_hook.adjust_strategy(query, base_strategy)
+        # TODO: adjusted_strategy は将来 RetrievalPipeline に渡される予定。
+        # 現在 RetrievalPipeline.search() は strategy パラメータを持たないため、
+        # QueryAnalyzer が内部で戦略を決定する設計になっている。
+        # RL 拡張時に RetrievalPipeline.search(strategy=adjusted_strategy) として
+        # 外部から戦略を注入できるよう拡張する。
+        adjusted_strategy = await self.policy_hook.adjust_strategy(query, base_strategy)  # noqa: F841
 
         result = await self._retrieval_pipeline.search(
             query,

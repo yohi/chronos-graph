@@ -12,6 +12,8 @@ from context_store.models.search import SearchStrategy
 
 from tests.unit.conftest import make_settings
 
+# graph=None を明示的に渡すためのセンチネル
+_UNSET = object()
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -96,7 +98,7 @@ def _make_mock_lifecycle_manager() -> MagicMock:
 async def _build_orchestrator(
     *,
     storage=None,
-    graph=None,
+    graph=_UNSET,
     cache=None,
     embedding=None,
     ingestion_pipeline=None,
@@ -107,11 +109,15 @@ async def _build_orchestrator(
     policy_hook=None,
     settings=None,
 ):
-    """Orchestrator を依存性注入でビルドするヘルパー。"""
+    """Orchestrator を依存性注入でビルドするヘルパー。
+
+    graph に None を明示的に渡すとグラフ機能無効（graph=None）として扱う。
+    省略した場合はデフォルトのモックを使用する。
+    """
     from context_store.orchestrator import Orchestrator
 
     storage = storage or _make_mock_storage()
-    graph = graph or _make_mock_graph()
+    graph = _make_mock_graph() if graph is _UNSET else graph
     cache = cache or _make_mock_cache()
     embedding = embedding or _make_mock_embedding()
     ingestion_pipeline = ingestion_pipeline or _make_mock_ingestion_pipeline()
@@ -316,6 +322,71 @@ class TestSearchOperation:
         call_args = policy_hook.adjust_strategy.call_args
         assert call_args[0][0] == "test query"
         assert isinstance(call_args[0][1], SearchStrategy)
+
+    @pytest.mark.asyncio
+    async def test_adjusted_strategy_is_computed_from_policy_hook(self):
+        """PolicyHook.adjust_strategy() が返した戦略が計算されること（将来の拡張に備えた設計検証）。
+
+        現時点では RetrievalPipeline.search() に strategy パラメータがないため、
+        adjusted_strategy は直接渡されないが、PolicyHook が正しく呼ばれ、
+        adjusted_strategy オブジェクトが生成されることを確認する。
+        """
+        custom_strategy = SearchStrategy(vector_weight=0.8, keyword_weight=0.1, graph_weight=0.1)
+        policy_hook = AsyncMock()
+        policy_hook.adjust_strategy = AsyncMock(return_value=custom_strategy)
+
+        retrieval = _make_mock_retrieval_pipeline()
+        orch, *_ = await _build_orchestrator(
+            retrieval_pipeline=retrieval, policy_hook=policy_hook
+        )
+
+        await orch.search("test query")
+
+        # PolicyHook が正しい引数で呼ばれ、adjusted_strategy が返されたことを確認
+        policy_hook.adjust_strategy.assert_called_once()
+        call_args = policy_hook.adjust_strategy.call_args[0]
+        assert call_args[0] == "test query"
+        assert isinstance(call_args[1], SearchStrategy)
+        # RetrievalPipeline.search() は引数なしで呼ばれる（strategy未対応）
+        retrieval.search.assert_called_once()
+
+
+class TestSearchGraphOperation:
+    """search_graph() 操作のテスト。"""
+
+    @pytest.mark.asyncio
+    async def test_search_graph_raises_when_graph_is_none(self):
+        """グラフが無効（graph=None）の場合 RuntimeError を raise する。"""
+        orch, *_ = await _build_orchestrator(graph=None)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            await orch.search_graph("test query")
+
+        assert "グラフ機能が無効" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_search_graph_delegates_to_retrieval_pipeline(self):
+        """グラフが有効な場合 RetrievalPipeline.search() に委譲される。"""
+        graph = _make_mock_graph()
+        retrieval = _make_mock_retrieval_pipeline()
+        orch, *_ = await _build_orchestrator(graph=graph, retrieval_pipeline=retrieval)
+
+        result = await orch.search_graph("test query", depth=2)
+
+        retrieval.search.assert_called_once()
+        assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_search_graph_passes_project_to_retrieval_pipeline(self):
+        """search_graph() が project パラメータを RetrievalPipeline.search() に渡す。"""
+        graph = _make_mock_graph()
+        retrieval = _make_mock_retrieval_pipeline()
+        orch, *_ = await _build_orchestrator(graph=graph, retrieval_pipeline=retrieval)
+
+        await orch.search_graph("test query", project="my-project")
+
+        call_kwargs = retrieval.search.call_args[1]
+        assert call_kwargs.get("project") == "my-project"
 
 
 class TestDeleteOperation:

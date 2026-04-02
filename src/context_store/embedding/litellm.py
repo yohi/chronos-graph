@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 import httpx
-from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_exponential
+from tenacity import AsyncRetrying, retry_if_exception, stop_after_attempt, wait_random_exponential
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +27,25 @@ def _get_litellm() -> Any:
 
 
 def _is_retryable(exc: BaseException) -> bool:
-    """リトライ対象の例外かどうかを判定する。"""
+    """リトライ対象の例外かどうかを判定する。
+
+    LiteLLM や httpx が投げる例外のうち、リトライ可能なものを判定する。
+    """
+    # 1. status_code を取得
+    status_code = None
     if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code in (429, 500, 502, 503, 504)
+        status_code = exc.response.status_code
+    else:
+        # LiteLLM の例外などは status_code 属性を直接持つ場合がある
+        status_code = getattr(exc, "status_code", None)
+
+    if status_code in (429, 500, 502, 503, 504):
+        return True
+
+    # 2. ネットワーク関連のエラー (httpx)
     if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError)):
         return True
+
     return False
 
 
@@ -39,7 +53,7 @@ class LiteLLMEmbeddingProvider:
     """LiteLLM API を利用した Embedding Provider。
 
     - embed_batch は内部でチャンク分割してリクエスト
-    - リトライは tenacity を利用した Exponential Backoff
+    - リトライは tenacity を利用した Exponential Backoff + Jitter
     - 入力 texts の順序を完全に保持して返す
     """
 
@@ -81,7 +95,7 @@ class LiteLLMEmbeddingProvider:
 
         retryer = AsyncRetrying(
             stop=stop_after_attempt(3),
-            wait=wait_exponential(multiplier=1, min=2, max=10),
+            wait=wait_random_exponential(multiplier=1, min=2, max=10),
             retry=retry_if_exception(_is_retryable),
             reraise=True,
         )

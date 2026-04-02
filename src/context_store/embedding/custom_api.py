@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import logging
 from typing import Any, cast
 
@@ -47,6 +48,19 @@ class CustomAPIEmbeddingProvider:
         self._chunk_size = chunk_size
         self._timeout = timeout
 
+        if not isinstance(self._chunk_size, int) or self._chunk_size <= 0:
+            raise ValueError(
+                f"self._chunk_size must be an int greater than 0, got {self._chunk_size!r}"
+            )
+        if not isinstance(self._timeout, (int, float)) or self._timeout <= 0:
+            raise ValueError(
+                f"self._timeout must be a number greater than 0, got {self._timeout!r}"
+            )
+        if not isinstance(self._dimension, int) or self._dimension <= 0:
+            raise ValueError(
+                f"self._dimension must be an int greater than 0, got {self._dimension!r}"
+            )
+
     @property
     def dimension(self) -> int:
         """埋め込みベクトルの次元数を返す。"""
@@ -71,7 +85,34 @@ class CustomAPIEmbeddingProvider:
         for chunk_start in range(0, len(texts), self._chunk_size):
             chunk = texts[chunk_start : chunk_start + self._chunk_size]
             response = await self._post({"texts": chunk})
-            all_results.extend(response["embeddings"])
+            embeddings = response.get("embeddings")
+            if not isinstance(embeddings, list):
+                raise ValueError(
+                    'response["embeddings"] must be a list before all_results.extend(...); '
+                    f'got {type(embeddings).__name__} for chunk size len(chunk)={len(chunk)}'
+                )
+            if len(embeddings) != len(chunk):
+                raise ValueError(
+                    'len(response["embeddings"]) must equal len(chunk) before '
+                    f'all_results.extend(...); got len(response["embeddings"])={len(embeddings)}, '
+                    f"len(chunk)={len(chunk)}"
+                )
+            for index, embedding in enumerate(embeddings):
+                if not isinstance(embedding, Iterable) or isinstance(embedding, (str, bytes)):
+                    raise ValueError(
+                        'Each item in response["embeddings"] must be an iterable with length '
+                        f"self._dimension={self._dimension}; invalid item at index {index} "
+                        f"for len(chunk)={len(chunk)}"
+                    )
+                vector = list(embedding)
+                if len(vector) != self._dimension:
+                    raise ValueError(
+                        'Each vector in response["embeddings"] must match '
+                        f"self._dimension={self._dimension}; got len(response[\"embeddings\"][{index}])="
+                        f"{len(vector)} for len(chunk)={len(chunk)}"
+                    )
+                embeddings[index] = vector
+            all_results.extend(cast(list[list[float]], embeddings))
 
         return all_results
 

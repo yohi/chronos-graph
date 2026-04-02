@@ -116,7 +116,7 @@ class TestGraphTraversal:
         assert isinstance(result, GraphResult)
         assert result.nodes == []
         assert result.edges == []
-        assert result.partial is False
+        assert result.partial is True
         assert result.timeout is False
 
     @pytest.mark.asyncio

@@ -202,3 +202,43 @@ class TestCustomAPIEmbeddingProvider:
             response=MagicMock(status_code=400),
         )
         assert _is_retryable(exc) is False
+
+    @pytest.mark.parametrize(
+        ("chunk_size", "timeout", "dimension", "message"),
+        [
+            (0, 60.0, 768, "self._chunk_size"),
+            (100, 0.0, 768, "self._timeout"),
+            (100, 60.0, 0, "self._dimension"),
+        ],
+    )
+    def test_init_validates_parameters(self, chunk_size, timeout, dimension, message) -> None:
+        from context_store.embedding.custom_api import CustomAPIEmbeddingProvider
+
+        with pytest.raises(ValueError, match=message):
+            CustomAPIEmbeddingProvider(
+                endpoint="http://localhost:8080/embeddings",
+                dimension=dimension,
+                chunk_size=chunk_size,
+                timeout=timeout,
+            )
+
+    @pytest.mark.asyncio
+    async def test_embed_batch_rejects_non_list_embeddings(self, provider) -> None:
+        with patch.object(provider, "_post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = {"embeddings": "invalid"}
+            with pytest.raises(ValueError, match=r'response\["embeddings"\].*list'):
+                await provider.embed_batch(["a"])
+
+    @pytest.mark.asyncio
+    async def test_embed_batch_rejects_length_mismatch(self, provider) -> None:
+        with patch.object(provider, "_post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = {"embeddings": [[0.1] * 768]}
+            with pytest.raises(ValueError, match=r'len\(response\["embeddings"\]\).*len\(chunk\)'):
+                await provider.embed_batch(["a", "b"])
+
+    @pytest.mark.asyncio
+    async def test_embed_batch_rejects_dimension_mismatch(self, provider) -> None:
+        with patch.object(provider, "_post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = {"embeddings": [[0.1] * 767]}
+            with pytest.raises(ValueError, match=r'self\._dimension=768'):
+                await provider.embed_batch(["a"])

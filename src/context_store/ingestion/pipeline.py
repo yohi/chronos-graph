@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -86,6 +87,26 @@ class IngestionPipeline:
         if self._url_adapter is None:
             self._url_adapter = URLAdapter()
         return await self._url_adapter.adapt(url)
+
+    async def dispose(self) -> None:
+        """保持しているクローズ可能リソースを解放する。"""
+        if self._url_adapter is not None:
+            aclose = getattr(self._url_adapter, "aclose", None)
+            if callable(aclose):
+                await aclose()
+
+        provider_dispose = getattr(self._embedding_provider, "dispose", None)
+        if callable(provider_dispose):
+            dispose_result = provider_dispose()
+            if inspect.isawaitable(dispose_result):
+                await dispose_result
+                return
+
+        provider_close = getattr(self._embedding_provider, "close", None)
+        if callable(provider_close):
+            close_result = provider_close()
+            if inspect.isawaitable(close_result):
+                await close_result
 
     async def ingest(
         self,

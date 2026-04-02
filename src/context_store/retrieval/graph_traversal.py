@@ -73,4 +73,10 @@ class GraphTraversal:
                 str(exc),
                 exc_info=exc,
             )
-            return GraphResult(nodes=[], edges=[], traversal_depth=0)
+            return GraphResult(
+                nodes=[],
+                edges=[],
+                traversal_depth=0,
+                partial=True,
+                timeout=isinstance(exc, TimeoutError),
+            )

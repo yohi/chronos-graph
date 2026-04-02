@@ -258,6 +258,31 @@ async def test_pipeline_concurrent_same_content_dedup() -> None:
     assert save_count >= 1
 
 
+@pytest.mark.asyncio
+async def test_pipeline_dispose_closes_embedding_provider_and_url_adapter() -> None:
+    """dispose() が保持リソースの終了処理を呼ぶ。"""
+    storage = _make_mock_storage()
+    graph = _make_mock_graph()
+
+    embedding_provider = MagicMock()
+    embedding_provider.close = AsyncMock()
+
+    pipeline = IngestionPipeline(
+        storage=storage,
+        graph=graph,
+        embedding_provider=embedding_provider,
+    )
+
+    url_adapter = MagicMock()
+    url_adapter.aclose = AsyncMock()
+    pipeline._url_adapter = url_adapter
+
+    await pipeline.dispose()
+
+    url_adapter.aclose.assert_awaited_once()
+    embedding_provider.close.assert_awaited_once()
+
+
 # ===========================================================================
 # URL ソースのテスト
 # ===========================================================================

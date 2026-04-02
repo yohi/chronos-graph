@@ -282,7 +282,7 @@ async def test_url_adapter_rejects_too_many_redirects() -> None:
         patch.object(adapter, "_resolve_and_validate_ips", new=mock_get_ips),
         patch.object(adapter, "_fetch_with_verified_ip", new=mock_fetch),
     ):
-        with pytest.raises((ValueError, Exception), match="[Rr]edirect|[Tt]oo many"):
+        with pytest.raises((ValueError, Exception), match=r"[Rr]edirect|[Tt]oo many"):
             await adapter.adapt("http://example.com/")
 
 
@@ -312,7 +312,7 @@ async def test_url_adapter_rejects_oversized_response() -> None:
         patch.object(adapter, "_resolve_and_validate_ips", new=mock_get_ips),
         patch.object(adapter, "_fetch_with_verified_ip", new=mock_fetch),
     ):
-        with pytest.raises(ValueError, match="[Ss]ize|[Ll]imit|[Tt]oo large|[Mm]ax"):
+        with pytest.raises(ValueError, match=r"[Ss]ize|[Ll]imit|[Tt]oo large|[Mm]ax"):
             await adapter.adapt("http://example.com/")
 
     # aclose() が呼ばれること（プール汚染防止）
@@ -340,7 +340,9 @@ async def test_url_adapter_rejects_disallowed_content_type() -> None:
         patch.object(adapter, "_resolve_and_validate_ips", new=mock_get_ips),
         patch.object(adapter, "_fetch_with_verified_ip", new=mock_fetch),
     ):
-        with pytest.raises(ValueError, match="[Cc]ontent.?[Tt]ype|[Nn]ot allowed|[Dd]isallowed"):
+        with pytest.raises(
+            ValueError, match=r"[Cc]ontent.?[Tt]ype|[Nn]ot allowed|[Dd]isallowed"
+        ):
             await adapter.adapt("http://example.com/")
 
     mock_response.aclose.assert_called()

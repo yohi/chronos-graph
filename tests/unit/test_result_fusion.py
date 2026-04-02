@@ -79,20 +79,14 @@ class TestResultFusion:
 
     def test_time_decay(self, result_fusion):
         """時間減衰の計算"""
-        half_life = 30
-        # 0日経過: recency = 0.5^(0/30) = 1.0
-        days_0 = 0
-        recency_0 = 0.5 ** (days_0 / half_life)
+        now = datetime.now(timezone.utc)
+        recency_0 = result_fusion.compute_time_decay(now)
         assert recency_0 == pytest.approx(1.0, abs=0.0001)
 
-        # 30日経過: recency = 0.5^(30/30) = 0.5
-        days_30 = 30
-        recency_30 = 0.5 ** (days_30 / half_life)
+        recency_30 = result_fusion.compute_time_decay(now - timedelta(days=30))
         assert recency_30 == pytest.approx(0.5, abs=0.0001)
 
-        # 60日経過: recency = 0.5^(60/30) = 0.25
-        days_60 = 60
-        recency_60 = 0.5 ** (days_60 / half_life)
+        recency_60 = result_fusion.compute_time_decay(now - timedelta(days=60))
         assert recency_60 == pytest.approx(0.25, abs=0.0001)
 
     def test_composite_score_calculation(self, result_fusion):

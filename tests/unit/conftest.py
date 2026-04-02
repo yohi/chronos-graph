@@ -32,8 +32,9 @@ def make_settings(**kwargs) -> Settings:
         "custom_api_endpoint": "http://localhost:8080/embed",
     }
 
-    # Detect unknown override keys
-    unknown = set(kwargs.keys()) - set(defaults.keys())
+    # Detect unknown override keys using the actual Settings schema.
+    allowed_fields = set(Settings.model_fields.keys())
+    unknown = set(kwargs.keys()) - allowed_fields
     if unknown:
         raise ValueError(f"Unknown settings overrides: {sorted(list(unknown))}")
 

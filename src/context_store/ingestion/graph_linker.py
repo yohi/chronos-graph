@@ -26,7 +26,7 @@ SEMANTIC_RELATION_THRESHOLD = 0.70
 
 # URL と ファイルパスの検出パターン
 _URL_PATTERN = re.compile(
-    r"https?://[^\s\"\'>)]+",
+    r"https?://[^\s\"\'<>()\[\]{}]+?(?<![.,!?:;)\]}'\"])",
     re.IGNORECASE,
 )
 _FILE_PATH_PATTERN = re.compile(

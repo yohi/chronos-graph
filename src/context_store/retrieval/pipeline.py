@@ -69,8 +69,10 @@ class RetrievalPipeline:
         # ステップ 1: クエリ分析
         strategy = self.query_analyzer.analyze(query)
         logger.info(
-            f"Query analyzed. Strategy: vector={strategy.vector_weight:.2f}, "
-            f"keyword={strategy.keyword_weight:.2f}, graph={strategy.graph_weight:.2f}"
+            "Query analyzed. Strategy: vector=%0.2f, keyword=%0.2f, graph=%0.2f",
+            strategy.vector_weight,
+            strategy.keyword_weight,
+            strategy.graph_weight,
         )
 
         # ステップ 2: ベクトル検索とキーワード検索を並列実行
@@ -165,12 +167,22 @@ class RetrievalPipeline:
         nodes: list[dict[str, Any]],
     ) -> list[ScoredMemory]:
         """GraphResult のノードリストから Memory を取得し ScoredMemory に変換"""
+        node_ids = [str(node.get("id", "")) for node in nodes if str(node.get("id", ""))]
+        memory_by_id: dict[str, Any] = {}
+
+        batch_getter = getattr(self.storage_adapter, "get_memories_batch", None)
+        if callable(batch_getter) and node_ids:
+            batch_memories = await batch_getter(node_ids)
+            memory_by_id = {str(memory.id): memory for memory in batch_memories if memory is not None}
+
         results: list[ScoredMemory] = []
         for node in nodes:
             node_id = str(node.get("id", ""))
             if not node_id:
                 continue
-            memory = await self.storage_adapter.get_memory(node_id)
+            memory = memory_by_id.get(node_id)
+            if memory is None:
+                memory = await self.storage_adapter.get_memory(node_id)
             if memory:
                 results.append(
                     ScoredMemory(

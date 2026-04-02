@@ -173,8 +173,8 @@ def _html_to_text(html: str) -> str:
     return parser.get_text()
 
 
-class _SSRFBlockingBackend(httpcore.AsyncNetworkBackend):
-    """SSRF対策のカスタムネットワークバックエンド。
+class _SSRFBlockingTransport(httpx.AsyncBaseTransport):
+    """SSRF対策のカスタムトランスポート。
 
     DNS解決後に検証済みIPへルーティングしつつ、
     TLS SNI と Host ヘッダーは元のホスト名を維持する。
@@ -186,46 +186,42 @@ class _SSRFBlockingBackend(httpcore.AsyncNetworkBackend):
         inner: httpcore.AsyncNetworkBackend | None = None,
     ) -> None:
         self._verified_ip = verified_ip
-        self._inner = inner or httpcore.AsyncConnectionPool()._network_backend  # type: ignore[attr-defined]
-        # デフォルトのバックエンドを取得
+        if inner is None:
+            backend_cls = getattr(httpcore, "AsyncNetworkBackend", None)
+            if backend_cls is not None:
+                self._inner = backend_cls()
+            else:
+                self._inner = httpcore.AsyncConnectionPool()._network_backend  # type: ignore[attr-defined]
+        else:
+            self._inner = inner
+        self._transport = httpx.AsyncHTTPTransport(retries=0)
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        """検証済みIPへ接続するため、URLだけを差し替えて内部 transport に転送する。"""
+        host = request.url.host
+        if host is None:
+            raise ValueError("request.url.host must not be None")
+
         try:
-            from httpcore._backends.asyncio import AsyncIOBackend  # type: ignore[import-not-found]
+            ipaddress.ip_address(self._verified_ip)
+        except ValueError as exc:
+            raise ValueError(
+                f"self._verified_ip must be a valid IP address: {self._verified_ip}"
+            ) from exc
 
-            self._inner = AsyncIOBackend()
-        except ImportError:
-            from httpcore._backends.anyio import AnyIOBackend  # type: ignore[import-not-found]
+        headers = httpx.Headers(request.headers)
+        headers["Host"] = host
+        forwarded_request = httpx.Request(
+            request.method,
+            request.url.copy_with(host=self._verified_ip),
+            headers=headers,
+            stream=request.stream,
+            extensions=request.extensions,
+        )
+        return await self._transport.handle_async_request(forwarded_request)
 
-            self._inner = AnyIOBackend()
-
-    async def connect_tcp(
-        self,
-        host: str,
-        port: int,
-        timeout: float | None = None,
-        local_address: str | None = None,
-        socket_options: Any = None,
-    ) -> httpcore.AsyncNetworkStream:
-        """検証済みIPへ接続する。ホスト名はSNI用に上位レイヤーで設定される。"""
-        kwargs: dict[str, Any] = {
-            "host": self._verified_ip,  # 実際には検証済みIPに接続
-            "port": port,
-            "timeout": timeout,
-            "local_address": local_address,
-        }
-        if socket_options is not None:
-            kwargs["socket_options"] = socket_options
-        return await self._inner.connect_tcp(**kwargs)
-
-    async def connect_unix_socket(
-        self,
-        path: str,
-        timeout: float | None = None,
-        socket_options: Any = None,
-    ) -> httpcore.AsyncNetworkStream:
-        raise PermissionError("Unix socket connections are not allowed")
-
-    async def sleep(self, seconds: float) -> None:
-        await self._inner.sleep(seconds)
+    async def aclose(self) -> None:
+        await self._transport.aclose()
 
 
 class URLAdapter:
@@ -312,9 +308,8 @@ class URLAdapter:
         hostname = parsed.host
         first_ip = resolved_ips[0]
 
-        # カスタムバックエンドで検証済みIPへルーティング
-        backend = _SSRFBlockingBackend(verified_ip=first_ip)
-        transport = httpx.AsyncHTTPTransport(backend=backend)  # type: ignore[call-arg]
+        # カスタムトランスポートで検証済みIPへルーティング
+        transport = _SSRFBlockingTransport(verified_ip=first_ip)
 
         async with httpx.AsyncClient(
             transport=transport,

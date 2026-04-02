@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import logging
+import threading
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -38,14 +40,17 @@ class LocalModelEmbeddingProvider:
         self._model_name = model_name
         self._model: Any = None
         self._dimension: int | None = None
+        self._model_lock = threading.Lock()
 
     def _get_model(self) -> Any:
         """モデルを遅延ロードして返す。"""
         if self._model is None:
-            logger.info(f"ローカルモデルをロード中: {self._model_name}")
-            self._model = SentenceTransformer(self._model_name)
-            self._dimension = int(self._model.get_sentence_embedding_dimension())
-            logger.info(f"モデルのロード完了: dimension={self._dimension}")
+            with self._model_lock:
+                if self._model is None:
+                    logger.info(f"ローカルモデルをロード中: {self._model_name}")
+                    self._model = SentenceTransformer(self._model_name)
+                    self._dimension = int(self._model.get_sentence_embedding_dimension())
+                    logger.info(f"モデルのロード完了: dimension={self._dimension}")
         return self._model
 
     @property
@@ -62,7 +67,7 @@ class LocalModelEmbeddingProvider:
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """複数テキストを埋め込みベクトルに変換する。
 
-        同期処理を asyncio.to_thread でバックグラウンドスレッドで実行する。
+        同期処理をバックグラウンドスレッドで実行する。
         """
         if not texts:
             return []
@@ -72,4 +77,6 @@ class LocalModelEmbeddingProvider:
             embeddings = model.encode(texts, show_progress_bar=False)
             return [emb.tolist() for emb in embeddings]
 
-        return await asyncio.to_thread(_encode)
+        loop = asyncio.get_running_loop()
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="local-embedding") as executor:
+            return await loop.run_in_executor(executor, _encode)

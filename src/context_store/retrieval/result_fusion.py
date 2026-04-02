@@ -14,6 +14,11 @@ class MemoryScore(TypedDict):
     graph_rank: int | None
 
 
+RRF_WEIGHT = 0.5
+TIME_DECAY_WEIGHT = 0.3
+IMPORTANCE_WEIGHT = 0.2
+
+
 class ResultFusion:
     """RRF (Reciprocal Rank Fusion) + 時間減衰 + 複合スコアリング"""
 
@@ -159,7 +164,11 @@ class ResultFusion:
                 else 1.0
             )
 
-            final_score = 0.5 * rrf_raw + 0.3 * time_decay + 0.2 * result.memory.importance_score
+            final_score = (
+                RRF_WEIGHT * rrf_raw
+                + TIME_DECAY_WEIGHT * time_decay
+                + IMPORTANCE_WEIGHT * result.memory.importance_score
+            )
 
             fused_results.append(
                 {
@@ -252,7 +261,11 @@ class ResultFusion:
                 else 1.0
             )
 
-            final_score = 0.5 * rrf_score + 0.3 * time_decay + 0.2 * data["memory"].importance_score
+            final_score = (
+                RRF_WEIGHT * rrf_score
+                + TIME_DECAY_WEIGHT * time_decay
+                + IMPORTANCE_WEIGHT * data["memory"].importance_score
+            )
 
             fused_results.append(
                 {

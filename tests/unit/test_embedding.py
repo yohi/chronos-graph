@@ -30,6 +30,15 @@ class TestEmbeddingProtocol:
         provider = OpenAIEmbeddingProvider(api_key="test-key", model="text-embedding-ada-002")
         assert provider.dimension == 1536
 
+    def test_dimension_unknown_model_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        provider = OpenAIEmbeddingProvider(api_key="test-key", model="text-embedding-unknown")
+
+        with caplog.at_level("WARNING"):
+            assert provider.dimension == 1536
+
+        assert "fallback=1536" in caplog.text
+        assert "text-embedding-unknown" in caplog.text
+
 
 class TestOpenAIEmbeddingProvider:
     """OpenAIEmbeddingProvider のテスト。"""
@@ -179,3 +188,11 @@ class TestOpenAIEmbeddingProvider:
 
         assert len(results) == 1
         assert results[0] == expected_vector
+
+    @pytest.mark.asyncio
+    async def test_close_closes_shared_client(self, provider: OpenAIEmbeddingProvider) -> None:
+        provider._client.aclose = AsyncMock()
+
+        await provider.close()
+
+        provider._client.aclose.assert_awaited_once()

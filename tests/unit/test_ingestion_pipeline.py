@@ -269,16 +269,22 @@ async def test_pipeline_concurrent_same_content_dedup() -> None:
         embedding_provider=embedding_provider,
         settings=make_settings(),
     )
-    # 同じコンテンツを同時に2回インジェスト
+    # 同じコンテンツ、同じドキュメント、同じチャンクインデックスを同時に2回処理
+    # (memo_key が完全に一致する場合のみキャッシュが効く)
     same_content = "重複テストコンテンツ"
+    chunk = RawContent(
+        content=same_content,
+        source_type=SourceType.MANUAL,
+        metadata={"document_id": "same-doc", "chunk_index": 0},
+    )
     results = await asyncio.gather(
-        pipeline.ingest(same_content, source_type=SourceType.MANUAL),
-        pipeline.ingest(same_content, source_type=SourceType.MANUAL),
+        pipeline._process_chunk(chunk, base_metadata={}, prior_document_memories=[]),
+        pipeline._process_chunk(chunk, base_metadata={}, prior_document_memories=[]),
     )
 
     # 両方の呼び出しが完了すること
     assert len(results) == 2
-    # 排他制御により save_memory が重複して呼ばれないこと
+    # 排他制御（memo_key の一致）により save_memory が重複して呼ばれないこと
     assert save_count == 1
 
 
@@ -454,3 +460,50 @@ async def test_pipeline_metadata_propagation() -> None:
         # Memory.project が最優先。常に設定されているはず。
         assert memory.project == "my-project"
         assert memory.source_metadata["session_id"] == "sess-001"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_memo_key_uniqueness_with_document_id() -> None:
+    """同一コンテンツで異なる document_id を持つ場合、キャッシュキーが分離されることを検証。"""
+    # モックのセットアップ
+    storage = _make_mock_storage()
+    graph = _make_mock_graph()
+    # 処理を遅延させて並行実行中にキャッシュが効くようにする
+    embedding_provider = _make_mock_embedding_provider(delay=0.1)
+
+    pipeline = IngestionPipeline(
+        storage=storage,
+        graph=graph,
+        embedding_provider=embedding_provider,
+        settings=make_settings(),
+    )
+
+    content = "共通のコンテンツ"
+    # 同じコンテンツだが document_id が異なる2つのチャンク
+    chunk1 = RawContent(
+        content=content,
+        source_type=SourceType.MANUAL,
+        metadata={"document_id": "doc-A", "chunk_index": 0},
+    )
+    chunk2 = RawContent(
+        content=content,
+        source_type=SourceType.MANUAL,
+        metadata={"document_id": "doc-B", "chunk_index": 0},
+    )
+
+    # 並行実行
+    # memo_key に document_id が含まれていない場合、
+    # 2つ目のタスクは 1つ目のタスクの完了を待ってその結果を返してしまう（キャッシュ衝突）。
+    results = await asyncio.gather(
+        pipeline._process_chunk(chunk1, base_metadata={}, prior_document_memories=[]),
+        pipeline._process_chunk(chunk2, base_metadata={}, prior_document_memories=[]),
+    )
+
+    assert results[0] is not None
+    assert results[1] is not None
+    # 各々の結果が自身のドキュメントIDを反映していることを確認
+    # (現状の _process_chunk_locked 実装では、保存された Memory の metadata に document_id が入る)
+    assert results[0].persisted_memory.source_metadata["document_id"] == "doc-A"
+    assert results[1].persisted_memory.source_metadata["document_id"] == "doc-B"
+    # 各々が保存されている（save_memory が 2回呼ばれている）ことを確認
+    assert storage.save_memory.call_count == 2

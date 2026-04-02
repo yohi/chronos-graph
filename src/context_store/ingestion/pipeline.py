@@ -227,6 +227,7 @@ class IngestionPipeline:
         # 追加のメタデータを含めてキーを精緻化
         url = chunk.metadata.get("url") or chunk.metadata.get("source_id", "")
         chunk_index = chunk.metadata.get("chunk_index", 0)
+        document_id = chunk.metadata.get("document_id", "")
         memo_key = (
             content_hash,
             project_id,
@@ -234,6 +235,7 @@ class IngestionPipeline:
             source_type,
             url,
             chunk_index,
+            document_id,
         )
 
         lock = await self._get_content_lock(content_hash)

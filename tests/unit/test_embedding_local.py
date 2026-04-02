@@ -48,6 +48,7 @@ class TestLocalModelEmbeddingProvider:
             mock_model = self._make_mock_model()
             mock_cls.return_value = mock_model
             provider = LocalModelEmbeddingProvider(model_name="test-model")
+            assert isinstance(provider, EmbeddingProvider)
             # インスタンス作成時点では SentenceTransformer は呼ばれない
             mock_cls.assert_not_called()
             loaded = provider._get_model()
@@ -113,3 +114,28 @@ class TestLocalModelEmbeddingProvider:
             mock_cls.return_value = self._make_mock_model()
             provider = LocalModelEmbeddingProvider()
             assert provider._model_name == "cl-nagoya/ruri-v3-310m"
+
+    def test_dimension_property_no_blocking_load(self) -> None:
+        """dimension をコンストラクタで指定した場合、dimension プロパティを呼び出してもモデルロードが発生しないことを確認。"""
+        from context_store.embedding.local_model import LocalModelEmbeddingProvider
+
+        with patch("context_store.embedding.local_model.SentenceTransformer") as mock_cls:
+            # 512 次元の次元数を指定
+            provider = LocalModelEmbeddingProvider(model_name="test-model", dimension=512)
+            # dimension プロパティを呼び出しても SentenceTransformer は呼ばれないはず
+            assert provider.dimension == 512
+            mock_cls.assert_not_called()
+            # 内部状態を確認(実装修正前は _get_model が呼ばれるため、mock_cls が呼ばれ、_model がセットされる)
+            assert provider._model is None
+
+    def test_invalid_dimension(self) -> None:
+        from context_store.embedding.local_model import LocalModelEmbeddingProvider
+
+        with pytest.raises(ValueError, match="dimension must be a positive integer"):
+            LocalModelEmbeddingProvider(dimension=-1)
+
+        with pytest.raises(ValueError, match="dimension must be a positive integer"):
+            LocalModelEmbeddingProvider(dimension=0)
+
+        with pytest.raises(ValueError, match="dimension must be a positive integer"):
+            LocalModelEmbeddingProvider(dimension="768")  # type: ignore

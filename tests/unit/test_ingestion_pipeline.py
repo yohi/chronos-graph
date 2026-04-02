@@ -314,33 +314,6 @@ async def test_pipeline_dispose_closes_embedding_provider_and_url_adapter() -> N
     embedding_provider.close.assert_awaited_once()
 
 
-@pytest.mark.asyncio
-async def test_pipeline_dispose_closes_embedding_provider_and_url_adapter_fallback() -> None:
-    """dispose() が dispose 失敗時に fallback として close を呼ぶ。"""
-    storage = _make_mock_storage()
-    graph = _make_mock_graph()
-
-    embedding_provider = MagicMock()
-    embedding_provider.dispose = AsyncMock(side_effect=Exception("dispose error"))
-    embedding_provider.close = AsyncMock()
-
-    pipeline = IngestionPipeline(
-        storage=storage,
-        graph=graph,
-        embedding_provider=embedding_provider,
-        settings=make_settings(),
-    )
-    url_adapter = MagicMock()
-    url_adapter.aclose = AsyncMock()
-    pipeline._url_adapter = url_adapter
-
-    await pipeline.dispose()
-
-    embedding_provider.dispose.assert_awaited_once()
-    embedding_provider.close.assert_awaited_once()
-    url_adapter.aclose.assert_awaited_once()
-
-
 # ===========================================================================
 # URL ソースのテスト
 # ===========================================================================

@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 import httpx
+import tenacity
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +27,22 @@ def _get_litellm() -> Any:
 
 
 def _is_retryable(exc: BaseException) -> bool:
-    """リトライ対象の例外かどうかを判定する。"""
+    """リトライ対象の例外かどうかを判定する。
+
+    LiteLLM や httpx が投げる例外のうち、リトライ可能なものを判定する。
+    """
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code in (429, 500, 502, 503, 504)
+
+    # ネットワーク関連のエラー (httpx)
     if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError)):
         return True
+
+    # LiteLLM の例外などは status_code 属性を直接持つ場合がある
+    status_code = getattr(exc, "status_code", None)
+    if status_code in (429, 500, 502, 503, 504):
+        return True
+
     return False
 
 
@@ -38,7 +50,7 @@ class LiteLLMEmbeddingProvider:
     """LiteLLM API を利用した Embedding Provider。
 
     - embed_batch は内部でチャンク分割してリクエスト
-    - リトライは tenacity を利用した Exponential Backoff
+    - リトライは tenacity を利用した Exponential Backoff + Jitter
     - 入力 texts の順序を完全に保持して返す
     """
 
@@ -75,7 +87,6 @@ class LiteLLMEmbeddingProvider:
         if not texts:
             return []
 
-        litellm = _get_litellm()
         all_results: list[list[float]] = []
 
         for chunk_start in range(0, len(texts), self._chunk_size):
@@ -86,8 +97,24 @@ class LiteLLMEmbeddingProvider:
             if self._api_key:
                 kwargs["api_key"] = self._api_key
 
-            response = await litellm.aembedding(**kwargs)
+            response = await self._aembedding_with_retry(**kwargs)
+
             chunk_embeddings = [item.embedding for item in response.data]
             all_results.extend(chunk_embeddings)
 
         return all_results
+
+    @tenacity.retry(
+        retry=tenacity.retry_if_exception(_is_retryable),
+        wait=tenacity.wait_random_exponential(multiplier=1, min=1, max=60),
+        stop=tenacity.stop_after_attempt(5),
+        before_sleep=tenacity.before_sleep_log(logger, logging.WARNING),
+    )
+    async def _aembedding_with_retry(self, **kwargs: Any) -> Any:
+        """LiteLLM aembedding をリトライ付きで呼び出す。"""
+        litellm = _get_litellm()
+        return await litellm.aembedding(**kwargs)
+
+    async def close(self) -> None:
+        """リソースを解放する (LiteLLM では特に無し)。"""
+        pass

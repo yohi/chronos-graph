@@ -391,6 +391,10 @@ class URLAdapter:
                 return True
         return False
 
+    async def aclose(self) -> None:
+        """リソースを解放する（現在は特になし）。"""
+        pass
+
     async def adapt(
         self, source: str, *, metadata: dict[str, Any] | None = None
     ) -> list[RawContent]:

@@ -57,6 +57,8 @@ class CustomAPIEmbeddingProvider:
         if not isinstance(self._dimension, int) or self._dimension <= 0:
             raise ValueError(f"dimension must be an int greater than 0, got {self._dimension!r}")
 
+        self._client = httpx.AsyncClient(timeout=self._timeout)
+
     @property
     def dimension(self) -> int:
         """埋め込みベクトルの次元数を返す。"""
@@ -136,11 +138,14 @@ class CustomAPIEmbeddingProvider:
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            response = await client.post(
-                self._endpoint,
-                json=payload,
-                headers=headers,
-            )
-            response.raise_for_status()
-            return cast(dict[str, Any], response.json())
+        response = await self._client.post(
+            self._endpoint,
+            json=payload,
+            headers=headers,
+        )
+        response.raise_for_status()
+        return cast(dict[str, Any], response.json())
+
+    async def close(self) -> None:
+        """クライアントを閉じる。"""
+        await self._client.aclose()

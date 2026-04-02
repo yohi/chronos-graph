@@ -36,10 +36,18 @@ class LocalModelEmbeddingProvider:
     - embed_batch は asyncio.to_thread で同期処理をノンブロッキングで実行
     """
 
-    def __init__(self, model_name: str = _DEFAULT_MODEL_NAME) -> None:
+    def __init__(
+        self,
+        model_name: str = _DEFAULT_MODEL_NAME,
+        dimension: int | None = None,
+    ) -> None:
+        if dimension is not None:
+            if not isinstance(dimension, int) or dimension <= 0:
+                raise ValueError(f"dimension must be a positive integer, got {dimension}")
+
         self._model_name = model_name
         self._model: Any = None
-        self._dimension: int | None = None
+        self._dimension: int | None = dimension
         self._model_lock = threading.Lock()
 
     def _get_model(self) -> Any:
@@ -49,15 +57,26 @@ class LocalModelEmbeddingProvider:
                 if self._model is None:
                     logger.info(f"ローカルモデルをロード中: {self._model_name}")
                     self._model = SentenceTransformer(self._model_name)
-                    self._dimension = int(self._model.get_sentence_embedding_dimension())
+                    # モデルから次元数を取得(コンストラクタで指定されていない場合のみ)
+                    if self._dimension is None:
+                        self._dimension = int(self._model.get_sentence_embedding_dimension())
                     logger.info(f"モデルのロード完了: dimension={self._dimension}")
         return self._model
 
     @property
     def dimension(self) -> int:
-        """埋め込みベクトルの次元数を返す。モデル未ロード時はロードを行う。"""
+        """埋め込みベクトルの次元数を返す。
+
+        コンストラクタで指定されているか、既にロード済みの場合はその値を返す。
+        それ以外の場合はモデルをロードして正確な次元数を取得する(モデルのロードは embed 呼び出しまで遅延される)。
+        """
+        if self._dimension is not None:
+            return self._dimension
+
+        # モデルをロードして次元数を確定させる
         self._get_model()
-        return self._dimension or 768
+        assert self._dimension is not None
+        return self._dimension
 
     async def embed(self, text: str) -> list[float]:
         """単一テキストを埋め込みベクトルに変換する。"""
@@ -80,3 +99,7 @@ class LocalModelEmbeddingProvider:
         loop = asyncio.get_running_loop()
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix="local-embedding") as executor:
             return await loop.run_in_executor(executor, _encode)
+
+    async def close(self) -> None:
+        """リソースを解放する (ローカルモデルでは特に無し)。"""
+        pass

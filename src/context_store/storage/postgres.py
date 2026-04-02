@@ -349,9 +349,17 @@ class PostgresStorageAdapter:
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         # Validate and whitelist ORDER BY columns
         allowed_order_cols = {
-            "id", "memory_type", "source_type", "semantic_relevance",
-            "importance_score", "access_count", "last_accessed_at",
-            "created_at", "updated_at", "archived_at", "project"
+            "id",
+            "memory_type",
+            "source_type",
+            "semantic_relevance",
+            "importance_score",
+            "access_count",
+            "last_accessed_at",
+            "created_at",
+            "updated_at",
+            "archived_at",
+            "project",
         }
         order_clause = "ORDER BY created_at DESC"
         if filters.order_by:
@@ -361,7 +369,9 @@ class PostgresStorageAdapter:
                 if tokens:
                     col = tokens[0].lower()
                     if col in allowed_order_cols:
-                        direction = "ASC" if len(tokens) > 1 and tokens[1].upper() == "ASC" else "DESC"
+                        direction = (
+                            "ASC" if len(tokens) > 1 and tokens[1].upper() == "ASC" else "DESC"
+                        )
                         order_parts.append(f"{col} {direction}")
             if order_parts:
                 order_clause = f"ORDER BY {', '.join(order_parts)}"

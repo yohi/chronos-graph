@@ -458,6 +458,12 @@ class SQLiteStorageAdapter:
                 _raise_if_locked(exc)
                 raise
 
+    async def get_memories_batch(self, memory_ids: list[str]) -> list[Memory]:
+        """Retrieve multiple memories by ID."""
+        if not memory_ids:
+            return []
+        return [memory for memory_id in memory_ids if (memory := await self.get_memory(memory_id))]
+
     # ------------------------------------------------------------------
     # StorageAdapter: delete_memory
     # ------------------------------------------------------------------

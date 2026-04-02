@@ -12,9 +12,8 @@ import re
 import socket
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any, ClassVar, Protocol, cast, runtime_checkable
 
-import httpcore
 import httpx
 
 from context_store.config import Settings
@@ -120,11 +119,28 @@ class _SimpleHTMLToTextParser(HTMLParser):
     """HTMLを簡易的にプレーンテキスト/Markdownへ変換するパーサー。"""
 
     # テキストを無視するタグ
-    SKIP_TAGS = {"script", "style", "noscript", "head"}
+    SKIP_TAGS: ClassVar[set[str]] = {"script", "style", "noscript", "head"}
     # ブロック要素（前後に改行を挿入）
-    BLOCK_TAGS = {"p", "div", "br", "li", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote"}
+    BLOCK_TAGS: ClassVar[set[str]] = {
+        "p",
+        "div",
+        "br",
+        "li",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "blockquote",
+    }
     # 見出しタグのプレフィックスマッピング
-    HEADING_PREFIX = {"h1": "# ", "h2": "## ", "h3": "### ", "h4": "#### "}
+    HEADING_PREFIX: ClassVar[dict[str, str]] = {
+        "h1": "# ",
+        "h2": "## ",
+        "h3": "### ",
+        "h4": "#### ",
+    }
 
     def __init__(self) -> None:
         super().__init__()
@@ -183,17 +199,8 @@ class _SSRFBlockingTransport(httpx.AsyncBaseTransport):
     def __init__(
         self,
         verified_ip: str,
-        inner: httpcore.AsyncNetworkBackend | None = None,
     ) -> None:
         self._verified_ip = verified_ip
-        if inner is None:
-            backend_cls = getattr(httpcore, "AsyncNetworkBackend", None)
-            if backend_cls is not None:
-                self._inner = backend_cls()
-            else:
-                self._inner = httpcore.AsyncConnectionPool()._network_backend  # type: ignore[attr-defined]
-        else:
-            self._inner = inner
         self._transport = httpx.AsyncHTTPTransport(retries=0)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:

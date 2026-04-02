@@ -153,6 +153,16 @@ class PostgresStorageAdapter:
             return None
         return _record_to_memory(dict(record))
 
+    async def get_memories_batch(self, memory_ids: list[str]) -> list[Memory]:
+        """Retrieve multiple memories by ID."""
+        if not memory_ids:
+            return []
+        sql = "SELECT * FROM memories WHERE id = ANY($1::uuid[])"
+        async with self._pool.acquire() as conn:
+            records = await conn.fetch(sql, memory_ids)
+        memory_map = {str(record["id"]): _record_to_memory(dict(record)) for record in records}
+        return [memory_map[memory_id] for memory_id in memory_ids if memory_id in memory_map]
+
     async def delete_memory(self, memory_id: str) -> bool:
         """Delete a memory. Returns True if deleted."""
         sql = "DELETE FROM memories WHERE id = $1"

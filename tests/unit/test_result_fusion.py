@@ -65,17 +65,26 @@ def search_strategy():
 class TestResultFusion:
     """結果統合とスコアリングのテスト"""
 
-    def test_rrf_calculation(self, result_fusion):
+    def test_rrf_calculation(self, result_fusion, sample_results, search_strategy):
         """RRF スコアの計算が正しいこと"""
-        weights = [0.5, 0.2, 0.3]  # ベクトル、キーワード、グラフの重み
-        weights_sum = sum(weights)
-        k = 60
+        fused = result_fusion.fuse_multiple_sources(
+            {
+                MemorySource.VECTOR: sample_results,
+                MemorySource.KEYWORD: sample_results,
+                MemorySource.GRAPH: sample_results,
+            },
+            search_strategy,
+        )
 
-        # RRF スコア: sum(weight * 1/(K + rank + 1))
-        # ランク1: 0.5 * 1/(60+1+1) + 0.2 * 1/(60+1+1) + 0.3 * 1/(60+1+1)
-        #       = (0.5 + 0.2 + 0.3) * 1/62 = 1.0 / 62 ≈ 0.01613
-        expected_rrf_rank1 = weights_sum * (1.0 / (k + 1 + 1))
-        assert expected_rrf_rank1 == pytest.approx(1.0 / 62, abs=0.0001)
+        expected_rrf = result_fusion.compute_rrf_score(
+            vector_rank=0,
+            keyword_rank=0,
+            graph_rank=0,
+            vector_weight=search_strategy.vector_weight,
+            keyword_weight=search_strategy.keyword_weight,
+            graph_weight=search_strategy.graph_weight,
+        )
+        assert fused[0]["rrf_score"] == pytest.approx(expected_rrf, abs=0.0001)
 
     def test_time_decay(self, result_fusion):
         """時間減衰の計算"""
@@ -89,17 +98,19 @@ class TestResultFusion:
         recency_60 = result_fusion.compute_time_decay(now - timedelta(days=60))
         assert recency_60 == pytest.approx(0.25, abs=0.0001)
 
-    def test_composite_score_calculation(self, result_fusion):
+    def test_composite_score_calculation(self, result_fusion, sample_results, search_strategy):
         """複合スコアの計算"""
-        # 複合スコア = 0.5 * normalized_rrf + 0.3 * time_decay + 0.2 * importance_score
-        # テスト値を直接検証
-        normalized_rrf = 0.8
-        time_decay = 1.0  # 0日経過
-        importance_score = 0.8
-
-        composite = 0.5 * normalized_rrf + 0.3 * time_decay + 0.2 * importance_score
-        expected = 0.5 * 0.8 + 0.3 * 1.0 + 0.2 * 0.8
-        assert composite == pytest.approx(expected, abs=0.0001)
+        fused = result_fusion.fuse(sample_results[:1], search_strategy)
+        expected_rrf = result_fusion.compute_rrf_score(
+            vector_rank=0,
+            keyword_rank=None,
+            graph_rank=None,
+            vector_weight=1.0,
+            keyword_weight=0.0,
+            graph_weight=0.0,
+        )
+        expected = 0.5 * expected_rrf + 0.3 * 1.0 + 0.2 * 0.8
+        assert fused[0]["final_score"] == pytest.approx(expected, abs=0.0001)
 
     def test_fusion_with_empty_results(self, result_fusion, search_strategy):
         """空の結果に対応"""

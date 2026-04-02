@@ -41,6 +41,10 @@ class StorageAdapter(Protocol):
         """Retrieve a memory by ID. Returns None if not found."""
         ...
 
+    async def get_memories_batch(self, memory_ids: list[str]) -> list[Memory]:
+        """Retrieve multiple memories by ID."""
+        ...
+
     async def delete_memory(self, memory_id: str) -> bool:
         """Delete a memory. Returns True if deleted, False if not found."""
         ...

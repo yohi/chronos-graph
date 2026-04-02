@@ -164,6 +164,9 @@ async def test_pipeline_embed_completes_before_save() -> None:
             call_order.append("save_memory")
             return str(memory.id)
 
+        async def get_memories_batch(self, memory_ids: list[str]) -> list[Memory]:
+            return []
+
         async def vector_search(
             self, embedding: list[float], top_k: int, project: Any = None
         ) -> list:
@@ -366,4 +369,11 @@ async def test_pipeline_metadata_propagation() -> None:
 
     assert len(saved_memories) >= 1
     for memory in saved_memories:
-        assert memory.project == "my-project" or "my-project" in str(memory.source_metadata)
+        if memory.project == "my-project":
+            assert memory.project == "my-project"
+            continue
+        if isinstance(memory.source_metadata, dict):
+            assert memory.source_metadata.get("project") == "my-project"
+            continue
+        assert hasattr(memory.source_metadata, "project")
+        assert getattr(memory.source_metadata, "project") == "my-project"

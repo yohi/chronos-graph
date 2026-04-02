@@ -1,4 +1,4 @@
-"""Custom API Embedding Provider。"""
+"""Custom API embedding provider."""
 
 from __future__ import annotations
 
@@ -42,6 +42,8 @@ class CustomAPIEmbeddingProvider:
         chunk_size: int = _DEFAULT_CHUNK_SIZE,
         timeout: float = 60.0,
     ) -> None:
+        if not isinstance(endpoint, str) or not endpoint.strip():
+            raise ValueError("endpoint must be a non-empty string")
         self._endpoint = endpoint
         self._dimension = dimension
         self._api_key = api_key
@@ -49,17 +51,11 @@ class CustomAPIEmbeddingProvider:
         self._timeout = timeout
 
         if not isinstance(self._chunk_size, int) or self._chunk_size <= 0:
-            raise ValueError(
-                f"self._chunk_size must be an int greater than 0, got {self._chunk_size!r}"
-            )
+            raise ValueError(f"chunk_size must be an int greater than 0, got {self._chunk_size!r}")
         if not isinstance(self._timeout, (int, float)) or self._timeout <= 0:
-            raise ValueError(
-                f"self._timeout must be a number greater than 0, got {self._timeout!r}"
-            )
+            raise ValueError(f"timeout must be a number greater than 0, got {self._timeout!r}")
         if not isinstance(self._dimension, int) or self._dimension <= 0:
-            raise ValueError(
-                f"self._dimension must be an int greater than 0, got {self._dimension!r}"
-            )
+            raise ValueError(f"dimension must be an int greater than 0, got {self._dimension!r}")
 
     @property
     def dimension(self) -> int:

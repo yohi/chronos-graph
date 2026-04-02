@@ -54,7 +54,7 @@ class TestLiteLLMEmbeddingProvider:
             results = await provider.embed_batch(texts)
 
         assert len(results) == 5
-        for i, (result, expected) in enumerate(zip(results, vectors)):
+        for i, (result, expected) in enumerate(zip(results, vectors, strict=True)):
             assert result == expected, f"Order mismatch at index {i}"
 
     @pytest.mark.asyncio
@@ -146,8 +146,18 @@ class TestCustomAPIEmbeddingProvider:
             results = await provider.embed_batch(texts)
 
         assert len(results) == 5
-        for i, (result, expected) in enumerate(zip(results, vectors)):
+        for i, (result, expected) in enumerate(zip(results, vectors, strict=True)):
             assert result == expected, f"Order mismatch at index {i}"
+
+    @pytest.mark.parametrize("endpoint", ["", "   "])
+    def test_init_rejects_blank_endpoint(self, endpoint: str) -> None:
+        from context_store.embedding.custom_api import CustomAPIEmbeddingProvider
+
+        with pytest.raises(ValueError, match="endpoint must be a non-empty string"):
+            CustomAPIEmbeddingProvider(
+                endpoint=endpoint,
+                dimension=768,
+            )
 
     @pytest.mark.asyncio
     async def test_embed_batch_chunks_large_input(self, provider) -> None:
@@ -206,9 +216,9 @@ class TestCustomAPIEmbeddingProvider:
     @pytest.mark.parametrize(
         ("chunk_size", "timeout", "dimension", "message"),
         [
-            (0, 60.0, 768, "self._chunk_size"),
-            (100, 0.0, 768, "self._timeout"),
-            (100, 60.0, 0, "self._dimension"),
+            (0, 60.0, 768, "chunk_size"),
+            (100, 0.0, 768, "timeout"),
+            (100, 60.0, 0, "dimension"),
         ],
     )
     def test_init_validates_parameters(self, chunk_size, timeout, dimension, message) -> None:
@@ -240,5 +250,5 @@ class TestCustomAPIEmbeddingProvider:
     async def test_embed_batch_rejects_dimension_mismatch(self, provider) -> None:
         with patch.object(provider, "_post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = {"embeddings": [[0.1] * 767]}
-            with pytest.raises(ValueError, match=r"self\._dimension=768"):
+            with pytest.raises(ValueError, match=r"dimension=768"):
                 await provider.embed_batch(["a"])

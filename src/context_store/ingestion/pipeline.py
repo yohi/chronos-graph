@@ -16,7 +16,7 @@ import hashlib
 import inspect
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from context_store.ingestion.adapters import RawContent, URLAdapter
 from context_store.ingestion.chunker import Chunker
@@ -27,6 +27,26 @@ from context_store.models.memory import Memory, MemoryType, SourceType
 from context_store.storage.protocols import GraphAdapter, StorageAdapter
 
 logger = logging.getLogger(__name__)
+
+
+class EmbeddingProvider(Protocol):
+    """IngestionPipeline が依存する最小限の埋め込み契約。"""
+
+    async def embed(self, text: str) -> list[float]:
+        """単一テキストを埋め込む。"""
+        ...
+
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """複数テキストを埋め込む。"""
+        ...
+
+    async def close(self) -> None:
+        """任意のクローズ処理。"""
+        ...
+
+    async def dispose(self) -> None:
+        """任意の破棄処理。"""
+        ...
 
 
 @dataclass
@@ -55,7 +75,7 @@ class IngestionPipeline:
         self,
         storage: StorageAdapter,
         graph: GraphAdapter,
-        embedding_provider: Any,
+        embedding_provider: EmbeddingProvider,
     ) -> None:
         self._storage = storage
         self._graph = graph
@@ -77,6 +97,13 @@ class IngestionPipeline:
             if content_hash not in self._content_locks:
                 self._content_locks[content_hash] = asyncio.Lock()
             return self._content_locks[content_hash]
+
+    async def _release_content_lock(self, content_hash: str, lock: asyncio.Lock) -> None:
+        """不要になったコンテンツロックを辞書から取り除く。"""
+        async with self._locks_mutex:
+            current_lock = self._content_locks.get(content_hash)
+            if current_lock is lock and not lock.locked():
+                self._content_locks.pop(content_hash, None)
 
     def _compute_hash(self, content: str) -> str:
         """コンテンツのハッシュ値を計算する。"""
@@ -159,7 +186,10 @@ class IngestionPipeline:
         lock = await self._get_content_lock(content_hash)
 
         async with lock:
-            return await self._process_chunk_locked(chunk, base_metadata=base_metadata)
+            result = await self._process_chunk_locked(chunk, base_metadata=base_metadata)
+
+        await self._release_content_lock(content_hash, lock)
+        return result
 
     async def _process_chunk_locked(
         self,

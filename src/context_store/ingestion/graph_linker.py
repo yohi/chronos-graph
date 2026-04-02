@@ -29,6 +29,7 @@ _URL_PATTERN = re.compile(
     r"https?://[^\s\"\'<>()\[\]{}]+?(?<![.,!?:;)\]}'\"])",
     re.IGNORECASE,
 )
+# TODO: Expand _FILE_PATH_PATTERN to support Windows absolute paths and ./ ../ relative paths.
 _FILE_PATH_PATTERN = re.compile(
     r"(?:^|[\s\"\(])(/(?:[a-zA-Z0-9_\-./]+))",
     re.MULTILINE,

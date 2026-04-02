@@ -84,7 +84,7 @@ class TestOpenAIEmbeddingProvider:
             results = await provider.embed_batch(texts)
 
         assert len(results) == 5
-        for i, (result, expected) in enumerate(zip(results, vectors)):
+        for i, (result, expected) in enumerate(zip(results, vectors, strict=True)):
             assert result == expected, f"Order mismatch at index {i}"
 
     @pytest.mark.asyncio

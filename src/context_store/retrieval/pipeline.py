@@ -1,4 +1,6 @@
-"""Retrieval Pipeline - 検索パイプライン統合"""
+"""Retrieval Pipeline - 検索パイプライン統合."""
+
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -26,6 +28,19 @@ class RetrievalResponse(TypedDict):
 SearchFunc = Callable[..., Awaitable[list[ScoredMemory]]]
 
 
+def _coerce_graph_score(raw_score: Any) -> float:
+    """グラフノード由来の score を安全に float へ変換する。"""
+    score = 0.5
+    if isinstance(raw_score, (int, float)):
+        score = float(raw_score)
+    elif isinstance(raw_score, str):
+        try:
+            score = float(raw_score)
+        except ValueError:
+            score = 0.5
+    return max(0.0, min(1.0, score))
+
+
 class RetrievalPipeline:
     """検索パイプライン統合"""
 
@@ -38,7 +53,7 @@ class RetrievalPipeline:
         result_fusion: ResultFusion,
         post_processor: PostProcessor,
         storage_adapter: StorageAdapter,
-    ):
+    ) -> None:
         self.query_analyzer = query_analyzer
         self.vector_search = vector_search
         self.keyword_search = keyword_search
@@ -98,8 +113,10 @@ class RetrievalPipeline:
                 graph_memories = await self._resolve_graph_nodes(graph_result.nodes)
 
         logger.info(
-            f"Search completed. Vector: {len(vector_results)}, "
-            f"Keyword: {len(keyword_results)}, Graph: {len(graph_memories)}"
+            "Search completed. Vector: %d, Keyword: %d, Graph: %d",
+            len(vector_results),
+            len(keyword_results),
+            len(graph_memories),
         )
 
         # ステップ 4: 結果統合 (RRF)
@@ -156,9 +173,13 @@ class RetrievalPipeline:
         try:
             results: list[ScoredMemory] = list(await search_func(query, top_k=top_k))
             return results
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.error(
-                "Search failed (%s): %s", getattr(search_func, "__qualname__", repr(search_func)), e
+            logger.warning(
+                "Search failed (%s): %s",
+                getattr(search_func, "__qualname__", repr(search_func)),
+                e,
             )
             return []
 
@@ -169,13 +190,9 @@ class RetrievalPipeline:
         """GraphResult のノードリストから Memory を取得し ScoredMemory に変換"""
         node_ids = [str(node.get("id", "")) for node in nodes if str(node.get("id", ""))]
         memory_by_id: dict[str, Any] = {}
-
-        batch_getter = getattr(self.storage_adapter, "get_memories_batch", None)
-        if callable(batch_getter) and node_ids:
-            batch_memories = await batch_getter(node_ids)
-            memory_by_id = {
-                str(memory.id): memory for memory in batch_memories if memory is not None
-            }
+        if node_ids:
+            batch_memories = await self.storage_adapter.get_memories_batch(node_ids)
+            memory_by_id = {str(memory.id): memory for memory in batch_memories}
 
         results: list[ScoredMemory] = []
         for node in nodes:
@@ -183,13 +200,11 @@ class RetrievalPipeline:
             if not node_id:
                 continue
             memory = memory_by_id.get(node_id)
-            if memory is None:
-                memory = await self.storage_adapter.get_memory(node_id)
             if memory:
                 results.append(
                     ScoredMemory(
                         memory=memory,
-                        score=float(node.get("score", 0.5)),
+                        score=_coerce_graph_score(node.get("score")),
                         source=MemorySource.GRAPH,
                     )
                 )

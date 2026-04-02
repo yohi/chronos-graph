@@ -191,9 +191,10 @@ class _SSRFBlockingTransport(httpx.AsyncBaseTransport):
     def __init__(
         self,
         verified_ip: str,
+        inner: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._verified_ip = verified_ip
-        self._transport = httpx.AsyncHTTPTransport(retries=0)
+        self._transport = inner or httpx.AsyncHTTPTransport(retries=0)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         """検証済みIPへ接続するため、URLだけを差し替えて内部 transport に転送する。"""
@@ -430,7 +431,7 @@ class URLAdapter:
                 location = headers.get("location", "")
                 if not location:
                     raise ValueError("Redirect response missing Location header")
-                url = urljoin(url, location)
+                url = str(httpx.URL(url).join(location))
                 continue
 
             # 非 2xx の場合はエラー

@@ -34,30 +34,6 @@ TURN_PATTERN = re.compile(r"^(User|Assistant|Human|AI|System):\s*", re.IGNORECAS
 HEADING_PATTERN = re.compile(r"^(#{1,2})\s+.+$", re.MULTILINE)
 
 
-def _assign_metadata(
-    chunks: list[str],
-    base_metadata: dict[str, Any],
-    document_id: str,
-) -> list[RawContent]:
-    """チャンクリストに必須メタデータを付与して RawContent リストを作成する。"""
-    total = len(chunks)
-    result = []
-    for i, content in enumerate(chunks):
-        meta = {
-            **base_metadata,
-            "document_id": document_id,
-            "chunk_index": i,
-            "chunk_count": total,
-        }
-        result.append(
-            RawContent(
-                content=content,
-                source_type=base_metadata.get("_source_type", SourceType.MANUAL),
-                metadata=meta,
-            )
-        )  # type: ignore[arg-type]
-    return result
-
 
 def _is_inside_code_block(text: str, pos: int) -> bool:
     """テキスト中の位置 pos がコードブロック内かどうかを判定する。"""

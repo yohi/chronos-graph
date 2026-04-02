@@ -97,8 +97,8 @@ class TestDeduplicationLogic:
         archived_ids = [c.args[0] for c in update_calls if "archived_at" in c.args[1]]
         assert str(older_memory.id) in archived_ids
 
-    async def test_does_not_archive_below_dedup_threshold(self):
-        """similarity < 0.90 の場合は自己修復アーカイブしないこと。"""
+    async def test_archives_regular_consolidation_candidate(self):
+        """0.85 <= similarity < 0.90 の通常統合候補も古い方がアーカイブされること。"""
         target_memory = _make_memory()
         other_memory = _make_memory(
             created_at=datetime.now(timezone.utc) - timedelta(hours=1),
@@ -113,14 +113,15 @@ class TestDeduplicationLogic:
         consolidator = Consolidator(storage=storage)
         result = await consolidator.run()
 
-        # 0.85 <= score < 0.90 は通常統合候補として処理されるが、
-        # 自己修復としてのアーカイブ(archived_at 設定)は行われない
+        # 0.85 <= score < 0.90 は通常統合候補として古い方がアーカイブされる
         update_calls_with_archive = [
             c for c in storage.update_memory.call_args_list
             if "archived_at" in c.args[1]
         ]
-        # older_memory が self-healing アーカイブされていないことを確認
-        assert len(update_calls_with_archive) == 0
+        # older_memory がアーカイブされること
+        assert len(update_calls_with_archive) == 1
+        assert update_calls_with_archive[0].args[0] == str(other_memory.id)
+        assert result.consolidated_count == 1
 
     async def test_avoids_full_scan_uses_vector_search(self):
         """O(N)のフルスキャンを避けてHNSW経由の vector_search を使うこと。

@@ -25,6 +25,8 @@ _DEFAULT_DEDUP_THRESHOLD = 0.90
 _DEFAULT_CONSOLIDATION_THRESHOLD = 0.85
 # vector_search の近傍数
 _VECTOR_SEARCH_TOP_K = 5
+# 1サイクルで処理する記憶数の上限
+CONSOLIDATION_BATCH_SIZE = 100
 
 
 @dataclass
@@ -75,7 +77,7 @@ class Consolidator:
     async def run(
         self,
         last_cleanup_at: datetime | None = None,
-        batch_size: int = 100,
+        batch_size: int = CONSOLIDATION_BATCH_SIZE,
     ) -> ConsolidatorResult:
         """スライディングウィンドウ内の記憶を走査して重複を統合する。
 
@@ -101,6 +103,11 @@ class Consolidator:
         # スライディングウィンドウ: last_cleanup_at 以降の記憶を取得
         filters = self._build_filters(last_cleanup_at)
         all_memories = await self._storage.list_by_filter(filters)
+
+        # Python 側で last_cleanup_at によるフィルタリング
+        # （MemoryFilters に created_after フィールドがないため）
+        if last_cleanup_at is not None:
+            all_memories = [m for m in all_memories if m.created_at >= last_cleanup_at]
 
         # batch_size で上限を設ける（メモリ枯渇防止）
         window = all_memories[:batch_size]
@@ -168,6 +175,33 @@ class Consolidator:
 
                 logger.info(
                     "Self-healing: archived duplicate memory %s due to similarity %s",
+                    older_id,
+                    scored.score,
+                )
+
+            # 通常統合候補を処理（0.85 <= score < 0.90）
+            for scored in regular_candidates:
+                older, newer = self._determine_order(memory, scored.memory)
+                older_id = str(older.id)
+
+                if older_id in archived_in_this_run:
+                    continue
+
+                await self._archive_memory(older_id)
+                archived_in_this_run.add(older_id)
+                consolidated_count += 1
+
+                if self._graph is not None:
+                    newer_id = str(newer.id)
+                    await self._graph.create_edge(
+                        newer_id,
+                        older_id,
+                        "SUPERSEDES",
+                        {"similarity": scored.score, "archived_at": datetime.now(timezone.utc)},
+                    )
+
+                logger.info(
+                    "Consolidation: archived similar memory %s due to similarity %s",
                     older_id,
                     scored.score,
                 )

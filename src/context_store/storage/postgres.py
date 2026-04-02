@@ -240,7 +240,7 @@ class PostgresStorageAdapter:
 
         async with self._pool.acquire() as conn:
             status = await conn.execute(sql, *params)
-        return status == "UPDATE 1"  # type: ignore[no-any-return]
+        return str(status) == "UPDATE 1"
 
     async def vector_search(
         self, embedding: list[float], top_k: int, project: str | None = None

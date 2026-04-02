@@ -329,6 +329,7 @@ class TestTimeout:
         assert isinstance(result, GraphResult)
         assert result.partial is True
         assert result.timeout is True
+        assert result.traversal_depth == 0
         # In this specific test, because we sleep BEFORE calling the actual traversal,
         # the result will be empty.
         assert len(result.nodes) == 0
@@ -370,5 +371,6 @@ class TestTimeout:
         # Verify interrupt was called
         assert interrupt_called is True
         assert result.timeout is True
+        assert result.traversal_depth == 0
 
         await adp.dispose()

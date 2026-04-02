@@ -7,7 +7,7 @@ import json
 from typing import Any
 from uuid import UUID
 
-import asyncpg  # type: ignore[import]
+import asyncpg  # type: ignore[import-not-found]
 
 from context_store.config import Settings
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType

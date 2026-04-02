@@ -303,8 +303,8 @@ class IngestionPipeline:
         # ========================================================
         embedding = await self._embedding_provider.embed(chunk.content)
 
-        # メタデータの整合
-        merged_meta = {**chunk.metadata, **base_metadata}
+        # メタデータの整合（パイプライン派生フィールドを含む chunk.metadata を優先）
+        merged_meta = {**base_metadata, **chunk.metadata}
         project = merged_meta.get("project")
 
         # Memory オブジェクトの作成（埋め込みベクトル設定済み）

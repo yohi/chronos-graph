@@ -159,6 +159,7 @@ class Orchestrator:
         self,
         query: str,
         project: str | None = None,
+        memory_type: str | None = None,
         top_k: int = 10,
         max_tokens: int | None = None,
     ) -> dict[str, Any]:
@@ -170,12 +171,23 @@ class Orchestrator:
         Args:
             query: 検索クエリ。
             project: プロジェクトフィルタ。
+            memory_type: 記憶種別フィルタ（"episodic", "semantic", "procedural"）。
+                現時点では RetrievalPipeline がこのパラメータをサポートしていないため
+                WARNING ログを出して無視する。将来の拡張のために受け取る。
             top_k: 返す最大件数。
             max_tokens: 最大トークン数。
 
         Returns:
             検索結果の dict。
         """
+        if memory_type is not None:
+            logger.warning(
+                "memory_type=%r が指定されましたが、現時点では RetrievalPipeline が "
+                "このパラメータをサポートしていないため無視されます。"
+                "将来の RetrievalPipeline 拡張時に有効化される予定です。",
+                memory_type,
+            )
+
         base_strategy = SearchStrategy()
         # TODO: adjusted_strategy は将来 RetrievalPipeline に渡される予定。
         # 現在 RetrievalPipeline.search() は strategy パラメータを持たないため、

@@ -146,7 +146,7 @@ async def test_memory_save_tags_none_becomes_empty_list(
     call_kwargs = mock_orchestrator.save.call_args
     _, kwargs = call_kwargs
     metadata = kwargs.get("metadata", {})
-    assert metadata.get("tags", []) == [] or metadata is None or "tags" not in metadata or metadata["tags"] == []
+    assert metadata.get("tags") == []
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +173,7 @@ async def test_memory_search_passes_parameters(
     await chronos_server.memory_search(
         query="test",
         project="proj",
+        memory_type="episodic",
         top_k=5,
         max_tokens=1000,
     )
@@ -180,6 +181,7 @@ async def test_memory_search_passes_parameters(
     mock_orchestrator.search.assert_called_once_with(
         "test",
         project="proj",
+        memory_type="episodic",
         top_k=5,
         max_tokens=1000,
     )

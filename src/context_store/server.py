@@ -187,6 +187,7 @@ class ChronosServer:
         result = await self._orchestrator.search(
             query,
             project=project,
+            memory_type=memory_type,
             top_k=top_k,
             max_tokens=max_tokens,
         )
@@ -435,12 +436,8 @@ async def stats_resource() -> str:
 @mcp.resource("memory://projects")
 async def projects_resource() -> str:
     """プロジェクト一覧リソース。"""
-    await _server._ensure_initialized()
-    assert _server._orchestrator is not None
-
-    # 全体統計から project 情報を取得
-    result = await _server._orchestrator.stats(project=None)
-    return json.dumps(result, default=str)
+    result = await _server.memory_stats(project=None)
+    return result
 
 
 __all__ = ["ChronosServer", "mcp"]

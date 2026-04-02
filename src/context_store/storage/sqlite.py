@@ -544,11 +544,45 @@ class SQLiteStorageAdapter:
         for col, val in updates.items():
             if col not in allowed_columns:
                 continue
-            # Serialise special types
-            if col == "tags" and not isinstance(val, str):
-                val = json.dumps(val)
-            elif col == "source_metadata" and not isinstance(val, str):
-                val = json.dumps(val)
+            # Serialise and validate special types
+            if col in ("tags", "source_metadata"):
+                if isinstance(val, str):
+                    try:
+                        parsed = json.loads(val)
+                        if col == "tags" and not isinstance(parsed, list):
+                            raise StorageError(
+                                f"Invalid tags type: expected list, got {type(parsed).__name__}",
+                                code="INVALID_PARAMETER",
+                            )
+                        if col == "source_metadata" and not isinstance(parsed, dict):
+                            raise StorageError(
+                                f"Invalid source_metadata type: expected dict, got {type(parsed).__name__}",
+                                code="INVALID_PARAMETER",
+                            )
+                    except json.JSONDecodeError as exc:
+                        raise StorageError(
+                            f"Invalid JSON for {col}: {exc}",
+                            code="INVALID_PARAMETER",
+                        ) from exc
+                else:
+                    # Not a string, must be the actual object
+                    if col == "tags" and not isinstance(val, list):
+                        raise StorageError(
+                            f"Invalid tags type: expected list, got {type(val).__name__}",
+                            code="INVALID_PARAMETER",
+                        )
+                    if col == "source_metadata" and not isinstance(val, dict):
+                        raise StorageError(
+                            f"Invalid source_metadata type: expected dict, got {type(val).__name__}",
+                            code="INVALID_PARAMETER",
+                        )
+                    try:
+                        val = json.dumps(val)
+                    except (TypeError, ValueError) as exc:
+                        raise StorageError(
+                            f"Failed to serialise {col}: {exc}",
+                            code="INVALID_PARAMETER",
+                        ) from exc
             elif col in ("last_accessed_at", "updated_at", "archived_at") and isinstance(
                 val, datetime
             ):

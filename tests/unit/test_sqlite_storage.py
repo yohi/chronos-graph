@@ -305,6 +305,32 @@ class TestUpdateMemory:
         assert len(new_results) == 1
 
 
+class TestUpdateMemoryValidation:
+    @pytest.mark.asyncio
+    async def test_update_memory_invalid_json(self, adapter):
+        memory = _make_memory()
+        mid = await adapter.save_memory(memory)
+        with pytest.raises(StorageError) as exc:
+            await adapter.update_memory(mid, {"tags": "invalid-json["})
+        assert exc.value.code == "INVALID_PARAMETER"
+
+    @pytest.mark.asyncio
+    async def test_update_memory_invalid_tags_type(self, adapter):
+        memory = _make_memory()
+        mid = await adapter.save_memory(memory)
+        with pytest.raises(StorageError) as exc:
+            await adapter.update_memory(mid, {"tags": '{"not": "a list"}'})
+        assert exc.value.code == "INVALID_PARAMETER"
+
+    @pytest.mark.asyncio
+    async def test_update_memory_invalid_metadata_type(self, adapter):
+        memory = _make_memory()
+        mid = await adapter.save_memory(memory)
+        with pytest.raises(StorageError) as exc:
+            await adapter.update_memory(mid, {"source_metadata": "[not, an, object]"})
+        assert exc.value.code == "INVALID_PARAMETER"
+
+
 # ---------------------------------------------------------------------------
 # Vector Search Tests
 # ---------------------------------------------------------------------------

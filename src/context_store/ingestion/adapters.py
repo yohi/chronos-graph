@@ -325,6 +325,7 @@ class URLAdapter:
         """
         parsed = httpx.URL(url)
         hostname = parsed.host
+        host_header = f"{hostname}:{parsed.port}" if parsed.port else hostname
         last_exception: Exception | None = None
 
         # 検証済みIPリストを順に試行する
@@ -339,7 +340,7 @@ class URLAdapter:
                     timeout=float(self.settings.url_timeout_seconds),
                     verify=True,  # TLS証明書検証を強制
                 ) as client:
-                    async with client.stream("GET", url, headers={"Host": hostname}) as response:
+                    async with client.stream("GET", url, headers={"Host": host_header}) as response:
                         # リダイレクトまたは 2xx 以外はボディを読まずにステータスのみ返す
                         if response.status_code in (301, 302, 303, 307, 308) or not (
                             200 <= response.status_code < 300
@@ -374,8 +375,17 @@ class URLAdapter:
             except ValueError:
                 # バリデーションエラー（サイズ超過等）は即座に再送
                 raise
-            except Exception as exc:
-                # その他のエラーも記録して次へ（または終了）
+            except (
+                httpx.ReadError,
+                httpx.WriteError,
+                httpx.ProtocolError,
+                httpx.ReadTimeout,
+                httpx.WriteTimeout,
+                httpx.PoolTimeout,
+                httpx.NetworkError,
+                httpx.TimeoutException,
+            ) as exc:
+                # HTTP(S)リクエスト/レスポンスのI/Oエラー等も記録して次を試す
                 last_exception = exc
                 continue
 

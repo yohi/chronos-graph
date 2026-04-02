@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any, Callable, Coroutine, Protocol, runtime_ch
 
 from filelock import FileLock, Timeout
 
+from context_store.storage.protocols import MemoryFilters
+
 if TYPE_CHECKING:
     from context_store.config import Settings
     from context_store.lifecycle.archiver import Archiver
@@ -415,7 +417,7 @@ class SQLiteLifecycleStateStore:
             await conn.commit()
 
 
-WalCheckpointFn = Callable[[], Coroutine[Any, Any, dict[str, int]]]
+WalCheckpointFn = Callable[[str], Coroutine[Any, Any, dict[str, int]]]
 
 
 class LifecycleManager:
@@ -618,11 +620,6 @@ class LifecycleManager:
     async def _collect_stats(self) -> None:
         """統計情報をログに記録する（将来的に DB 保存へ拡張可能）。"""
         try:
-            filters_import = __import__(
-                "context_store.storage.protocols",
-                fromlist=["MemoryFilters"],
-            )
-            MemoryFilters = filters_import.MemoryFilters
             # アクティブ記憶数
             active_memories = await self._storage.list_by_filter(MemoryFilters(archived=None))
             active_count = len(active_memories)
@@ -645,8 +642,11 @@ class LifecycleManager:
         now = datetime.now(timezone.utc)
 
         try:
-            result = await self._wal_checkpoint_fn()
+            result = await self._wal_checkpoint_fn(self._wal_checkpoint_mode_passive)
             busy = result.get(_WAL_RESULT_KEY_BUSY, 0)
+            log_size = result.get(_WAL_RESULT_KEY_LOG, 0)
+            # WAL サイズを観測値として更新（1ページ ≈ 4096バイトで近似）
+            wal_state.wal_last_observed_size_bytes = log_size * 4096
 
             if busy > 0:
                 # PASSIVE チェックポイントが busy ページを持つ場合は失敗とみなす
@@ -654,7 +654,7 @@ class LifecycleManager:
             else:
                 # 成功: 連続失敗カウンターをリセット
                 wal_state.wal_consecutive_passive_failures = 0
-                wal_state.wal_last_checkpoint_result = self._wal_checkpoint_mode_passive
+                wal_state.wal_last_checkpoint_result = "PASSIVE_OK"
                 logger.debug("WAL PASSIVE checkpoint succeeded.")
 
         except Exception as exc:
@@ -702,13 +702,13 @@ class LifecycleManager:
             )
             assert self._wal_checkpoint_fn is not None
             try:
-                await self._wal_checkpoint_fn()
-                wal_state.wal_last_checkpoint_result = self._wal_checkpoint_mode_truncate
+                await self._wal_checkpoint_fn(self._wal_checkpoint_mode_truncate)
+                wal_state.wal_last_checkpoint_result = "TRUNCATE_OK"
                 wal_state.wal_consecutive_passive_failures = 0
                 logger.info("WAL TRUNCATE checkpoint succeeded.")
             except Exception as exc:
                 logger.error("WAL TRUNCATE checkpoint failed: %s", exc)
-                wal_state.wal_last_checkpoint_result = f"TRUNCATE_FAILED: {exc}"
+                wal_state.wal_last_checkpoint_result = "TRUNCATE_FAIL"
         else:
             wal_state.wal_last_checkpoint_result = "PASSIVE_FAILED"
 

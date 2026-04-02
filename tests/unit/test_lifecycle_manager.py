@@ -495,8 +495,8 @@ class TestWalCheckpoint:
         """wal_checkpoint_fn が提供された場合に WAL チェックポイントが実行されること。"""
         checkpoint_calls = []
 
-        async def mock_wal_fn() -> dict:
-            checkpoint_calls.append(True)
+        async def mock_wal_fn(mode: str) -> dict:
+            checkpoint_calls.append(mode)
             return {"busy": 0, "log": 10, "checkpointed": 10}
 
         manager, store = _make_manager(wal_checkpoint_fn=mock_wal_fn)
@@ -519,7 +519,7 @@ class TestWalCheckpoint:
         """PASSIVE チェックポイント連続失敗がトラッキングされること。"""
         call_count = [0]
 
-        async def failing_wal_fn() -> dict:
+        async def failing_wal_fn(mode: str) -> dict:
             call_count[0] += 1
             return {"busy": 5, "log": 100, "checkpointed": 95}  # busy > 0 = 失敗
 
@@ -535,11 +535,12 @@ class TestWalCheckpoint:
         """連続失敗かつ WAL サイズ超過時に TRUNCATE が試みられること。"""
         call_count = [0]
 
-        async def mock_wal_fn() -> dict:
+        async def mock_wal_fn(mode: str) -> dict:
             call_count[0] += 1
             if call_count[0] == 1:
-                return {"busy": 5, "log": 100, "checkpointed": 95}  # PASSIVE 失敗
-            return {"busy": 0, "log": 100, "checkpointed": 100}  # TRUNCATE 成功
+                # log=26214 → 26214 * 4096 ≈ 107MB > 100MB threshold
+                return {"busy": 5, "log": 26214, "checkpointed": 95}  # PASSIVE 失敗
+            return {"busy": 0, "log": 26214, "checkpointed": 26214}  # TRUNCATE 成功
 
         store = InMemoryLifecycleStateStore()
         # 連続失敗数をしきい値ギリギリに設定 (threshold=3, consecutive=2)
@@ -563,7 +564,7 @@ class TestWalCheckpoint:
         assert call_count[0] == 2
 
         loaded_wal = await store.load_wal_state()
-        assert loaded_wal.wal_last_checkpoint_result == "TRUNCATE"
+        assert loaded_wal.wal_last_checkpoint_result == "TRUNCATE_OK"
         assert loaded_wal.wal_consecutive_passive_failures == 0
 
 

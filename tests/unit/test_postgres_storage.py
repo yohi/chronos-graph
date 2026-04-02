@@ -8,12 +8,17 @@ asyncpg.Pool をモックして SQL クエリの組み立てロジックと
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+
+# Skip this module if asyncpg is not installed
+if importlib.util.find_spec("asyncpg") is None:
+    pytest.skip("asyncpg not installed", allow_module_level=True)
 
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
 from context_store.storage.protocols import MemoryFilters, StorageError

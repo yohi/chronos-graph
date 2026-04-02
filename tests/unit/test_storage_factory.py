@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-# Mock asyncpg if not installed to avoid ModuleNotFoundError during patch resolution
-if "asyncpg" not in sys.modules:
+# Mock asyncpg only if not installed to avoid ModuleNotFoundError during patch resolution.
+# We use find_spec to avoid importing it here if it exists.
+if importlib.util.find_spec("asyncpg") is None:
     sys.modules["asyncpg"] = MagicMock()
 
 from context_store.storage.factory import create_storage

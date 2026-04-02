@@ -89,7 +89,7 @@ class CustomAPIEmbeddingProvider:
             if not isinstance(embeddings, list):
                 raise ValueError(
                     'response["embeddings"] must be a list before all_results.extend(...); '
-                    f'got {type(embeddings).__name__} for chunk size len(chunk)={len(chunk)}'
+                    f"got {type(embeddings).__name__} for chunk size len(chunk)={len(chunk)}"
                 )
             if len(embeddings) != len(chunk):
                 raise ValueError(
@@ -108,7 +108,7 @@ class CustomAPIEmbeddingProvider:
                 if len(vector) != self._dimension:
                     raise ValueError(
                         'Each vector in response["embeddings"] must match '
-                        f"self._dimension={self._dimension}; got len(response[\"embeddings\"][{index}])="
+                        f'self._dimension={self._dimension}; got len(response["embeddings"][{index}])='
                         f"{len(vector)} for len(chunk)={len(chunk)}"
                     )
                 embeddings[index] = vector

@@ -173,7 +173,9 @@ class RetrievalPipeline:
         batch_getter = getattr(self.storage_adapter, "get_memories_batch", None)
         if callable(batch_getter) and node_ids:
             batch_memories = await batch_getter(node_ids)
-            memory_by_id = {str(memory.id): memory for memory in batch_memories if memory is not None}
+            memory_by_id = {
+                str(memory.id): memory for memory in batch_memories if memory is not None
+            }
 
         results: list[ScoredMemory] = []
         for node in nodes:

@@ -340,9 +340,7 @@ async def test_url_adapter_rejects_disallowed_content_type() -> None:
         patch.object(adapter, "_resolve_and_validate_ips", new=mock_get_ips),
         patch.object(adapter, "_fetch_with_verified_ip", new=mock_fetch),
     ):
-        with pytest.raises(
-            ValueError, match=r"[Cc]ontent.?[Tt]ype|[Nn]ot allowed|[Dd]isallowed"
-        ):
+        with pytest.raises(ValueError, match=r"[Cc]ontent.?[Tt]ype|[Nn]ot allowed|[Dd]isallowed"):
             await adapter.adapt("http://example.com/")
 
     mock_response.aclose.assert_called()

@@ -554,6 +554,7 @@ class LifecycleManager:
             self._wal_checkpoint_mode_truncate = "TRUNCATE"
 
         self._active_tasks: list[asyncio.Task[None]] = []
+        self._shutting_down = False
 
     async def start(self) -> None:
         """MCPサーバー起動時に呼び出す。時間ベースのクリーンアップチェックをスケジュール。
@@ -587,6 +588,9 @@ class LifecycleManager:
 
     def _spawn_background_task(self, coro: Coroutine[Any, Any, None]) -> None:
         """例外ハンドリング付きでバックグラウンドタスクを開始する。"""
+        if getattr(self, "_shutting_down", False):
+            return
+
         task: asyncio.Task[None] = asyncio.create_task(coro)
         self._active_tasks.append(task)
 
@@ -832,10 +836,15 @@ class LifecycleManager:
             )
             assert self._wal_checkpoint_fn is not None
             try:
-                await self._wal_checkpoint_fn(self._wal_checkpoint_mode_truncate)
-                wal_state.wal_last_checkpoint_result = "TRUNCATE_OK"
-                wal_state.wal_consecutive_passive_failures = 0
-                logger.info("WAL TRUNCATE checkpoint succeeded.")
+                result = await self._wal_checkpoint_fn(self._wal_checkpoint_mode_truncate)
+                busy = result.get(_WAL_RESULT_KEY_BUSY, 0) if result else 0
+                if busy == 0:
+                    wal_state.wal_last_checkpoint_result = "TRUNCATE_OK"
+                    wal_state.wal_consecutive_passive_failures = 0
+                    logger.info("WAL TRUNCATE checkpoint succeeded.")
+                else:
+                    wal_state.wal_last_checkpoint_result = "TRUNCATE_BUSY"
+                    logger.warning("WAL TRUNCATE checkpoint busy.")
             except Exception as exc:
                 logger.error("WAL TRUNCATE checkpoint failed: %s", exc)
                 wal_state.wal_last_checkpoint_result = "TRUNCATE_FAIL"
@@ -846,20 +855,26 @@ class LifecycleManager:
 
     async def graceful_shutdown(self) -> None:
         """進行中のタスクをタイムアウト付きで完了待機する（最大 5 秒）。"""
+        self._shutting_down = True
+
         if not self._active_tasks:
             return
 
-        tasks = list(self._active_tasks)
-        logger.info("Graceful shutdown: waiting for %d task(s)...", len(tasks))
+        logger.info("Graceful shutdown: waiting for task(s)...")
+        start_time = asyncio.get_event_loop().time()
         try:
-            await asyncio.wait_for(
-                asyncio.gather(*tasks, return_exceptions=True),
-                timeout=5.0,
-            )
+            while self._active_tasks:
+                if asyncio.get_event_loop().time() - start_time >= 5.0:
+                    raise asyncio.TimeoutError()
+                tasks = list(self._active_tasks)
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=5.0 - (asyncio.get_event_loop().time() - start_time)
+                )
         except asyncio.TimeoutError:
             logger.warning("Graceful shutdown timed out, cancelling remaining tasks.")
-            for task in tasks:
+            for task in list(self._active_tasks):
                 if not task.done():
                     task.cancel()
             # キャンセルされたタスクが終了（およびクリーンアップ）するのを待機
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*list(self._active_tasks), return_exceptions=True)

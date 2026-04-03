@@ -138,7 +138,7 @@ class Consolidator:
 
             # HNSW 経由の近似近傍探索（O(log N) per query）
             scored_neighbors = await self._storage.vector_search(
-                memory.embedding, top_k=_VECTOR_SEARCH_TOP_K
+                memory.embedding, top_k=_VECTOR_SEARCH_TOP_K, project=memory.project
             )
 
             # 自身を除外し、類似度でフィルタリング

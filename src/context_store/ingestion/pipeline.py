@@ -328,33 +328,54 @@ class IngestionPipeline:
                 chunk_neighbors=chunk_neighbors,
             )
         except Exception:
-            # ロールバック: 新しく保存したメモリを削除
-            try:
-                await self._storage.delete_memory(str(memory_id))
-            except Exception as e:
-                logger.error("Error during delete_memory for memory_id=%s: %s", memory_id, e)
-
-            # ロールバック: 作成したグラフノードを削除
-            try:
-                if node_created:
-                    await self._graph.delete_node(str(memory_id))
-            except Exception as e:
-                logger.error("Error during delete_node for memory_id=%s: %s", memory_id, e)
-
-            # ロールバック: アーカイブされたメモリを復元 (REPLACE 時)
-            if dedup_result.action == DeduplicationAction.REPLACE and supersedes_memory:
+            # ロールバック処理
+            # 1. 作成したグラフノードを削除 (Best effort)
+            if node_created:
                 try:
-                    await self._storage.update_memory(
+                    await self._graph.delete_node(str(memory_id))
+                except Exception as e:
+                    logger.error("ロールバック失敗: delete_node (memory_id=%s): %s", memory_id, e)
+
+            # 2. 新しく保存したメモリを削除
+            new_memory_deleted = False
+            try:
+                new_memory_deleted = await self._storage.delete_memory(str(memory_id))
+                if not new_memory_deleted:
+                    logger.warning(
+                        "ロールバック失敗: delete_memory が False を返しました (memory_id=%s)",
+                        memory_id,
+                    )
+            except Exception as e:
+                logger.error("ロールバック失敗: delete_memory (memory_id=%s): %s", memory_id, e)
+
+            # 3. アーカイブされたメモリを復元 (REPLACE 時)
+            # 新しいメモリの削除に成功した場合のみ、古いメモリを復旧させる（二重アクティブ防止）
+            if (
+                new_memory_deleted
+                and dedup_result.action == DeduplicationAction.REPLACE
+                and supersedes_memory
+            ):
+                try:
+                    success = await self._storage.update_memory(
                         str(supersedes_memory.id), {"archived_at": None}
                     )
-                    logger.info(
-                        "ロールバック: supersedes_memory=%s のアーカイブを解除しました",
-                        supersedes_memory.id,
-                    )
+                    if success:
+                        logger.info(
+                            "ロールバック成功: supersedes_memory=%s のアーカイブを解除しました",
+                            supersedes_memory.id,
+                        )
+                    else:
+                        logger.error(
+                            "ロールバック失敗: update_memory が False を返しました (supersedes_memory=%s)",
+                            supersedes_memory.id,
+                        )
                 except Exception as e:
                     logger.error(
-                        "Error during unarchiving supersedes_memory=%s: %s", supersedes_memory.id, e
+                        "ロールバック失敗: アーカイブ解除中に例外が発生しました (supersedes_memory=%s): %s",
+                        supersedes_memory.id,
+                        e,
                     )
+
             raise
 
         logger.info(

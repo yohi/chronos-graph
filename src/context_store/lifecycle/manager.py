@@ -869,7 +869,7 @@ class LifecycleManager:
                 tasks = list(self._active_tasks)
                 await asyncio.wait_for(
                     asyncio.gather(*tasks, return_exceptions=True),
-                    timeout=5.0 - (asyncio.get_event_loop().time() - start_time)
+                    timeout=5.0 - (asyncio.get_event_loop().time() - start_time),
                 )
         except asyncio.TimeoutError:
             logger.warning("Graceful shutdown timed out, cancelling remaining tasks.")

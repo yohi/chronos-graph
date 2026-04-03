@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Protocol, runtime_checkable
@@ -43,7 +44,8 @@ class LifecycleState:
         last_cleanup_at: 最後にクリーンアップが「完全に成功」した日時（UTC）。
         last_cleanup_cursor_at: クリーンアップのページング用カーソル日時。
         last_cleanup_id: クリーンアップのページング用カーソル ID。
-        cleanup_running: クリーンアップが実行中かどうか。
+        cleanup_lock_owner: クリーンアップロックの保持者トークン。
+        cleanup_lock_touched_at: クリーンアップロックの最終更新日時（UTC）。
         updated_at: 状態が最後に更新された日時（UTC）。
     """
 
@@ -51,7 +53,8 @@ class LifecycleState:
     last_cleanup_at: datetime | None = None
     last_cleanup_cursor_at: datetime | None = None
     last_cleanup_id: str | None = None
-    cleanup_running: bool = False
+    cleanup_lock_owner: str | None = None
+    cleanup_lock_touched_at: datetime | None = None
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -99,16 +102,31 @@ class LifecycleStateStore(Protocol):
         """
         ...
 
-    async def acquire_cleanup_lock(self) -> bool:
+    async def acquire_cleanup_lock(self, token: str) -> bool:
         """クリーンアップの DB レベルロックを取得する。
+
+        Args:
+            token: ロック取得者を識別するユニークなトークン。
 
         Returns:
             ロック取得に成功した場合 True。既にロックされている場合 False。
         """
         ...
 
-    async def release_cleanup_lock(self) -> None:
-        """クリーンアップの DB レベルロックを解放する。"""
+    async def release_cleanup_lock(self, token: str) -> None:
+        """クリーンアップの DB レベルロックを解放する。
+
+        Args:
+            token: ロック取得時に使用したトークン。
+        """
+        ...
+
+    async def heartbeat_cleanup_lock(self, token: str) -> None:
+        """クリーンアップロックの生存確認（ハートビート）を更新する。
+
+        Args:
+            token: ロック取得時に使用したトークン。
+        """
         ...
 
     async def load_wal_state(self) -> WalState:
@@ -155,47 +173,69 @@ class InMemoryLifecycleStateStore:
                 last_cleanup_at=state.last_cleanup_at,
                 last_cleanup_cursor_at=state.last_cleanup_cursor_at,
                 last_cleanup_id=state.last_cleanup_id,
-                cleanup_running=state.cleanup_running,
+                cleanup_lock_owner=state.cleanup_lock_owner,
+                cleanup_lock_touched_at=state.cleanup_lock_touched_at,
                 updated_at=datetime.now(timezone.utc),
             )
             return threshold_just_reached
 
-    async def acquire_cleanup_lock(self) -> bool:
+    async def acquire_cleanup_lock(self, token: str) -> bool:
         """クリーンアップロックを取得する（スタルロック検出付き）。"""
         async with self._lock:
             state = self._state
-            # スタルロック検出: cleanup_running=True かつ updated_at が古い場合は強制解放
-            if state.cleanup_running:
+            # スタルロック検出: cleanup_lock_owner が設定されている場合は touched_at を確認
+            if state.cleanup_lock_owner is not None:
                 now = datetime.now(timezone.utc)
-                elapsed = (now - state.updated_at).total_seconds()
-                if elapsed < self._stale_lock_timeout_seconds:
-                    return False
-                logger.warning(
-                    "Stale cleanup lock detected (elapsed=%.1fs), force releasing.", elapsed
-                )
+                if state.cleanup_lock_touched_at:
+                    elapsed = (now - state.cleanup_lock_touched_at).total_seconds()
+                    if elapsed < self._stale_lock_timeout_seconds:
+                        return False
+                    logger.warning(
+                        "Stale cleanup lock detected (owner=%s, elapsed=%.1fs), force releasing.",
+                        state.cleanup_lock_owner,
+                        elapsed,
+                    )
 
             self._state = LifecycleState(
                 save_count=state.save_count,
                 last_cleanup_at=state.last_cleanup_at,
                 last_cleanup_cursor_at=state.last_cleanup_cursor_at,
                 last_cleanup_id=state.last_cleanup_id,
-                cleanup_running=True,
+                cleanup_lock_owner=token,
+                cleanup_lock_touched_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc),
             )
             return True
 
-    async def release_cleanup_lock(self) -> None:
+    async def release_cleanup_lock(self, token: str) -> None:
         """クリーンアップロックを解放する。"""
         async with self._lock:
             state = self._state
-            self._state = LifecycleState(
-                save_count=state.save_count,
-                last_cleanup_at=state.last_cleanup_at,
-                last_cleanup_cursor_at=state.last_cleanup_cursor_at,
-                last_cleanup_id=state.last_cleanup_id,
-                cleanup_running=False,
-                updated_at=datetime.now(timezone.utc),
-            )
+            if state.cleanup_lock_owner == token:
+                self._state = LifecycleState(
+                    save_count=state.save_count,
+                    last_cleanup_at=state.last_cleanup_at,
+                    last_cleanup_cursor_at=state.last_cleanup_cursor_at,
+                    last_cleanup_id=state.last_cleanup_id,
+                    cleanup_lock_owner=None,
+                    cleanup_lock_touched_at=None,
+                    updated_at=datetime.now(timezone.utc),
+                )
+
+    async def heartbeat_cleanup_lock(self, token: str) -> None:
+        """クリーンアップロックの生存確認を更新する。"""
+        async with self._lock:
+            state = self._state
+            if state.cleanup_lock_owner == token:
+                self._state = LifecycleState(
+                    save_count=state.save_count,
+                    last_cleanup_at=state.last_cleanup_at,
+                    last_cleanup_cursor_at=state.last_cleanup_cursor_at,
+                    last_cleanup_id=state.last_cleanup_id,
+                    cleanup_lock_owner=token,
+                    cleanup_lock_touched_at=datetime.now(timezone.utc),
+                    updated_at=state.updated_at,
+                )
 
     async def load_wal_state(self) -> WalState:
         """WAL 状態を返す。"""
@@ -231,7 +271,8 @@ class SQLiteLifecycleStateStore:
                 last_cleanup_at TIMESTAMP,
                 last_cleanup_cursor_at TIMESTAMP,
                 last_cleanup_id TEXT,
-                cleanup_running INTEGER NOT NULL DEFAULT 0,
+                cleanup_lock_owner TEXT,
+                cleanup_lock_touched_at TIMESTAMP,
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -245,6 +286,13 @@ class SQLiteLifecycleStateStore:
             await conn.execute(
                 "ALTER TABLE lifecycle_state ADD COLUMN last_cleanup_cursor_at TIMESTAMP"
             )
+        if "cleanup_lock_owner" not in column_names:
+            await conn.execute("ALTER TABLE lifecycle_state ADD COLUMN cleanup_lock_owner TEXT")
+        if "cleanup_lock_touched_at" not in column_names:
+            await conn.execute(
+                "ALTER TABLE lifecycle_state ADD COLUMN cleanup_lock_touched_at TIMESTAMP"
+            )
+
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS lifecycle_wal_state (
                 id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
@@ -269,7 +317,8 @@ class SQLiteLifecycleStateStore:
             await self._ensure_tables(conn)
             conn.row_factory = aiosqlite.Row
             cursor = await conn.execute(
-                "SELECT save_count, last_cleanup_at, last_cleanup_cursor_at, last_cleanup_id, cleanup_running, updated_at "
+                "SELECT save_count, last_cleanup_at, last_cleanup_cursor_at, last_cleanup_id, "
+                "cleanup_lock_owner, cleanup_lock_touched_at, updated_at "
                 "FROM lifecycle_state WHERE id = 1"
             )
             row = await cursor.fetchone()
@@ -287,7 +336,8 @@ class SQLiteLifecycleStateStore:
             last_cleanup_at=_parse_ts(row["last_cleanup_at"]),
             last_cleanup_cursor_at=_parse_ts(row["last_cleanup_cursor_at"]),
             last_cleanup_id=row["last_cleanup_id"],
-            cleanup_running=bool(row["cleanup_running"]),
+            cleanup_lock_owner=row["cleanup_lock_owner"],
+            cleanup_lock_touched_at=_parse_ts(row["cleanup_lock_touched_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]).replace(tzinfo=timezone.utc),
         )
 
@@ -304,7 +354,7 @@ class SQLiteLifecycleStateStore:
                 """
                 UPDATE lifecycle_state
                 SET save_count = ?, last_cleanup_at = ?, last_cleanup_cursor_at = ?,
-                    last_cleanup_id = ?, cleanup_running = ?, updated_at = ?
+                    last_cleanup_id = ?, cleanup_lock_owner = ?, cleanup_lock_touched_at = ?, updated_at = ?
                 WHERE id = 1
                 """,
                 (
@@ -312,7 +362,8 @@ class SQLiteLifecycleStateStore:
                     _fmt_ts(state.last_cleanup_at),
                     _fmt_ts(state.last_cleanup_cursor_at),
                     state.last_cleanup_id,
-                    1 if state.cleanup_running else 0,
+                    state.cleanup_lock_owner,
+                    _fmt_ts(state.cleanup_lock_touched_at),
                     state.updated_at.isoformat(),
                 ),
             )
@@ -346,7 +397,7 @@ class SQLiteLifecycleStateStore:
         # 同時実行時の重複トリガーを防ぐ。
         return new_count == threshold
 
-    async def acquire_cleanup_lock(self) -> bool:
+    async def acquire_cleanup_lock(self, token: str) -> bool:
         """クリーンアップロックを取得する（DB レベル）。
 
         Returns:
@@ -360,9 +411,9 @@ class SQLiteLifecycleStateStore:
 
             # 1. 通常の取得試行（ロックされていない場合のみ取得）
             cursor = await conn.execute(
-                "UPDATE lifecycle_state SET cleanup_running = 1, updated_at = ? "
-                "WHERE id = 1 AND cleanup_running = 0",
-                (now.isoformat(),),
+                "UPDATE lifecycle_state SET cleanup_lock_owner = ?, cleanup_lock_touched_at = ?, updated_at = ? "
+                "WHERE id = 1 AND cleanup_lock_owner IS NULL",
+                (token, now.isoformat(), now.isoformat()),
             )
             await conn.commit()
             if cursor.rowcount > 0:
@@ -371,23 +422,38 @@ class SQLiteLifecycleStateStore:
             # 2. 取得失敗時、スタルロックのチェックと強制解放を試行
             conn.row_factory = aiosqlite.Row
             cursor = await conn.execute(
-                "SELECT cleanup_running, updated_at FROM lifecycle_state WHERE id = 1"
+                "SELECT cleanup_lock_owner, cleanup_lock_touched_at FROM lifecycle_state WHERE id = 1"
             )
             row = await cursor.fetchone()
-            if row is None or not row["cleanup_running"]:
+            if row is None or row["cleanup_lock_owner"] is None:
                 return False  # 既に他者が解放したか、行が存在しない
 
-            updated_at_str = row["updated_at"]
-            updated_at = datetime.fromisoformat(updated_at_str).replace(tzinfo=timezone.utc)
-            elapsed = (now - updated_at).total_seconds()
+            touched_at_str = row["cleanup_lock_touched_at"]
+            if touched_at_str is None:
+                # touched_at が NULL の場合は、古いスキーマからの移行直後などの可能性があるため
+                # updated_at を代替として使用することを検討するが、ここではシンプルに強制解放対象とする
+                elapsed = self._stale_lock_timeout_seconds + 1
+            else:
+                touched_at = datetime.fromisoformat(touched_at_str).replace(tzinfo=timezone.utc)
+                elapsed = (now - touched_at).total_seconds()
 
             if elapsed >= self._stale_lock_timeout_seconds:
-                logger.warning("Stale lock detected (elapsed=%.1fs), forcing release.", elapsed)
+                logger.warning(
+                    "Stale lock detected (owner=%s, elapsed=%.1fs), forcing release.",
+                    row["cleanup_lock_owner"],
+                    elapsed,
+                )
                 # CAS (Compare-And-Swap) 方式で安全に上書き取得
                 cursor = await conn.execute(
-                    "UPDATE lifecycle_state SET cleanup_running = 1, updated_at = ? "
-                    "WHERE id = 1 AND updated_at = ?",
-                    (now.isoformat(), updated_at_str),
+                    "UPDATE lifecycle_state SET cleanup_lock_owner = ?, cleanup_lock_touched_at = ?, updated_at = ? "
+                    "WHERE id = 1 AND cleanup_lock_owner = ? AND (cleanup_lock_touched_at = ? OR cleanup_lock_touched_at IS NULL)",
+                    (
+                        token,
+                        now.isoformat(),
+                        now.isoformat(),
+                        row["cleanup_lock_owner"],
+                        touched_at_str,
+                    ),
                 )
                 await conn.commit()
                 if cursor.rowcount > 0:
@@ -395,7 +461,7 @@ class SQLiteLifecycleStateStore:
 
         return False
 
-    async def release_cleanup_lock(self) -> None:
+    async def release_cleanup_lock(self, token: str) -> None:
         """クリーンアップロックを解放する。"""
         import aiosqlite  # type: ignore[import-untyped]
 
@@ -403,8 +469,22 @@ class SQLiteLifecycleStateStore:
             await self._ensure_tables(conn)
             now = datetime.now(timezone.utc)
             await conn.execute(
-                "UPDATE lifecycle_state SET cleanup_running = 0, updated_at = ? WHERE id = 1",
-                (now.isoformat(),),
+                "UPDATE lifecycle_state SET cleanup_lock_owner = NULL, cleanup_lock_touched_at = NULL, updated_at = ? "
+                "WHERE id = 1 AND cleanup_lock_owner = ?",
+                (now.isoformat(), token),
+            )
+            await conn.commit()
+
+    async def heartbeat_cleanup_lock(self, token: str) -> None:
+        """クリーンアップロックの生存確認を更新する。"""
+        import aiosqlite  # type: ignore[import-untyped]
+
+        async with aiosqlite.connect(self._db_path) as conn:
+            await self._ensure_tables(conn)
+            now = datetime.now(timezone.utc)
+            await conn.execute(
+                "UPDATE lifecycle_state SET cleanup_lock_touched_at = ? WHERE id = 1 AND cleanup_lock_owner = ?",
+                (now.isoformat(), token),
             )
             await conn.commit()
 
@@ -650,7 +730,8 @@ class LifecycleManager:
             未処理の保存が残っており、次回のクリーンアップを即座にスケジュールすべきか。
         """
         # DB レベルのロック取得
-        acquired = await self._state_store.acquire_cleanup_lock()
+        token = str(uuid.uuid4())
+        acquired = await self._state_store.acquire_cleanup_lock(token)
         if not acquired:
             logger.debug("Cleanup skipped: DB lock already acquired.")
             return False
@@ -671,6 +752,7 @@ class LifecycleManager:
                 archiver_result.archived_count,
                 archiver_result.checked_count,
             )
+            await self._state_store.heartbeat_cleanup_lock(token)
 
             # 3. Consolidator
             # カーソル (timestamp + ID) を渡して、安定したページングを実現。
@@ -684,6 +766,7 @@ class LifecycleManager:
                 consolidator_result.consolidated_count,
                 consolidator_result.checked_count,
             )
+            await self._state_store.heartbeat_cleanup_lock(token)
 
             # 4. Purger
             purger_result = await self._purger.run()
@@ -692,6 +775,7 @@ class LifecycleManager:
                 purger_result.purged_count,
                 purger_result.checked_count,
             )
+            await self._state_store.heartbeat_cleanup_lock(token)
 
             # 5. Stats Collector
             await self._collect_stats()
@@ -699,6 +783,7 @@ class LifecycleManager:
             # 6. WAL チェックポイント（SQLite のみ）
             if self._wal_checkpoint_fn is not None:
                 await self._run_wal_checkpoint()
+            await self._state_store.heartbeat_cleanup_lock(token)
 
             # 状態を更新（カウンターリセット + last_cleanup_at 更新）
             # ページングカーソル (last_processed_at/id) を保存
@@ -718,7 +803,8 @@ class LifecycleManager:
                 last_cleanup_at=now,  # 全工程成功につき更新
                 last_cleanup_cursor_at=next_cursor_at,
                 last_cleanup_id=next_cursor_id,
-                cleanup_running=True,  # finally で release_cleanup_lock を呼ぶまで保持
+                cleanup_lock_owner=token,  # finally で release_cleanup_lock を呼ぶまで保持
+                cleanup_lock_touched_at=datetime.now(timezone.utc),
                 updated_at=now,
             )
             await self._state_store.save_state(new_state)
@@ -743,7 +829,8 @@ class LifecycleManager:
                         last_cleanup_at=state.last_cleanup_at,
                         last_cleanup_cursor_at=state.last_cleanup_cursor_at,
                         last_cleanup_id=state.last_cleanup_id,
-                        cleanup_running=True,  # finally で release_cleanup_lock を呼ぶまで保持
+                        cleanup_lock_owner=token,  # finally で release_cleanup_lock を呼ぶまで保持
+                        cleanup_lock_touched_at=state.cleanup_lock_touched_at,
                         updated_at=datetime.now(timezone.utc),
                     )
                 )
@@ -751,7 +838,7 @@ class LifecycleManager:
                 logger.exception("Failed to reset save_count after cleanup failure.")
             raise
         finally:
-            await self._state_store.release_cleanup_lock()
+            await self._state_store.release_cleanup_lock(token)
 
         return should_schedule_followup
 

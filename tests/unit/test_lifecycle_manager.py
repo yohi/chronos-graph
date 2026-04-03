@@ -19,6 +19,13 @@ from context_store.lifecycle.manager import (
 from tests.unit.conftest import make_settings
 
 
+def test_lifecycle_state_fields():
+    state = LifecycleState()
+    assert hasattr(state, "cleanup_lock_owner")
+    assert hasattr(state, "cleanup_lock_touched_at")
+    assert not hasattr(state, "cleanup_running")
+
+
 # ─────────────────────────── フィクスチャ ───────────────────────────
 
 
@@ -248,7 +255,7 @@ class TestRunCleanup:
         await manager.run_cleanup()
 
         state = await store.load_state()
-        assert state.cleanup_running is False
+        assert state.cleanup_lock_owner is None
 
     async def test_releases_db_lock_on_exception(self):
         """例外発生時でも DB ロックが解放されること。"""
@@ -259,7 +266,7 @@ class TestRunCleanup:
             await manager.run_cleanup()
 
         state = await store.load_state()
-        assert state.cleanup_running is False
+        assert state.cleanup_lock_owner is None
 
 
 # ─────────────────────────── スタルロックテスト ───────────────────────────
@@ -269,56 +276,60 @@ class TestStaleLock:
     """スタルロックの検出と解放テスト。"""
 
     async def test_stale_lock_is_force_released(self):
-        """古い cleanup_running フラグが強制解放されること。"""
+        """古い cleanup_lock_owner が強制解放されること。"""
         # stale_lock_timeout_seconds を 1 秒に設定
         store = InMemoryLifecycleStateStore(stale_lock_timeout_seconds=1)
 
-        # 2秒以上前の updated_at で cleanup_running=True を設定
+        # 2秒以上前の touched_at で cleanup_lock_owner="old_token" を設定
         old_time = datetime.now(timezone.utc) - timedelta(seconds=2)
         stale_state = LifecycleState(
             save_count=0,
             last_cleanup_at=None,
-            cleanup_running=True,
+            cleanup_lock_owner="old_token",
+            cleanup_lock_touched_at=old_time,
             updated_at=old_time,
         )
         store._state = stale_state
 
         # acquire_cleanup_lock() がスタルロックを検出して取得できること
-        acquired = await store.acquire_cleanup_lock()
+        token = "new_token"
+        acquired = await store.acquire_cleanup_lock(token)
         assert acquired is True
         state = await store.load_state()
-        assert state.cleanup_running is True
+        assert state.cleanup_lock_owner == token
 
     async def test_recent_lock_is_not_released(self):
-        """新しい cleanup_running フラグは解放されないこと。"""
+        """新しい cleanup_lock_owner は解放されないこと。"""
         store = InMemoryLifecycleStateStore(stale_lock_timeout_seconds=600)
 
-        # 最近の updated_at で cleanup_running=True を設定
+        # 最近の touched_at で cleanup_lock_owner="current_token" を設定
         recent_time = datetime.now(timezone.utc)
         running_state = LifecycleState(
             save_count=0,
             last_cleanup_at=None,
-            cleanup_running=True,
+            cleanup_lock_owner="current_token",
+            cleanup_lock_touched_at=recent_time,
             updated_at=recent_time,
         )
         store._state = running_state
 
         # acquire_cleanup_lock() が False を返すことを確認（最近のロックなので解放されない）
-        acquired = await store.acquire_cleanup_lock()
+        acquired = await store.acquire_cleanup_lock("new_token")
         assert acquired is False
         state = await store.load_state()
-        assert state.cleanup_running is True
+        assert state.cleanup_lock_owner == "current_token"
 
     async def test_cleanup_skipped_when_db_lock_held(self):
         """DB ロックが保持されている場合はクリーンアップをスキップすること。"""
         manager, store = _make_manager()
 
-        # 手動で cleanup_running=True に設定
+        # 手動で cleanup_lock_owner を設定
         now = datetime.now(timezone.utc)
         store._state = LifecycleState(
             save_count=0,
             last_cleanup_at=None,
-            cleanup_running=True,
+            cleanup_lock_owner="other_token",
+            cleanup_lock_touched_at=now,
             updated_at=now,
         )
 
@@ -355,7 +366,7 @@ class TestTimeBasedCleanup:
         store._state = LifecycleState(
             save_count=0,
             last_cleanup_at=old_time,
-            cleanup_running=False,
+            cleanup_lock_owner=None,
             updated_at=datetime.now(timezone.utc),
         )
         manager, _ = _make_manager(state_store=store)
@@ -377,7 +388,7 @@ class TestTimeBasedCleanup:
         store._state = LifecycleState(
             save_count=0,
             last_cleanup_at=recent_time,
-            cleanup_running=False,
+            cleanup_lock_owner=None,
             updated_at=datetime.now(timezone.utc),
         )
         manager, _ = _make_manager(state_store=store)
@@ -603,7 +614,7 @@ class TestSQLiteLifecycleStateStore:
             state = await store.load_state()
             assert state.save_count == 0
             assert state.last_cleanup_at is None
-            assert state.cleanup_running is False
+            assert state.cleanup_lock_owner is None
         finally:
             os.unlink(db_path)
 
@@ -620,7 +631,7 @@ class TestSQLiteLifecycleStateStore:
             state = LifecycleState(
                 save_count=42,
                 last_cleanup_at=now,
-                cleanup_running=False,
+                cleanup_lock_owner="some_token",
                 updated_at=now,
             )
             await store.save_state(state)
@@ -630,6 +641,7 @@ class TestSQLiteLifecycleStateStore:
             # タイムスタンプは秒単位で比較
             assert loaded.last_cleanup_at is not None
             assert abs((loaded.last_cleanup_at - now).total_seconds()) < 2
+            assert loaded.cleanup_lock_owner == "some_token"
         finally:
             os.unlink(db_path)
 
@@ -643,21 +655,22 @@ class TestSQLiteLifecycleStateStore:
         try:
             store = SQLiteLifecycleStateStore(db_path=db_path)
 
+            token = "test_token"
             # ロック取得成功
-            acquired = await store.acquire_cleanup_lock()
+            acquired = await store.acquire_cleanup_lock(token)
             assert acquired is True
 
             # 同じロックを再取得しようとすると失敗
-            acquired_again = await store.acquire_cleanup_lock()
+            acquired_again = await store.acquire_cleanup_lock("other_token")
             assert acquired_again is False
 
             # ロック解放
-            await store.release_cleanup_lock()
+            await store.release_cleanup_lock(token)
 
             # 解放後は再取得可能
-            acquired_after_release = await store.acquire_cleanup_lock()
+            acquired_after_release = await store.acquire_cleanup_lock("new_token")
             assert acquired_after_release is True
-            await store.release_cleanup_lock()
+            await store.release_cleanup_lock("new_token")
         finally:
             os.unlink(db_path)
 
@@ -681,22 +694,24 @@ class TestSQLiteLifecycleStateStore:
                         id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
                         save_count INTEGER NOT NULL DEFAULT 0,
                         last_cleanup_at TIMESTAMP,
-                        cleanup_running INTEGER NOT NULL DEFAULT 0,
+                        cleanup_lock_owner TEXT,
+                        cleanup_lock_touched_at TIMESTAMP,
                         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
                 await conn.execute(
-                    "INSERT OR REPLACE INTO lifecycle_state (id, cleanup_running, updated_at) "
-                    "VALUES (1, 1, ?)",
-                    (old_time,),
+                    "INSERT OR REPLACE INTO lifecycle_state (id, cleanup_lock_owner, cleanup_lock_touched_at, updated_at) "
+                    "VALUES (1, 'old_token', ?, ?)",
+                    (old_time, old_time),
                 )
                 await conn.commit()
 
             # acquire_cleanup_lock() がスタルロックを検出して取得できること
-            acquired = await store.acquire_cleanup_lock()
+            new_token = "new_token"
+            acquired = await store.acquire_cleanup_lock(new_token)
             assert acquired is True
             state = await store.load_state()
-            assert state.cleanup_running is True
+            assert state.cleanup_lock_owner == new_token
         finally:
             os.unlink(db_path)
 

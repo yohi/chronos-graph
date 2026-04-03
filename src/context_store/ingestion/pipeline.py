@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import weakref
 from uuid import UUID
@@ -140,15 +141,19 @@ class IngestionPipeline:
 
         results: list[IngestionResult] = []
         document_memories: dict[str, list[Memory]] = {}
+        failed_chunks: list[dict[str, Any]] = []
+        total_chunks = 0
 
         for raw in raw_contents:
             # ステップ2: チャンク分割
             chunks = list(self._chunker.chunk(raw))
+            total_chunks += len(chunks)
 
             # ステップ3: 各チャンクを処理
             for chunk in chunks:
                 document_id = str(chunk.metadata.get("document_id", ""))
                 prior_document_memories = document_memories.get(document_id, [])
+                content_hash = self._compute_hash(chunk.content)
                 try:
                     result = await self._process_chunk(
                         chunk,
@@ -164,12 +169,25 @@ class IngestionPipeline:
                 except Exception as e:
                     logger.error(
                         "Chunk 処理失敗 (content_hash=%s, doc_id=%s): %s",
-                        self._compute_hash(chunk.content)[:8],
+                        content_hash[:8],
                         document_id,
                         e,
                         exc_info=True,
                     )
-                    # 失敗したチャンクはスキップして続行
+                    failed_chunks.append(
+                        {
+                            "content_hash": content_hash,
+                            "document_id": document_id,
+                            "error": str(e),
+                        }
+                    )
+
+        # 全てのチャンクが失敗した場合は例外を投げる
+        if total_chunks > 0 and not results:
+            raise RuntimeError(
+                f"Ingestion 全件失敗 ({len(failed_chunks)}/{total_chunks} chunks). "
+                f"Failures: {failed_chunks}"
+            )
 
         return results
 
@@ -181,24 +199,15 @@ class IngestionPipeline:
         prior_document_memories: list[Memory],
     ) -> IngestionResult | None:
         """単一チャンクの処理パイプラインを実行する。"""
-        # コンテンツハッシュ + メタデータでキーイング
+        # コンテンツハッシュ + メージされたメタデータのハッシュでキーイング
         content_hash = self._compute_hash(chunk.content)
-        project_id = base_metadata.get("project", "")
-        session_id = base_metadata.get("session_id", "")
-        source_type = chunk.source_type.value
-        # 追加のメタデータを含めてキーを精緻化
-        url = chunk.metadata.get("url") or chunk.metadata.get("source_id", "")
-        chunk_index = chunk.metadata.get("chunk_index", 0)
-        document_id = chunk.metadata.get("document_id", "")
-        memo_key = (
-            content_hash,
-            project_id,
-            session_id,
-            source_type,
-            url,
-            chunk_index,
-            document_id,
-        )
+        merged_meta = {**base_metadata, **chunk.metadata}
+
+        # 決定論的なメタデータのハッシュを作成
+        meta_json = json.dumps(merged_meta, sort_keys=True, default=str)
+        meta_hash = hashlib.sha256(meta_json.encode("utf-8")).hexdigest()
+
+        memo_key = (content_hash, meta_hash)
 
         # 1. ロックを取得して同一 memo_key のタスクをアトミックにチェック・登録する
         async with self._locks_mutex:
@@ -319,15 +328,28 @@ class IngestionPipeline:
                 chunk_neighbors=chunk_neighbors,
             )
         except Exception:
+            # ロールバック: 新しく保存したメモリを削除
             try:
                 await self._storage.delete_memory(str(memory_id))
             except Exception as e:
                 logger.error("Error during delete_memory for memory_id=%s: %s", memory_id, e)
+            
+            # ロールバック: 作成したグラフノードを削除
             try:
                 if node_created:
                     await self._graph.delete_node(str(memory_id))
             except Exception as e:
                 logger.error("Error during delete_node for memory_id=%s: %s", memory_id, e)
+
+            # ロールバック: アーカイブされたメモリを復元 (REPLACE 時)
+            if dedup_result.action == DeduplicationAction.REPLACE and supersedes_memory:
+                try:
+                    await self._storage.update_memory(
+                        str(supersedes_memory.id), {"archived_at": None}
+                    )
+                    logger.info("ロールバック: supersedes_memory=%s のアーカイブを解除しました", supersedes_memory.id)
+                except Exception as e:
+                    logger.error("Error during unarchiving supersedes_memory=%s: %s", supersedes_memory.id, e)
             raise
 
         logger.info(

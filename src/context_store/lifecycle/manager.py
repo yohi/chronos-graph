@@ -432,7 +432,7 @@ class SQLiteLifecycleStateStore:
             if touched_at_str is None:
                 # touched_at が NULL の場合は、古いスキーマからの移行直後などの可能性があるため
                 # updated_at を代替として使用することを検討するが、ここではシンプルに強制解放対象とする
-                elapsed = self._stale_lock_timeout_seconds + 1
+                elapsed = float(self._stale_lock_timeout_seconds + 1)
             else:
                 touched_at = datetime.fromisoformat(touched_at_str).replace(tzinfo=timezone.utc)
                 elapsed = (now - touched_at).total_seconds()

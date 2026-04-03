@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 import weakref
+from datetime import datetime
 from uuid import UUID
 from dataclasses import dataclass
 from typing import Any
@@ -96,6 +97,15 @@ class IngestionPipeline:
     def _compute_hash(self, content: str) -> str:
         """コンテンツのハッシュ値を計算する。"""
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _serialize_meta(obj: Any) -> str:
+        """メタデータの各要素を決定論的な文字列表現に変換する。"""
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if isinstance(obj, UUID):
+            return str(obj)
+        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
     async def _fetch_url_content(self, url: str) -> list[RawContent]:
         """URL からコンテンツを取得する（テストでモック可能）。"""
@@ -199,12 +209,12 @@ class IngestionPipeline:
         prior_document_memories: list[Memory],
     ) -> IngestionResult | None:
         """単一チャンクの処理パイプラインを実行する。"""
-        # コンテンツハッシュ + メージされたメタデータのハッシュでキーイング
+        # コンテンツハッシュ + マージされたメタデータのハッシュでキーイング
         content_hash = self._compute_hash(chunk.content)
         merged_meta = {**base_metadata, **chunk.metadata}
 
         # 決定論的なメタデータのハッシュを作成
-        meta_json = json.dumps(merged_meta, sort_keys=True, default=str)
+        meta_json = json.dumps(merged_meta, sort_keys=True, default=self._serialize_meta)
         meta_hash = hashlib.sha256(meta_json.encode("utf-8")).hexdigest()
 
         memo_key = (content_hash, meta_hash)

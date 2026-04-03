@@ -216,7 +216,6 @@ class IngestionPipeline:
                         prior_document_memories=prior_document_memories,
                         memo_key=memo_key,
                         content_hash=content_hash,
-                        lock=lock,
                     )
                 )
                 self._content_results[memo_key] = current_task
@@ -237,7 +236,6 @@ class IngestionPipeline:
         prior_document_memories: list[Memory],
         memo_key: Any,
         content_hash: str,
-        lock: asyncio.Lock,
     ) -> IngestionResult | None:
         """処理を実行し、完了後に確実にクリーンアップを行うラッパー。"""
         try:
@@ -248,13 +246,9 @@ class IngestionPipeline:
             )
         finally:
             # タスク完了時のクリーンアップ
-            # Note: 呼び出し元が lock を保持して待機している場合、
-            # ここで再度 lock を取得しようとするとデッドロックする可能性がある。
-            # しかし、現在の実装では呼び出し元が lock を解放する前に
-            # この Task が完了を通知する必要がある。
-            # lock.locked() でチェックして、取られていればそのまま、
-            # 取られていなければ取ってから pop する。
-            # または、locks_mutex を使う。
+            # Note: 呼び出し元が content_hash ロックを保持して待機しているため、
+            # ここで同一のロックを取得しようとするとデッドロックする可能性がある。
+            # そのため、クリーンアップには独立した locks_mutex を使用する。
             async with self._locks_mutex:
                 if self._content_results.get(memo_key) is asyncio.current_task():
                     self._content_results.pop(memo_key, None)

@@ -217,9 +217,10 @@ class IngestionPipeline:
         meta_json = json.dumps(merged_meta, sort_keys=True, default=self._serialize_meta)
         meta_hash = hashlib.sha256(meta_json.encode("utf-8")).hexdigest()
 
-        memo_key = (content_hash, meta_hash, chunk.source_type)
+        memo_key = (content_hash, meta_hash, chunk.source_type.value)
 
         # 1. ロックを取得して同一 memo_key のタスクをアトミックにチェック・登録する
+
         async with self._locks_mutex:
             target_task = self._content_results.get(memo_key)
             if target_task is None:

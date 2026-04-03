@@ -36,14 +36,15 @@ def create_embedding_provider(settings: "Settings") -> EmbeddingProvider:
 
         return LocalModelEmbeddingProvider(
             model_name=settings.local_model_name,
+            dimension=settings.embedding_dimension,
         )
 
     if provider_name == "litellm":
         from context_store.embedding.litellm import LiteLLMEmbeddingProvider
 
         return LiteLLMEmbeddingProvider(
-            model=settings.local_model_name,
-            dimension=1536,
+            model=settings.litellm_model,
+            dimension=settings.embedding_dimension,
             api_base=settings.litellm_api_base or None,
         )
 
@@ -52,7 +53,7 @@ def create_embedding_provider(settings: "Settings") -> EmbeddingProvider:
 
         return CustomAPIEmbeddingProvider(
             endpoint=settings.custom_api_endpoint,
-            dimension=1536,
+            dimension=settings.embedding_dimension,
         )
 
     raise ValueError(

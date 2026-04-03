@@ -1,6 +1,7 @@
 """Query Analyzer - クエリ意図解析と検索戦略決定"""
 
 import re
+from typing import Pattern
 
 from context_store.models.search import SearchStrategy
 
@@ -11,22 +12,22 @@ class QueryAnalyzer:
     """クエリの意図を解析し、最適な検索戦略を決定"""
 
     # パターンマッチング用の正規表現
-    ERROR_PATTERNS = [
+    ERROR_PATTERNS: tuple[str, ...] = (
         r"(ERROR|WARN|Exception|Error|TypeError|SyntaxError|ValueError)",
         r"(ENOENT|ECONNREFUSED|ETIMEDOUT|ER_\w+|ORA-\d+)",
-    ]
+    )
 
-    CAUSALITY_PATTERNS = [
+    CAUSALITY_PATTERNS: tuple[str, ...] = (
         r"(なぜ|どうして|原因|理由|何故)",
         r"(why|cause|reason|how did)",
-    ]
+    )
 
-    TIME_PATTERNS = [
+    TIME_PATTERNS: tuple[str, ...] = (
         r"(昨日|今日|明日|先週|来週|先月|今月|来月|最近|最近の)",
         r"(\d+\s*日?前|先\s*\d+\s*日)",
         r"(yesterday|today|tomorrow|last\s+week|next\s+week|last\s+month|recently)",
         r"(\d+\s*days?\s+ago|previous\s+week)",
-    ]
+    )
 
     def __init__(self) -> None:
         """初期化"""
@@ -35,7 +36,7 @@ class QueryAnalyzer:
         self._time_regex = self._compile_patterns(self.TIME_PATTERNS)
 
     @staticmethod
-    def _compile_patterns(patterns: list[str]) -> re.Pattern[str]:
+    def _compile_patterns(patterns: tuple[str, ...]) -> Pattern[str]:
         """複数のパターンを1つの正規表現に結合"""
         combined = "|".join(f"({p})" for p in patterns)
         return re.compile(combined, re.IGNORECASE)

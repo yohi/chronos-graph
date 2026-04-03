@@ -65,47 +65,52 @@ def search_strategy():
 class TestResultFusion:
     """結果統合とスコアリングのテスト"""
 
-    def test_rrf_calculation(self, result_fusion):
+    def test_rrf_calculation(self, result_fusion, sample_results, search_strategy):
         """RRF スコアの計算が正しいこと"""
-        weights = [0.5, 0.2, 0.3]  # ベクトル、キーワード、グラフの重み
-        weights_sum = sum(weights)
-        k = 60
+        fused = result_fusion.fuse_multiple_sources(
+            {
+                MemorySource.VECTOR: sample_results,
+                MemorySource.KEYWORD: sample_results,
+                MemorySource.GRAPH: sample_results,
+            },
+            search_strategy,
+        )
 
-        # RRF スコア: sum(weight * 1/(K + rank + 1))
-        # ランク1: 0.5 * 1/(60+1+1) + 0.2 * 1/(60+1+1) + 0.3 * 1/(60+1+1)
-        #       = (0.5 + 0.2 + 0.3) * 1/62 = 1.0 / 62 ≈ 0.01613
-        expected_rrf_rank1 = weights_sum * (1.0 / (k + 1 + 1))
-        assert expected_rrf_rank1 == pytest.approx(1.0 / 62, abs=0.0001)
+        expected_rrf = result_fusion.compute_rrf_score(
+            vector_rank=0,
+            keyword_rank=0,
+            graph_rank=0,
+            vector_weight=search_strategy.vector_weight,
+            keyword_weight=search_strategy.keyword_weight,
+            graph_weight=search_strategy.graph_weight,
+        )
+        assert fused[0]["rrf_score"] == pytest.approx(expected_rrf, abs=0.0001)
 
     def test_time_decay(self, result_fusion):
         """時間減衰の計算"""
-        half_life = 30
-        # 0日経過: recency = 0.5^(0/30) = 1.0
-        days_0 = 0
-        recency_0 = 0.5 ** (days_0 / half_life)
+        now = datetime.now(timezone.utc)
+        recency_0 = result_fusion.compute_time_decay(now)
         assert recency_0 == pytest.approx(1.0, abs=0.0001)
 
-        # 30日経過: recency = 0.5^(30/30) = 0.5
-        days_30 = 30
-        recency_30 = 0.5 ** (days_30 / half_life)
+        recency_30 = result_fusion.compute_time_decay(now - timedelta(days=30))
         assert recency_30 == pytest.approx(0.5, abs=0.0001)
 
-        # 60日経過: recency = 0.5^(60/30) = 0.25
-        days_60 = 60
-        recency_60 = 0.5 ** (days_60 / half_life)
+        recency_60 = result_fusion.compute_time_decay(now - timedelta(days=60))
         assert recency_60 == pytest.approx(0.25, abs=0.0001)
 
-    def test_composite_score_calculation(self, result_fusion):
+    def test_composite_score_calculation(self, result_fusion, sample_results, search_strategy):
         """複合スコアの計算"""
-        # 複合スコア = 0.5 * normalized_rrf + 0.3 * time_decay + 0.2 * importance_score
-        # テスト値を直接検証
-        normalized_rrf = 0.8
-        time_decay = 1.0  # 0日経過
-        importance_score = 0.8
-
-        composite = 0.5 * normalized_rrf + 0.3 * time_decay + 0.2 * importance_score
-        expected = 0.5 * 0.8 + 0.3 * 1.0 + 0.2 * 0.8
-        assert composite == pytest.approx(expected, abs=0.0001)
+        fused = result_fusion.fuse(sample_results[:1], search_strategy)
+        expected_rrf = result_fusion.compute_rrf_score(
+            vector_rank=0,
+            keyword_rank=None,
+            graph_rank=None,
+            vector_weight=1.0,
+            keyword_weight=0.0,
+            graph_weight=0.0,
+        )
+        expected = 0.5 * expected_rrf + 0.3 * 1.0 + 0.2 * 0.8
+        assert fused[0]["final_score"] == pytest.approx(expected, abs=0.0001)
 
     def test_fusion_with_empty_results(self, result_fusion, search_strategy):
         """空の結果に対応"""
@@ -115,7 +120,6 @@ class TestResultFusion:
     def test_fusion_returns_sorted_results(self, result_fusion, sample_results, search_strategy):
         """結果がスコア順にソートされること"""
         # 複数の検索結果を作成（異なるスコアで）
-        datetime.now(timezone.utc)
         results_dict = {
             MemorySource.VECTOR: sample_results,
             MemorySource.KEYWORD: [],

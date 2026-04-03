@@ -14,16 +14,20 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import weakref
+from uuid import UUID
 from dataclasses import dataclass
 from typing import Any
 
-from context_store.ingestion.adapters import RawContent, URLAdapter
+from context_store.config import Settings
+from context_store.embedding.protocols import EmbeddingProvider
+from context_store.ingestion.adapters import ConversationAdapter, RawContent, URLAdapter
 from context_store.ingestion.chunker import Chunker
 from context_store.ingestion.classifier import Classifier
 from context_store.ingestion.deduplicator import DeduplicationAction, Deduplicator
 from context_store.ingestion.graph_linker import GraphLinker
 from context_store.models.memory import Memory, MemoryType, SourceType
-from context_store.storage.protocols import GraphAdapter, StorageAdapter
+from context_store.storage.protocols import GraphAdapter, MemoryFilters, StorageAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +41,7 @@ class IngestionResult:
     memory_type: MemoryType = MemoryType.EPISODIC
     chunk_index: int = 0
     chunk_count: int = 1
+    persisted_memory: Memory | None = None
 
 
 class IngestionPipeline:
@@ -54,28 +59,36 @@ class IngestionPipeline:
         self,
         storage: StorageAdapter,
         graph: GraphAdapter,
-        embedding_provider: Any,
+        embedding_provider: EmbeddingProvider,
+        settings: Settings | None = None,
     ) -> None:
         self._storage = storage
         self._graph = graph
         self._embedding_provider = embedding_provider
+        self._settings = settings or Settings()
 
         self._chunker = Chunker()
         self._classifier = Classifier()
         self._deduplicator = Deduplicator(storage=storage)
         self._graph_linker = GraphLinker(storage=storage, graph=graph)
+        self._conversation_adapter = ConversationAdapter()
         self._url_adapter: URLAdapter | None = None  # 遅延初期化
 
         # コンテンツハッシュ別の Lock（排他制御）
-        self._content_locks: dict[str, asyncio.Lock] = {}
+        self._content_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
+        self._content_results: dict[Any, asyncio.Task[IngestionResult | None]] = {}
         self._locks_mutex = asyncio.Lock()
 
     async def _get_content_lock(self, content_hash: str) -> asyncio.Lock:
         """コンテンツハッシュに対応する Lock を取得（なければ作成）する。"""
         async with self._locks_mutex:
-            if content_hash not in self._content_locks:
-                self._content_locks[content_hash] = asyncio.Lock()
-            return self._content_locks[content_hash]
+            lock = self._content_locks.get(content_hash)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._content_locks[content_hash] = lock
+            return lock
 
     def _compute_hash(self, content: str) -> str:
         """コンテンツのハッシュ値を計算する。"""
@@ -84,8 +97,17 @@ class IngestionPipeline:
     async def _fetch_url_content(self, url: str) -> list[RawContent]:
         """URL からコンテンツを取得する（テストでモック可能）。"""
         if self._url_adapter is None:
-            self._url_adapter = URLAdapter()
+            self._url_adapter = URLAdapter(settings=self._settings)
         return await self._url_adapter.adapt(url)
+
+    async def dispose(self) -> None:
+        """保持しているクローズ可能リソースを解放する。"""
+        if self._url_adapter is not None:
+            aclose = getattr(self._url_adapter, "aclose", None)
+            if callable(aclose):
+                await aclose()
+
+        await self._embedding_provider.close()
 
     async def ingest(
         self,
@@ -109,10 +131,13 @@ class IngestionPipeline:
         # ステップ1: ソースからコンテンツを取得
         if source_type == SourceType.URL:
             raw_contents = await self._fetch_url_content(source)
+        elif source_type == SourceType.CONVERSATION:
+            raw_contents = await self._conversation_adapter.adapt(source, metadata=meta)
         else:
             raw_contents = [RawContent(content=source, source_type=source_type, metadata=meta)]
 
         results: list[IngestionResult] = []
+        document_memories: dict[str, list[Memory]] = {}
 
         for raw in raw_contents:
             # ステップ2: チャンク分割
@@ -120,9 +145,19 @@ class IngestionPipeline:
 
             # ステップ3: 各チャンクを処理
             for chunk in chunks:
-                result = await self._process_chunk(chunk, base_metadata=meta)
+                document_id = str(chunk.metadata.get("document_id", ""))
+                prior_document_memories = document_memories.get(document_id, [])
+                result = await self._process_chunk(
+                    chunk,
+                    base_metadata=meta,
+                    prior_document_memories=prior_document_memories,
+                )
                 if result:
                     results.append(result)
+                    if document_id and result.persisted_memory is not None:
+                        document_memories.setdefault(document_id, []).append(
+                            result.persisted_memory
+                        )
 
         return results
 
@@ -131,20 +166,105 @@ class IngestionPipeline:
         chunk: RawContent,
         *,
         base_metadata: dict[str, Any],
+        prior_document_memories: list[Memory],
     ) -> IngestionResult | None:
         """単一チャンクの処理パイプラインを実行する。"""
-        # コンテンツハッシュで排他制御
+        # コンテンツハッシュ + メタデータでキーイング
         content_hash = self._compute_hash(chunk.content)
+        project_id = base_metadata.get("project", "")
+        session_id = base_metadata.get("session_id", "")
+        source_type = chunk.source_type.value
+        # 追加のメタデータを含めてキーを精緻化
+        url = chunk.metadata.get("url") or chunk.metadata.get("source_id", "")
+        chunk_index = chunk.metadata.get("chunk_index", 0)
+        document_id = chunk.metadata.get("document_id", "")
+        memo_key = (
+            content_hash,
+            project_id,
+            session_id,
+            source_type,
+            url,
+            chunk_index,
+            document_id,
+        )
+
         lock = await self._get_content_lock(content_hash)
 
+        # 1. 同一の memo_key (コンテンツ + メタデータ) が並行して走っている場合は、そのタスクを共有する
+        # ここは lock 外でチェックし、あれば shield で待つ。
+        # (競合を避けるため、後で lock 内でも再チェックする)
+        existing_task = self._content_results.get(memo_key)
+        if existing_task is not None:
+            return await asyncio.shield(existing_task)
+
+        # 2. content_hash レベルの排他制御
         async with lock:
-            return await self._process_chunk_locked(chunk, base_metadata=base_metadata)
+            # lock 取得後に memo_key を再チェック（他のタスクが先に作った可能性があるため）
+            existing_task = self._content_results.get(memo_key)
+            if existing_task is not None:
+                # すでにタスクが作成されている場合は、lock を抜けてから待つ
+                pass
+            else:
+                # 自分が処理を担当する。
+                # 同一 memo_key の後続リクエストのために、自分自身を Task として登録して実行する。
+                # ここでは直接 asyncio.current_task() を登録したいが、
+                # まだ走っているので、ラッパーを Task 化して登録する。
+                current_task = asyncio.create_task(
+                    self._process_chunk_locked_with_cleanup(
+                        chunk,
+                        base_metadata=base_metadata,
+                        prior_document_memories=prior_document_memories,
+                        memo_key=memo_key,
+                        content_hash=content_hash,
+                        lock=lock,
+                    )
+                )
+                self._content_results[memo_key] = current_task
+
+                # lock を保持したまま、タスクの完了を待機する。
+                # これにより、同じ content_hash の別 memo_key はここで待たされる。
+                # _process_chunk_locked_with_cleanup 内部で再度 lock を取るとデッドロックするので注意が必要。
+                return await asyncio.shield(current_task)
+
+        # 3. 他のリクエストが作成した既存タスクを待機
+        return await asyncio.shield(existing_task)
+
+    async def _process_chunk_locked_with_cleanup(
+        self,
+        chunk: RawContent,
+        *,
+        base_metadata: dict[str, Any],
+        prior_document_memories: list[Memory],
+        memo_key: Any,
+        content_hash: str,
+        lock: asyncio.Lock,
+    ) -> IngestionResult | None:
+        """処理を実行し、完了後に確実にクリーンアップを行うラッパー。"""
+        try:
+            return await self._process_chunk_locked(
+                chunk,
+                base_metadata=base_metadata,
+                prior_document_memories=prior_document_memories,
+            )
+        finally:
+            # タスク完了時のクリーンアップ
+            # Note: 呼び出し元が lock を保持して待機している場合、
+            # ここで再度 lock を取得しようとするとデッドロックする可能性がある。
+            # しかし、現在の実装では呼び出し元が lock を解放する前に
+            # この Task が完了を通知する必要がある。
+            # lock.locked() でチェックして、取られていればそのまま、
+            # 取られていなければ取ってから pop する。
+            # または、locks_mutex を使う。
+            async with self._locks_mutex:
+                if self._content_results.get(memo_key) is asyncio.current_task():
+                    self._content_results.pop(memo_key, None)
 
     async def _process_chunk_locked(
         self,
         chunk: RawContent,
         *,
         base_metadata: dict[str, Any],
+        prior_document_memories: list[Memory],
     ) -> IngestionResult | None:
         """排他ロック取得済みの状態でチャンクを処理する。"""
         # ステップ3: 分類（LLM不使用のルールベース）
@@ -156,8 +276,8 @@ class IngestionPipeline:
         # ========================================================
         embedding = await self._embedding_provider.embed(chunk.content)
 
-        # メタデータの整合
-        merged_meta = {**chunk.metadata, **base_metadata}
+        # メタデータの整合（パイプライン派生フィールドを含む chunk.metadata を優先）
+        merged_meta = {**base_metadata, **chunk.metadata}
         project = merged_meta.get("project")
 
         # Memory オブジェクトの作成（埋め込みベクトル設定済み）
@@ -186,23 +306,50 @@ class IngestionPipeline:
         # ========================================================
 
         # ステップ6: 永続化
-        memory_id = await self._storage.save_memory(memory)
+        raw_id = await self._storage.save_memory(memory)
+        # IDをUUIDに正規化（ストレージが文字列を返す場合があるため）
+        memory_id = UUID(raw_id) if isinstance(raw_id, str) else raw_id
+        persisted_memory = memory.model_copy(update={"id": memory_id})
 
         # ステップ7: グラフノード作成
-        await self._graph.create_node(
-            memory_id,
-            {
-                "memory_type": memory.memory_type.value,
-                "source_type": memory.source_type.value,
-                "project": memory.project,
-            },
-        )
+        node_created = False
+        try:
+            await self._graph.create_node(
+                str(memory_id),
+                {
+                    "memory_type": persisted_memory.memory_type.value,
+                    "source_type": persisted_memory.source_type.value,
+                    "project": persisted_memory.project,
+                },
+            )
+            node_created = True
 
-        # ステップ8: グラフリンク（エッジ作成）
-        await self._graph_linker.link(
-            memory,
-            supersedes=supersedes_memory,
-        )
+            # ステップ8: グラフリンク（エッジ作成）
+            previous_memories = await self._get_previous_memories(persisted_memory)
+            chunk_neighbors = self._build_chunk_neighbors(
+                persisted_memory,
+                prior_document_memories,
+                supersedes_memory,
+            )
+            await self._graph_linker.link(
+                persisted_memory,
+                supersedes=supersedes_memory,
+                previous_memories=previous_memories,
+                chunk_neighbors=chunk_neighbors,
+            )
+        except Exception:
+            # 補償処理（ロールバック）: delete_memory と delete_node を個別に試行
+            try:
+                await self._storage.delete_memory(str(memory_id))
+            except Exception as e:
+                logger.error("Error during delete_memory for memory_id=%s: %s", memory_id, e)
+
+            try:
+                if node_created:
+                    await self._graph.delete_node(str(memory_id))
+            except Exception as e:
+                logger.error("Error during delete_node for memory_id=%s: %s", memory_id, e)
+            raise
 
         logger.info(
             "Ingestion 完了: memory_id=%s, action=%s, type=%s",
@@ -211,10 +358,59 @@ class IngestionPipeline:
             classification.memory_type.value,
         )
 
-        return IngestionResult(
-            memory_id=memory_id,
+        result = IngestionResult(
+            memory_id=str(memory_id),
             action=dedup_result.action,
             memory_type=classification.memory_type,
             chunk_index=int(chunk.metadata.get("chunk_index", 0)),
             chunk_count=int(chunk.metadata.get("chunk_count", 1)),
         )
+        result.persisted_memory = persisted_memory
+        return result
+
+    async def _get_previous_memories(self, memory: Memory) -> list[Memory]:
+        """時系列エッジ用に同一セッションまたはプロジェクトの直前候補を取得する。"""
+        session_id = memory.source_metadata.get("session_id")
+
+        # limit を 2 に増やし、自分自身が返ってきた場合でも直前の1件を取得できるようにする
+        filters = MemoryFilters(
+            project=memory.project,
+            limit=2,
+            order_by="created_at DESC",
+            session_id=str(session_id) if session_id else None,
+        )
+
+        candidates = await self._storage.list_by_filter(filters)
+
+        previous_memories: list[Memory] = []
+        candidates = [c for c in candidates if str(c.id) != str(memory.id)]
+
+        for candidate in candidates:
+            candidate_session_id = candidate.source_metadata.get("session_id")
+            if session_id and candidate_session_id == session_id:
+                previous_memories.append(candidate)
+                break
+            if not session_id and memory.project and candidate.project == memory.project:
+                previous_memories.append(candidate)
+                break
+
+        return previous_memories
+
+    def _build_chunk_neighbors(
+        self,
+        memory: Memory,
+        prior_document_memories: list[Memory],
+        supersedes_memory: Memory | None,
+    ) -> dict[str, list[Memory]] | None:
+        """同一 document_id を持つチャンク近傍情報を構築する。"""
+        document_id = memory.source_metadata.get("document_id")
+        if document_id is None:
+            return None
+
+        neighbors = [*prior_document_memories, memory]
+        if (
+            supersedes_memory
+            and supersedes_memory.source_metadata.get("document_id") == document_id
+        ):
+            neighbors.append(supersedes_memory)
+        return {str(document_id): neighbors}

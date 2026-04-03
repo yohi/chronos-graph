@@ -257,30 +257,17 @@ async def test_url_adapter_rejects_any_private_in_dns_response() -> None:
 
 @pytest.mark.asyncio
 async def test_url_adapter_rejects_too_many_redirects() -> None:
-    """リダイレクト4回目で失敗する（url_max_redirects=3）。"""
-    settings = _make_settings(url_max_redirects=3)
-    adapter = URLAdapter(settings=settings)
+    """リダイレクト制限。"""
+    adapter = URLAdapter(settings=_make_settings(url_max_redirects=1))
 
-    redirect_count = 0
-
-    async def mock_get_ips(hostname: str) -> list[str]:
-        return ["203.0.113.1"]  # 文書化済みテストIP（RFC 5737）
-
-    async def mock_fetch(url: str, resolved_ips: list[str]) -> httpx.Response:
-        nonlocal redirect_count
-        redirect_count += 1
-        response = MagicMock(spec=httpx.Response)
-        response.status_code = 302
-        response.headers = httpx.Headers(
-            {"location": f"http://other.example.com/redirect{redirect_count}"}
-        )
-        return response
+    async def mock_fetch(url, ips):
+        return 302, httpx.Headers({"location": "http://other.com"}), b""
 
     with (
-        patch.object(adapter, "_resolve_and_validate_ips", new=mock_get_ips),
-        patch.object(adapter, "_fetch_with_verified_ip", new=mock_fetch),
+        patch.object(adapter, "_resolve_and_validate_ips", return_value=["203.0.113.1"]),
+        patch.object(adapter, "_fetch_with_verified_ip", side_effect=mock_fetch),
     ):
-        with pytest.raises((ValueError, Exception), match="[Rr]edirect|[Tt]oo many"):
+        with pytest.raises(ValueError, match=r"[Rr]edirect"):
             await adapter.adapt("http://example.com/")
 
 

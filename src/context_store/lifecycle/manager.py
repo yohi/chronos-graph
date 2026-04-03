@@ -128,69 +128,76 @@ class InMemoryLifecycleStateStore:
         self._state = LifecycleState()
         self._wal_state = WalState()
         self._stale_lock_timeout_seconds = stale_lock_timeout_seconds
+        self._lock = asyncio.Lock()
 
     async def load_state(self) -> LifecycleState:
         """インメモリ状態を返す。"""
-        return self._state
+        async with self._lock:
+            return self._state
 
     async def save_state(self, state: LifecycleState) -> None:
         """インメモリ状態を更新する。"""
-        self._state = state
+        async with self._lock:
+            self._state = state
 
     async def increment_save_count(self, threshold: int) -> bool:
         """インメモリでのインクリメントと閾値チェック。"""
-        # 単純なインメモリ操作(実用上はロックが必要だが、非同期なら asyncio.Lock があれば安全)
-        state = self._state
-        new_count = state.save_count + 1
-        threshold_just_reached = new_count == threshold
+        async with self._lock:
+            state = self._state
+            new_count = state.save_count + 1
+            threshold_just_reached = new_count == threshold
 
-        self._state = LifecycleState(
-            save_count=new_count,
-            last_cleanup_at=state.last_cleanup_at,
-            last_cleanup_id=state.last_cleanup_id,
-            cleanup_running=state.cleanup_running,
-            updated_at=datetime.now(timezone.utc),
-        )
-        return threshold_just_reached
+            self._state = LifecycleState(
+                save_count=new_count,
+                last_cleanup_at=state.last_cleanup_at,
+                last_cleanup_id=state.last_cleanup_id,
+                cleanup_running=state.cleanup_running,
+                updated_at=datetime.now(timezone.utc),
+            )
+            return threshold_just_reached
 
     async def acquire_cleanup_lock(self) -> bool:
         """クリーンアップロックを取得する（スタルロック検出付き）。"""
-        state = self._state
-        # スタルロック検出: cleanup_running=True かつ updated_at が古い場合は強制解放
-        if state.cleanup_running:
-            now = datetime.now(timezone.utc)
-            elapsed = (now - state.updated_at).total_seconds()
-            if elapsed < self._stale_lock_timeout_seconds:
-                return False
-            logger.warning("Stale cleanup lock detected (elapsed=%.1fs), force releasing.", elapsed)
+        async with self._lock:
+            state = self._state
+            # スタルロック検出: cleanup_running=True かつ updated_at が古い場合は強制解放
+            if state.cleanup_running:
+                now = datetime.now(timezone.utc)
+                elapsed = (now - state.updated_at).total_seconds()
+                if elapsed < self._stale_lock_timeout_seconds:
+                    return False
+                logger.warning("Stale cleanup lock detected (elapsed=%.1fs), force releasing.", elapsed)
 
-        self._state = LifecycleState(
-            save_count=state.save_count,
-            last_cleanup_at=state.last_cleanup_at,
-            last_cleanup_id=state.last_cleanup_id,
-            cleanup_running=True,
-            updated_at=datetime.now(timezone.utc),
-        )
-        return True
+            self._state = LifecycleState(
+                save_count=state.save_count,
+                last_cleanup_at=state.last_cleanup_at,
+                last_cleanup_id=state.last_cleanup_id,
+                cleanup_running=True,
+                updated_at=datetime.now(timezone.utc),
+            )
+            return True
 
     async def release_cleanup_lock(self) -> None:
         """クリーンアップロックを解放する。"""
-        state = self._state
-        self._state = LifecycleState(
-            save_count=state.save_count,
-            last_cleanup_at=state.last_cleanup_at,
-            last_cleanup_id=state.last_cleanup_id,
-            cleanup_running=False,
-            updated_at=datetime.now(timezone.utc),
-        )
+        async with self._lock:
+            state = self._state
+            self._state = LifecycleState(
+                save_count=state.save_count,
+                last_cleanup_at=state.last_cleanup_at,
+                last_cleanup_id=state.last_cleanup_id,
+                cleanup_running=False,
+                updated_at=datetime.now(timezone.utc),
+            )
 
     async def load_wal_state(self) -> WalState:
         """WAL 状態を返す。"""
-        return self._wal_state
+        async with self._lock:
+            return self._wal_state
 
     async def save_wal_state(self, state: WalState) -> None:
         """WAL 状態を更新する。"""
-        self._wal_state = state
+        async with self._lock:
+            self._wal_state = state
 
 
 class SQLiteLifecycleStateStore:
@@ -220,10 +227,11 @@ class SQLiteLifecycleStateStore:
             )
         """)
         # カラムが存在しない場合は追加 (移行用)
-        try:
+        cursor = await conn.execute("PRAGMA table_info('lifecycle_state')")
+        columns = await cursor.fetchall()
+        column_names = [col[1] for col in columns]
+        if "last_cleanup_id" not in column_names:
             await conn.execute("ALTER TABLE lifecycle_state ADD COLUMN last_cleanup_id TEXT")
-        except Exception:
-            pass
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS lifecycle_wal_state (
                 id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
@@ -542,9 +550,8 @@ class LifecycleManager:
         初回起動時のみ前回クリーンアップからの経過時間を確認し、
         1日以上経過している場合はクリーンアップを非同期でトリガーする。
         """
-        task = asyncio.create_task(self._check_time_based_cleanup())
-        self._active_tasks.append(task)
-        task.add_done_callback(self._active_tasks.remove)
+        self._spawn_background_task(self._check_time_based_cleanup())
+
 
     async def _check_time_based_cleanup(self) -> None:
         """時間ベースのクリーンアップチェック（起動時に1回のみ実行）。"""
@@ -568,6 +575,25 @@ class LifecycleManager:
         except Exception:
             logger.exception("Time-based cleanup check failed.")
 
+    def _spawn_background_task(self, coro) -> None:
+        """例外ハンドリング付きでバックグラウンドタスクを開始する。"""
+        task = asyncio.create_task(coro)
+        self._active_tasks.append(task)
+
+        def done_callback(t: asyncio.Task) -> None:
+            if t in self._active_tasks:
+                self._active_tasks.remove(t)
+            try:
+                # 例外が発生していた場合はログに記録
+                if not t.cancelled():
+                    exc = t.exception()
+                    if exc:
+                        logger.error("Background task failed: %s", exc, exc_info=True)
+            except asyncio.InvalidStateError:
+                pass
+
+        task.add_done_callback(done_callback)
+
     async def on_memory_saved(self) -> None:
         """記憶が保存されるたびに呼び出す。カウンターをインクリメント。
 
@@ -580,9 +606,7 @@ class LifecycleManager:
 
         if threshold_just_reached:
             logger.info("Save count threshold reached, triggering cleanup.")
-            task = asyncio.create_task(self.run_cleanup())
-            self._active_tasks.append(task)
-            task.add_done_callback(self._active_tasks.remove)
+            self._spawn_background_task(self.run_cleanup())
 
     async def run_cleanup(self) -> None:
         """クリーンアップを実行する（filelock + DB ロック排他制御付き）。
@@ -603,9 +627,7 @@ class LifecycleManager:
         # ロック解放後に、必要に応じてフォローアップをスケジュール
         if should_schedule_followup:
             logger.info("Scheduling follow-up cleanup.")
-            task = asyncio.create_task(self.run_cleanup())
-            self._active_tasks.append(task)
-            task.add_done_callback(self._active_tasks.remove)
+            self._spawn_background_task(self.run_cleanup())
 
     async def _run_cleanup_inner(self) -> bool:
         """クリーンアップ本体（DB ロック取得後に実行）。
@@ -682,11 +704,12 @@ class LifecycleManager:
             )
             await self._state_store.save_state(new_state)
 
-            # 未処理の保存がまだ残っている場合は、フォローアップを要求
-            if remaining_count >= self._save_count_threshold:
+            # 未処理の保存がまだ残っているか、Consolidator に次ページがある場合は、フォローアップを要求
+            if remaining_count >= self._save_count_threshold or consolidator_result.has_more:
                 logger.info(
-                    "Remaining saves (%d) still exceed threshold, follow-up requested.",
+                    "Follow-up cleanup requested (remaining=%d, has_more=%s).",
                     remaining_count,
+                    consolidator_result.has_more,
                 )
                 should_schedule_followup = True
 
@@ -716,11 +739,9 @@ class LifecycleManager:
         """統計情報をログに記録する（将来的に DB 保存へ拡張可能）。"""
         try:
             # アクティブ記憶数
-            active_memories = await self._storage.list_by_filter(MemoryFilters(archived=None))
-            active_count = len(active_memories)
+            active_count = await self._storage.count_by_filter(MemoryFilters(archived=None))
             # アーカイブ済み記憶数
-            archived_memories = await self._storage.list_by_filter(MemoryFilters(archived=True))
-            archived_count = len(archived_memories)
+            archived_count = await self._storage.count_by_filter(MemoryFilters(archived=True))
             logger.info(
                 "Stats: active_memories=%d, archived_memories=%d",
                 active_count,

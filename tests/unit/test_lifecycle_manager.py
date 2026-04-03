@@ -303,6 +303,9 @@ class TestStaleLock:
         )
         store._state = running_state
 
+        # acquire_cleanup_lock() が False を返すことを確認（最近のロックなので解放されない）
+        acquired = await store.acquire_cleanup_lock()
+        assert acquired is False
         state = await store.load_state()
         assert state.cleanup_running is True
 

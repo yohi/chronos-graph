@@ -40,12 +40,14 @@ class ConsolidatorResult:
         checked_count: チェックした記憶数。
         last_processed_at: 最後にチェックした記憶の作成日時。
         last_processed_id: 最後にチェックした記憶の ID。
+        has_more: さらに処理すべきページが存在するかどうか。
     """
 
     consolidated_count: int
     checked_count: int
     last_processed_at: datetime | None = None
     last_processed_id: str | None = None
+    has_more: bool = False
 
 
 class Consolidator:
@@ -115,6 +117,7 @@ class Consolidator:
 
         last_processed_at = window[-1].created_at
         last_processed_id = str(window[-1].id)
+        has_more = len(window) >= CONSOLIDATION_BATCH_SIZE
 
         consolidated_count = 0
         # 処理済み（アーカイブ済み）記憶 ID を追跡してスキップ
@@ -193,6 +196,7 @@ class Consolidator:
             checked_count=len(window),
             last_processed_at=last_processed_at,
             last_processed_id=last_processed_id,
+            has_more=has_more,
         )
 
     async def _process_candidate(
@@ -223,12 +227,21 @@ class Consolidator:
 
         # SUPERSEDES エッジを作成
         if self._graph is not None:
-            await self._graph.create_edge(
-                newer_id,
-                older_id,
-                "SUPERSEDES",
-                {"similarity": scored.score, "archived_at": datetime.now(timezone.utc)},
-            )
+            try:
+                await self._graph.create_edge(
+                    newer_id,
+                    older_id,
+                    "SUPERSEDES",
+                    {"similarity": scored.score, "archived_at": datetime.now(timezone.utc)},
+                )
+            except Exception:
+                logger.error(
+                    "%s: failed to create SUPERSEDES edge from %s to %s",
+                    log_prefix,
+                    newer_id,
+                    older_id,
+                    exc_info=True,
+                )
 
         logger.info(
             "%s: archived memory %s due to similarity %s",
@@ -260,9 +273,10 @@ class Consolidator:
             mem_b: 比較する記憶 B。
 
         Returns:
-            (older, newer) のタプル。created_at が古い方が older。
+            (older, newer) のタプル。
+            (created_at, id) のタプルで比較を行い、小さい方が older。
         """
-        if mem_a.created_at <= mem_b.created_at:
+        if (mem_a.created_at, str(mem_a.id)) <= (mem_b.created_at, str(mem_b.id)):
             return mem_a, mem_b
         return mem_b, mem_a
 

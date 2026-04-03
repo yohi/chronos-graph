@@ -167,7 +167,7 @@ def _parse_dt(val: str | None) -> datetime | None:
 def _dt_to_str(dt: datetime | None) -> str | None:
     if dt is None:
         return None
-    return dt.isoformat()
+    return dt.astimezone(timezone.utc).isoformat()
 
 
 def _row_to_memory(row: dict[str, Any], embedding: list[float] | None = None) -> Memory:
@@ -736,71 +736,56 @@ class SQLiteStorageAdapter:
     # StorageAdapter: list_by_filter
     # ------------------------------------------------------------------
 
-    async def list_by_filter(self, filters: MemoryFilters) -> list[Memory]:
-        """List memories matching filters."""
+    def _build_where_clause(
+        self, filters: MemoryFilters, prefix: str = "m."
+    ) -> tuple[str, list[Any]]:
+        """共通の WHERE 句とパラメータを生成する。"""
         conditions: list[str] = []
         params: list[Any] = []
 
         if filters.archived is None:
-            conditions.append("archived_at IS NULL")
+            conditions.append(f"{prefix}archived_at IS NULL")
         elif filters.archived is True:
-            conditions.append("archived_at IS NOT NULL")
-        # archived=False → both active and archived, no condition
+            conditions.append(f"{prefix}archived_at IS NOT NULL")
 
         if filters.project is not None:
             params.append(filters.project)
-            conditions.append("project = ?")
+            conditions.append(f"{prefix}project = ?")
 
         if filters.memory_type is not None:
             params.append(filters.memory_type)
-            conditions.append("memory_type = ?")
+            conditions.append(f"{prefix}memory_type = ?")
 
         if filters.tags:
-            # SQLite JSON tag matching: check if any tag is present
             tag_conditions = []
             for tag in filters.tags:
                 params.append(f'%"{tag}"%')
-                tag_conditions.append("tags LIKE ?")
+                tag_conditions.append(f"{prefix}tags LIKE ?")
             conditions.append("(" + " OR ".join(tag_conditions) + ")")
 
         if getattr(filters, "session_id", None) is not None:
             params.append(filters.session_id)
             conditions.append(
-                "CASE WHEN json_valid(source_metadata) "
-                "THEN json_extract(source_metadata, '$.session_id') END = ?"
+                f"CASE WHEN json_valid({prefix}source_metadata) "
+                f"THEN json_extract({prefix}source_metadata, '$.session_id') END = ?"
             )
 
         if filters.created_after is not None:
+            created_after_utc = filters.created_after.astimezone(timezone.utc).isoformat()
             if filters.id_after is not None:
-                params.append(filters.created_after.isoformat())
+                params.append(created_after_utc)
                 params.append(filters.id_after)
-                conditions.append("(created_at, id) > (?, ?)")
+                conditions.append(f"({prefix}created_at, {prefix}id) > (?, ?)")
             else:
-                params.append(filters.created_after.isoformat())
-                conditions.append("created_at >= ?")
+                params.append(created_after_utc)
+                conditions.append(f"{prefix}created_at >= ?")
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        prefixed_where = ""
-        if where_clause:
-            prefixed_where = where_clause
-            replacements = {
-                "archived_at IS NULL": "m.archived_at IS NULL",
-                "archived_at IS NOT NULL": "m.archived_at IS NOT NULL",
-                "project = ?": "m.project = ?",
-                "memory_type = ?": "m.memory_type = ?",
-                "tags LIKE ?": "m.tags LIKE ?",
-                (
-                    "CASE WHEN json_valid(source_metadata) "
-                    "THEN json_extract(source_metadata, '$.session_id') END = ?"
-                ): (
-                    "CASE WHEN json_valid(m.source_metadata) "
-                    "THEN json_extract(m.source_metadata, '$.session_id') END = ?"
-                ),
-                "created_at >= ?": "m.created_at >= ?",
-                "(created_at, id) > (?, ?)": "(m.created_at, m.id) > (?, ?)",
-            }
-            for original, prefixed in replacements.items():
-                prefixed_where = prefixed_where.replace(original, prefixed)
+        return where_clause, params
+
+    async def list_by_filter(self, filters: MemoryFilters) -> list[Memory]:
+        """List memories matching filters."""
+        where_clause, params = self._build_where_clause(filters, prefix="m.")
 
         # ------------------------------------------------------------------
         # ORDER BY validation (whitelist)
@@ -856,7 +841,7 @@ class SQLiteStorageAdapter:
             "SELECT m.*, me.embedding "
             "FROM memories m "
             "LEFT JOIN memory_embeddings me ON me.memory_id = m.id "
-            f"{prefixed_where} "
+            f"{where_clause} "
             f"{order_clause} "
             f"{limit_clause}"
         ).strip()
@@ -872,6 +857,25 @@ class SQLiteStorageAdapter:
                     emb = decode_embedding(bytes(emb_blob)) if emb_blob else []
                     memories.append(_row_to_memory(row_dict, emb))
                 return memories
+            except aiosqlite.OperationalError as exc:
+                _raise_if_locked(exc)
+                raise
+
+    async def count_by_filter(self, filters: MemoryFilters) -> int:
+        """Count memories matching filters."""
+        where_clause, params = self._build_where_clause(filters, prefix="m.")
+
+        sql = (
+            "SELECT COUNT(*) "
+            "FROM memories m "
+            f"{where_clause}"
+        ).strip()
+
+        async with self._db() as conn:
+            try:
+                async with conn.execute(sql, params) as cursor:
+                    row = await cursor.fetchone()
+                return row[0] if row else 0
             except aiosqlite.OperationalError as exc:
                 _raise_if_locked(exc)
                 raise

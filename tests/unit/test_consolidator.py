@@ -69,16 +69,14 @@ def _make_storage(memories: list[Memory] | None = None) -> AsyncMock:
         mems = sorted(mems, key=lambda x: (x.created_at, x.id))
 
         if filters.id_after:
-            # id_after 以降のデータを取得
-            found = False
-            filtered = []
-            for m in mems:
-                if str(m.id) == filters.id_after:
-                    found = True
-                    continue
-                if found:
-                    filtered.append(m)
-            mems = filtered
+            # (created_at, id) > (cursor_ts, cursor_id) の比較をシミュレート
+            cursor_ts = filters.created_after or datetime.min.replace(tzinfo=timezone.utc)
+            cursor_id = filters.id_after
+            mems = [
+                m
+                for m in mems
+                if (m.created_at, str(m.id)) > (cursor_ts, cursor_id)
+            ]
 
         if filters.limit:
             mems = mems[: filters.limit]
@@ -88,6 +86,14 @@ def _make_storage(memories: list[Memory] | None = None) -> AsyncMock:
     storage.vector_search.return_value = []
     storage.update_memory.return_value = True
     return storage
+
+
+def extract_update_call(call) -> tuple[str, dict[str, Any]]:
+    """update_memory のコールから (id, updates) を抽出する。"""
+    if call.args:
+        # (memory_id, updates)
+        return str(call.args[0]), call.args[1]
+    return str(call.kwargs["memory_id"]), call.kwargs["updates"]
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +128,11 @@ class TestDeduplicationLogic:
         assert result.consolidated_count >= 1
         # older_memory がアーカイブされること
         update_calls = storage.update_memory.call_args_list
-        archived_ids = [c.args[0] for c in update_calls if "archived_at" in c.args[1]]
+        archived_ids = [
+            extract_update_call(c)[0]
+            for c in update_calls
+            if "archived_at" in extract_update_call(c)[1]
+        ]
         assert str(older_memory.id) in archived_ids
 
     async def test_archives_regular_consolidation_candidate(self):
@@ -143,11 +153,13 @@ class TestDeduplicationLogic:
 
         # 0.85 <= score < 0.90 は通常統合候補として古い方がアーカイブされる
         update_calls_with_archive = [
-            c for c in storage.update_memory.call_args_list if "archived_at" in c.args[1]
+            c
+            for c in storage.update_memory.call_args_list
+            if "archived_at" in extract_update_call(c)[1]
         ]
         # older_memory がアーカイブされること
         assert len(update_calls_with_archive) == 1
-        assert update_calls_with_archive[0].args[0] == str(other_memory.id)
+        assert extract_update_call(update_calls_with_archive[0])[0] == str(other_memory.id)
         assert result.consolidated_count == 1
 
     async def test_avoids_full_scan_uses_vector_search(self):
@@ -430,10 +442,8 @@ class TestPerformance:
         consolidator = Consolidator(storage=storage)
         await consolidator.run(batch_size=n)
 
-        # 各メモリに対して1回ずつ = N 回
+        # 各メモリに対して1回ずつ呼び出す（O(N^2) を避けるため N 回であることを確認）
         assert storage.vector_search.call_count == n
-        # O(N^2) = N*(N-1)/2 = 4950 にはなっていない
-        assert storage.vector_search.call_count < n * (n - 1) // 2
 
     async def test_batch_size_limits_processing(self):
         """batch_size が設定された件数だけ処理すること（メモリ枯渇防止）。"""
@@ -457,6 +467,7 @@ class TestPerformance:
 # ---------------------------------------------------------------------------
 
 
+@contextlib.contextmanager
 def _capture_logs(logger_name: str) -> list[logging.LogRecord]:
     """指定ロガーのログレコードを一時的にキャプチャするヘルパー。
 
@@ -475,9 +486,6 @@ def _capture_logs(logger_name: str) -> list[logging.LogRecord]:
         yield records
     finally:
         log.removeHandler(handler)
-
-
-_capture_logs = contextlib.contextmanager(_capture_logs)  # type: ignore[assignment]
 
 
 class TestMonitoringLogs:
@@ -600,10 +608,23 @@ class TestGraphAndEmbeddingIntegration:
 
         # SUPERSEDES エッジが作成されること
         graph.create_edge.assert_called_once()
-        call_kwargs = graph.create_edge.call_args
-        # from=base(新), to=duplicate(古) または args として呼ばれること
-        args = call_kwargs.args if call_kwargs.args else list(call_kwargs.kwargs.values())
-        assert "SUPERSEDES" in args
+        call = graph.create_edge.call_args
+        
+        # Newer (base) -> Older (duplicate)
+        # Positional: (from, to, type, props)
+        # Kwargs: from_id, to_id, edge_type, props
+        if call.args:
+            assert str(base.id) in str(call.args[0])
+            assert str(duplicate.id) in str(call.args[1])
+            assert "SUPERSEDES" == call.args[2]
+        else:
+            kwargs = call.kwargs
+            from_id = kwargs.get("from_id") or kwargs.get("from")
+            to_id = kwargs.get("to_id") or kwargs.get("to")
+            edge_type = kwargs.get("edge_type") or kwargs.get("type")
+            assert str(base.id) in str(from_id)
+            assert str(duplicate.id) in str(to_id)
+            assert "SUPERSEDES" == edge_type
 
     async def test_no_graph_edge_when_graph_not_provided(self):
         """GraphAdapter が None の場合、エッジ作成が呼ばれないこと。"""

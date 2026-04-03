@@ -95,6 +95,10 @@ class StorageAdapter(Protocol):
         """List memories matching the given filters."""
         ...
 
+    async def count_by_filter(self, filters: MemoryFilters) -> int:
+        """Count memories matching the given filters."""
+        ...
+
     async def get_vector_dimension(self) -> int | None:
         """Return the dimension of stored vectors.
 

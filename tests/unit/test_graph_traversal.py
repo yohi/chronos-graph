@@ -1,4 +1,5 @@
 """Graph Traversal のテスト"""
+
 import pytest
 from uuid import UUID
 from unittest.mock import AsyncMock, MagicMock

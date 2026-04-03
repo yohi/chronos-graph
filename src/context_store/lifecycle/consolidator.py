@@ -3,6 +3,7 @@
 スライディングウィンドウ方式と HNSW インデックスを活用して
 O(M log N) で重複を検出・アーカイブする。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -134,7 +135,7 @@ class Consolidator:
 
             # 自身を除外し、類似度でフィルタリング
             self_healing_candidates = []  # score >= dedup_threshold
-            regular_candidates = []       # consolidation_threshold <= score < dedup_threshold
+            regular_candidates = []  # consolidation_threshold <= score < dedup_threshold
 
             for scored in scored_neighbors:
                 neighbor_id = str(scored.memory.id)

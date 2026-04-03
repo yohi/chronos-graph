@@ -1,4 +1,5 @@
 """Consolidator のユニットテスト。"""
+
 from __future__ import annotations
 
 import contextlib
@@ -66,6 +67,7 @@ def _make_storage(memories: list[Memory] | None = None) -> AsyncMock:
 # 1. 重複検出ロジックのテスト
 # ---------------------------------------------------------------------------
 
+
 class TestDeduplicationLogic:
     """重複検出ロジックのテスト。"""
 
@@ -114,8 +116,7 @@ class TestDeduplicationLogic:
 
         # 0.85 <= score < 0.90 は通常統合候補として古い方がアーカイブされる
         update_calls_with_archive = [
-            c for c in storage.update_memory.call_args_list
-            if "archived_at" in c.args[1]
+            c for c in storage.update_memory.call_args_list if "archived_at" in c.args[1]
         ]
         # older_memory がアーカイブされること
         assert len(update_calls_with_archive) == 1
@@ -155,7 +156,10 @@ class TestDeduplicationLogic:
         await consolidator.run()
 
         call_args = storage.vector_search.call_args
-        assert call_args.kwargs.get("top_k", call_args.args[1] if len(call_args.args) > 1 else None) == 5
+        assert (
+            call_args.kwargs.get("top_k", call_args.args[1] if len(call_args.args) > 1 else None)
+            == 5
+        )
 
     async def test_skips_memory_without_embedding(self):
         """embedding が空のメモリは vector_search をスキップすること。"""
@@ -175,6 +179,7 @@ class TestDeduplicationLogic:
 # ---------------------------------------------------------------------------
 # 2. レースコンディションのシミュレーション（自己修復）
 # ---------------------------------------------------------------------------
+
 
 class TestSelfHealingRaceCondition:
     """レースコンディションによる重複見逃しの事後修復テスト。"""
@@ -198,7 +203,7 @@ class TestSelfHealingRaceCondition:
         storage.vector_search.side_effect = [
             # mem_a の検索結果
             [
-                _make_scored_memory(mem_a, 1.0),   # 自身
+                _make_scored_memory(mem_a, 1.0),  # 自身
                 _make_scored_memory(mem_b, 0.93),  # 重複！
             ],
             # mem_b の検索結果（既にアーカイブ済みのためスキップ or 検索後フィルタ）
@@ -267,6 +272,7 @@ class TestSelfHealingRaceCondition:
 # 3. 優先順位テスト（自己修復 >= 0.90 を通常統合 0.85–0.89 より優先）
 # ---------------------------------------------------------------------------
 
+
 class TestPriorityProcessing:
     """優先順位テスト: 自己修復候補を通常統合候補より優先して処理することを検証。"""
 
@@ -320,7 +326,7 @@ class TestPriorityProcessing:
         storage.vector_search.return_value = [
             _make_scored_memory(base, 1.0),
             _make_scored_memory(high_dup, 0.91),  # 自己修復
-            _make_scored_memory(low_dup, 0.87),   # 通常統合
+            _make_scored_memory(low_dup, 0.87),  # 通常統合
         ]
 
         consolidator = Consolidator(storage=storage)
@@ -335,6 +341,7 @@ class TestPriorityProcessing:
 # ---------------------------------------------------------------------------
 # 4. パフォーマンステスト（10,000件モック）
 # ---------------------------------------------------------------------------
+
 
 class TestPerformance:
     """パフォーマンステスト: 10,000件のモックデータで O(M log N) であることを検証。"""
@@ -421,6 +428,7 @@ class TestPerformance:
 # ---------------------------------------------------------------------------
 # 5. 監視ログのテスト
 # ---------------------------------------------------------------------------
+
 
 def _capture_logs(logger_name: str) -> list[logging.LogRecord]:
     """指定ロガーのログレコードを一時的にキャプチャするヘルパー。
@@ -542,6 +550,7 @@ class TestMonitoringLogs:
 # 6. GraphAdapter / EmbeddingProvider 連携テスト
 # ---------------------------------------------------------------------------
 
+
 class TestGraphAndEmbeddingIntegration:
     """GraphAdapter と EmbeddingProvider との連携テスト。"""
 
@@ -615,6 +624,7 @@ class TestGraphAndEmbeddingIntegration:
 # 7. sliding window (last_cleanup_at) テスト
 # ---------------------------------------------------------------------------
 
+
 class TestSlidingWindow:
     """スライディングウィンドウ（last_cleanup_at）のテスト。"""
 
@@ -666,6 +676,7 @@ class TestSlidingWindow:
 # ---------------------------------------------------------------------------
 # 8. ConsolidatorResult のテスト
 # ---------------------------------------------------------------------------
+
 
 class TestConsolidatorResult:
     """ConsolidatorResult のテスト。"""

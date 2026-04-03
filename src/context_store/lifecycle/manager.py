@@ -1,4 +1,5 @@
 """ライフサイクルマネージャー。イベント駆動型レイジークリーンアップを実装するモジュール。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -208,12 +209,8 @@ class SQLiteLifecycleStateStore:
             )
         """)
         # 初期レコードが存在しない場合のみ挿入
-        await conn.execute(
-            "INSERT OR IGNORE INTO lifecycle_state (id) VALUES (1)"
-        )
-        await conn.execute(
-            "INSERT OR IGNORE INTO lifecycle_wal_state (id) VALUES (1)"
-        )
+        await conn.execute("INSERT OR IGNORE INTO lifecycle_state (id) VALUES (1)")
+        await conn.execute("INSERT OR IGNORE INTO lifecycle_wal_state (id) VALUES (1)")
         await conn.commit()
 
     async def load_state(self) -> LifecycleState:
@@ -312,9 +309,7 @@ class SQLiteLifecycleStateStore:
 
             if row["cleanup_running"]:
                 # スタルロックチェック
-                updated_at = datetime.fromisoformat(row["updated_at"]).replace(
-                    tzinfo=timezone.utc
-                )
+                updated_at = datetime.fromisoformat(row["updated_at"]).replace(tzinfo=timezone.utc)
                 now = datetime.now(timezone.utc)
                 elapsed = (now - updated_at).total_seconds()
                 if elapsed < self._stale_lock_timeout_seconds:
@@ -512,7 +507,9 @@ class LifecycleManager:
                     should_run = True
 
             if should_run:
-                logger.info("Time-based cleanup triggered (last_cleanup_at=%s).", state.last_cleanup_at)
+                logger.info(
+                    "Time-based cleanup triggered (last_cleanup_at=%s).", state.last_cleanup_at
+                )
                 await self.run_cleanup()
         except Exception:
             logger.exception("Time-based cleanup check failed.")
@@ -533,9 +530,7 @@ class LifecycleManager:
         await self._state_store.save_state(new_state)
 
         if new_count >= self._save_count_threshold:
-            logger.info(
-                "Save count threshold reached (%d), triggering cleanup.", new_count
-            )
+            logger.info("Save count threshold reached (%d), triggering cleanup.", new_count)
             task = asyncio.create_task(self.run_cleanup())
             self._active_tasks.append(task)
             task.add_done_callback(self._active_tasks.remove)
@@ -663,9 +658,7 @@ class LifecycleManager:
 
         await self._state_store.save_wal_state(wal_state)
 
-    async def _handle_wal_passive_failure(
-        self, wal_state: WalState, now: datetime
-    ) -> WalState:
+    async def _handle_wal_passive_failure(self, wal_state: WalState, now: datetime) -> WalState:
         """PASSIVE チェックポイント失敗時の処理。
 
         スライディングウィンドウと連続失敗数に基づいて TRUNCATE を試みる。

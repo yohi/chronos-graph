@@ -1,4 +1,5 @@
 """LifecycleManager のユニットテスト。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -42,9 +43,7 @@ def _make_manager(
     purger.run = AsyncMock(return_value=MagicMock(purged_count=0, checked_count=0))
 
     consolidator = AsyncMock()
-    consolidator.run = AsyncMock(
-        return_value=MagicMock(consolidated_count=0, checked_count=0)
-    )
+    consolidator.run = AsyncMock(return_value=MagicMock(consolidated_count=0, checked_count=0))
 
     decay_scorer = MagicMock()
 
@@ -652,9 +651,7 @@ class TestSQLiteLifecycleStateStore:
             db_path = f.name
 
         try:
-            store = SQLiteLifecycleStateStore(
-                db_path=db_path, stale_lock_timeout_seconds=1
-            )
+            store = SQLiteLifecycleStateStore(db_path=db_path, stale_lock_timeout_seconds=1)
 
             # 手動でスタルなロック状態を作る
             import aiosqlite

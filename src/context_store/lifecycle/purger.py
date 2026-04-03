@@ -1,4 +1,5 @@
 """アーカイブ後 N 日経過した記憶を物理削除するモジュール。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

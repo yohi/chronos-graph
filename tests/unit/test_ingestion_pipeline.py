@@ -187,7 +187,6 @@ async def test_pipeline_embed_completes_before_save() -> None:
         async def get_memories_batch(self, memory_ids: list[str]) -> list[Memory]:
             return []
 
-
         async def vector_search(
             self, embedding: list[float], top_k: int, project: Any = None
         ) -> list:

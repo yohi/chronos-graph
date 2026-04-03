@@ -1,4 +1,5 @@
 """スコアが閾値以下の記憶を Archived 状態に遷移させるモジュール。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

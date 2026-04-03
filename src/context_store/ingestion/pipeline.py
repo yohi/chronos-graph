@@ -200,33 +200,25 @@ class IngestionPipeline:
             document_id,
         )
 
-        # 1. 同一の memo_key (コンテンツ + メタデータ) が並行して走っている場合は、そのタスクを共有する
-        # ここはロック外でチェックし、あれば shield で待つ。
-        existing_task = self._content_results.get(memo_key)
-        if existing_task is not None:
-            return await asyncio.shield(existing_task)
-
-        # 2. 自分が処理を担当する（Task として登録して実行）
-        # 同一 memo_key の後続リクエストのために、自分自身を Task として登録する。
-        # ロック制御は Task 内部で行う。
-        current_task = asyncio.create_task(
-            self._process_chunk_task_wrapper(
-                chunk,
-                base_metadata=base_metadata,
-                prior_document_memories=prior_document_memories,
-                memo_key=memo_key,
-                content_hash=content_hash,
-            )
-        )
-
+        # 1. ロックを取得して同一 memo_key のタスクをアトミックにチェック・登録する
         async with self._locks_mutex:
-            # 二重チェック
-            if memo_key in self._content_results:
-                current_task.cancel()
-                return await asyncio.shield(self._content_results[memo_key])
-            self._content_results[memo_key] = current_task
+            target_task = self._content_results.get(memo_key)
+            if target_task is None:
+                # 2. 自分が処理を担当する（Task として登録して実行）
+                # ロック内でタスクを作成・登録することで、高コストな処理の重複開始を防ぐ
+                target_task = asyncio.create_task(
+                    self._process_chunk_task_wrapper(
+                        chunk,
+                        base_metadata=base_metadata,
+                        prior_document_memories=prior_document_memories,
+                        memo_key=memo_key,
+                        content_hash=content_hash,
+                    )
+                )
+                self._content_results[memo_key] = target_task
 
-        return await asyncio.shield(current_task)
+        # 3. ロック解放後に待機（デッドロック回避：Task A の完了クリーンアップもロックが必要なため）
+        return await asyncio.shield(target_task)
 
     async def _process_chunk_task_wrapper(
         self,

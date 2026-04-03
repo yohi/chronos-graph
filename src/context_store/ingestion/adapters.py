@@ -46,23 +46,38 @@ class SourceAdapter(Protocol):
 class ConversationAdapter:
     """会話トランスクリプトを RawContent に変換するアダプター。"""
 
+    def __init__(self, chunk_size: int = 5) -> None:
+        """初期化。
+
+        Args:
+            chunk_size: 会話を分割するターン数。デフォルトは5。
+        """
+        self.chunk_size = max(1, chunk_size)
+
     async def adapt(
         self, source: str, *, metadata: dict[str, Any] | None = None
     ) -> list[RawContent]:
-        """会話トランスクリプト全体を1つの RawContent として返す。"""
+        """会話トランスクリプトを RawContent のリストに変換する。"""
         meta = metadata or {}
         turns = self._parse_turns(source)
 
         if not turns:
             return [RawContent(content=source, source_type=SourceType.CONVERSATION, metadata=meta)]
 
-        return [
-            RawContent(
-                content="\n".join(turns),
-                source_type=SourceType.CONVERSATION,
-                metadata={**meta, "turn_start": 0, "turn_end": len(turns) - 1},
+        # 会話を一定数（self.chunk_size）ごとに分割して返す
+        results: list[RawContent] = []
+
+        for i in range(0, len(turns), self.chunk_size):
+            chunk = turns[i : i + self.chunk_size]
+            results.append(
+                RawContent(
+                    content="\n".join(chunk),
+                    source_type=SourceType.CONVERSATION,
+                    metadata={**meta, "turn_start": i, "turn_end": i + len(chunk) - 1},
+                )
             )
-        ]
+
+        return results
 
     def _parse_turns(self, transcript: str) -> list[str]:
         """トランスクリプトを個々のターンに分割する。
@@ -248,12 +263,23 @@ class URLAdapter:
     def _is_restricted_ip(self, ip_str: str) -> bool:
         """IPアドレスが制限されたアドレスかどうかを判定する。
 
-        グローバルIP以外をブロック。
+        グローバルIP以外（プライベート、ループバック、リンクローカル、マルチキャスト等）をブロック。
         """
         try:
             addr = ipaddress.ip_address(ip_str)
         except ValueError:
             return True  # 解析できない場合は拒否
+
+        # SSRF対策: グローバルユニキャスト以外を制限
+        if (
+            addr.is_loopback
+            or addr.is_private
+            or addr.is_link_local
+            or addr.is_multicast
+            or addr.is_reserved
+            or addr.is_unspecified
+        ):
+            return True
 
         return not addr.is_global
 

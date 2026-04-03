@@ -284,21 +284,21 @@ class IngestionPipeline:
         )
 
         # ========================================================
-        # 重複排除（Deduplication）のみをロックで保護
+        # 重複排除（Deduplication）と保存を同一ロックで保護
         # ========================================================
         lock = await self._get_content_lock(content_hash)
         async with lock:
             dedup_result = await self._deduplicator.deduplicate(memory)
 
-        # ロック解放後に保存処理を続行
-        supersedes_memory = None
-        if dedup_result.action == DeduplicationAction.REPLACE:
-            supersedes_memory = dedup_result.existing_memory
+            # ロック内で保存処理を続行
+            supersedes_memory = None
+            if dedup_result.action == DeduplicationAction.REPLACE:
+                supersedes_memory = dedup_result.existing_memory
 
-        # ステップ6: 永続化
-        raw_id = await self._storage.save_memory(memory)
-        memory_id = UUID(raw_id) if isinstance(raw_id, str) else raw_id
-        persisted_memory = memory.model_copy(update={"id": memory_id})
+            # ステップ6: 永続化
+            raw_id = await self._storage.save_memory(memory)
+            memory_id = UUID(raw_id) if isinstance(raw_id, str) else raw_id
+            persisted_memory = memory.model_copy(update={"id": memory_id})
 
         # ステップ7: グラフノード作成
         node_created = False

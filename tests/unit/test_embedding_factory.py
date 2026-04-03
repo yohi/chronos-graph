@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 import pytest
 
 from context_store.config import Settings
@@ -39,10 +38,13 @@ class TestCreateEmbeddingProvider:
         settings = self._make_settings(
             embedding_provider="local-model",
             local_model_name="test-model",
+            embedding_dimension=384,
         )
         provider = create_embedding_provider(settings)
         assert isinstance(provider, LocalModelEmbeddingProvider)
         assert isinstance(provider, EmbeddingProvider)
+        assert provider._model_name == "test-model"
+        assert provider._dimension == 384
 
     def test_creates_litellm_provider(self) -> None:
         from context_store.embedding import create_embedding_provider
@@ -51,10 +53,14 @@ class TestCreateEmbeddingProvider:
         settings = self._make_settings(
             embedding_provider="litellm",
             litellm_api_base="http://localhost:4000",
+            litellm_model="custom/model",
+            embedding_dimension=768,
         )
         provider = create_embedding_provider(settings)
         assert isinstance(provider, LiteLLMEmbeddingProvider)
         assert isinstance(provider, EmbeddingProvider)
+        assert provider._model == "custom/model"
+        assert provider.dimension == 768
 
     def test_creates_custom_api_provider(self) -> None:
         from context_store.embedding import create_embedding_provider
@@ -63,10 +69,12 @@ class TestCreateEmbeddingProvider:
         settings = self._make_settings(
             embedding_provider="custom-api",
             custom_api_endpoint="http://localhost:8080/embeddings",
+            embedding_dimension=1024,
         )
         provider = create_embedding_provider(settings)
         assert isinstance(provider, CustomAPIEmbeddingProvider)
         assert isinstance(provider, EmbeddingProvider)
+        assert provider.dimension == 1024
 
     def test_openai_provider_uses_correct_api_key(self) -> None:
         from context_store.embedding import create_embedding_provider

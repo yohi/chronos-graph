@@ -305,6 +305,32 @@ class TestUpdateMemory:
         assert len(new_results) == 1
 
 
+class TestUpdateMemoryValidation:
+    @pytest.mark.asyncio
+    async def test_update_memory_invalid_json(self, adapter):
+        memory = _make_memory()
+        mid = await adapter.save_memory(memory)
+        with pytest.raises(StorageError) as exc:
+            await adapter.update_memory(mid, {"tags": "invalid-json["})
+        assert exc.value.code == "INVALID_PARAMETER"
+
+    @pytest.mark.asyncio
+    async def test_update_memory_invalid_tags_type(self, adapter):
+        memory = _make_memory()
+        mid = await adapter.save_memory(memory)
+        with pytest.raises(StorageError) as exc:
+            await adapter.update_memory(mid, {"tags": '{"not": "a list"}'})
+        assert exc.value.code == "INVALID_PARAMETER"
+
+    @pytest.mark.asyncio
+    async def test_update_memory_invalid_metadata_type(self, adapter):
+        memory = _make_memory()
+        mid = await adapter.save_memory(memory)
+        with pytest.raises(StorageError) as exc:
+            await adapter.update_memory(mid, {"source_metadata": "[not, an, object]"})
+        assert exc.value.code == "INVALID_PARAMETER"
+
+
 # ---------------------------------------------------------------------------
 # Vector Search Tests
 # ---------------------------------------------------------------------------
@@ -556,6 +582,61 @@ class TestListByFilter:
         ids = [str(r.id) for r in results]
         assert str(tagged.id) in ids
         assert str(other.id) not in ids
+
+
+class TestSqlInjection:
+    async def test_list_by_filter_order_by_injection(self, adapter):
+        # Malicious order_by to drop a table or cause syntax error
+        malicious_order = "id; DROP TABLE memories;"
+        filters = MemoryFilters(order_by=malicious_order)
+
+        # Before fix, this will likely raise aiosqlite.OperationalError (syntax error)
+        # We expect a StorageError with code 'INVALID_PARAMETER' after our fix.
+        with pytest.raises(StorageError) as exc_info:
+            await adapter.list_by_filter(filters)
+        assert exc_info.value.code == "INVALID_PARAMETER"
+
+    async def test_list_by_filter_order_by_extra_tokens(self, adapter):
+        # Even if columns are valid, extra tokens should be rejected
+        filters = MemoryFilters(order_by="id DESC extra")
+        with pytest.raises(StorageError) as exc_info:
+            await adapter.list_by_filter(filters)
+        assert exc_info.value.code == "INVALID_PARAMETER"
+        assert "Extra tokens detected" in str(exc_info.value)
+
+    async def test_list_by_filter_limit_injection(self, adapter):
+        malicious_limit = "1; DROP TABLE memories;"
+        filters = MemoryFilters()
+        filters.limit = malicious_limit
+
+        with pytest.raises(StorageError) as exc_info:
+            await adapter.list_by_filter(filters)
+        assert exc_info.value.code == "INVALID_PARAMETER"
+
+    async def test_list_by_filter_valid_parameters(self, adapter):
+        # 1. Whitelisted order_by (ASC/DESC)
+        filters = MemoryFilters(order_by="id ASC")
+        # Should NOT raise StorageError
+        await adapter.list_by_filter(filters)
+
+        filters = MemoryFilters(order_by="id DESC")
+        await adapter.list_by_filter(filters)
+
+        # 2. Valid integer limit
+        filters = MemoryFilters(limit=10)
+        # Should NOT raise StorageError
+        await adapter.list_by_filter(filters)
+
+        # 3. Valid session_id filter
+        memory = _make_memory(content="metadata search test")
+        memory.source_metadata = {"session_id": "test_session_id"}
+        await adapter.save_memory(memory)
+
+        filters = MemoryFilters(session_id="test_session_id")
+        results = await adapter.list_by_filter(filters)
+        # Verify success and check property (source_metadata is a dict in Memory)
+        assert len(results) >= 1
+        assert results[0].source_metadata["session_id"] == "test_session_id"
 
 
 # ---------------------------------------------------------------------------
@@ -968,3 +1049,72 @@ class TestDispose:
         adp = await SQLiteStorageAdapter.create(settings)
         await adp.dispose()
         await adp.dispose()  # 2 回目もエラーなし
+
+
+# ---------------------------------------------------------------------------
+# get_memories_batch
+# ---------------------------------------------------------------------------
+
+
+class TestGetMemoriesBatch:
+    @pytest.mark.asyncio
+    async def test_get_memories_batch_basic(self, adapter):
+        # Save some memories
+        m1 = _make_memory(content="test1")
+        m2 = _make_memory(content="test2")
+        await adapter.save_memory(m1)
+        await adapter.save_memory(m2)
+
+        # Retrieve in batch
+        results = await adapter.get_memories_batch([str(m1.id), str(m2.id)])
+        assert len(results) == 2
+        ids = [str(m.id) for m in results]
+        assert str(m1.id) in ids
+        assert str(m2.id) in ids
+
+    @pytest.mark.asyncio
+    async def test_get_memories_batch_order_and_duplicates(self, adapter):
+        m1 = _make_memory(content="test1")
+        m2 = _make_memory(content="test2")
+        await adapter.save_memory(m1)
+        await adapter.save_memory(m2)
+
+        # Duplicate IDs and specific order
+        results = await adapter.get_memories_batch([str(m2.id), str(m1.id), str(m2.id)])
+        assert len(results) == 3
+        assert str(results[0].id) == str(m2.id)
+        assert str(results[1].id) == str(m1.id)
+        assert str(results[2].id) == str(m2.id)
+
+    @pytest.mark.asyncio
+    async def test_get_memories_batch_large(self, adapter):
+        # Trigger chunking (chunk_size=900)
+        ids = []
+        # Using 950 to trigger 2 chunks (900 + 50)
+        # 1000 items save one-by-one is slow in CI
+        for i in range(950):
+            m = _make_memory(content=f"test{i}")
+            await adapter.save_memory(m)
+            ids.append(str(m.id))
+
+        # This should trigger chunking (chunk_size=900)
+        results = await adapter.get_memories_batch(ids)
+        assert len(results) == 950
+        for i, m in enumerate(results):
+            assert str(m.id) == ids[i]
+        assert results[0].content == "test0"
+        assert results[-1].content == "test949"
+
+    @pytest.mark.asyncio
+    async def test_get_memories_batch_empty(self, adapter):
+        results = await adapter.get_memories_batch([])
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_get_memories_batch_missing_ids(self, adapter):
+        m1 = _make_memory(content="test1")
+        await adapter.save_memory(m1)
+
+        results = await adapter.get_memories_batch([str(m1.id), str(uuid4())])
+        assert len(results) == 1
+        assert str(results[0].id) == str(m1.id)

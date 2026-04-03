@@ -56,7 +56,9 @@ CREATE TABLE IF NOT EXISTS memory_edges (
     to_id     TEXT NOT NULL,
     edge_type TEXT NOT NULL,
     props     TEXT NOT NULL DEFAULT '{}',
-    PRIMARY KEY (from_id, to_id, edge_type)
+    PRIMARY KEY (from_id, to_id, edge_type),
+    FOREIGN KEY(from_id) REFERENCES memory_nodes(id) ON DELETE CASCADE,
+    FOREIGN KEY(to_id) REFERENCES memory_nodes(id) ON DELETE CASCADE
 );
 """
 
@@ -100,6 +102,11 @@ class SQLiteGraphAdapter:
 
     @asynccontextmanager
     async def _connect(self) -> AsyncGenerator[aiosqlite.Connection, None]:
+        if not self._db_path:
+            raise ValueError(
+                "SQLite DB path is not set (received None or empty). "
+                "Ensure sqlite_db_path is provided in Settings."
+            )
         async with aiosqlite.connect(self._db_path) as conn:
             conn.row_factory = aiosqlite.Row
             await conn.execute("PRAGMA journal_mode=WAL")
@@ -121,7 +128,10 @@ class SQLiteGraphAdapter:
         meta_json = json.dumps(metadata)
         async with self._connect() as conn:
             await conn.execute(
-                "INSERT OR REPLACE INTO memory_nodes (id, metadata) VALUES (?, ?)",
+                """
+                INSERT INTO memory_nodes (id, metadata) VALUES (?, ?)
+                ON CONFLICT(id) DO UPDATE SET metadata = excluded.metadata
+                """,
                 (memory_id, meta_json),
             )
             await conn.commit()
@@ -133,7 +143,10 @@ class SQLiteGraphAdapter:
     async def create_edge(
         self, from_id: str, to_id: str, edge_type: str, props: dict[str, Any]
     ) -> None:
-        """Create a directed edge (idempotent — duplicate is ignored)."""
+        """Create a directed edge (idempotent — duplicate is ignored).
+
+        Requires both nodes to exist (enforced by FOREIGN KEY constraints).
+        """
         props_json = json.dumps(props)
         async with self._connect() as conn:
             await conn.execute(
@@ -448,9 +461,12 @@ class SQLiteGraphAdapter:
     # ------------------------------------------------------------------
 
     async def delete_node(self, memory_id: str) -> None:
-        """Delete a node and all its incident edges."""
+        """Delete a node and all its incident edges.
+
+        Incident edges are automatically removed via FOREIGN KEY ON DELETE CASCADE,
+        but we explicitly delete them here for double-safety and clarity.
+        """
         async with self._connect() as conn:
-            # Remove incident edges first (avoids FK issues if enabled)
             await conn.execute(
                 "DELETE FROM memory_edges WHERE from_id = ? OR to_id = ?",
                 (memory_id, memory_id),

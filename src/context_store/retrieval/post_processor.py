@@ -1,9 +1,11 @@
 """Post Processor - フィルタ・トークン制限・アクセス記録"""
 
+import asyncio
 import logging
 from datetime import datetime, timezone
+
+from context_store.models.memory import ScoredMemory
 from context_store.storage.protocols import StorageAdapter
-from context_store.models.search import ScoredMemory
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +17,7 @@ class PostProcessor:
         self,
         storage_adapter: StorageAdapter,
         max_tokens: int | None = None,
-    ):
+    ) -> None:
         """
         初期化
 
@@ -54,8 +56,10 @@ class PostProcessor:
             filtered = self._apply_token_limit(filtered, max_tokens)
 
         # ステップ 3: アクセス記録を更新（非同期）
-        for result in filtered:
-            await self._update_access_record(result)
+        await asyncio.gather(
+            *(self._update_access_record(result) for result in filtered),
+            return_exceptions=True,
+        )
 
         return filtered
 
@@ -94,26 +98,31 @@ class PostProcessor:
         Returns:
             トークン制限内の結果
         """
-        if max_tokens <= 0 or not results:
+        if not results:
             return results
+        if max_tokens <= 0:
+            return []
 
         # 簡単な推定: 1トークン ≈ 4文字（英語主体）または 3文字（日本語主体）
         # テキストのASCII比率で判定
-        limited_results = []
+        limited_results: list[ScoredMemory] = []
         total_tokens = 0
+        safety_margin = 1.5
 
         for result in results:
             content = result.memory.content
-            # ASCII文字比率で言語を判定し、安全側（過大推定）でトークン数を推定
-            ascii_count = sum(1 for c in content if ord(c) < 128)
-            ascii_ratio = ascii_count / len(content) if content else 0
-
-            if ascii_ratio >= 0.9:
-                # 英語主体: 1トークン ≈ 4文字、1.5倍の安全マージン
-                estimated_tokens = int(len(content) / 4.0 * 1.5)
+            if not content:
+                estimated_tokens = 0
             else:
-                # 日本語等マルチバイト: 1トークン ≈ 3文字、3.0倍の安全マージン
-                estimated_tokens = int(len(content) / 3.0 * 3.0)
+                # ASCII文字比率で言語を判定し、安全側（過大推定）でトークン数を推定
+                ascii_count = sum(1 for c in content if ord(c) < 128)
+                ascii_ratio = ascii_count / len(content)
+
+                if ascii_ratio >= 0.9:
+                    estimated_tokens = int((len(content) / 4.0) * safety_margin)
+                else:
+                    estimated_tokens = int((len(content) / 3.0) * safety_margin)
+                estimated_tokens = max(1, estimated_tokens)
 
             if total_tokens + estimated_tokens <= max_tokens:
                 limited_results.append(result)

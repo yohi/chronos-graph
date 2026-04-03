@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+import importlib.util
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+
+# Mock asyncpg only if not installed to avoid ModuleNotFoundError during patch resolution.
+# We use find_spec to avoid importing it here if it exists.
+if importlib.util.find_spec("asyncpg") is None:
+    sys.modules["asyncpg"] = MagicMock()
 
 from context_store.storage.factory import create_storage
 from context_store.storage.inmemory import InMemoryCacheAdapter
@@ -17,6 +24,18 @@ from tests.unit.conftest import make_settings
 # ---------------------------------------------------------------------------
 
 
+async def dispose_adapters(
+    storage: StorageAdapter,
+    graph_adp: GraphAdapter | None,
+    cache_adp: CacheAdapter,
+) -> None:
+    """Dispose created adapters in a consistent order for test cleanup."""
+    await storage.dispose()
+    if graph_adp:
+        await graph_adp.dispose()
+    await cache_adp.dispose()
+
+
 class TestSQLiteBackend:
     async def test_sqlite_returns_storage_adapter(self, tmp_path: Path) -> None:
         """STORAGE_BACKEND=sqlite → SQLiteStorageAdapter が返される."""
@@ -27,10 +46,7 @@ class TestSQLiteBackend:
         try:
             assert isinstance(storage, SQLiteStorageAdapter)
         finally:
-            await storage.dispose()
-            if graph_adp:
-                await graph_adp.dispose()
-            await cache_adp.dispose()
+            await dispose_adapters(storage, graph_adp, cache_adp)
 
     async def test_sqlite_graph_enabled(self, tmp_path: Path) -> None:
         """GRAPH_ENABLED=true, STORAGE_BACKEND=sqlite → SQLiteGraphAdapter が返される."""
@@ -45,10 +61,7 @@ class TestSQLiteBackend:
         try:
             assert isinstance(graph_adp, SQLiteGraphAdapter)
         finally:
-            await storage.dispose()
-            if graph_adp:
-                await graph_adp.dispose()
-            await cache_adp.dispose()
+            await dispose_adapters(storage, graph_adp, cache_adp)
 
     async def test_sqlite_graph_disabled(self, tmp_path: Path) -> None:
         """GRAPH_ENABLED=false → GraphAdapter が None."""
@@ -63,8 +76,7 @@ class TestSQLiteBackend:
         try:
             assert graph_adp is None
         finally:
-            await storage.dispose()
-            await cache_adp.dispose()
+            await dispose_adapters(storage, graph_adp, cache_adp)
 
 
 # ---------------------------------------------------------------------------
@@ -86,10 +98,7 @@ class TestCacheBackend:
         try:
             assert isinstance(cache_adp, InMemoryCacheAdapter)
         finally:
-            await storage.dispose()
-            if graph_adp:
-                await graph_adp.dispose()
-            await cache_adp.dispose()
+            await dispose_adapters(storage, graph_adp, cache_adp)
 
     async def test_redis_cache(self, tmp_path: Path) -> None:
         """CACHE_BACKEND=redis → RedisCacheAdapter が返される."""
@@ -113,10 +122,7 @@ class TestCacheBackend:
             try:
                 assert cache_adp is mock_adapter
             finally:
-                await storage.dispose()
-                if graph_adp:
-                    await graph_adp.dispose()
-                await cache_adp.dispose()
+                await dispose_adapters(storage, graph_adp, cache_adp)
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +139,7 @@ class TestPostgresBackend:
             postgres_port=5432,
             postgres_db="test_db",
             postgres_user="test_user",
-            postgres_password="secret",
+            postgres_password="secret",  # noqa: S106
             graph_enabled=False,
         )
 
@@ -141,6 +147,7 @@ class TestPostgresBackend:
         mock_pool = MagicMock()
         mock_pool.close = AsyncMock()
         create_pool_mock = AsyncMock(return_value=mock_pool)
+
         with (
             patch("asyncpg.create_pool", create_pool_mock),
             patch.object(
@@ -158,9 +165,7 @@ class TestPostgresBackend:
                 assert isinstance(storage, PostgresStorageAdapter)
                 assert graph_adp is None  # postgres + graph_enabled=False
             finally:
-                storage._pool = mock_pool
-                await storage.dispose()
-                await cache_adp.dispose()
+                await dispose_adapters(storage, graph_adp, cache_adp)
 
     async def test_postgres_graph_disabled(self, tmp_path: Path) -> None:
         """STORAGE_BACKEND=postgres, GRAPH_ENABLED=false → GraphAdapter が None."""
@@ -170,7 +175,7 @@ class TestPostgresBackend:
             postgres_port=5432,
             postgres_db="test_db",
             postgres_user="test_user",
-            postgres_password="secret",
+            postgres_password="secret",  # noqa: S106
             graph_enabled=False,
         )
 
@@ -191,9 +196,7 @@ class TestPostgresBackend:
             try:
                 assert graph_adp is None
             finally:
-                storage._pool = mock_pool
-                await storage.dispose()
-                await cache_adp.dispose()
+                await dispose_adapters(storage, graph_adp, cache_adp)
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +218,4 @@ class TestReturnTypes:
         assert graph_adp is None or isinstance(graph_adp, GraphAdapter)
         assert isinstance(cache_adp, CacheAdapter)
 
-        await storage.dispose()
-        if graph_adp:
-            await graph_adp.dispose()
-        await cache_adp.dispose()
+        await dispose_adapters(storage, graph_adp, cache_adp)

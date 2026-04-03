@@ -1,10 +1,9 @@
 """Archiver のユニットテスト。"""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 
 from context_store.lifecycle.archiver import Archiver, ArchiverResult
 from context_store.models.memory import Memory, MemoryType, SourceType

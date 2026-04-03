@@ -1,14 +1,13 @@
 """Consolidator のユニットテスト。"""
 from __future__ import annotations
 
-import asyncio
+import contextlib
 import logging
 import time
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
-import pytest
 
 from context_store.lifecycle.consolidator import Consolidator, ConsolidatorResult
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
@@ -240,7 +239,7 @@ class TestSelfHealingRaceCondition:
         ]
 
         consolidator = Consolidator(storage=storage)
-        result = await consolidator.run()
+        await consolidator.run()
 
         # older が archived_at 付きでアーカイブされること
         update_calls = storage.update_memory.call_args_list
@@ -251,7 +250,7 @@ class TestSelfHealingRaceCondition:
     async def test_already_archived_memory_skipped(self):
         """既にアーカイブ済みのメモリは処理対象に含まれないこと。"""
         active = _make_memory()
-        archived = _make_memory(
+        _make_memory(
             archived_at=datetime.now(timezone.utc) - timedelta(hours=1),
         )
 
@@ -302,7 +301,7 @@ class TestPriorityProcessing:
         ]
 
         consolidator = Consolidator(storage=storage)
-        result = await consolidator.run()
+        await consolidator.run()
 
         # 自己修復が実行されること（archived_at が設定されること）
         update_calls = storage.update_memory.call_args_list
@@ -325,7 +324,7 @@ class TestPriorityProcessing:
         ]
 
         consolidator = Consolidator(storage=storage)
-        result = await consolidator.run()
+        await consolidator.run()
 
         update_calls = storage.update_memory.call_args_list
         archived_ids = {c.args[0] for c in update_calls if "archived_at" in c.args[1]}
@@ -442,8 +441,6 @@ def _capture_logs(logger_name: str) -> list[logging.LogRecord]:
     finally:
         log.removeHandler(handler)
 
-
-import contextlib
 
 _capture_logs = contextlib.contextmanager(_capture_logs)  # type: ignore[assignment]
 
@@ -626,7 +623,7 @@ class TestSlidingWindow:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
 
         recent_memory = _make_memory(created_at=datetime.now(timezone.utc))
-        old_memory = _make_memory(
+        _make_memory(
             created_at=datetime.now(timezone.utc) - timedelta(hours=2),
         )
 

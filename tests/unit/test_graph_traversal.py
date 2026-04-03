@@ -1,6 +1,5 @@
 """Graph Traversal のテスト"""
 import pytest
-from typing import Protocol
 from uuid import UUID
 from unittest.mock import AsyncMock, MagicMock
 

@@ -344,7 +344,9 @@ class IngestionPipeline:
                     try:
                         await self._graph.delete_node(str(memory_id))
                     except Exception as e:
-                        logger.error("ロールバック失敗: delete_node (memory_id=%s): %s", memory_id, e)
+                        logger.error(
+                            "ロールバック失敗: delete_node (memory_id=%s): %s", memory_id, e
+                        )
 
                 # 2. 新しく保存したメモリを削除
                 new_memory_deleted = False

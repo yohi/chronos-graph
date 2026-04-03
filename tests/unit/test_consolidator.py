@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 
 from context_store.lifecycle.consolidator import Consolidator, ConsolidatorResult
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
+from context_store.storage.protocols import MemoryFilters
 
 
 # ---------------------------------------------------------------------------

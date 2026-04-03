@@ -71,7 +71,9 @@ class IngestionPipeline:
         self._classifier = Classifier()
         self._deduplicator = Deduplicator(storage=storage)
         self._graph_linker = GraphLinker(storage=storage, graph=graph)
-        self._conversation_adapter = ConversationAdapter()
+        self._conversation_adapter = ConversationAdapter(
+            chunk_size=settings.conversation_chunk_size
+        )
         self._url_adapter: URLAdapter | None = None  # 遅延初期化
 
         # コンテンツハッシュ別の Lock（排他制御）
@@ -147,17 +149,27 @@ class IngestionPipeline:
             for chunk in chunks:
                 document_id = str(chunk.metadata.get("document_id", ""))
                 prior_document_memories = document_memories.get(document_id, [])
-                result = await self._process_chunk(
-                    chunk,
-                    base_metadata=meta,
-                    prior_document_memories=prior_document_memories,
-                )
-                if result:
-                    results.append(result)
-                    if document_id and result.persisted_memory is not None:
-                        document_memories.setdefault(document_id, []).append(
-                            result.persisted_memory
-                        )
+                try:
+                    result = await self._process_chunk(
+                        chunk,
+                        base_metadata=meta,
+                        prior_document_memories=prior_document_memories,
+                    )
+                    if result:
+                        results.append(result)
+                        if document_id and result.persisted_memory is not None:
+                            document_memories.setdefault(document_id, []).append(
+                                result.persisted_memory
+                            )
+                except Exception as e:
+                    logger.error(
+                        "Chunk 処理失敗 (content_hash=%s, doc_id=%s): %s",
+                        self._compute_hash(chunk.content)[:8],
+                        document_id,
+                        e,
+                        exc_info=True,
+                    )
+                    # 失敗したチャンクはスキップして続行
 
         return results
 
@@ -188,47 +200,35 @@ class IngestionPipeline:
             document_id,
         )
 
-        lock = await self._get_content_lock(content_hash)
-
         # 1. 同一の memo_key (コンテンツ + メタデータ) が並行して走っている場合は、そのタスクを共有する
-        # ここは lock 外でチェックし、あれば shield で待つ。
-        # (競合を避けるため、後で lock 内でも再チェックする)
+        # ここはロック外でチェックし、あれば shield で待つ。
         existing_task = self._content_results.get(memo_key)
         if existing_task is not None:
             return await asyncio.shield(existing_task)
 
-        # 2. content_hash レベルの排他制御
-        async with lock:
-            # lock 取得後に memo_key を再チェック（他のタスクが先に作った可能性があるため）
-            existing_task = self._content_results.get(memo_key)
-            if existing_task is not None:
-                # すでにタスクが作成されている場合は、lock を抜けてから待つ
-                pass
-            else:
-                # 自分が処理を担当する。
-                # 同一 memo_key の後続リクエストのために、自分自身を Task として登録して実行する。
-                # ここでは直接 asyncio.current_task() を登録したいが、
-                # まだ走っているので、ラッパーを Task 化して登録する。
-                current_task = asyncio.create_task(
-                    self._process_chunk_locked_with_cleanup(
-                        chunk,
-                        base_metadata=base_metadata,
-                        prior_document_memories=prior_document_memories,
-                        memo_key=memo_key,
-                        content_hash=content_hash,
-                    )
-                )
-                self._content_results[memo_key] = current_task
+        # 2. 自分が処理を担当する（Task として登録して実行）
+        # 同一 memo_key の後続リクエストのために、自分自身を Task として登録する。
+        # ロック制御は Task 内部で行う。
+        current_task = asyncio.create_task(
+            self._process_chunk_task_wrapper(
+                chunk,
+                base_metadata=base_metadata,
+                prior_document_memories=prior_document_memories,
+                memo_key=memo_key,
+                content_hash=content_hash,
+            )
+        )
 
-                # lock を保持したまま、タスクの完了を待機する。
-                # これにより、同じ content_hash の別 memo_key はここで待たされる。
-                # _process_chunk_locked_with_cleanup 内部で再度 lock を取るとデッドロックするので注意が必要。
-                return await asyncio.shield(current_task)
+        async with self._locks_mutex:
+            # 二重チェック
+            if memo_key in self._content_results:
+                current_task.cancel()
+                return await asyncio.shield(self._content_results[memo_key])
+            self._content_results[memo_key] = current_task
 
-        # 3. 他のリクエストが作成した既存タスクを待機
-        return await asyncio.shield(existing_task)
+        return await asyncio.shield(current_task)
 
-    async def _process_chunk_locked_with_cleanup(
+    async def _process_chunk_task_wrapper(
         self,
         chunk: RawContent,
         *,
@@ -239,38 +239,36 @@ class IngestionPipeline:
     ) -> IngestionResult | None:
         """処理を実行し、完了後に確実にクリーンアップを行うラッパー。"""
         try:
-            return await self._process_chunk_locked(
+            return await self._process_chunk_core(
                 chunk,
                 base_metadata=base_metadata,
                 prior_document_memories=prior_document_memories,
+                content_hash=content_hash,
             )
         finally:
             # タスク完了時のクリーンアップ
-            # Note: 呼び出し元が content_hash ロックを保持して待機しているため、
-            # ここで同一のロックを取得しようとするとデッドロックする可能性がある。
-            # そのため、クリーンアップには独立した locks_mutex を使用する。
             async with self._locks_mutex:
                 if self._content_results.get(memo_key) is asyncio.current_task():
                     self._content_results.pop(memo_key, None)
 
-    async def _process_chunk_locked(
+    async def _process_chunk_core(
         self,
         chunk: RawContent,
         *,
         base_metadata: dict[str, Any],
         prior_document_memories: list[Memory],
+        content_hash: str,
     ) -> IngestionResult | None:
-        """排他ロック取得済みの状態でチャンクを処理する。"""
+        """チャンクのコア処理（ロック範囲を最適化）。"""
         # ステップ3: 分類（LLM不使用のルールベース）
         classification = self._classifier.classify(chunk)
 
         # ========================================================
-        # 重要: EmbeddingProvider によるベクトル化を StorageAdapter の
-        # 書き込みトランザクション開始前に完了させる（SQLITE_BUSY 回避）
+        # 埋め込み生成はロック外で実施（並列性を高め SQLITE_BUSY 回避）
         # ========================================================
         embedding = await self._embedding_provider.embed(chunk.content)
 
-        # メタデータの整合（パイプライン派生フィールドを含む chunk.metadata を優先）
+        # メタデータの整合
         merged_meta = {**base_metadata, **chunk.metadata}
         project = merged_meta.get("project")
 
@@ -285,23 +283,20 @@ class IngestionPipeline:
             project=str(project) if project else None,
         )
 
-        # ステップ5: 重複排除（類似度チェック）
-        dedup_result = await self._deduplicator.deduplicate(memory)
+        # ========================================================
+        # 重複排除（Deduplication）のみをロックで保護
+        # ========================================================
+        lock = await self._get_content_lock(content_hash)
+        async with lock:
+            dedup_result = await self._deduplicator.deduplicate(memory)
 
-        # MERGE_CANDIDATE の場合は統合候補としてマークするが挿入も行う
-        # （Consolidator が後で処理する）
+        # ロック解放後に保存処理を続行
         supersedes_memory = None
         if dedup_result.action == DeduplicationAction.REPLACE:
             supersedes_memory = dedup_result.existing_memory
 
-        # ========================================================
-        # ここからが StorageAdapter の書き込み操作
-        # （埋め込みベクトル化は上で完了済み）
-        # ========================================================
-
         # ステップ6: 永続化
         raw_id = await self._storage.save_memory(memory)
-        # IDをUUIDに正規化（ストレージが文字列を返す場合があるため）
         memory_id = UUID(raw_id) if isinstance(raw_id, str) else raw_id
         persisted_memory = memory.model_copy(update={"id": memory_id})
 
@@ -332,12 +327,10 @@ class IngestionPipeline:
                 chunk_neighbors=chunk_neighbors,
             )
         except Exception:
-            # 補償処理（ロールバック）: delete_memory と delete_node を個別に試行
             try:
                 await self._storage.delete_memory(str(memory_id))
             except Exception as e:
                 logger.error("Error during delete_memory for memory_id=%s: %s", memory_id, e)
-
             try:
                 if node_created:
                     await self._graph.delete_node(str(memory_id))

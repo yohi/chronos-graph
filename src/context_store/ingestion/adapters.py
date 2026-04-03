@@ -46,6 +46,14 @@ class SourceAdapter(Protocol):
 class ConversationAdapter:
     """会話トランスクリプトを RawContent に変換するアダプター。"""
 
+    def __init__(self, chunk_size: int = 5) -> None:
+        """初期化。
+
+        Args:
+            chunk_size: 会話を分割するターン数。デフォルトは5。
+        """
+        self.chunk_size = max(1, chunk_size)
+
     async def adapt(
         self, source: str, *, metadata: dict[str, Any] | None = None
     ) -> list[RawContent]:
@@ -56,12 +64,11 @@ class ConversationAdapter:
         if not turns:
             return [RawContent(content=source, source_type=SourceType.CONVERSATION, metadata=meta)]
 
-        # 会話を一定数（例: 5ターン）ごとに分割して返す
-        chunk_size = 5
+        # 会話を一定数（self.chunk_size）ごとに分割して返す
         results: list[RawContent] = []
 
-        for i in range(0, len(turns), chunk_size):
-            chunk = turns[i : i + chunk_size]
+        for i in range(0, len(turns), self.chunk_size):
+            chunk = turns[i : i + self.chunk_size]
             results.append(
                 RawContent(
                     content="\n".join(chunk),

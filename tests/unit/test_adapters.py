@@ -118,7 +118,7 @@ def _make_settings(**kwargs: Any) -> Settings:
         "storage_backend": "sqlite",
     }
     defaults.update(kwargs)
-    return Settings(**defaults)
+    return Settings(_env_file=None, **defaults)
 
 
 @pytest.mark.asyncio
@@ -274,31 +274,31 @@ async def test_url_adapter_rejects_too_many_redirects() -> None:
 @pytest.mark.asyncio
 async def test_url_adapter_rejects_oversized_response() -> None:
     """10MB超のレスポンスを受信途中で即時中断し拒否する。"""
-    settings = _make_settings(url_max_response_bytes=100)  # 100バイト制限
+    settings = _make_settings(url_max_response_bytes=10)  # 10バイト制限
     adapter = URLAdapter(settings=settings)
 
-    async def mock_get_ips(hostname: str) -> list[str]:
-        return ["203.0.113.1"]
-
     # 大きなコンテンツを返すモック
-    async def aiter_bytes():  # type: ignore[return]
-        yield b"x" * 200  # 200バイト（制限の100バイトを超える）
+    async def mock_aiter_bytes():
+        yield b"x" * 20  # 20バイト（制限の10バイトを超える）
 
     mock_response = MagicMock(spec=httpx.Response)
     mock_response.status_code = 200
     mock_response.headers = httpx.Headers({"content-type": "text/html"})
-    mock_response.aiter_bytes = aiter_bytes
+    mock_response.aiter_bytes = mock_aiter_bytes
     mock_response.aclose = AsyncMock()
 
-    async def mock_fetch(url: str, resolved_ips: list[str]) -> tuple[int, httpx.Headers, bytes]:
-        # サイズ制限のテストのため、ここでは _fetch_with_verified_ip と同様の例外を投げる
-        raise ValueError("Response size exceeds max limit")
+    class MockAsyncContextManager:
+        async def __aenter__(self) -> MagicMock:
+            return mock_response
+
+        async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+            pass
 
     with (
-        patch.object(adapter, "_resolve_and_validate_ips", new=mock_get_ips),
-        patch.object(adapter, "_fetch_with_verified_ip", new=mock_fetch),
+        patch.object(adapter, "_resolve_and_validate_ips", return_value=["203.0.113.1"]),
+        patch("httpx.AsyncClient.stream", return_value=MockAsyncContextManager()),
     ):
-        with pytest.raises(ValueError, match="[Ss]ize|[Ll]imit|[Tt]oo large|[Mm]ax"):
+        with pytest.raises(ValueError, match="Response size exceeds max limit"):
             await adapter.adapt("http://example.com/")
 
 

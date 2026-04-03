@@ -264,7 +264,14 @@ class URLAdapter:
             return True  # 解析できない場合は拒否
 
         # SSRF対策: グローバルユニキャスト以外を制限
-        if addr.is_loopback or addr.is_private or addr.is_link_local or addr.is_multicast or addr.is_reserved or addr.is_unspecified:
+        if (
+            addr.is_loopback
+            or addr.is_private
+            or addr.is_link_local
+            or addr.is_multicast
+            or addr.is_reserved
+            or addr.is_unspecified
+        ):
             return True
 
         return not addr.is_global

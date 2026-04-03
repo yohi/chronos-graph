@@ -166,7 +166,9 @@ class InMemoryLifecycleStateStore:
                 elapsed = (now - state.updated_at).total_seconds()
                 if elapsed < self._stale_lock_timeout_seconds:
                     return False
-                logger.warning("Stale cleanup lock detected (elapsed=%.1fs), force releasing.", elapsed)
+                logger.warning(
+                    "Stale cleanup lock detected (elapsed=%.1fs), force releasing.", elapsed
+                )
 
             self._state = LifecycleState(
                 save_count=state.save_count,
@@ -552,7 +554,6 @@ class LifecycleManager:
         """
         self._spawn_background_task(self._check_time_based_cleanup())
 
-
     async def _check_time_based_cleanup(self) -> None:
         """時間ベースのクリーンアップチェック（起動時に1回のみ実行）。"""
         try:
@@ -575,12 +576,12 @@ class LifecycleManager:
         except Exception:
             logger.exception("Time-based cleanup check failed.")
 
-    def _spawn_background_task(self, coro) -> None:
+    def _spawn_background_task(self, coro: Coroutine[Any, Any, None]) -> None:
         """例外ハンドリング付きでバックグラウンドタスクを開始する。"""
-        task = asyncio.create_task(coro)
+        task: asyncio.Task[None] = asyncio.create_task(coro)
         self._active_tasks.append(task)
 
-        def done_callback(t: asyncio.Task) -> None:
+        def done_callback(t: asyncio.Task[None]) -> None:
             if t in self._active_tasks:
                 self._active_tasks.remove(t)
             try:

@@ -73,11 +73,7 @@ def _make_storage(memories: list[Memory] | None = None) -> AsyncMock:
             # (created_at, id) > (cursor_ts, cursor_id) の比較をシミュレート
             cursor_ts = filters.created_after or datetime.min.replace(tzinfo=timezone.utc)
             cursor_id = filters.id_after
-            mems = [
-                m
-                for m in mems
-                if (m.created_at, str(m.id)) > (cursor_ts, cursor_id)
-            ]
+            mems = [m for m in mems if (m.created_at, str(m.id)) > (cursor_ts, cursor_id)]
 
         if filters.limit:
             mems = mems[: filters.limit]
@@ -610,7 +606,7 @@ class TestGraphAndEmbeddingIntegration:
         # SUPERSEDES エッジが作成されること
         graph.create_edge.assert_called_once()
         call = graph.create_edge.call_args
-        
+
         # Newer (base) -> Older (duplicate)
         # Positional: (from, to, type, props)
         # Kwargs: from_id, to_id, edge_type, props

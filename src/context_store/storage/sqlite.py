@@ -865,11 +865,7 @@ class SQLiteStorageAdapter:
         """Count memories matching filters."""
         where_clause, params = self._build_where_clause(filters, prefix="m.")
 
-        sql = (
-            "SELECT COUNT(*) "
-            "FROM memories m "
-            f"{where_clause}"
-        ).strip()
+        sql = (f"SELECT COUNT(*) FROM memories m {where_clause}").strip()
 
         async with self._db() as conn:
             try:

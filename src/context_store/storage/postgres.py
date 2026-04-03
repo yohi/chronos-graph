@@ -319,9 +319,7 @@ class PostgresStorageAdapter:
             for r in records
         ]
 
-    def _build_where_clause(
-        self, filters: MemoryFilters
-    ) -> tuple[str, list[Any]]:
+    def _build_where_clause(self, filters: MemoryFilters) -> tuple[str, list[Any]]:
         """共通の WHERE 句とパラメータを生成する。"""
         conditions: list[str] = []
         params: list[Any] = []

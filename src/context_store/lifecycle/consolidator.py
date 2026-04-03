@@ -151,6 +151,8 @@ class Consolidator:
                     continue
                 if neighbor_id in archived_in_this_run:
                     continue
+                if scored.memory.project != memory.project:
+                    continue
                 # アーカイブ済みの記憶はスキップ
                 if scored.memory.archived_at is not None:
                     continue

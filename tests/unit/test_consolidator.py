@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import time
+import pytest
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import AsyncMock
@@ -507,9 +508,9 @@ class TestMonitoringLogs:
 
         # ログメッセージが出力されていること
         log_messages = [r.getMessage() for r in records]
-        assert any("Self-healing" in msg for msg in log_messages), (
-            f"Self-healing ログが見つかりません。実際のログ: {log_messages}"
-        )
+        assert any(
+            "Self-healing" in msg for msg in log_messages
+        ), f"Self-healing ログが見つかりません。実際のログ: {log_messages}"
 
     async def test_self_healing_log_contains_memory_id(self):
         """自己修復ログにメモリIDが含まれること。"""
@@ -533,9 +534,9 @@ class TestMonitoringLogs:
             await consolidator.run()
 
         log_messages = " ".join(r.getMessage() for r in records)
-        assert str(dup_id) in log_messages, (
-            f"メモリID {dup_id} がログに含まれていません。ログ: {log_messages}"
-        )
+        assert (
+            str(dup_id) in log_messages
+        ), f"メモリID {dup_id} がログに含まれていません。ログ: {log_messages}"
 
     async def test_self_healing_log_contains_similarity_score(self):
         """自己修復ログに類似度スコアが含まれること。"""
@@ -556,9 +557,9 @@ class TestMonitoringLogs:
             await consolidator.run()
 
         log_messages = " ".join(r.getMessage() for r in records)
-        assert str(score) in log_messages or f"{score:.2f}" in log_messages, (
-            f"スコア {score} がログに含まれていません。ログ: {log_messages}"
-        )
+        assert (
+            str(score) in log_messages or f"{score:.2f}" in log_messages
+        ), f"スコア {score} がログに含まれていません。ログ: {log_messages}"
 
     async def test_no_log_when_no_self_healing(self):
         """自己修復が発動しない場合はログが出力されないこと。"""
@@ -766,3 +767,59 @@ class TestConsolidatorResult:
 
         assert result.checked_count == 1
         assert result.consolidated_count == 2  # dup1 と dup2 の両方がアーカイブ
+
+
+@pytest.mark.asyncio
+async def test_consolidator_skips_different_projects():
+    # Setup storage mock
+    mock_storage = AsyncMock()
+
+    # Base memory (project 'A')
+    memory_a = Memory(
+        id=uuid4(),
+        content="test",
+        memory_type=MemoryType.EPISODIC,
+        source_type=SourceType.CONVERSATION,
+        source_metadata={},
+        embedding=[0.1],
+        semantic_relevance=0.5,
+        importance_score=0.5,
+        access_count=0,
+        last_accessed_at=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        archived_at=None,
+        tags=[],
+        project="A",
+    )
+
+    # Neighbor memory (project 'B')
+    memory_b = Memory(
+        id=uuid4(),
+        content="test 2",
+        memory_type=MemoryType.EPISODIC,
+        source_type=SourceType.CONVERSATION,
+        source_metadata={},
+        embedding=[0.1],
+        semantic_relevance=0.5,
+        importance_score=0.5,
+        access_count=0,
+        last_accessed_at=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        archived_at=None,
+        tags=[],
+        project="B",
+    )
+
+    scored_b = ScoredMemory(memory=memory_b, score=0.99, source=MemorySource.VECTOR)
+
+    mock_storage.list_by_filter.return_value = [memory_a]
+    mock_storage.vector_search.return_value = [scored_b]
+
+    consolidator = Consolidator(storage=mock_storage)
+    result = await consolidator.run()
+
+    # Since neighbor is from project B and base is from A, it should be skipped
+    assert result.consolidated_count == 0
+    mock_storage.update_memory.assert_not_called()

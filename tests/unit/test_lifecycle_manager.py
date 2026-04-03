@@ -55,7 +55,9 @@ def _make_manager(
 
     consolidator = AsyncMock()
     consolidator.run = AsyncMock(
-        return_value=ConsolidatorResult(consolidated_count=0, checked_count=0, last_processed_at=None)
+        return_value=ConsolidatorResult(
+            consolidated_count=0, checked_count=0, last_processed_at=None
+        )
     )
 
     decay_scorer = MagicMock()

@@ -42,7 +42,7 @@ class TestGraphTraversal:
 
     @pytest.mark.asyncio
     async def test_traverse_with_seed_ids(self, graph_traversal, graph_adapter):
-        """起点ノードIDでグラフをトラバース"""
+        """Traverse the graph starting from seed node IDs."""
         seed_ids = [UUID("00000000-0000-0000-0000-000000000010")]
         result = await graph_traversal.traverse(
             seed_ids=seed_ids,
@@ -57,7 +57,7 @@ class TestGraphTraversal:
 
     @pytest.mark.asyncio
     async def test_traverse_with_edge_type_filter(self, graph_traversal, graph_adapter):
-        """エッジタイプでフィルタリング"""
+        """Filter graph traversal by specific edge types."""
         seed_ids = [UUID("00000000-0000-0000-0000-000000000010")]
         edge_types = ["CAUSED_BY", "RESULTED_IN"]
         await graph_traversal.traverse(

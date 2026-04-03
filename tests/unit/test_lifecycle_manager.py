@@ -19,6 +19,15 @@ from context_store.lifecycle.manager import (
 from tests.unit.conftest import make_settings
 
 
+# ─────────────────────────── フィクスチャ ───────────────────────────
+
+
+@pytest.fixture
+def temp_lock_path(tmp_path):
+    """テスト用のロックファイルパス。"""
+    return str(tmp_path / "lifecycle.lock")
+
+
 # ─────────────────────────── ヘルパー ───────────────────────────
 
 
@@ -28,7 +37,7 @@ def _make_manager(
     save_count_threshold: int = 50,
     stale_lock_timeout_seconds: int = 600,
     wal_checkpoint_fn=None,
-    lock_path: str | None = None,
+    lock_path: str = ".lifecycle.lock",
 ) -> tuple[LifecycleManager, InMemoryLifecycleStateStore]:
     """テスト用 LifecycleManager を生成するヘルパー。"""
     if state_store is None:
@@ -55,9 +64,6 @@ def _make_manager(
         cleanup_save_count_threshold=save_count_threshold,
     )
 
-    with tempfile.NamedTemporaryFile(suffix=".lock", delete=False) as f:
-        tmp_lock_path = lock_path or f.name
-
     manager = LifecycleManager(
         state_store=state_store,
         archiver=archiver,
@@ -66,7 +72,7 @@ def _make_manager(
         decay_scorer=decay_scorer,
         storage=storage,
         settings=settings,
-        lock_path=tmp_lock_path,
+        lock_path=lock_path,
         wal_checkpoint_fn=wal_checkpoint_fn,
     )
     return manager, state_store
@@ -117,7 +123,7 @@ class TestOnMemorySaved:
 
     async def test_does_not_trigger_cleanup_below_threshold(self):
         """閾値未満では run_cleanup がトリガーされないこと。"""
-        manager, store = _make_manager()
+        manager, _ = _make_manager()
         manager._save_count_threshold = 10
 
         cleanup_called = []
@@ -211,16 +217,13 @@ class TestRunCleanup:
         # save_count はどちらも 0 にリセットされること
         assert state_after_second.save_count == 0
 
-    async def test_skips_when_filelock_acquired(self):
+    async def test_skips_when_filelock_acquired(self, temp_lock_path):
         """filelock が既に取得されている場合にスキップすること。"""
-        with tempfile.NamedTemporaryFile(suffix=".lock", delete=False) as f:
-            lock_path = f.name
-
-        manager, _ = _make_manager(lock_path=lock_path)
+        manager, _ = _make_manager(lock_path=temp_lock_path)
 
         from filelock import FileLock
 
-        outer_lock = FileLock(lock_path, timeout=0)
+        outer_lock = FileLock(temp_lock_path, timeout=0)
 
         # 外部からロックを保持
         with outer_lock.acquire():

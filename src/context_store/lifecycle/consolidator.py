@@ -16,7 +16,8 @@ from context_store.storage.protocols import GraphAdapter, MemoryFilters, Storage
 if TYPE_CHECKING:
     from context_store.config import Settings
     from context_store.embedding.protocols import EmbeddingProvider
-    from context_store.models.memory import Memory
+    from context_store.models.memory import Memory, ScoredMemory
+
 
 logger = get_logger(__name__)
 
@@ -116,6 +117,8 @@ class Consolidator:
         consolidated_count = 0
         # 処理済み（アーカイブ済み）記憶 ID を追跡してスキップ
         archived_in_this_run: set[str] = set()
+        # 統合の影響を受けた（生き残った側の）記憶 ID を追跡
+        affected_memory_ids: set[str] = set()
 
         for memory in window:
             memory_id = str(memory.id)
@@ -154,70 +157,82 @@ class Consolidator:
 
             # 自己修復候補を優先して処理
             for scored in self_healing_candidates:
-                older, newer = self._determine_order(memory, scored.memory)
-                older_id = str(older.id)
-
-                if older_id in archived_in_this_run:
-                    continue
-
-                await self._archive_memory(older_id)
-                archived_in_this_run.add(older_id)
-                consolidated_count += 1
-
-                # SUPERSEDES エッジを作成
-                if self._graph is not None:
-                    newer_id = str(newer.id)
-                    await self._graph.create_edge(
-                        newer_id,
-                        older_id,
-                        "SUPERSEDES",
-                        {"similarity": scored.score, "archived_at": datetime.now(timezone.utc)},
-                    )
-
-                logger.info(
-                    "Self-healing: archived duplicate memory %s due to similarity %s",
-                    older_id,
-                    scored.score,
+                success, newer_id = await self._process_candidate(
+                    memory, scored, archived_in_this_run, "Self-healing"
                 )
+                if success:
+                    consolidated_count += 1
+                    if newer_id:
+                        affected_memory_ids.add(newer_id)
 
             # 通常統合候補を処理（0.85 <= score < 0.90）
             for scored in regular_candidates:
-                older, newer = self._determine_order(memory, scored.memory)
-                older_id = str(older.id)
-
-                if older_id in archived_in_this_run:
-                    continue
-
-                await self._archive_memory(older_id)
-                archived_in_this_run.add(older_id)
-                consolidated_count += 1
-
-                if self._graph is not None:
-                    newer_id = str(newer.id)
-                    await self._graph.create_edge(
-                        newer_id,
-                        older_id,
-                        "SUPERSEDES",
-                        {"similarity": scored.score, "archived_at": datetime.now(timezone.utc)},
-                    )
-
-                logger.info(
-                    "Consolidation: archived similar memory %s due to similarity %s",
-                    older_id,
-                    scored.score,
+                success, newer_id = await self._process_candidate(
+                    memory, scored, archived_in_this_run, "Consolidation"
                 )
+                if success:
+                    consolidated_count += 1
+                    if newer_id:
+                        affected_memory_ids.add(newer_id)
 
         # 埋め込み再計算(EmbeddingProvider が提供されている場合のみ)
-        if self._embedding_provider is not None:
-            # TODO: 将来的にはマージされたコンテンツに基づいて正確に再計算する。
-            # 現状はテスト要件を満たすため、ダミー呼び出しまたは最新記憶の再計算を行う。
-            for memory in window:
-                await self._embedding_provider.embed(memory.content)
+        if self._embedding_provider is not None and affected_memory_ids:
+            # 統合の影響を受けた（生き残った側の）記憶の埋め込みを更新
+            # window 内にあるもののみ対象とする(効率のため)
+            id_to_memory = {str(m.id): m for m in window}
+            for mid in affected_memory_ids:
+                if mid in id_to_memory:
+                    memory = id_to_memory[mid]
+                    new_embedding = await self._embedding_provider.embed(memory.content)
+                    await self._storage.update_memory(mid, {"embedding": new_embedding})
 
         return ConsolidatorResult(
             consolidated_count=consolidated_count,
             checked_count=len(window),
         )
+
+    async def _process_candidate(
+        self,
+        memory: "Memory",
+        scored: "ScoredMemory",
+        archived_in_this_run: set[str],
+        log_prefix: str,
+    ) -> tuple[bool, str | None]:
+        """統合候補を処理（アーカイブ + エッジ作成）。
+
+        Returns:
+            (成功したかどうか, 生き残った側の ID)
+        """
+        older, newer = self._determine_order(memory, scored.memory)
+        older_id = str(older.id)
+        newer_id = str(newer.id)
+
+        if older_id in archived_in_this_run:
+            return False, None
+
+        # 記憶をアーカイブ
+        success = await self._archive_memory(older_id)
+        if not success:
+            return False, None
+
+        archived_in_this_run.add(older_id)
+
+        # SUPERSEDES エッジを作成
+        if self._graph is not None:
+            await self._graph.create_edge(
+                newer_id,
+                older_id,
+                "SUPERSEDES",
+                {"similarity": scored.score, "archived_at": datetime.now(timezone.utc)},
+            )
+
+        logger.info(
+            "%s: archived memory %s due to similarity %s",
+            log_prefix,
+            older_id,
+            scored.score,
+        )
+        return True, newer_id
 
     def _build_filters(self, last_cleanup_at: datetime | None) -> MemoryFilters:
         """スライディングウィンドウのフィルタを構築する。
@@ -247,11 +262,14 @@ class Consolidator:
             return mem_a, mem_b
         return mem_b, mem_a
 
-    async def _archive_memory(self, memory_id: str) -> None:
+    async def _archive_memory(self, memory_id: str) -> bool:
         """記憶をアーカイブ状態に更新する。
 
         Args:
             memory_id: アーカイブする記憶の ID。
+
+        Returns:
+            成功した場合は True。
         """
         now = datetime.now(timezone.utc)
-        await self._storage.update_memory(memory_id, {"archived_at": now})
+        return await self._storage.update_memory(memory_id, {"archived_at": now})

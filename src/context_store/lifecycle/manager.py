@@ -83,6 +83,17 @@ class LifecycleStateStore(Protocol):
         """状態を永続化する。"""
         ...
 
+    async def increment_save_count(self, threshold: int) -> bool:
+        """save_count を 1 増やし、閾値をちょうど超えたかどうかを返す。
+
+        原子的に更新する必要がある。
+
+        Returns:
+            インクリメント後に閾値をちょうど超えた(または等しくなった)場合に True。
+            既に超えていた場合や、まだ達していない場合は False。
+        """
+        ...
+
     async def acquire_cleanup_lock(self) -> bool:
         """クリーンアップの DB レベルロックを取得する。
 
@@ -139,6 +150,21 @@ class InMemoryLifecycleStateStore:
     async def save_state(self, state: LifecycleState) -> None:
         """インメモリ状態を更新する。"""
         self._state = state
+
+    async def increment_save_count(self, threshold: int) -> bool:
+        """インメモリでのインクリメントと閾値チェック。"""
+        # 単純なインメモリ操作(実用上はロックが必要だが、非同期なら asyncio.Lock があれば安全)
+        state = self._state
+        new_count = state.save_count + 1
+        threshold_just_reached = new_count == threshold
+
+        self._state = LifecycleState(
+            save_count=new_count,
+            last_cleanup_at=state.last_cleanup_at,
+            cleanup_running=state.cleanup_running,
+            updated_at=datetime.now(timezone.utc),
+        )
+        return threshold_just_reached
 
     async def acquire_cleanup_lock(self) -> bool:
         """クリーンアップロックを取得する。"""
@@ -288,6 +314,33 @@ class SQLiteLifecycleStateStore:
                 ),
             )
             await conn.commit()
+
+    async def increment_save_count(self, threshold: int) -> bool:
+        """SQLite でのアトミックなインクリメント。"""
+        import aiosqlite  # type: ignore[import-untyped]
+
+        async with aiosqlite.connect(self._db_path) as conn:
+            await self._ensure_tables(conn)
+            async with conn.execute("BEGIN TRANSACTION"):
+                conn.row_factory = aiosqlite.Row
+                cursor = await conn.execute("SELECT save_count FROM lifecycle_state WHERE id = 1")
+                row = await cursor.fetchone()
+                if row is None:
+                    # 初期データなし(通常ありえない)
+                    await conn.execute("INSERT INTO lifecycle_state (id, save_count) VALUES (1, 1)")
+                    new_count = 1
+                else:
+                    new_count = row["save_count"] + 1
+                    now = datetime.now(timezone.utc)
+                    await conn.execute(
+                        "UPDATE lifecycle_state SET save_count = ?, updated_at = ? WHERE id = 1",
+                        (new_count, now.isoformat()),
+                    )
+                await conn.commit()
+
+        # 閾値を「ちょうど」超えた場合に True を返すことで、
+        # 同時実行時の重複トリガーを防ぐ。
+        return new_count == threshold
 
     async def acquire_cleanup_lock(self) -> bool:
         """クリーンアップロックを取得する（DB レベル）。
@@ -517,22 +570,17 @@ class LifecycleManager:
             logger.exception("Time-based cleanup check failed.")
 
     async def on_memory_saved(self) -> None:
-        """記憶が保存されるたびに呼び出す。カウンターをインクリメントして閾値チェック。
+        """記憶が保存されるたびに呼び出す。カウンターをインクリメント。
 
-        カウンターが閾値（50回）に達した場合、クリーンアップを非同期でトリガーする。
+        アトミックにカウンターを更新し、閾値にちょうど達した場合のみクリーンアップを開始。
+        これにより同時実行時の重複トリガーを防止する。
         """
-        state = await self._state_store.load_state()
-        new_count = state.save_count + 1
-        new_state = LifecycleState(
-            save_count=new_count,
-            last_cleanup_at=state.last_cleanup_at,
-            cleanup_running=state.cleanup_running,
-            updated_at=datetime.now(timezone.utc),
+        threshold_just_reached = await self._state_store.increment_save_count(
+            self._save_count_threshold
         )
-        await self._state_store.save_state(new_state)
 
-        if new_count >= self._save_count_threshold:
-            logger.info("Save count threshold reached (%d), triggering cleanup.", new_count)
+        if threshold_just_reached:
+            logger.info("Save count threshold reached, triggering cleanup.")
             task = asyncio.create_task(self.run_cleanup())
             self._active_tasks.append(task)
             task.add_done_callback(self._active_tasks.remove)
@@ -599,10 +647,14 @@ class LifecycleManager:
                 await self._run_wal_checkpoint()
 
             # 状態を更新（カウンターリセット + last_cleanup_at 更新）
+            # クリーンアップ中に発生した保存を失わないように、
+            # 現在の値を読み取ってから、処理対象となった分(閾値)だけ引く。
             now = datetime.now(timezone.utc)
+            current_state = await self._state_store.load_state()
             new_state = LifecycleState(
-                save_count=0,
+                save_count=max(0, current_state.save_count - self._save_count_threshold),
                 last_cleanup_at=now,
+                cleanup_running=True,  # finally で release_cleanup_lock を呼ぶまで保持
                 updated_at=now,
             )
             await self._state_store.save_state(new_state)
@@ -614,8 +666,9 @@ class LifecycleManager:
                 state = await self._state_store.load_state()
                 await self._state_store.save_state(
                     LifecycleState(
-                        save_count=0,
+                        save_count=max(0, state.save_count - self._save_count_threshold),
                         last_cleanup_at=state.last_cleanup_at,
+                        cleanup_running=True,  # finally で release_cleanup_lock を呼ぶまで保持
                         updated_at=datetime.now(timezone.utc),
                     )
                 )

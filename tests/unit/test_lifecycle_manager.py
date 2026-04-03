@@ -51,8 +51,12 @@ def _make_manager(
     purger = AsyncMock()
     purger.run = AsyncMock(return_value=MagicMock(purged_count=0, checked_count=0))
 
+    from context_store.lifecycle.consolidator import ConsolidatorResult
+
     consolidator = AsyncMock()
-    consolidator.run = AsyncMock(return_value=MagicMock(consolidated_count=0, checked_count=0))
+    consolidator.run = AsyncMock(
+        return_value=ConsolidatorResult(consolidated_count=0, checked_count=0, last_processed_at=None)
+    )
 
     decay_scorer = MagicMock()
 

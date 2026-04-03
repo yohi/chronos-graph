@@ -321,21 +321,22 @@ class SQLiteLifecycleStateStore:
 
         async with aiosqlite.connect(self._db_path) as conn:
             await self._ensure_tables(conn)
-            async with conn.execute("BEGIN TRANSACTION"):
-                conn.row_factory = aiosqlite.Row
-                cursor = await conn.execute("SELECT save_count FROM lifecycle_state WHERE id = 1")
+            now = datetime.now(timezone.utc).isoformat()
+            async with conn.execute("BEGIN IMMEDIATE"):
+                # UPSERT (INSERT or UPDATE) + RETURNING でアトミックに実行
+                cursor = await conn.execute(
+                    """
+                    INSERT INTO lifecycle_state (id, save_count, updated_at)
+                    VALUES (1, 1, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        save_count = lifecycle_state.save_count + 1,
+                        updated_at = excluded.updated_at
+                    RETURNING save_count
+                    """,
+                    (now,),
+                )
                 row = await cursor.fetchone()
-                if row is None:
-                    # 初期データなし(通常ありえない)
-                    await conn.execute("INSERT INTO lifecycle_state (id, save_count) VALUES (1, 1)")
-                    new_count = 1
-                else:
-                    new_count = row["save_count"] + 1
-                    now = datetime.now(timezone.utc)
-                    await conn.execute(
-                        "UPDATE lifecycle_state SET save_count = ?, updated_at = ? WHERE id = 1",
-                        (new_count, now.isoformat()),
-                    )
+                new_count = row[0] if row else 0
                 await conn.commit()
 
         # 閾値を「ちょうど」超えた場合に True を返すことで、
@@ -663,15 +664,31 @@ class LifecycleManager:
             # 状態を更新（カウンターリセット + last_cleanup_at 更新）
             # クリーンアップ中に発生した保存を失わないように、
             # 現在の値を読み取ってから、処理対象となった分(閾値)だけ引く。
+            # last_cleanup_at は Consolidator が処理した最後の位置まで進める。
             now = datetime.now(timezone.utc)
             current_state = await self._state_store.load_state()
+
+            # last_processed_at があればそれを優先し、なければ now を使用
+            next_cleanup_at = consolidator_result.last_processed_at or now
+
+            remaining_count = max(0, current_state.save_count - self._save_count_threshold)
             new_state = LifecycleState(
-                save_count=max(0, current_state.save_count - self._save_count_threshold),
-                last_cleanup_at=now,
+                save_count=remaining_count,
+                last_cleanup_at=next_cleanup_at,
                 cleanup_running=True,  # finally で release_cleanup_lock を呼ぶまで保持
                 updated_at=now,
             )
             await self._state_store.save_state(new_state)
+
+            # 未処理の保存がまだ残っている場合は、即座に次をスケジュール
+            if remaining_count >= self._save_count_threshold:
+                logger.info(
+                    "Remaining saves (%d) still exceed threshold, scheduling follow-up cleanup.",
+                    remaining_count,
+                )
+                task = asyncio.create_task(self.run_cleanup())
+                self._active_tasks.append(task)
+                task.add_done_callback(self._active_tasks.remove)
 
         except Exception:
             logger.exception("Cleanup failed.")

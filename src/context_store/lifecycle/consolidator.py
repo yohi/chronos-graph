@@ -38,10 +38,12 @@ class ConsolidatorResult:
     Attributes:
         consolidated_count: アーカイブした重複数。
         checked_count: チェックした記憶数。
+        last_processed_at: 最後にチェックした記憶の作成日時。
     """
 
     consolidated_count: int
     checked_count: int
+    last_processed_at: datetime | None = None
 
 
 class Consolidator:
@@ -103,16 +105,26 @@ class Consolidator:
             処理結果を格納した ConsolidatorResult。
         """
         # スライディングウィンドウ: last_cleanup_at 以降の記憶を取得
+        # 安定したページングのために order_by と limit を指定
         filters = self._build_filters(last_cleanup_at)
+        filters.limit = batch_size
+        filters.order_by = "created_at"
+
         all_memories = await self._storage.list_by_filter(filters)
 
         # Python 側で last_cleanup_at によるフィルタリング
-        # （MemoryFilters に created_after フィールドがないため）
+        # (Storage 側で created_after がサポートされていない場合に備えた安全策)
         if last_cleanup_at is not None:
             all_memories = [m for m in all_memories if m.created_at >= last_cleanup_at]
 
-        # batch_size で上限を設ける（メモリ枯渇防止）
+        # batch_size で上限を設ける
         window = all_memories[:batch_size]
+        if not window:
+            return ConsolidatorResult(
+                consolidated_count=0, checked_count=0, last_processed_at=last_cleanup_at
+            )
+
+        last_processed_at = window[-1].created_at
 
         consolidated_count = 0
         # 処理済み（アーカイブ済み）記憶 ID を追跡してスキップ
@@ -189,6 +201,7 @@ class Consolidator:
         return ConsolidatorResult(
             consolidated_count=consolidated_count,
             checked_count=len(window),
+            last_processed_at=last_processed_at,
         )
 
     async def _process_candidate(

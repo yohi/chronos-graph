@@ -131,7 +131,8 @@ class TestGraphTraversal:
 
     @pytest.mark.asyncio
     async def test_traverse_graceful_degradation_on_error(self, graph_traversal, graph_adapter):
-        """グラフアダプター失敗時に空の GraphResult を返す（Graceful Degradation）"""
+        """グラフアダプター失敗時に空の GraphResult を返す(Graceful Degradation)"""
+
         graph_adapter.traverse.side_effect = ConnectionError("Connection failed")
         seed_ids = [UUID("00000000-0000-0000-0000-000000000010")]
 

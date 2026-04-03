@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: .devcontainer/Dockerfile
+    user: root
     volumes:
       - .:/workspaces/chronos-graph
     working_dir: /workspaces/chronos-graph

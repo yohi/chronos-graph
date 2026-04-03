@@ -352,30 +352,44 @@ class SQLiteLifecycleStateStore:
 
         async with aiosqlite.connect(self._db_path) as conn:
             await self._ensure_tables(conn)
+            now = datetime.now(timezone.utc)
+
+            # 1. 通常の取得試行（ロックされていない場合のみ取得）
+            cursor = await conn.execute(
+                "UPDATE lifecycle_state SET cleanup_running = 1, updated_at = ? "
+                "WHERE id = 1 AND cleanup_running = 0",
+                (now.isoformat(),),
+            )
+            await conn.commit()
+            if cursor.rowcount > 0:
+                return True
+
+            # 2. 取得失敗時、スタルロックのチェックと強制解放を試行
             conn.row_factory = aiosqlite.Row
             cursor = await conn.execute(
                 "SELECT cleanup_running, updated_at FROM lifecycle_state WHERE id = 1"
             )
             row = await cursor.fetchone()
-            if row is None:
-                return False
+            if row is None or not row["cleanup_running"]:
+                return False  # 既に他者が解放したか、行が存在しない
 
-            if row["cleanup_running"]:
-                # スタルロックチェック
-                updated_at = datetime.fromisoformat(row["updated_at"]).replace(tzinfo=timezone.utc)
-                now = datetime.now(timezone.utc)
-                elapsed = (now - updated_at).total_seconds()
-                if elapsed < self._stale_lock_timeout_seconds:
-                    return False
-                logger.warning("Stale lock expired, forcing release.")
+            updated_at_str = row["updated_at"]
+            updated_at = datetime.fromisoformat(updated_at_str).replace(tzinfo=timezone.utc)
+            elapsed = (now - updated_at).total_seconds()
 
-            now = datetime.now(timezone.utc)
-            await conn.execute(
-                "UPDATE lifecycle_state SET cleanup_running = 1, updated_at = ? WHERE id = 1",
-                (now.isoformat(),),
-            )
-            await conn.commit()
-        return True
+            if elapsed >= self._stale_lock_timeout_seconds:
+                logger.warning("Stale lock detected (elapsed=%.1fs), forcing release.", elapsed)
+                # CAS (Compare-And-Swap) 方式で安全に上書き取得
+                cursor = await conn.execute(
+                    "UPDATE lifecycle_state SET cleanup_running = 1, updated_at = ? "
+                    "WHERE id = 1 AND updated_at = ?",
+                    (now.isoformat(), updated_at_str),
+                )
+                await conn.commit()
+                if cursor.rowcount > 0:
+                    return True
+
+        return False
 
     async def release_cleanup_lock(self) -> None:
         """クリーンアップロックを解放する。"""

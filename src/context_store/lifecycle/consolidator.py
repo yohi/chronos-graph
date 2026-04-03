@@ -117,7 +117,7 @@ class Consolidator:
 
         last_processed_at = window[-1].created_at
         last_processed_id = str(window[-1].id)
-        has_more = len(window) >= CONSOLIDATION_BATCH_SIZE
+        has_more = len(window) >= batch_size
 
         consolidated_count = 0
         # 処理済み（アーカイブ済み）記憶 ID を追跡してスキップ
@@ -169,6 +169,14 @@ class Consolidator:
                     consolidated_count += 1
                     if newer_id:
                         affected_memory_ids.add(newer_id)
+                
+                # ベース側がアーカイブされた場合はこの記憶の処理を中断
+                if memory_id in archived_in_this_run:
+                    break
+
+            # ベース側がアーカイブ済みならスキップ
+            if memory_id in archived_in_this_run:
+                continue
 
             # 通常統合候補を処理（0.85 <= score < 0.90）
             for scored in regular_candidates:
@@ -179,6 +187,10 @@ class Consolidator:
                     consolidated_count += 1
                     if newer_id:
                         affected_memory_ids.add(newer_id)
+                
+                # ベース側がアーカイブされた場合は中断
+                if memory_id in archived_in_this_run:
+                    break
 
         # 埋め込み再計算(EmbeddingProvider が提供されている場合のみ)
         if self._embedding_provider is not None and affected_memory_ids:

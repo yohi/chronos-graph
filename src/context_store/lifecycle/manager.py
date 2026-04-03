@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Callable, Coroutine, Protocol, runtime_ch
 from filelock import FileLock, Timeout
 
 from context_store.storage.protocols import MemoryFilters
+from context_store.lifecycle.consolidator import CONSOLIDATION_BATCH_SIZE
 
 if TYPE_CHECKING:
     from context_store.config import Settings
@@ -39,14 +40,16 @@ class LifecycleState:
 
     Attributes:
         save_count: 前回クリーンアップ以降の保存回数。
-        last_cleanup_at: 最後にクリーンアップを実行した日時（UTC）。
-        last_cleanup_id: 最後にクリーンアップで処理した記憶の ID。
+        last_cleanup_at: 最後にクリーンアップが「完全に成功」した日時（UTC）。
+        last_cleanup_cursor_at: クリーンアップのページング用カーソル日時。
+        last_cleanup_id: クリーンアップのページング用カーソル ID。
         cleanup_running: クリーンアップが実行中かどうか。
         updated_at: 状態が最後に更新された日時（UTC）。
     """
 
     save_count: int = 0
     last_cleanup_at: datetime | None = None
+    last_cleanup_cursor_at: datetime | None = None
     last_cleanup_id: str | None = None
     cleanup_running: bool = False
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -150,6 +153,7 @@ class InMemoryLifecycleStateStore:
             self._state = LifecycleState(
                 save_count=new_count,
                 last_cleanup_at=state.last_cleanup_at,
+                last_cleanup_cursor_at=state.last_cleanup_cursor_at,
                 last_cleanup_id=state.last_cleanup_id,
                 cleanup_running=state.cleanup_running,
                 updated_at=datetime.now(timezone.utc),
@@ -166,13 +170,12 @@ class InMemoryLifecycleStateStore:
                 elapsed = (now - state.updated_at).total_seconds()
                 if elapsed < self._stale_lock_timeout_seconds:
                     return False
-                logger.warning(
-                    "Stale cleanup lock detected (elapsed=%.1fs), force releasing.", elapsed
-                )
+                logger.warning("Stale cleanup lock detected (elapsed=%.1fs), force releasing.", elapsed)
 
             self._state = LifecycleState(
                 save_count=state.save_count,
                 last_cleanup_at=state.last_cleanup_at,
+                last_cleanup_cursor_at=state.last_cleanup_cursor_at,
                 last_cleanup_id=state.last_cleanup_id,
                 cleanup_running=True,
                 updated_at=datetime.now(timezone.utc),
@@ -186,10 +189,12 @@ class InMemoryLifecycleStateStore:
             self._state = LifecycleState(
                 save_count=state.save_count,
                 last_cleanup_at=state.last_cleanup_at,
+                last_cleanup_cursor_at=state.last_cleanup_cursor_at,
                 last_cleanup_id=state.last_cleanup_id,
                 cleanup_running=False,
                 updated_at=datetime.now(timezone.utc),
             )
+
 
     async def load_wal_state(self) -> WalState:
         """WAL 状態を返す。"""
@@ -223,6 +228,7 @@ class SQLiteLifecycleStateStore:
                 id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
                 save_count INTEGER NOT NULL DEFAULT 0,
                 last_cleanup_at TIMESTAMP,
+                last_cleanup_cursor_at TIMESTAMP,
                 last_cleanup_id TEXT,
                 cleanup_running INTEGER NOT NULL DEFAULT 0,
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -234,6 +240,8 @@ class SQLiteLifecycleStateStore:
         column_names = [col[1] for col in columns]
         if "last_cleanup_id" not in column_names:
             await conn.execute("ALTER TABLE lifecycle_state ADD COLUMN last_cleanup_id TEXT")
+        if "last_cleanup_cursor_at" not in column_names:
+            await conn.execute("ALTER TABLE lifecycle_state ADD COLUMN last_cleanup_cursor_at TIMESTAMP")
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS lifecycle_wal_state (
                 id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
@@ -258,7 +266,7 @@ class SQLiteLifecycleStateStore:
             await self._ensure_tables(conn)
             conn.row_factory = aiosqlite.Row
             cursor = await conn.execute(
-                "SELECT save_count, last_cleanup_at, last_cleanup_id, cleanup_running, updated_at "
+                "SELECT save_count, last_cleanup_at, last_cleanup_cursor_at, last_cleanup_id, cleanup_running, updated_at "
                 "FROM lifecycle_state WHERE id = 1"
             )
             row = await cursor.fetchone()
@@ -266,42 +274,40 @@ class SQLiteLifecycleStateStore:
         if row is None:
             return LifecycleState()
 
-        last_cleanup_at = None
-        if row["last_cleanup_at"] is not None:
-            last_cleanup_at = datetime.fromisoformat(row["last_cleanup_at"]).replace(
-                tzinfo=timezone.utc
-            )
-
-        updated_at_str = row["updated_at"]
-        updated_at = datetime.fromisoformat(updated_at_str).replace(tzinfo=timezone.utc)
+        def _parse_ts(val: str | None) -> datetime | None:
+            if val is None:
+                return None
+            return datetime.fromisoformat(val).replace(tzinfo=timezone.utc)
 
         return LifecycleState(
             save_count=row["save_count"],
-            last_cleanup_at=last_cleanup_at,
+            last_cleanup_at=_parse_ts(row["last_cleanup_at"]),
+            last_cleanup_cursor_at=_parse_ts(row["last_cleanup_cursor_at"]),
             last_cleanup_id=row["last_cleanup_id"],
             cleanup_running=bool(row["cleanup_running"]),
-            updated_at=updated_at,
+            updated_at=datetime.fromisoformat(row["updated_at"]).replace(tzinfo=timezone.utc),
         )
 
     async def save_state(self, state: LifecycleState) -> None:
         """状態を SQLite に保存する。"""
         import aiosqlite  # type: ignore[import-untyped]
 
-        last_cleanup_at_str = (
-            state.last_cleanup_at.isoformat() if state.last_cleanup_at is not None else None
-        )
+        def _fmt_ts(dt: datetime | None) -> str | None:
+            return dt.isoformat() if dt is not None else None
+
         async with aiosqlite.connect(self._db_path) as conn:
             await self._ensure_tables(conn)
             await conn.execute(
                 """
                 UPDATE lifecycle_state
-                SET save_count = ?, last_cleanup_at = ?, last_cleanup_id = ?,
-                    cleanup_running = ?, updated_at = ?
+                SET save_count = ?, last_cleanup_at = ?, last_cleanup_cursor_at = ?,
+                    last_cleanup_id = ?, cleanup_running = ?, updated_at = ?
                 WHERE id = 1
                 """,
                 (
                     state.save_count,
-                    last_cleanup_at_str,
+                    _fmt_ts(state.last_cleanup_at),
+                    _fmt_ts(state.last_cleanup_cursor_at),
                     state.last_cleanup_id,
                     1 if state.cleanup_running else 0,
                     state.updated_at.isoformat(),
@@ -662,8 +668,9 @@ class LifecycleManager:
             # 3. Consolidator
             # カーソル (timestamp + ID) を渡して、安定したページングを実現。
             consolidator_result = await self._consolidator.run(
-                last_cleanup_at=state.last_cleanup_at,
+                last_cleanup_at=state.last_cleanup_cursor_at,
                 last_cleanup_id=state.last_cleanup_id,
+                batch_size=CONSOLIDATION_BATCH_SIZE,
             )
             logger.info(
                 "Consolidator: consolidated=%d, checked=%d",
@@ -687,19 +694,21 @@ class LifecycleManager:
                 await self._run_wal_checkpoint()
 
             # 状態を更新（カウンターリセット + last_cleanup_at 更新）
-            # last_processed_at/id があればそれを優先し、なければ now を使用
+            # ページングカーソル (last_processed_at/id) を保存
+            # last_cleanup_at は「全ジョブ成功時」に現在時刻で更新
             now = datetime.now(timezone.utc)
             current_state = await self._state_store.load_state()
 
-            next_cleanup_at = consolidator_result.last_processed_at or now
-            next_cleanup_id = consolidator_result.last_processed_id
+            next_cursor_at = consolidator_result.last_processed_at or current_state.last_cleanup_cursor_at
+            next_cursor_id = consolidator_result.last_processed_id
 
             # 開始時のカウント(今回処理対象とした分)だけ引く
             remaining_count = max(0, current_state.save_count - cleanup_start_save_count)
             new_state = LifecycleState(
                 save_count=remaining_count,
-                last_cleanup_at=next_cleanup_at,
-                last_cleanup_id=next_cleanup_id,
+                last_cleanup_at=now,  # 全工程成功につき更新
+                last_cleanup_cursor_at=next_cursor_at,
+                last_cleanup_id=next_cursor_id,
                 cleanup_running=True,  # finally で release_cleanup_lock を呼ぶまで保持
                 updated_at=now,
             )
@@ -716,13 +725,14 @@ class LifecycleManager:
 
         except Exception:
             logger.exception("Cleanup failed.")
-            # カウンターをリセットして次のサイクルで再試行させる
+            # カウンターを閾値未満にリセットして、無限ループを防ぎつつ次のサイクルを待つ
             try:
                 state = await self._state_store.load_state()
                 await self._state_store.save_state(
                     LifecycleState(
-                        save_count=max(0, state.save_count - self._save_count_threshold),
+                        save_count=min(state.save_count, self._save_count_threshold - 1),
                         last_cleanup_at=state.last_cleanup_at,
+                        last_cleanup_cursor_at=state.last_cleanup_cursor_at,
                         last_cleanup_id=state.last_cleanup_id,
                         cleanup_running=True,  # finally で release_cleanup_lock を呼ぶまで保持
                         updated_at=datetime.now(timezone.utc),

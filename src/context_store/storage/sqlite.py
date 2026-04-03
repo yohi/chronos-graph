@@ -538,13 +538,21 @@ class SQLiteStorageAdapter:
             "archived_at",
             "tags",
             "project",
+            "embedding",
         }
 
         set_parts: list[str] = []
         params: list[Any] = []
+        embedding: list[float] | None = None
+
         for col, val in updates.items():
             if col not in allowed_columns:
                 continue
+            
+            if col == "embedding":
+                embedding = val
+                continue
+
             # Serialise and validate special types
             if col in ("tags", "source_metadata"):
                 if isinstance(val, str):
@@ -591,25 +599,50 @@ class SQLiteStorageAdapter:
             set_parts.append(f"{col} = ?")
             params.append(val)
 
-        if not set_parts:
+        if not set_parts and embedding is None:
             return False
-
-        params.append(memory_id)
 
         async with self._db() as conn:
             try:
-                async with conn.execute(
-                    f"UPDATE memories SET {', '.join(set_parts)} WHERE id = ?",
-                    params,
-                ) as cursor:
-                    updated = cursor.rowcount
+                updated = 0
+                if set_parts:
+                    params.append(memory_id)
+                    async with conn.execute(
+                        f"UPDATE memories SET {', '.join(set_parts)} WHERE id = ?",
+                        params,
+                    ) as cursor:
+                        updated = cursor.rowcount
 
-                if updated == 0:
+                    if updated == 0 and embedding is None:
+                        return False
+
+                if embedding is not None:
+                    # Validate dimension
+                    dim = await self.get_vector_dimension()
+                    if dim is not None and len(embedding) != dim:
+                        raise StorageError(
+                            f"Dimension mismatch: expected {dim}, got {len(embedding)}",
+                            code="INVALID_PARAMETER",
+                        )
+                    validate_embedding(embedding)
+                    blob = encode_embedding(embedding)
+                    await conn.execute(
+                        "INSERT OR REPLACE INTO memory_embeddings (memory_id, embedding) VALUES (?, ?)",
+                        (memory_id, blob),
+                    )
+                    # If only embedding was updated, we still want to return True
+                    if not set_parts:
+                        # Check if memory exists
+                        async with conn.execute(
+                            "SELECT 1 FROM memories WHERE id = ?", (memory_id,)
+                        ) as cursor:
+                            if not await cursor.fetchone():
+                                return False
+                        updated = 1
+
+                if updated == 0 and embedding is None:
                     return False
 
-                # FTS is maintained by triggers for INSERT/DELETE/UPDATE OF content,
-                # but we need to manually handle content update because we do a generic UPDATE.
-                # The trigger memories_au fires on UPDATE OF content, so this is handled.
                 await conn.commit()
                 return True
             except aiosqlite.OperationalError as exc:

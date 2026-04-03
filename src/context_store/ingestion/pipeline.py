@@ -220,7 +220,7 @@ class IngestionPipeline:
                     )
                 )
                 self._content_results[memo_key] = current_task
-                
+
                 # lock を保持したまま、タスクの完了を待機する。
                 # これにより、同じ content_hash の別 memo_key はここで待たされる。
                 # _process_chunk_locked_with_cleanup 内部で再度 lock を取るとデッドロックするので注意が必要。

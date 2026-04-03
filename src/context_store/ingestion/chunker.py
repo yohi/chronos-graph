@@ -33,7 +33,6 @@ TURN_PATTERN = re.compile(r"^(User|Assistant|Human|AI|System):\s*", re.IGNORECAS
 HEADING_PATTERN = re.compile(r"^(#{1,2})\s+.+$", re.MULTILINE)
 
 
-
 def _is_inside_code_block(text: str, pos: int) -> bool:
     """テキスト中の位置 pos がコードブロック内かどうかを判定する。"""
     # pos より前の ``` の出現回数が奇数ならコードブロック内

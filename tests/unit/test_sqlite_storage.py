@@ -16,6 +16,7 @@ import pytest
 
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
 from context_store.storage.protocols import MemoryFilters, StorageError
+from context_store.storage.sqlite import SQLiteStorageAdapter
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +57,6 @@ async def _fetch_one_value(adapter, sql: str) -> Any:
 async def adapter(tmp_path):
     """SQLiteStorageAdapter を tmpdir の DB ファイルで作成して返す。"""
     from context_store.config import Settings
-    from context_store.storage.sqlite import SQLiteStorageAdapter
 
     db_path = str(tmp_path / "test_memories.db")
     settings = Settings(
@@ -77,7 +77,6 @@ async def adapter(tmp_path):
 async def adapter_with_backpressure(tmp_path):
     """バックプレッシャーテスト用の厳格な制限付きアダプター。"""
     from context_store.config import Settings
-    from context_store.storage.sqlite import SQLiteStorageAdapter
 
     db_path = str(tmp_path / "bp_memories.db")
     settings = Settings(
@@ -673,7 +672,6 @@ class TestGetVectorDimension:
 class TestWalMode:
     async def test_journal_mode_is_wal(self, adapter):
         """PRAGMA journal_mode が 'wal' を返すこと。"""
-        from context_store.storage.sqlite import SQLiteStorageAdapter
 
         assert isinstance(adapter, SQLiteStorageAdapter)
         async with adapter._connect() as conn:
@@ -684,7 +682,6 @@ class TestWalMode:
 
     async def test_foreign_keys_enabled(self, adapter):
         """PRAGMA foreign_keys が ON であること。"""
-        from context_store.storage.sqlite import SQLiteStorageAdapter
 
         assert isinstance(adapter, SQLiteStorageAdapter)
         async with adapter._connect() as conn:
@@ -741,7 +738,6 @@ class TestBackpressureControl:
         成功=5, 拒否=5 の厳密テスト（遅い操作で保証）。
         """
         from context_store.config import Settings
-        from context_store.storage.sqlite import SQLiteStorageAdapter
 
         db_path = str(tmp_path / "bp_strict.db")
         settings = Settings(
@@ -795,7 +791,6 @@ class TestBackpressureControl:
     async def test_semaphore_acquire_timeout(self, tmp_path):
         """タイムアウトで STORAGE_BUSY (recoverable=True) が発生すること。"""
         from context_store.config import Settings
-        from context_store.storage.sqlite import SQLiteStorageAdapter
 
         db_path = str(tmp_path / "timeout.db")
         settings = Settings(
@@ -846,7 +841,6 @@ class TestBackpressureControl:
     async def test_no_semaphore_leak_after_error(self, tmp_path):
         """エラー後もセマフォ・待機カウンタがリークしないこと。"""
         from context_store.config import Settings
-        from context_store.storage.sqlite import SQLiteStorageAdapter
 
         db_path = str(tmp_path / "leak.db")
         settings = Settings(
@@ -918,7 +912,6 @@ class TestEmbeddingSerDes:
     async def test_nan_in_embedding_raises_error(self, tmp_path):
         """NaN を含む埋め込みは拒否されること。"""
         from context_store.config import Settings
-        from context_store.storage.sqlite import SQLiteStorageAdapter
 
         db_path = str(tmp_path / "nan_test.db")
         settings = Settings(
@@ -939,7 +932,6 @@ class TestEmbeddingSerDes:
     async def test_inf_in_embedding_raises_error(self, tmp_path):
         """Inf を含む埋め込みは拒否されること。"""
         from context_store.config import Settings
-        from context_store.storage.sqlite import SQLiteStorageAdapter
 
         db_path = str(tmp_path / "inf_test.db")
         settings = Settings(
@@ -1037,7 +1029,6 @@ class TestDispose:
     async def test_dispose_can_be_called_multiple_times(self, tmp_path):
         """dispose は複数回呼んでもエラーにならない。"""
         from context_store.config import Settings
-        from context_store.storage.sqlite import SQLiteStorageAdapter
 
         db_path = str(tmp_path / "dispose.db")
         settings = Settings(
@@ -1118,3 +1109,17 @@ class TestGetMemoriesBatch:
         results = await adapter.get_memories_batch([str(m1.id), str(uuid4())])
         assert len(results) == 1
         assert str(results[0].id) == str(m1.id)
+
+
+@pytest.mark.asyncio
+async def test_update_memory_non_existent_with_embedding(adapter):
+    # Try to update a non-existent memory with an embedding AND other fields
+    bad_id = str(uuid4())
+    result = await adapter.update_memory(bad_id, {"content": "new", "embedding": [1.0, 0.0]})
+
+    # Should safely return False, not raise SQLite FK error
+    assert result is False
+
+    # Try to update ONLY embedding
+    result_only_emb = await adapter.update_memory(bad_id, {"embedding": [1.0, 0.0]})
+    assert result_only_emb is False

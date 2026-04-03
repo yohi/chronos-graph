@@ -613,12 +613,12 @@ class SQLiteStorageAdapter:
                     ) as cursor:
                         updated = cursor.rowcount
 
-                    if updated == 0 and embedding is None:
+                    if updated == 0:
                         return False
 
                 if embedding is not None:
+                    # Only check existence if we didn't just update the record
                     if not set_parts:
-                        # Check if memory exists before inserting embedding to avoid FK violations
                         async with conn.execute(
                             "SELECT 1 FROM memories WHERE id = ?", (memory_id,)
                         ) as cursor:

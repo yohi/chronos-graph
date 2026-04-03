@@ -459,6 +459,7 @@ class LifecycleManager:
 
         if settings is not None:
             self._save_count_threshold = settings.cleanup_save_count_threshold
+            self._cleanup_interval_hours = settings.cleanup_interval_hours
             self._stale_lock_timeout_seconds = settings.stale_lock_timeout_seconds
             self._wal_truncate_size_bytes = settings.wal_truncate_size_bytes
             self._wal_passive_fail_consecutive_threshold = (
@@ -472,6 +473,7 @@ class LifecycleManager:
             self._wal_checkpoint_mode_truncate = settings.wal_checkpoint_mode_truncate
         else:
             self._save_count_threshold = _DEFAULT_SAVE_COUNT_THRESHOLD
+            self._cleanup_interval_hours = _DEFAULT_CLEANUP_INTERVAL_HOURS
             self._stale_lock_timeout_seconds = 600
             self._wal_truncate_size_bytes = 104857600  # 100MB
             self._wal_passive_fail_consecutive_threshold = 3
@@ -503,7 +505,7 @@ class LifecycleManager:
                 should_run = True
             else:
                 elapsed = now - state.last_cleanup_at
-                if elapsed >= timedelta(hours=_DEFAULT_CLEANUP_INTERVAL_HOURS):
+                if elapsed >= timedelta(hours=self._cleanup_interval_hours):
                     should_run = True
 
             if should_run:
@@ -601,13 +603,24 @@ class LifecycleManager:
             new_state = LifecycleState(
                 save_count=0,
                 last_cleanup_at=now,
-                cleanup_running=False,
                 updated_at=now,
             )
             await self._state_store.save_state(new_state)
 
         except Exception:
             logger.exception("Cleanup failed.")
+            # カウンターをリセットして次のサイクルで再試行させる
+            try:
+                state = await self._state_store.load_state()
+                await self._state_store.save_state(
+                    LifecycleState(
+                        save_count=0,
+                        last_cleanup_at=state.last_cleanup_at,
+                        updated_at=datetime.now(timezone.utc),
+                    )
+                )
+            except Exception:
+                logger.exception("Failed to reset save_count after cleanup failure.")
             raise
         finally:
             await self._state_store.release_cleanup_lock()
@@ -724,3 +737,5 @@ class LifecycleManager:
             for task in tasks:
                 if not task.done():
                     task.cancel()
+            # キャンセルされたタスクが終了（およびクリーンアップ）するのを待機
+            await asyncio.gather(*tasks, return_exceptions=True)

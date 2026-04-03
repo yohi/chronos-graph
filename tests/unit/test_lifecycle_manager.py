@@ -50,7 +50,10 @@ def _make_manager(
     storage = AsyncMock()
     storage.list_by_filter = AsyncMock(return_value=[])
 
-    settings = make_settings(stale_lock_timeout_seconds=stale_lock_timeout_seconds)
+    settings = make_settings(
+        stale_lock_timeout_seconds=stale_lock_timeout_seconds,
+        cleanup_save_count_threshold=save_count_threshold,
+    )
 
     with tempfile.NamedTemporaryFile(suffix=".lock", delete=False) as f:
         tmp_lock_path = lock_path or f.name
@@ -89,7 +92,8 @@ class TestOnMemorySaved:
 
     async def test_triggers_cleanup_at_threshold(self):
         """閾値到達時に run_cleanup がトリガーされること。"""
-        manager, store = _make_manager(save_count_threshold=50)
+        manager, _ = _make_manager(save_count_threshold=50)
+
         # _save_count_threshold を 3 に上書きしてテストを軽くする
         manager._save_count_threshold = 3
 
@@ -150,7 +154,7 @@ class TestRunCleanup:
 
     async def test_runs_all_jobs(self):
         """run_cleanup() が全ジョブを実行すること。"""
-        manager, store = _make_manager()
+        manager, _ = _make_manager()
 
         await manager.run_cleanup()
 
@@ -212,7 +216,7 @@ class TestRunCleanup:
         with tempfile.NamedTemporaryFile(suffix=".lock", delete=False) as f:
             lock_path = f.name
 
-        manager, store = _make_manager(lock_path=lock_path)
+        manager, _ = _make_manager(lock_path=lock_path)
 
         from filelock import FileLock
 
@@ -319,7 +323,7 @@ class TestTimeBasedCleanup:
 
     async def test_triggers_cleanup_when_never_run(self):
         """last_cleanup_at が None の場合にクリーンアップがトリガーされること。"""
-        manager, store = _make_manager()
+        manager, _ = _make_manager()
         cleanup_called = []
 
         async def fake_cleanup():
@@ -376,7 +380,7 @@ class TestTimeBasedCleanup:
 
     async def test_start_schedules_time_based_check(self):
         """start() が時間ベースのチェックをスケジュールすること。"""
-        manager, store = _make_manager()
+        manager, _ = _make_manager()
 
         check_called = []
 
@@ -453,7 +457,7 @@ class TestGracefulShutdown:
 
     async def test_shutdown_waits_for_running_task(self):
         """実行中タスクの完了を待機すること。"""
-        manager, _ = _make_manager()
+        manager, store = _make_manager()
 
         completed = []
 
@@ -469,7 +473,7 @@ class TestGracefulShutdown:
 
     async def test_shutdown_times_out_after_5s(self):
         """5秒以内にシャットダウンが収束すること（タイムアウト発生でもエラーにならない）。"""
-        manager, _ = _make_manager()
+        manager, store = _make_manager()
 
         async def long_task():
             await asyncio.sleep(10)  # 5秒を超えるタスク
@@ -498,7 +502,7 @@ class TestWalCheckpoint:
             checkpoint_calls.append(mode)
             return {"busy": 0, "log": 10, "checkpointed": 10}
 
-        manager, store = _make_manager(wal_checkpoint_fn=mock_wal_fn)
+        manager, _ = _make_manager(wal_checkpoint_fn=mock_wal_fn)
 
         await manager.run_cleanup()
         assert len(checkpoint_calls) == 1

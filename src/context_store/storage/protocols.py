@@ -30,6 +30,7 @@ class MemoryFilters:
     limit: int | None = None
     order_by: str | None = None
     session_id: str | None = None
+    created_after: datetime | None = None
 
 
 ALLOWED_SORT_COLUMNS: set[str] = {

@@ -307,9 +307,9 @@ class TestPriorityProcessing:
         ]
 
         consolidator = Consolidator(storage=storage)
-        await consolidator.run()
+        await consolidator.run(batch_size=1)
 
-        # 自己修復が実行されること（archived_at が設定されること）
+        # 自己修復が実行されること(archived_at が設定されること)
         update_calls = storage.update_memory.call_args_list
         archived_ids = {c.args[0] for c in update_calls if "archived_at" in c.args[1]}
         # mem_high_dup（古い方）がアーカイブされること
@@ -615,9 +615,9 @@ class TestGraphAndEmbeddingIntegration:
         consolidator = Consolidator(storage=storage, embedding_provider=embedding_provider)
         await consolidator.run()
 
-        # embed が呼ばれること（マージ後の内容で再計算）
+        # embed が呼ばれること(マージ後の内容で再計算)
         # 少なくとも1回は呼ばれること
-        assert embedding_provider.embed.call_count >= 0  # Optional: 実装依存
+        assert embedding_provider.embed.call_count >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -669,8 +669,12 @@ class TestSlidingWindow:
         consolidator = Consolidator(storage=storage)
         await consolidator.run(last_cleanup_at=cutoff)
 
-        # list_by_filter が呼ばれること
-        storage.list_by_filter.assert_called()
+        # list_by_filter が正しいフィルタ(created_after == cutoff)で呼ばれること
+        # Note: 内部で MemoryFilters オブジェクトが渡されるため、属性をチェックするか
+        # 呼び出し時の引数をキャプチャして検証します。
+        storage.list_by_filter.assert_called_once()
+        call_args = storage.list_by_filter.call_args[0][0]
+        assert call_args.created_after == cutoff
 
 
 # ---------------------------------------------------------------------------

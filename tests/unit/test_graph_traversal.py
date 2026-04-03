@@ -22,10 +22,10 @@ def graph_adapter():
                 Edge(
                     from_id=str(UUID("00000000-0000-0000-0000-000000000001")),
                     to_id=str(UUID("00000000-0000-0000-0000-000000000002")),
-                    edge_type="SEMANTICALLY_RELATED",
+                    edge_type="links",
                 )
             ],
-            traversal_depth=2,
+            traversal_depth=1,
         )
     )
     return mock
@@ -73,8 +73,11 @@ class TestGraphTraversal:
     async def test_traverse_calls_adapter(self, graph_traversal, graph_adapter):
         """アダプターを正しく呼び出すこと"""
         graph_adapter.traverse.return_value = GraphResult(
-            nodes=[{"id": "node1", "score": 0.85}, {"id": "node2", "score": 0.75}],
-            edges=[{"from_id": "node1", "to_id": "node2", "edge_type": "links"}],
+            nodes=[
+                {"id": "node1", "score": 0.85},
+                {"id": "node2", "score": 0.75},
+            ],
+            edges=[Edge(from_id="node1", to_id="node2", edge_type="links")],
             traversal_depth=2,
         )
         seed_ids = [UUID("00000000-0000-0000-0000-000000000010")]

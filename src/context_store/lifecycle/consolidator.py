@@ -169,7 +169,7 @@ class Consolidator:
                     consolidated_count += 1
                     if newer_id:
                         affected_memory_ids.add(newer_id)
-                
+
                 # ベース側がアーカイブされた場合はこの記憶の処理を中断
                 if memory_id in archived_in_this_run:
                     break
@@ -187,7 +187,7 @@ class Consolidator:
                     consolidated_count += 1
                     if newer_id:
                         affected_memory_ids.add(newer_id)
-                
+
                 # ベース側がアーカイブされた場合は中断
                 if memory_id in archived_in_this_run:
                     break

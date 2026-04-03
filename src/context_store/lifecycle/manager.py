@@ -170,7 +170,9 @@ class InMemoryLifecycleStateStore:
                 elapsed = (now - state.updated_at).total_seconds()
                 if elapsed < self._stale_lock_timeout_seconds:
                     return False
-                logger.warning("Stale cleanup lock detected (elapsed=%.1fs), force releasing.", elapsed)
+                logger.warning(
+                    "Stale cleanup lock detected (elapsed=%.1fs), force releasing.", elapsed
+                )
 
             self._state = LifecycleState(
                 save_count=state.save_count,
@@ -194,7 +196,6 @@ class InMemoryLifecycleStateStore:
                 cleanup_running=False,
                 updated_at=datetime.now(timezone.utc),
             )
-
 
     async def load_wal_state(self) -> WalState:
         """WAL 状態を返す。"""
@@ -241,7 +242,9 @@ class SQLiteLifecycleStateStore:
         if "last_cleanup_id" not in column_names:
             await conn.execute("ALTER TABLE lifecycle_state ADD COLUMN last_cleanup_id TEXT")
         if "last_cleanup_cursor_at" not in column_names:
-            await conn.execute("ALTER TABLE lifecycle_state ADD COLUMN last_cleanup_cursor_at TIMESTAMP")
+            await conn.execute(
+                "ALTER TABLE lifecycle_state ADD COLUMN last_cleanup_cursor_at TIMESTAMP"
+            )
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS lifecycle_wal_state (
                 id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
@@ -699,7 +702,9 @@ class LifecycleManager:
             now = datetime.now(timezone.utc)
             current_state = await self._state_store.load_state()
 
-            next_cursor_at = consolidator_result.last_processed_at or current_state.last_cleanup_cursor_at
+            next_cursor_at = (
+                consolidator_result.last_processed_at or current_state.last_cleanup_cursor_at
+            )
             next_cursor_id = consolidator_result.last_processed_id
 
             # 開始時のカウント(今回処理対象とした分)だけ引く

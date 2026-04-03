@@ -548,7 +548,7 @@ class SQLiteStorageAdapter:
         for col, val in updates.items():
             if col not in allowed_columns:
                 continue
-            
+
             if col == "embedding":
                 embedding = val
                 continue

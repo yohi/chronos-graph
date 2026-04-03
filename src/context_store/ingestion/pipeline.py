@@ -333,7 +333,7 @@ class IngestionPipeline:
                 await self._storage.delete_memory(str(memory_id))
             except Exception as e:
                 logger.error("Error during delete_memory for memory_id=%s: %s", memory_id, e)
-            
+
             # ロールバック: 作成したグラフノードを削除
             try:
                 if node_created:
@@ -347,9 +347,14 @@ class IngestionPipeline:
                     await self._storage.update_memory(
                         str(supersedes_memory.id), {"archived_at": None}
                     )
-                    logger.info("ロールバック: supersedes_memory=%s のアーカイブを解除しました", supersedes_memory.id)
+                    logger.info(
+                        "ロールバック: supersedes_memory=%s のアーカイブを解除しました",
+                        supersedes_memory.id,
+                    )
                 except Exception as e:
-                    logger.error("Error during unarchiving supersedes_memory=%s: %s", supersedes_memory.id, e)
+                    logger.error(
+                        "Error during unarchiving supersedes_memory=%s: %s", supersedes_memory.id, e
+                    )
             raise
 
         logger.info(

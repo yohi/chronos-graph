@@ -17,6 +17,7 @@ import json
 import logging
 import weakref
 from datetime import datetime
+from enum import Enum
 from uuid import UUID
 from dataclasses import dataclass
 from typing import Any
@@ -99,13 +100,21 @@ class IngestionPipeline:
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _serialize_meta(obj: Any) -> str:
+    def _serialize_meta(obj: Any) -> Any:
         """メタデータの各要素を決定論的な文字列表現に変換する。"""
         if isinstance(obj, datetime):
             return obj.isoformat()
         if isinstance(obj, UUID):
             return str(obj)
-        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+        if isinstance(obj, Enum):
+            return obj.value
+        if isinstance(obj, bytes):
+            try:
+                return obj.decode("utf-8")
+            except UnicodeDecodeError:
+                return obj.hex()
+        # フォールバック: 文字列化
+        return str(obj)
 
     async def _fetch_url_content(self, url: str) -> list[RawContent]:
         """URL からコンテンツを取得する（テストでモック可能）。"""

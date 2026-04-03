@@ -283,9 +283,11 @@ class TestStaleLock:
         )
         store._state = stale_state
 
-        # load_state() がスタルロックを検出して解放すること
+        # acquire_cleanup_lock() がスタルロックを検出して取得できること
+        acquired = await store.acquire_cleanup_lock()
+        assert acquired is True
         state = await store.load_state()
-        assert state.cleanup_running is False
+        assert state.cleanup_running is True
 
     async def test_recent_lock_is_not_released(self):
         """新しい cleanup_running フラグは解放されないこと。"""
@@ -687,9 +689,11 @@ class TestSQLiteLifecycleStateStore:
                 )
                 await conn.commit()
 
-            # load_state() がスタルロックを検出して解放すること
+            # acquire_cleanup_lock() がスタルロックを検出して取得できること
+            acquired = await store.acquire_cleanup_lock()
+            assert acquired is True
             state = await store.load_state()
-            assert state.cleanup_running is False
+            assert state.cleanup_running is True
         finally:
             os.unlink(db_path)
 

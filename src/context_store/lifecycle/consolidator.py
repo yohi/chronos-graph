@@ -39,11 +39,13 @@ class ConsolidatorResult:
         consolidated_count: アーカイブした重複数。
         checked_count: チェックした記憶数。
         last_processed_at: 最後にチェックした記憶の作成日時。
+        last_processed_id: 最後にチェックした記憶の ID。
     """
 
     consolidated_count: int
     checked_count: int
     last_processed_at: datetime | None = None
+    last_processed_id: str | None = None
 
 
 class Consolidator:
@@ -81,50 +83,38 @@ class Consolidator:
     async def run(
         self,
         last_cleanup_at: datetime | None = None,
+        last_cleanup_id: str | None = None,
         batch_size: int = CONSOLIDATION_BATCH_SIZE,
     ) -> ConsolidatorResult:
-        """スライディングウィンドウ内の記憶を走査して重複を統合する。
-
-        アルゴリズム:
-        1. last_cleanup_at 以降に作成された記憶を取得（スライディングウィンドウ）。
-           last_cleanup_at=None なら全記憶対象（初回実行）。
-        2. batch_size 件ずつバッチ処理。
-        3. 各記憶の embedding に対して vector_search(top_k=5) で近傍を検索。
-        4. 自身を除いて similarity >= dedup_threshold の記憶がある場合
-           → 古い方をアーカイブして SUPERSEDES エッジを作成（自己修復）。
-        5. consolidation_threshold <= similarity < dedup_threshold の場合も処理
-           （通常統合候補）だが、自己修復候補を優先。
-        6. ログ出力: 'Self-healing: archived duplicate memory {id} due to similarity {score}'
+        """重複記憶を統合するクリーンアップジョブ。
 
         Args:
             last_cleanup_at: この時刻以降に作成された記憶を対象とする。
                 None の場合は全記憶が対象。
+            last_cleanup_id: 最後に処理した記憶の ID。
             batch_size: 1サイクルで処理する最大記憶数。
 
         Returns:
             処理結果を格納した ConsolidatorResult。
         """
-        # スライディングウィンドウ: last_cleanup_at 以降の記憶を取得
-        # 安定したページングのために order_by と limit を指定
+        # 安定したページングのために (created_at, id) ASC で取得
         filters = self._build_filters(last_cleanup_at)
+        filters.id_after = last_cleanup_id
         filters.limit = batch_size
-        filters.order_by = "created_at"
+        filters.order_by = "created_at ASC, id ASC"
 
-        all_memories = await self._storage.list_by_filter(filters)
+        window = await self._storage.list_by_filter(filters)
 
-        # Python 側で last_cleanup_at によるフィルタリング
-        # (Storage 側で created_after がサポートされていない場合に備えた安全策)
-        if last_cleanup_at is not None:
-            all_memories = [m for m in all_memories if m.created_at >= last_cleanup_at]
-
-        # batch_size で上限を設ける
-        window = all_memories[:batch_size]
         if not window:
             return ConsolidatorResult(
-                consolidated_count=0, checked_count=0, last_processed_at=last_cleanup_at
+                consolidated_count=0,
+                checked_count=0,
+                last_processed_at=last_cleanup_at,
+                last_processed_id=last_cleanup_id,
             )
 
         last_processed_at = window[-1].created_at
+        last_processed_id = str(window[-1].id)
 
         consolidated_count = 0
         # 処理済み（アーカイブ済み）記憶 ID を追跡してスキップ
@@ -202,6 +192,7 @@ class Consolidator:
             consolidated_count=consolidated_count,
             checked_count=len(window),
             last_processed_at=last_processed_at,
+            last_processed_id=last_processed_id,
         )
 
     async def _process_candidate(

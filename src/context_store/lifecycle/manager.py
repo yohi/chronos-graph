@@ -40,12 +40,14 @@ class LifecycleState:
     Attributes:
         save_count: 前回クリーンアップ以降の保存回数。
         last_cleanup_at: 最後にクリーンアップを実行した日時（UTC）。
+        last_cleanup_id: 最後にクリーンアップで処理した記憶の ID。
         cleanup_running: クリーンアップが実行中かどうか。
         updated_at: 状態が最後に更新された日時（UTC）。
     """
 
     save_count: int = 0
     last_cleanup_at: datetime | None = None
+    last_cleanup_id: str | None = None
     cleanup_running: bool = False
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -128,24 +130,8 @@ class InMemoryLifecycleStateStore:
         self._stale_lock_timeout_seconds = stale_lock_timeout_seconds
 
     async def load_state(self) -> LifecycleState:
-        """インメモリ状態を返す（スタルロック検出付き）。"""
-        state = self._state
-        # スタルロック検出: cleanup_running=True かつ updated_at が古い場合は強制解放
-        if state.cleanup_running:
-            now = datetime.now(timezone.utc)
-            elapsed = (now - state.updated_at).total_seconds()
-            if elapsed >= self._stale_lock_timeout_seconds:
-                logger.warning(
-                    "Stale cleanup lock detected (elapsed=%.1fs), force releasing.", elapsed
-                )
-                state = LifecycleState(
-                    save_count=state.save_count,
-                    last_cleanup_at=state.last_cleanup_at,
-                    cleanup_running=False,
-                    updated_at=now,
-                )
-                self._state = state
-        return state
+        """インメモリ状態を返す。"""
+        return self._state
 
     async def save_state(self, state: LifecycleState) -> None:
         """インメモリ状態を更新する。"""
@@ -161,19 +147,29 @@ class InMemoryLifecycleStateStore:
         self._state = LifecycleState(
             save_count=new_count,
             last_cleanup_at=state.last_cleanup_at,
+            last_cleanup_id=state.last_cleanup_id,
             cleanup_running=state.cleanup_running,
             updated_at=datetime.now(timezone.utc),
         )
         return threshold_just_reached
 
     async def acquire_cleanup_lock(self) -> bool:
-        """クリーンアップロックを取得する。"""
-        state = await self.load_state()
+        """クリーンアップロックを取得する（スタルロック検出付き）。"""
+        state = self._state
+        # スタルロック検出: cleanup_running=True かつ updated_at が古い場合は強制解放
         if state.cleanup_running:
-            return False
+            now = datetime.now(timezone.utc)
+            elapsed = (now - state.updated_at).total_seconds()
+            if elapsed < self._stale_lock_timeout_seconds:
+                return False
+            logger.warning(
+                "Stale cleanup lock detected (elapsed=%.1fs), force releasing.", elapsed
+            )
+
         self._state = LifecycleState(
             save_count=state.save_count,
             last_cleanup_at=state.last_cleanup_at,
+            last_cleanup_id=state.last_cleanup_id,
             cleanup_running=True,
             updated_at=datetime.now(timezone.utc),
         )
@@ -185,6 +181,7 @@ class InMemoryLifecycleStateStore:
         self._state = LifecycleState(
             save_count=state.save_count,
             last_cleanup_at=state.last_cleanup_at,
+            last_cleanup_id=state.last_cleanup_id,
             cleanup_running=False,
             updated_at=datetime.now(timezone.utc),
         )
@@ -219,10 +216,16 @@ class SQLiteLifecycleStateStore:
                 id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
                 save_count INTEGER NOT NULL DEFAULT 0,
                 last_cleanup_at TIMESTAMP,
+                last_cleanup_id TEXT,
                 cleanup_running INTEGER NOT NULL DEFAULT 0,
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # カラムが存在しない場合は追加 (移行用)
+        try:
+            await conn.execute("ALTER TABLE lifecycle_state ADD COLUMN last_cleanup_id TEXT")
+        except Exception:
+            pass
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS lifecycle_wal_state (
                 id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
@@ -240,14 +243,14 @@ class SQLiteLifecycleStateStore:
         await conn.commit()
 
     async def load_state(self) -> LifecycleState:
-        """SQLite から状態を読み込む（スタルロック検出付き）。"""
+        """SQLite から状態を読み込む。"""
         import aiosqlite  # type: ignore[import-untyped]
 
         async with aiosqlite.connect(self._db_path) as conn:
             await self._ensure_tables(conn)
             conn.row_factory = aiosqlite.Row
             cursor = await conn.execute(
-                "SELECT save_count, last_cleanup_at, cleanup_running, updated_at "
+                "SELECT save_count, last_cleanup_at, last_cleanup_id, cleanup_running, updated_at "
                 "FROM lifecycle_state WHERE id = 1"
             )
             row = await cursor.fetchone()
@@ -264,30 +267,11 @@ class SQLiteLifecycleStateStore:
         updated_at_str = row["updated_at"]
         updated_at = datetime.fromisoformat(updated_at_str).replace(tzinfo=timezone.utc)
 
-        cleanup_running = bool(row["cleanup_running"])
-
-        # スタルロック検出
-        if cleanup_running:
-            now = datetime.now(timezone.utc)
-            elapsed = (now - updated_at).total_seconds()
-            if elapsed >= self._stale_lock_timeout_seconds:
-                logger.warning(
-                    "Stale cleanup lock detected (elapsed=%.1fs), force releasing.", elapsed
-                )
-                cleanup_running = False
-                updated_at = now
-                # DB を即時更新
-                async with aiosqlite.connect(self._db_path) as conn:
-                    await conn.execute(
-                        "UPDATE lifecycle_state SET cleanup_running = 0, updated_at = ? WHERE id = 1",
-                        (now.isoformat(),),
-                    )
-                    await conn.commit()
-
         return LifecycleState(
             save_count=row["save_count"],
             last_cleanup_at=last_cleanup_at,
-            cleanup_running=cleanup_running,
+            last_cleanup_id=row["last_cleanup_id"],
+            cleanup_running=bool(row["cleanup_running"]),
             updated_at=updated_at,
         )
 
@@ -303,12 +287,14 @@ class SQLiteLifecycleStateStore:
             await conn.execute(
                 """
                 UPDATE lifecycle_state
-                SET save_count = ?, last_cleanup_at = ?, cleanup_running = ?, updated_at = ?
+                SET save_count = ?, last_cleanup_at = ?, last_cleanup_id = ?,
+                    cleanup_running = ?, updated_at = ?
                 WHERE id = 1
                 """,
                 (
                     state.save_count,
                     last_cleanup_at_str,
+                    state.last_cleanup_id,
                     1 if state.cleanup_running else 0,
                     state.updated_at.isoformat(),
                 ),
@@ -608,24 +594,40 @@ class LifecycleManager:
         """
         # OS レベルの排他ロック（timeout=0 = 非ブロッキング）
         file_lock = FileLock(self._lock_path, timeout=0)
+        should_schedule_followup = False
         try:
             with file_lock.acquire():
-                await self._run_cleanup_inner()
+                should_schedule_followup = await self._run_cleanup_inner()
         except Timeout:
             logger.debug("Cleanup skipped: another process holds the file lock.")
             return
 
-    async def _run_cleanup_inner(self) -> None:
-        """クリーンアップ本体（DB ロック取得後に実行）。"""
+        # ロック解放後に、必要に応じてフォローアップをスケジュール
+        if should_schedule_followup:
+            logger.info("Scheduling follow-up cleanup.")
+            task = asyncio.create_task(self.run_cleanup())
+            self._active_tasks.append(task)
+            task.add_done_callback(self._active_tasks.remove)
+
+    async def _run_cleanup_inner(self) -> bool:
+        """クリーンアップ本体（DB ロック取得後に実行）。
+
+        Returns:
+            未処理の保存が残っており、次回のクリーンアップを即座にスケジュールすべきか。
+        """
         # DB レベルのロック取得
         acquired = await self._state_store.acquire_cleanup_lock()
         if not acquired:
             logger.debug("Cleanup skipped: DB lock already acquired.")
-            return
+            return False
 
+        should_schedule_followup = False
         try:
             state = await self._state_store.load_state()
-            logger.info("Starting cleanup (save_count=%d).", state.save_count)
+            # クリーンアップ開始時のカウントをキャプチャ。
+            # concurrent saves があった場合に、その分まで差し引かないようにする。
+            cleanup_start_save_count = state.save_count
+            logger.info("Starting cleanup (save_count=%d).", cleanup_start_save_count)
 
             # 1. Decay Scorer (各ジョブは暗黙的にスコアを使用)
             # 2. Archiver
@@ -637,8 +639,10 @@ class LifecycleManager:
             )
 
             # 3. Consolidator
+            # カーソル (timestamp + ID) を渡して、安定したページングを実現。
             consolidator_result = await self._consolidator.run(
-                last_cleanup_at=state.last_cleanup_at
+                last_cleanup_at=state.last_cleanup_at,
+                last_cleanup_id=state.last_cleanup_id,
             )
             logger.info(
                 "Consolidator: consolidated=%d, checked=%d",
@@ -662,33 +666,31 @@ class LifecycleManager:
                 await self._run_wal_checkpoint()
 
             # 状態を更新（カウンターリセット + last_cleanup_at 更新）
-            # クリーンアップ中に発生した保存を失わないように、
-            # 現在の値を読み取ってから、処理対象となった分(閾値)だけ引く。
-            # last_cleanup_at は Consolidator が処理した最後の位置まで進める。
+            # last_processed_at/id があればそれを優先し、なければ now を使用
             now = datetime.now(timezone.utc)
             current_state = await self._state_store.load_state()
 
-            # last_processed_at があればそれを優先し、なければ now を使用
             next_cleanup_at = consolidator_result.last_processed_at or now
+            next_cleanup_id = consolidator_result.last_processed_id
 
-            remaining_count = max(0, current_state.save_count - self._save_count_threshold)
+            # 開始時のカウント(今回処理対象とした分)だけ引く
+            remaining_count = max(0, current_state.save_count - cleanup_start_save_count)
             new_state = LifecycleState(
                 save_count=remaining_count,
                 last_cleanup_at=next_cleanup_at,
+                last_cleanup_id=next_cleanup_id,
                 cleanup_running=True,  # finally で release_cleanup_lock を呼ぶまで保持
                 updated_at=now,
             )
             await self._state_store.save_state(new_state)
 
-            # 未処理の保存がまだ残っている場合は、即座に次をスケジュール
+            # 未処理の保存がまだ残っている場合は、フォローアップを要求
             if remaining_count >= self._save_count_threshold:
                 logger.info(
-                    "Remaining saves (%d) still exceed threshold, scheduling follow-up cleanup.",
+                    "Remaining saves (%d) still exceed threshold, follow-up requested.",
                     remaining_count,
                 )
-                task = asyncio.create_task(self.run_cleanup())
-                self._active_tasks.append(task)
-                task.add_done_callback(self._active_tasks.remove)
+                should_schedule_followup = True
 
         except Exception:
             logger.exception("Cleanup failed.")
@@ -699,6 +701,7 @@ class LifecycleManager:
                     LifecycleState(
                         save_count=max(0, state.save_count - self._save_count_threshold),
                         last_cleanup_at=state.last_cleanup_at,
+                        last_cleanup_id=state.last_cleanup_id,
                         cleanup_running=True,  # finally で release_cleanup_lock を呼ぶまで保持
                         updated_at=datetime.now(timezone.utc),
                     )
@@ -708,6 +711,8 @@ class LifecycleManager:
             raise
         finally:
             await self._state_store.release_cleanup_lock()
+
+        return should_schedule_followup
 
     async def _collect_stats(self) -> None:
         """統計情報をログに記録する（将来的に DB 保存へ拡張可能）。"""

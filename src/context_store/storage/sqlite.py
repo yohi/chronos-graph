@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS memories (
     tags               TEXT NOT NULL DEFAULT '[]',
     project            TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_memories_created_id ON memories(created_at, id);
 """
 
 _DDL_VECTORS_METADATA = """
@@ -328,7 +329,7 @@ class SQLiteStorageAdapter:
     async def _migrate(self) -> None:
         """Create tables and indexes if they do not exist."""
         async with self._connect() as conn:
-            await conn.execute(_DDL_MEMORIES)
+            await conn.executescript(_DDL_MEMORIES)
             await conn.execute(_DDL_VECTORS_METADATA)
             await conn.execute(_DDL_EMBEDDINGS)
             await conn.executescript(_DDL_FTS + _DDL_FTS_TRIGGERS)
@@ -769,6 +770,15 @@ class SQLiteStorageAdapter:
                 "THEN json_extract(source_metadata, '$.session_id') END = ?"
             )
 
+        if filters.created_after is not None:
+            if filters.id_after is not None:
+                params.append(filters.created_after.isoformat())
+                params.append(filters.id_after)
+                conditions.append("(created_at, id) > (?, ?)")
+            else:
+                params.append(filters.created_after.isoformat())
+                conditions.append("created_at >= ?")
+
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         prefixed_where = ""
         if where_clause:
@@ -786,6 +796,8 @@ class SQLiteStorageAdapter:
                     "CASE WHEN json_valid(m.source_metadata) "
                     "THEN json_extract(m.source_metadata, '$.session_id') END = ?"
                 ),
+                "created_at >= ?": "m.created_at >= ?",
+                "(created_at, id) > (?, ?)": "(m.created_at, m.id) > (?, ?)",
             }
             for original, prefixed in replacements.items():
                 prefixed_where = prefixed_where.replace(original, prefixed)
@@ -795,34 +807,36 @@ class SQLiteStorageAdapter:
         # ------------------------------------------------------------------
         allowed_sort_columns = ALLOWED_SORT_COLUMNS
 
-        raw_order = (filters.order_by or "m.created_at DESC").strip()
-        parts = raw_order.split()
-        if not parts:
-            order_clause = "ORDER BY m.created_at DESC"
-        else:
-            # First part: Column name
-            col = parts[0].replace("m.", "")
-            if col not in allowed_sort_columns:
-                raise StorageError(f"Invalid sort column: {col}", code="INVALID_PARAMETER")
+        order_clause = "ORDER BY m.created_at DESC"
+        if filters.order_by:
+            order_parts = []
+            # Support comma-separated columns
+            for part in str(filters.order_by).split(","):
+                tokens = part.strip().split()
+                if not tokens:
+                    continue
+                col = tokens[0].replace("m.", "").lower()
+                if col not in allowed_sort_columns:
+                    raise StorageError(f"Invalid sort column: {col}", code="INVALID_PARAMETER")
 
-            # Second part: ASC / DESC (optional)
-            direction = ""
-            if len(parts) > 1:
-                dir_part = parts[1].upper()
-                if dir_part not in ("ASC", "DESC"):
+                direction = "DESC"
+                if len(tokens) > 1:
+                    dir_part = tokens[1].upper()
+                    if dir_part not in ("ASC", "DESC"):
+                        raise StorageError(
+                            f"Invalid sort direction: {dir_part}", code="INVALID_PARAMETER"
+                        )
+                    direction = dir_part
+
+                if len(tokens) > 2:
                     raise StorageError(
-                        f"Invalid sort direction: {dir_part}", code="INVALID_PARAMETER"
+                        f"Invalid order_by format: {part}. Extra tokens detected.",
+                        code="INVALID_PARAMETER",
                     )
-                direction = dir_part
+                order_parts.append(f"m.{col} {direction}")
 
-            # Reject additional tokens (length > 2)
-            if len(parts) > 2:
-                raise StorageError(
-                    f"Invalid order_by format: {raw_order}. Extra tokens detected.",
-                    code="INVALID_PARAMETER",
-                )
-
-            order_clause = f"ORDER BY m.{col} {direction}".strip()
+            if order_parts:
+                order_clause = f"ORDER BY {', '.join(order_parts)}"
 
         # ------------------------------------------------------------------
         # LIMIT validation (integer check)

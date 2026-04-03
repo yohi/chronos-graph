@@ -346,6 +346,15 @@ class PostgresStorageAdapter:
             params.append(filters.session_id)
             conditions.append(f"source_metadata->>'session_id' = ${len(params)}")
 
+        if filters.created_after is not None:
+            if filters.id_after is not None:
+                params.append(filters.created_after)
+                params.append(filters.id_after)
+                conditions.append(f"(created_at, id) > (${len(params)-1}, ${len(params)})")
+            else:
+                params.append(filters.created_after)
+                conditions.append(f"created_at >= ${len(params)}")
+
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         # Validate and whitelist ORDER BY columns
         allowed_order_cols = ALLOWED_SORT_COLUMNS

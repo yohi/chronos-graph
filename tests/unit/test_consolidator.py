@@ -57,7 +57,33 @@ def _make_scored_memory(memory: Memory, score: float) -> ScoredMemory:
 def _make_storage(memories: list[Memory] | None = None) -> AsyncMock:
     """StorageAdapter モックを返す。"""
     storage = AsyncMock()
-    storage.list_by_filter.return_value = memories or []
+
+    async def list_by_filter(filters: MemoryFilters) -> list[Memory]:
+        mems = memories or []
+        # 簡易的なフィルタリング
+        if filters.created_after:
+            mems = [m for m in mems if m.created_at >= filters.created_after]
+
+        # 安定したソート (ASC)
+        mems = sorted(mems, key=lambda x: (x.created_at, x.id))
+
+        if filters.id_after:
+            # id_after 以降のデータを取得
+            found = False
+            filtered = []
+            for m in mems:
+                if str(m.id) == filters.id_after:
+                    found = True
+                    continue
+                if found:
+                    filtered.append(m)
+            mems = filtered
+
+        if filters.limit:
+            mems = mems[:filters.limit]
+        return mems
+
+    storage.list_by_filter.side_effect = list_by_filter
     storage.vector_search.return_value = []
     storage.update_memory.return_value = True
     return storage

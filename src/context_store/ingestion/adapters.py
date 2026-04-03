@@ -14,7 +14,6 @@ import socket
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Any, ClassVar, Protocol, cast, runtime_checkable
-from urllib.parse import urljoin
 
 import httpx
 

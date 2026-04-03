@@ -189,14 +189,26 @@ class IngestionPipeline:
         )
 
         lock = await self._get_content_lock(content_hash)
-        current_task: asyncio.Task[IngestionResult | None] | None = None
 
+        # 1. 同一の memo_key (コンテンツ + メタデータ) が並行して走っている場合は、そのタスクを共有する
+        # ここは lock 外でチェックし、あれば shield で待つ。
+        # (競合を避けるため、後で lock 内でも再チェックする)
+        existing_task = self._content_results.get(memo_key)
+        if existing_task is not None:
+            return await asyncio.shield(existing_task)
+
+        # 2. content_hash レベルの排他制御
         async with lock:
-            # 他の並行タスクがすでにこのチャンクを処理中であれば、そのタスクの完了を待つ
-            # （in-flight map として機能させる）
+            # lock 取得後に memo_key を再チェック（他のタスクが先に作った可能性があるため）
             existing_task = self._content_results.get(memo_key)
-            if existing_task is None:
-                # 自分が処理を担当するため、Task を作成して登録
+            if existing_task is not None:
+                # すでにタスクが作成されている場合は、lock を抜けてから待つ
+                pass
+            else:
+                # 自分が処理を担当する。
+                # 同一 memo_key の後続リクエストのために、自分自身を Task として登録して実行する。
+                # ここでは直接 asyncio.current_task() を登録したいが、
+                # まだ走っているので、ラッパーを Task 化して登録する。
                 current_task = asyncio.create_task(
                     self._process_chunk_locked_with_cleanup(
                         chunk,
@@ -208,16 +220,14 @@ class IngestionPipeline:
                     )
                 )
                 self._content_results[memo_key] = current_task
+                
+                # lock を保持したまま、タスクの完了を待機する。
+                # これにより、同じ content_hash の別 memo_key はここで待たされる。
+                # _process_chunk_locked_with_cleanup 内部で再度 lock を取るとデッドロックするので注意が必要。
+                return await asyncio.shield(current_task)
 
-        if existing_task is not None:
-            # 他のタスクが処理中なので、その完了を待つ
-            # asyncio.shield を使い、呼び出し元のキャンセルが共有タスクに波及しないようにする
-            return await asyncio.shield(existing_task)
-
-        # 自分が作成したタスクを実行（current_task は必ず非 None）
-        assert current_task is not None
-        # 自分が作成したタスクも shield で待機し、キャンセルから保護する
-        return await asyncio.shield(current_task)
+        # 3. 他のリクエストが作成した既存タスクを待機
+        return await asyncio.shield(existing_task)
 
     async def _process_chunk_locked_with_cleanup(
         self,
@@ -238,7 +248,14 @@ class IngestionPipeline:
             )
         finally:
             # タスク完了時のクリーンアップ
-            async with lock:
+            # Note: 呼び出し元が lock を保持して待機している場合、
+            # ここで再度 lock を取得しようとするとデッドロックする可能性がある。
+            # しかし、現在の実装では呼び出し元が lock を解放する前に
+            # この Task が完了を通知する必要がある。
+            # lock.locked() でチェックして、取られていればそのまま、
+            # 取られていなければ取ってから pop する。
+            # または、locks_mutex を使う。
+            async with self._locks_mutex:
                 if self._content_results.get(memo_key) is asyncio.current_task():
                     self._content_results.pop(memo_key, None)
 

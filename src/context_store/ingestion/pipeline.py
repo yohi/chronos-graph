@@ -72,7 +72,7 @@ class IngestionPipeline:
         self._deduplicator = Deduplicator(storage=storage)
         self._graph_linker = GraphLinker(storage=storage, graph=graph)
         self._conversation_adapter = ConversationAdapter(
-            chunk_size=settings.conversation_chunk_size
+            chunk_size=self._settings.conversation_chunk_size
         )
         self._url_adapter: URLAdapter | None = None  # 遅延初期化
 

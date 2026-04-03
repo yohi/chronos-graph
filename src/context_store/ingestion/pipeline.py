@@ -217,7 +217,7 @@ class IngestionPipeline:
         meta_json = json.dumps(merged_meta, sort_keys=True, default=self._serialize_meta)
         meta_hash = hashlib.sha256(meta_json.encode("utf-8")).hexdigest()
 
-        memo_key = (content_hash, meta_hash)
+        memo_key = (content_hash, meta_hash, chunk.source_type)
 
         # 1. ロックを取得して同一 memo_key のタスクをアトミックにチェック・登録する
         async with self._locks_mutex:
@@ -295,7 +295,7 @@ class IngestionPipeline:
         )
 
         # ========================================================
-        # 重複排除（Deduplication）と保存を同一ロックで保護
+        # 重複排除（Deduplication）、保存、グラフ登録を同一ロックで保護
         # ========================================================
         lock = await self._get_content_lock(content_hash)
         async with lock:
@@ -311,82 +311,82 @@ class IngestionPipeline:
             memory_id = UUID(raw_id) if isinstance(raw_id, str) else raw_id
             persisted_memory = memory.model_copy(update={"id": memory_id})
 
-        # ステップ7: グラフノード作成
-        node_created = False
-        try:
-            await self._graph.create_node(
-                str(memory_id),
-                {
-                    "memory_type": persisted_memory.memory_type.value,
-                    "source_type": persisted_memory.source_type.value,
-                    "project": persisted_memory.project,
-                },
-            )
-            node_created = True
-
-            # ステップ8: グラフリンク（エッジ作成）
-            previous_memories = await self._get_previous_memories(persisted_memory)
-            chunk_neighbors = self._build_chunk_neighbors(
-                persisted_memory,
-                prior_document_memories,
-                supersedes_memory,
-            )
-            await self._graph_linker.link(
-                persisted_memory,
-                supersedes=supersedes_memory,
-                previous_memories=previous_memories,
-                chunk_neighbors=chunk_neighbors,
-            )
-        except Exception:
-            # ロールバック処理
-            # 1. 作成したグラフノードを削除 (Best effort)
-            if node_created:
-                try:
-                    await self._graph.delete_node(str(memory_id))
-                except Exception as e:
-                    logger.error("ロールバック失敗: delete_node (memory_id=%s): %s", memory_id, e)
-
-            # 2. 新しく保存したメモリを削除
-            new_memory_deleted = False
+            # ステップ7: グラフノード作成
+            node_created = False
             try:
-                new_memory_deleted = await self._storage.delete_memory(str(memory_id))
-                if not new_memory_deleted:
-                    logger.warning(
-                        "ロールバック失敗: delete_memory が False を返しました (memory_id=%s)",
-                        memory_id,
-                    )
-            except Exception as e:
-                logger.error("ロールバック失敗: delete_memory (memory_id=%s): %s", memory_id, e)
+                await self._graph.create_node(
+                    str(memory_id),
+                    {
+                        "memory_type": persisted_memory.memory_type.value,
+                        "source_type": persisted_memory.source_type.value,
+                        "project": persisted_memory.project,
+                    },
+                )
+                node_created = True
 
-            # 3. アーカイブされたメモリを復元 (REPLACE 時)
-            # 新しいメモリの削除に成功した場合のみ、古いメモリを復旧させる（二重アクティブ防止）
-            if (
-                new_memory_deleted
-                and dedup_result.action == DeduplicationAction.REPLACE
-                and supersedes_memory
-            ):
+                # ステップ8: グラフリンク（エッジ作成）
+                previous_memories = await self._get_previous_memories(persisted_memory)
+                chunk_neighbors = self._build_chunk_neighbors(
+                    persisted_memory,
+                    prior_document_memories,
+                    supersedes_memory,
+                )
+                await self._graph_linker.link(
+                    persisted_memory,
+                    supersedes=supersedes_memory,
+                    previous_memories=previous_memories,
+                    chunk_neighbors=chunk_neighbors,
+                )
+            except Exception:
+                # ロールバック処理
+                # 1. 作成したグラフノードを削除 (Best effort)
+                if node_created:
+                    try:
+                        await self._graph.delete_node(str(memory_id))
+                    except Exception as e:
+                        logger.error("ロールバック失敗: delete_node (memory_id=%s): %s", memory_id, e)
+
+                # 2. 新しく保存したメモリを削除
+                new_memory_deleted = False
                 try:
-                    success = await self._storage.update_memory(
-                        str(supersedes_memory.id), {"archived_at": None}
-                    )
-                    if success:
-                        logger.info(
-                            "ロールバック成功: supersedes_memory=%s のアーカイブを解除しました",
-                            supersedes_memory.id,
-                        )
-                    else:
-                        logger.error(
-                            "ロールバック失敗: update_memory が False を返しました (supersedes_memory=%s)",
-                            supersedes_memory.id,
+                    new_memory_deleted = await self._storage.delete_memory(str(memory_id))
+                    if not new_memory_deleted:
+                        logger.warning(
+                            "ロールバック失敗: delete_memory が False を返しました (memory_id=%s)",
+                            memory_id,
                         )
                 except Exception as e:
-                    logger.error(
-                        "ロールバック失敗: アーカイブ解除中に例外が発生しました (supersedes_memory=%s): %s",
-                        supersedes_memory.id,
-                        e,
-                    )
+                    logger.error("ロールバック失敗: delete_memory (memory_id=%s): %s", memory_id, e)
 
-            raise
+                # 3. アーカイブされたメモリを復元 (REPLACE 時)
+                # 新しいメモリの削除に成功した場合のみ、古いメモリを復旧させる（二重アクティブ防止）
+                if (
+                    new_memory_deleted
+                    and dedup_result.action == DeduplicationAction.REPLACE
+                    and supersedes_memory
+                ):
+                    try:
+                        success = await self._storage.update_memory(
+                            str(supersedes_memory.id), {"archived_at": None}
+                        )
+                        if success:
+                            logger.info(
+                                "ロールバック成功: supersedes_memory=%s のアーカイブを解除しました",
+                                supersedes_memory.id,
+                            )
+                        else:
+                            logger.error(
+                                "ロールバック失敗: update_memory が False を返しました (supersedes_memory=%s)",
+                                supersedes_memory.id,
+                            )
+                    except Exception as e:
+                        logger.error(
+                            "ロールバック失敗: アーカイブ解除中に例外が発生しました (supersedes_memory=%s): %s",
+                            supersedes_memory.id,
+                            e,
+                        )
+
+                raise
 
         logger.info(
             "Ingestion 完了: memory_id=%s, action=%s, type=%s",

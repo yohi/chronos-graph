@@ -350,7 +350,7 @@ class PostgresStorageAdapter:
             if filters.id_after is not None:
                 params.append(filters.created_after)
                 params.append(filters.id_after)
-                conditions.append(f"(created_at, id) > (${len(params)-1}, ${len(params)})")
+                conditions.append(f"(created_at, id) > (${len(params) - 1}, ${len(params)})")
             else:
                 params.append(filters.created_after)
                 conditions.append(f"created_at >= ${len(params)}")

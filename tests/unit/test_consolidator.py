@@ -81,7 +81,7 @@ def _make_storage(memories: list[Memory] | None = None) -> AsyncMock:
             mems = filtered
 
         if filters.limit:
-            mems = mems[:filters.limit]
+            mems = mems[: filters.limit]
         return mems
 
     storage.list_by_filter.side_effect = list_by_filter

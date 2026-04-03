@@ -162,9 +162,7 @@ class InMemoryLifecycleStateStore:
             elapsed = (now - state.updated_at).total_seconds()
             if elapsed < self._stale_lock_timeout_seconds:
                 return False
-            logger.warning(
-                "Stale cleanup lock detected (elapsed=%.1fs), force releasing.", elapsed
-            )
+            logger.warning("Stale cleanup lock detected (elapsed=%.1fs), force releasing.", elapsed)
 
         self._state = LifecycleState(
             save_count=state.save_count,

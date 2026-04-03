@@ -562,7 +562,7 @@ class LifecycleManager:
         初回起動時のみ前回クリーンアップからの経過時間を確認し、
         1日以上経過している場合はクリーンアップを非同期でトリガーする。
         """
-        self._spawn_background_task(self._check_time_based_cleanup())
+        self._spawn_background_task(self._check_time_based_cleanup)
 
     async def _check_time_based_cleanup(self) -> None:
         """時間ベースのクリーンアップチェック（起動時に1回のみ実行）。"""
@@ -586,12 +586,12 @@ class LifecycleManager:
         except Exception:
             logger.exception("Time-based cleanup check failed.")
 
-    def _spawn_background_task(self, coro: Coroutine[Any, Any, None]) -> None:
+    def _spawn_background_task(self, factory: Callable[[], Coroutine[Any, Any, None]]) -> None:
         """例外ハンドリング付きでバックグラウンドタスクを開始する。"""
         if getattr(self, "_shutting_down", False):
             return
 
-        task: asyncio.Task[None] = asyncio.create_task(coro)
+        task: asyncio.Task[None] = asyncio.create_task(factory())
         self._active_tasks.append(task)
 
         def done_callback(t: asyncio.Task[None]) -> None:
@@ -620,7 +620,7 @@ class LifecycleManager:
 
         if threshold_just_reached:
             logger.info("Save count threshold reached, triggering cleanup.")
-            self._spawn_background_task(self.run_cleanup())
+            self._spawn_background_task(self.run_cleanup)
 
     async def run_cleanup(self) -> None:
         """クリーンアップを実行する（filelock + DB ロック排他制御付き）。
@@ -641,7 +641,7 @@ class LifecycleManager:
         # ロック解放後に、必要に応じてフォローアップをスケジュール
         if should_schedule_followup:
             logger.info("Scheduling follow-up cleanup.")
-            self._spawn_background_task(self.run_cleanup())
+            self._spawn_background_task(self.run_cleanup)
 
     async def _run_cleanup_inner(self) -> bool:
         """クリーンアップ本体（DB ロック取得後に実行）。

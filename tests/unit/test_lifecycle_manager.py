@@ -729,3 +729,45 @@ class TestSQLiteLifecycleStateStore:
             assert len(loaded.wal_failure_window) == 1
         finally:
             os.unlink(db_path)
+
+
+@pytest.mark.asyncio
+async def test_spawn_background_task_no_leak():
+    # Setup mocks
+    mock_store = MagicMock()
+    mock_archiver = MagicMock()
+    mock_purger = MagicMock()
+    mock_consolidator = MagicMock()
+    mock_decay = MagicMock()
+    mock_storage = MagicMock()
+
+    manager = LifecycleManager(
+        state_store=mock_store,
+        archiver=mock_archiver,
+        purger=mock_purger,
+        consolidator=mock_consolidator,
+        decay_scorer=mock_decay,
+        storage=mock_storage,
+        settings=MagicMock(),
+    )
+
+    # Simulate shutdown
+    manager._shutting_down = True
+
+    called = False
+
+    async def dummy_task():
+        nonlocal called
+        called = True
+
+    def task_factory():
+        return dummy_task()
+
+    manager._spawn_background_task(task_factory)
+
+    # Wait a bit just in case
+    await asyncio.sleep(0.01)
+
+    # The factory shouldn't be called, so the coroutine is never created, hence no leak.
+    assert called is False
+    assert len(manager._active_tasks) == 0

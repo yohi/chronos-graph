@@ -13,7 +13,6 @@ from __future__ import annotations
 import re
 import uuid
 from collections.abc import Generator
-from typing import Any
 
 from context_store.ingestion.adapters import RawContent
 from context_store.models.memory import SourceType

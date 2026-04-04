@@ -87,7 +87,7 @@ class LifecycleStateStore(Protocol):
         """永続化された状態を読み込む。"""
         ...
 
-    async def save_state(self, state: LifecycleState) -> None:
+    async def save_state(self, state: LifecycleState, token: str | None = None) -> bool:
         """状態を永続化する。"""
         ...
 
@@ -156,10 +156,13 @@ class InMemoryLifecycleStateStore:
         async with self._lock:
             return self._state
 
-    async def save_state(self, state: LifecycleState) -> None:
+    async def save_state(self, state: LifecycleState, token: str | None = None) -> bool:
         """インメモリ状態を更新する。"""
         async with self._lock:
+            if token is not None and self._state.cleanup_lock_owner != token:
+                return False
             self._state = state
+            return True
 
     async def increment_save_count(self, threshold: int) -> bool:
         """インメモリでのインクリメントと閾値チェック。"""
@@ -341,7 +344,7 @@ class SQLiteLifecycleStateStore:
             updated_at=datetime.fromisoformat(row["updated_at"]).replace(tzinfo=timezone.utc),
         )
 
-    async def save_state(self, state: LifecycleState) -> None:
+    async def save_state(self, state: LifecycleState, token: str | None = None) -> bool:
         """状態を SQLite に保存する。"""
         import aiosqlite  # type: ignore[import-untyped]
 
@@ -350,24 +353,29 @@ class SQLiteLifecycleStateStore:
 
         async with aiosqlite.connect(self._db_path) as conn:
             await self._ensure_tables(conn)
-            await conn.execute(
-                """
+            query = """
                 UPDATE lifecycle_state
                 SET save_count = ?, last_cleanup_at = ?, last_cleanup_cursor_at = ?,
                     last_cleanup_id = ?, cleanup_lock_owner = ?, cleanup_lock_touched_at = ?, updated_at = ?
                 WHERE id = 1
-                """,
-                (
-                    state.save_count,
-                    _fmt_ts(state.last_cleanup_at),
-                    _fmt_ts(state.last_cleanup_cursor_at),
-                    state.last_cleanup_id,
-                    state.cleanup_lock_owner,
-                    _fmt_ts(state.cleanup_lock_touched_at),
-                    state.updated_at.isoformat(),
-                ),
-            )
+            """
+            params = [
+                state.save_count,
+                _fmt_ts(state.last_cleanup_at),
+                _fmt_ts(state.last_cleanup_cursor_at),
+                state.last_cleanup_id,
+                state.cleanup_lock_owner,
+                _fmt_ts(state.cleanup_lock_touched_at),
+                state.updated_at.isoformat(),
+            ]
+
+            if token is not None:
+                query += " AND cleanup_lock_owner = ?"
+                params.append(token)
+
+            cursor = await conn.execute(query, params)
             await conn.commit()
+            return cursor.rowcount > 0
 
     async def increment_save_count(self, threshold: int) -> bool:
         """SQLite でのアトミックなインクリメント。"""
@@ -807,7 +815,7 @@ class LifecycleManager:
                 cleanup_lock_touched_at=datetime.now(timezone.utc),
                 updated_at=now,
             )
-            await self._state_store.save_state(new_state)
+            await self._state_store.save_state(new_state, token=token)
 
             # 未処理の保存がまだ残っているか、Consolidator に次ページがある場合は、フォローアップを要求
             if remaining_count >= self._save_count_threshold or consolidator_result.has_more:
@@ -832,7 +840,8 @@ class LifecycleManager:
                         cleanup_lock_owner=token,  # finally で release_cleanup_lock を呼ぶまで保持
                         cleanup_lock_touched_at=state.cleanup_lock_touched_at,
                         updated_at=datetime.now(timezone.utc),
-                    )
+                    ),
+                    token=token,
                 )
             except Exception:
                 logger.exception("Failed to reset save_count after cleanup failure.")

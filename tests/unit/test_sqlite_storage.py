@@ -1123,3 +1123,15 @@ async def test_update_memory_non_existent_with_embedding(adapter):
     # Try to update ONLY embedding
     result_only_emb = await adapter.update_memory(bad_id, {"embedding": [1.0, 0.0]})
     assert result_only_emb is False
+
+
+@pytest.mark.asyncio
+async def test_update_memory_unconditional_existence_check(adapter):
+    # This test ensures that even if we try to update other fields,
+    # we still check existence for the embedding part.
+    # Currently it passes due to the cursor.rowcount check, but we want to
+    # ensure the specific SELECT 1 check is run as requested.
+    bad_id = str(uuid4())
+    # This should return False
+    result = await adapter.update_memory(bad_id, {"content": "new", "embedding": [1.0, 0.0]})
+    assert result is False

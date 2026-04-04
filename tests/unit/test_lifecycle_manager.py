@@ -745,6 +745,41 @@ class TestSQLiteLifecycleStateStore:
         finally:
             os.unlink(db_path)
 
+    @pytest.mark.asyncio
+    async def test_save_state_requires_correct_token(self, tmp_path):
+        """正しいトークンがないと save_state が失敗することを確認。"""
+        from context_store.lifecycle.manager import SQLiteLifecycleStateStore, LifecycleState
+        from datetime import datetime, timezone
+
+        db_path = str(tmp_path / "test_cas.db")
+        store = SQLiteLifecycleStateStore(db_path)
+
+        token = "owner-token"
+        await store.acquire_cleanup_lock(token)
+
+        # Try to save state with wrong token
+        wrong_token = "wrong-token"
+        state = await store.load_state()
+        new_state = LifecycleState(
+            save_count=10,
+            last_cleanup_at=state.last_cleanup_at,
+            last_cleanup_cursor_at=state.last_cleanup_cursor_at,
+            last_cleanup_id=state.last_cleanup_id,
+            cleanup_lock_owner=state.cleanup_lock_owner,
+            cleanup_lock_touched_at=state.cleanup_lock_touched_at,
+            updated_at=datetime.now(timezone.utc),
+        )
+
+        # 正しく False が返されることを確認
+        result = await store.save_state(new_state, token=wrong_token)
+        assert result is False
+
+        # 正しいトークンでの保存
+        result = await store.save_state(new_state, token=token)
+        assert result is True
+        state_after = await store.load_state()
+        assert state_after.save_count == 10
+
 
 @pytest.mark.asyncio
 async def test_spawn_background_task_no_leak():

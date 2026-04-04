@@ -508,9 +508,9 @@ class TestMonitoringLogs:
 
         # ログメッセージが出力されていること
         log_messages = [r.getMessage() for r in records]
-        assert any("Self-healing" in msg for msg in log_messages), (
-            f"Self-healing ログが見つかりません。実際のログ: {log_messages}"
-        )
+        assert any(
+            "Self-healing" in msg for msg in log_messages
+        ), f"Self-healing ログが見つかりません。実際のログ: {log_messages}"
 
     async def test_self_healing_log_contains_memory_id(self):
         """自己修復ログにメモリIDが含まれること。"""
@@ -534,9 +534,9 @@ class TestMonitoringLogs:
             await consolidator.run()
 
         log_messages = " ".join(r.getMessage() for r in records)
-        assert str(dup_id) in log_messages, (
-            f"メモリID {dup_id} がログに含まれていません。ログ: {log_messages}"
-        )
+        assert (
+            str(dup_id) in log_messages
+        ), f"メモリID {dup_id} がログに含まれていません。ログ: {log_messages}"
 
     async def test_self_healing_log_contains_similarity_score(self):
         """自己修復ログに類似度スコアが含まれること。"""
@@ -557,9 +557,9 @@ class TestMonitoringLogs:
             await consolidator.run()
 
         log_messages = " ".join(r.getMessage() for r in records)
-        assert str(score) in log_messages or f"{score:.2f}" in log_messages, (
-            f"スコア {score} がログに含まれていません。ログ: {log_messages}"
-        )
+        assert (
+            str(score) in log_messages or f"{score:.2f}" in log_messages
+        ), f"スコア {score} がログに含まれていません。ログ: {log_messages}"
 
     async def test_no_log_when_no_self_healing(self):
         """自己修復が発動しない場合はログが出力されないこと。"""

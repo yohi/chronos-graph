@@ -617,13 +617,12 @@ class SQLiteStorageAdapter:
                         return False
 
                 if embedding is not None:
-                    # Only check existence if we didn't just update the record
-                    if not set_parts:
-                        async with conn.execute(
-                            "SELECT 1 FROM memories WHERE id = ?", (memory_id,)
-                        ) as cursor:
-                            if not await cursor.fetchone():
-                                return False
+                    # Unconditionally check if memory exists before inserting embedding to avoid FK violations
+                    async with conn.execute(
+                        "SELECT 1 FROM memories WHERE id = ?", (memory_id,)
+                    ) as cursor:
+                        if not await cursor.fetchone():
+                            return False
 
                     # Validate dimension
                     dim = await self.get_vector_dimension()

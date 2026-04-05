@@ -261,7 +261,7 @@ class URLAdapter:
     """
 
     def __init__(self, settings: Settings | None = None) -> None:
-        self.settings = settings
+        self.settings = settings or Settings()
 
     def _is_restricted_ip(self, ip_str: str) -> bool:
         """IPアドレスが制限されたアドレスかどうかを判定する。

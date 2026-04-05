@@ -1,9 +1,11 @@
+from typing import Any
+
 from context_store.config import Settings
 
 
-def make_settings(**kwargs) -> Settings:
+def make_settings(**kwargs: Any) -> Settings:
     """Settings オブジェクトを作成するヘルパー。"""
-    defaults: dict = {
+    defaults: dict[str, Any] = {
         "storage_backend": "sqlite",
         "graph_enabled": True,
         "cache_backend": "inmemory",
@@ -39,4 +41,4 @@ def make_settings(**kwargs) -> Settings:
         raise ValueError(f"Unknown settings overrides: {sorted(list(unknown))}")
 
     defaults.update(kwargs)
-    return Settings(_env_file=None, **defaults)
+    return Settings(_env_file=None, **defaults)  # type: ignore[call-arg]

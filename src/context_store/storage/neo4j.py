@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pydantic import SecretStr
 
 from context_store.models.graph import Edge, GraphResult
 
@@ -32,11 +35,16 @@ class Neo4jGraphAdapter:
     # ------------------------------------------------------------------
 
     @classmethod
-    async def create(cls, uri: str, user: str, password: str) -> "Neo4jGraphAdapter":
+    async def create(cls, uri: str, user: str, password: str | SecretStr) -> "Neo4jGraphAdapter":
         """Create a new adapter by connecting to Neo4j."""
         import neo4j
 
-        driver = neo4j.AsyncGraphDatabase.driver(uri, auth=(user, password))
+        from pydantic import SecretStr
+
+        actual_password = (
+            password.get_secret_value() if isinstance(password, SecretStr) else password
+        )
+        driver = neo4j.AsyncGraphDatabase.driver(uri, auth=(user, actual_password))
         return cls(driver)
 
     # ------------------------------------------------------------------

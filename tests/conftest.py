@@ -5,15 +5,22 @@
 
 from __future__ import annotations
 
-import pytest
 import random
+from typing import TYPE_CHECKING
+
+import pytest
+
+if TYPE_CHECKING:
+    from context_store.embedding.protocols import EmbeddingProvider
 
 
-def make_mock_embedding_provider(dim: int = 16):
+def make_mock_embedding_provider(dim: int = 16) -> EmbeddingProvider:
     """固定ベクトルを返すモック EmbeddingProvider を作成する。"""
 
     class MockEmbeddingProvider:
-        dimension = dim
+        @property
+        def dimension(self) -> int:
+            return dim
 
         async def embed(self, text: str) -> list[float]:
             # テキストのハッシュに基づいた決定論的なベクトルを返す
@@ -23,7 +30,10 @@ def make_mock_embedding_provider(dim: int = 16):
         async def embed_batch(self, texts: list[str]) -> list[list[float]]:
             return [await self.embed(t) for t in texts]
 
-    return MockEmbeddingProvider()
+        async def close(self) -> None:
+            pass
+
+    return MockEmbeddingProvider()  # type: ignore[return-value]
 
 
 @pytest.fixture(scope="session")

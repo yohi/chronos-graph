@@ -1,6 +1,6 @@
 # Task 5: Update Tests (Assertions & Mocking) Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+プランをタスクごとに実行してください。
 
 **Goal:** Update unit tests to improve assertions and mocking reliability.
 

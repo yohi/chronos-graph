@@ -139,6 +139,7 @@ class TestTraverse:
         assert "child1" in node_ids
         assert "child2" in node_ids
         assert "grandchild" not in node_ids
+        assert result.traversal_depth == 1
 
     async def test_traverse_depth_2(self, adapter: SQLiteGraphAdapter) -> None:
         """depth=2 で孫ノードまで返される."""
@@ -150,6 +151,7 @@ class TestTraverse:
         result = await adapter.traverse(["root"], ["REFERENCES"], depth=2)
         node_ids = {n["id"] for n in result.nodes}
         assert "grandchild" in node_ids
+        assert result.traversal_depth == 2
 
     async def test_traverse_depth_3(self, adapter: SQLiteGraphAdapter) -> None:
         """depth=3 でさらに深いノードまで返される."""
@@ -163,6 +165,7 @@ class TestTraverse:
         result = await adapter.traverse(["a"], ["TEMPORAL_NEXT"], depth=3)
         node_ids = {n["id"] for n in result.nodes}
         assert "d" in node_ids
+        assert result.traversal_depth == 3
 
     async def test_traverse_empty_seed(self, adapter: SQLiteGraphAdapter) -> None:
         """空のシードリストは空結果を返す."""
@@ -259,12 +262,11 @@ class TestDeleteNode:
         await adapter.create_edge("p", "q", "TEMPORAL_NEXT", {})
         await adapter.delete_node("p")
 
-        async with adapter._connect() as conn:
-            async with conn.execute(
-                "SELECT COUNT(*) FROM memory_edges WHERE from_id = ? OR to_id = ?", ("p", "p")
-            ) as cursor:
-                count = (await cursor.fetchone())[0]
-        assert count == 0
+        # 公開 API である traverse を使用してエッジが削除されたことを確認する
+        # p が削除されたので、q からの探索でも p とのエッジは見つからないはず
+        result = await adapter.traverse(["q"], [], depth=1)
+        assert len(result.edges) == 0
+        assert "p" not in {n["id"] for n in result.nodes}
 
     async def test_delete_nonexistent_node(self, adapter: SQLiteGraphAdapter) -> None:
         """存在しないノードの削除でも例外が発生しない."""
@@ -326,6 +328,7 @@ class TestTimeout:
         assert isinstance(result, GraphResult)
         assert result.partial is True
         assert result.timeout is True
+        assert result.traversal_depth == 0
         # In this specific test, because we sleep BEFORE calling the actual traversal,
         # the result will be empty.
         assert len(result.nodes) == 0
@@ -367,5 +370,6 @@ class TestTimeout:
         # Verify interrupt was called
         assert interrupt_called is True
         assert result.timeout is True
+        assert result.traversal_depth == 0
 
         await adp.dispose()

@@ -1,14 +1,31 @@
 """Purger のユニットテスト。"""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
-
 from context_store.lifecycle.purger import Purger, PurgerResult
 from context_store.models.memory import Memory, MemoryType, SourceType
 from context_store.storage.protocols import MemoryFilters
+
+
+class TestPurgerValidation:
+    """Purger のバリデーションテスト。"""
+
+    def test_init_raises_on_negative_retention(self):
+        """初期化時に負の retention_days が渡された場合に ValueError を投げること。"""
+        storage = AsyncMock()
+        with pytest.raises(ValueError, match="retention_days must be non-negative"):
+            Purger(storage=storage, graph=None, retention_days=-1)
+
+    async def test_run_raises_on_negative_retention(self):
+        """run 実行時に負の retention_days が渡された場合に ValueError を投げること。"""
+        storage = AsyncMock()
+        purger = Purger(storage=storage, graph=None, retention_days=90)
+        with pytest.raises(ValueError, match="retention_days must be non-negative"):
+            await purger.run(retention_days=-1)
 
 
 def _make_archived_memory(
@@ -170,7 +187,7 @@ class TestPurgerBoundaryConditions:
     """Purger の境界値テスト。"""
 
     async def test_exactly_at_retention_boundary_is_not_purged(self):
-        """ちょうど retention_days 秒後の記憶は削除されないこと。"""
+        """ちょうど retention_days 日後の記憶は削除されないこと。"""
         storage = AsyncMock()
         graph = AsyncMock()
 

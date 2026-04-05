@@ -3,7 +3,7 @@
 LLMを使用せず、キーワードマッチと構文パターンで分類する。
 - EPISODIC: 「〜した」「〜を決めた」、タイムスタンプ付き、会話ログ由来
 - SEMANTIC: 「〜とは」「〜の仕様は」、ドキュメント/URL由来
-- PROCEDURAL: 「〜する方法」「手順：」、コマンド列、ステップ構造
+- PROCEDURAL: 「〜する方法」「手順: 」、コマンド列、ステップ構造
 - フォールバック: EPISODIC + importance_score に 0.5倍ペナルティ
 """
 
@@ -26,7 +26,7 @@ FALLBACK_PENALTY = 0.5
 # ===========================================================================
 # 分類ルール: EPISODIC パターン
 # ===========================================================================
-# 過去形・完了形の動詞（日本語）
+# 過去形・完了形の動詞 (日本語)
 _EPISODIC_VERB_PATTERNS = [
     r"した[。、。\s」\)]",  # 〜した
     r"しました",
@@ -81,7 +81,7 @@ _SEMANTIC_PATTERNS = [
     r"is a type of",
     r"is an abbreviation",
     r"stands for",
-    r"# ",  # Markdown 見出し（ドキュメント）
+    r"# ",  # Markdown 見出し(ドキュメント)
     r"## ",
 ]
 
@@ -93,13 +93,13 @@ _SEMANTIC_RE = re.compile("|".join(_SEMANTIC_PATTERNS))
 _PROCEDURAL_PATTERNS = [
     r"する方法",  # 〜する方法
     r"のやり方",
-    r"手順",  # 手順：
+    r"手順",  # 手順:
     r"ステップ",  # ステップ構造
     r"step \d+",  # Step 1, Step 2
     r"^\d+\. ",  # 番号付きリスト (1. 〜)
     r"^\$ ",  # シェルコマンド
     r"^> ",  # コマンドプロンプト
-    r"```",  # コードブロック（コマンド例）
+    r"```",  # コードブロック(コマンド例)
     r"how to",
     r"instructions",
     r"procedure",
@@ -107,7 +107,7 @@ _PROCEDURAL_PATTERNS = [
 
 _PROCEDURAL_RE = re.compile("|".join(_PROCEDURAL_PATTERNS), re.IGNORECASE | re.MULTILINE)
 
-# コマンド列の検出（複数のコマンドが連続する）
+# コマンド列の検出(複数のコマンドが連続する)
 _COMMAND_LINE_RE = re.compile(
     r"(^\$\s+\S+|^>\s+\S+|^\d+\.\s+\S+)",
     re.MULTILINE,
@@ -181,7 +181,7 @@ class Classifier:
         """RawContent を分析して MemoryType に分類する。
 
         Returns:
-            ClassificationResult: 分類結果（memory_type, importance_score, is_fallback）
+            ClassificationResult: 分類結果(memory_type, importance_score, is_fallback)
         """
         content = raw.content
         source_type = raw.source_type
@@ -197,7 +197,7 @@ class Classifier:
         if max_score < 1.0:
             logger.warning(
                 "分類フォールバック: コンテンツが既定のパターンに合致しません。"
-                " EPISODIC にフォールバックします（importance_score にペナルティ適用）。"
+                " EPISODIC にフォールバックします(importance_score にペナルティ適用)。"
                 " content_preview=%r",
                 content[:50],
             )

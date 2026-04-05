@@ -162,12 +162,23 @@ async def create_storage(
 
         return storage, graph_adp, cache_adp
     except Exception:
+        # 各リソースの dispose() を個別に try/except で囲むことで、
+        # 途中で例外が発生しても全リソースの解放を試みる。
         if cache_adp:
-            await cache_adp.dispose()
+            try:
+                await cache_adp.dispose()
+            except Exception:
+                logger.exception("Failed to dispose cache_adp")
         if graph_adp:
-            await graph_adp.dispose()
+            try:
+                await graph_adp.dispose()
+            except Exception:
+                logger.exception("Failed to dispose graph_adp")
         if storage:
-            await storage.dispose()
+            try:
+                await storage.dispose()
+            except Exception:
+                logger.exception("Failed to dispose storage")
         raise
 
 

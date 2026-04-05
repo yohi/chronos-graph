@@ -4,6 +4,7 @@ FastMCP を使用して 7 ツールと 2 リソースを公開する。
 Orchestrator は初回ツール呼び出し時に遅延初期化する（MCPハンドシェイク時は
 重いモジュールをロードしない）。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -14,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 from mcp.server.fastmcp import FastMCP
 
 if TYPE_CHECKING:
+    from context_store.config import Settings
     from context_store.orchestrator import Orchestrator
 
 logger = logging.getLogger(__name__)
@@ -40,8 +42,9 @@ class ChronosServer:
 
     def __init__(self) -> None:
         self._orchestrator: "Orchestrator | None" = None
-        self._init_lock: asyncio.Lock | None = None
+        self._init_lock: asyncio.Lock = asyncio.Lock()
         self._initialized: bool = False
+        self._settings: "Settings | None" = None
         # URLフェッチ用 asyncio.Semaphore はプロセスレベルの制限です。
         # MCPサーバーが複数プロセスで起動された場合、この Semaphore はプロセス単位
         # での制限となり、システム全体の真の制限にはなりません。
@@ -52,8 +55,8 @@ class ChronosServer:
         from context_store.config import Settings
         from context_store.orchestrator import create_orchestrator
 
-        settings = Settings()
-        self._orchestrator = await create_orchestrator(settings)
+        self._settings = Settings()
+        self._orchestrator = await create_orchestrator(self._settings)
 
     async def _ensure_initialized(self) -> None:
         """Orchestrator を遅延初期化する（二重初期化を防ぐ）。
@@ -61,21 +64,23 @@ class ChronosServer:
         asyncio.Lock を使用して複数の同時非同期呼び出し時でも
         デッドロック・重複初期化を防ぐ。
         """
-        if self._init_lock is None:
-            self._init_lock = asyncio.Lock()
         async with self._init_lock:
             if not self._initialized:
                 await self._do_initialize()
                 if self._url_semaphore is None:
-                    from context_store.config import Settings
-
-                    settings = Settings()
-                    self._url_semaphore = asyncio.Semaphore(settings.url_fetch_concurrency)
+                    # 指摘に基づき、Orchestrator が提供する公開プロパティを再利用する
+                    assert self._orchestrator is not None
+                    self._url_semaphore = asyncio.Semaphore(
+                        self._orchestrator.url_fetch_concurrency
+                    )
                     logger.warning(
                         "現在のURLフェッチ制限はプロセススコープです。"
                         "マルチプロセス実行時は制限を超過する可能性があります。"
                     )
                 self._initialized = True
+                # ライフサイクルマネージャーを開始
+                assert self._orchestrator is not None
+                await self._orchestrator.start_lifecycle()
 
     # ---------------------------------------------------------------------------
     # ツールハンドラ
@@ -109,6 +114,9 @@ class ChronosServer:
         try:
             source_type = SourceType(source)
         except ValueError:
+            logger.warning(
+                "無効なソース種別が指定されました: %r。'conversation' を使用します。", source
+            )
             source_type = SourceType.CONVERSATION
 
         effective_tags: list[str] = tags if tags is not None else []
@@ -281,6 +289,14 @@ class ChronosServer:
         result = await self._orchestrator.stats(project=project)
         return json.dumps(result, default=str)
 
+    async def memory_list_projects(self) -> str:
+        """プロジェクト一覧を返す。"""
+        await self._ensure_initialized()
+        assert self._orchestrator is not None
+
+        projects = await self._orchestrator.list_projects()
+        return json.dumps({"projects": projects})
+
 
 # ---------------------------------------------------------------------------
 # グローバルサーバーインスタンス
@@ -436,8 +452,7 @@ async def stats_resource() -> str:
 @mcp.resource("memory://projects")
 async def projects_resource() -> str:
     """プロジェクト一覧リソース。"""
-    result = await _server.memory_stats(project=None)
-    return result
+    return await _server.memory_list_projects()
 
 
 __all__ = ["ChronosServer", "mcp"]

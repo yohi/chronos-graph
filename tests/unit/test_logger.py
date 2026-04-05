@@ -2,7 +2,6 @@ import json
 from datetime import datetime
 from uuid import uuid4
 
-
 from context_store.logger import clear_context, get_logger, set_context
 
 

@@ -3,253 +3,301 @@
 スライディングウィンドウ方式と HNSW インデックスを活用して
 O(M log N) で重複を検出・アーカイブする。
 """
+
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import Any, Callable, Coroutine
 
-from context_store.logger import get_logger
+from context_store.models.memory import Memory, ScoredMemory
 from context_store.storage.protocols import GraphAdapter, MemoryFilters, StorageAdapter
 
-if TYPE_CHECKING:
-    from context_store.config import Settings
-    from context_store.embedding.protocols import EmbeddingProvider
-    from context_store.models.memory import Memory
+logger = logging.getLogger(__name__)
 
-logger = get_logger(__name__)
-
-# 自己修復の類似度閾値（デフォルト）
-_DEFAULT_DEDUP_THRESHOLD = 0.90
-# 通常統合候補の類似度閾値（デフォルト）
-_DEFAULT_CONSOLIDATION_THRESHOLD = 0.85
-# vector_search の近傍数
-_VECTOR_SEARCH_TOP_K = 5
-# 1サイクルで処理する記憶数の上限
+# 一度に処理する最大記憶数
 CONSOLIDATION_BATCH_SIZE = 100
 
 
 @dataclass
 class ConsolidatorResult:
-    """Consolidator の実行結果。
-
-    Attributes:
-        consolidated_count: アーカイブした重複数。
-        checked_count: チェックした記憶数。
-    """
+    """統合処理の結果。"""
 
     consolidated_count: int
     checked_count: int
+    last_processed_at: datetime | None
+    last_processed_id: str | None
+    has_more: bool = False
 
 
 class Consolidator:
-    """重複記憶を統合・自己修復するクラス。
-
-    スライディングウィンドウ（last_cleanup_at 以降の記憶）に対して
-    HNSW インデックスを利用した近似近傍探索を行い、
-    類似度 >= dedup_threshold の記憶を事後的にアーカイブする（自己修復）。
-    類似度 0.85 <= score < 0.90 は通常統合候補として処理する。
-
-    Args:
-        storage: ストレージアダプター。
-        graph: グラフアダプター。None の場合は SUPERSEDES エッジ作成をスキップ。
-        embedding_provider: 埋め込みプロバイダー。None の場合は埋め込み再計算をスキップ。
-        settings: アプリ設定。None の場合はデフォルト閾値を使用。
-    """
+    """重複記憶を統合・アーカイブするクラス。"""
 
     def __init__(
         self,
         storage: StorageAdapter,
         graph: GraphAdapter | None = None,
-        embedding_provider: "EmbeddingProvider | None" = None,
-        settings: "Settings | None" = None,
+        embedding_provider: Any | None = None,
+        dedup_threshold: float = 0.90,
+        consolidation_threshold: float = 0.85,
     ) -> None:
         self._storage = storage
         self._graph = graph
         self._embedding_provider = embedding_provider
-        if settings is not None:
-            self._dedup_threshold = settings.dedup_threshold
-            self._consolidation_threshold = settings.consolidation_threshold
-        else:
-            self._dedup_threshold = _DEFAULT_DEDUP_THRESHOLD
-            self._consolidation_threshold = _DEFAULT_CONSOLIDATION_THRESHOLD
+        self._dedup_threshold = dedup_threshold
+        self._consolidation_threshold = consolidation_threshold
 
     async def run(
         self,
         last_cleanup_at: datetime | None = None,
+        last_cleanup_id: str | None = None,
         batch_size: int = CONSOLIDATION_BATCH_SIZE,
+        heartbeat_fn: Callable[[], Coroutine[Any, Any, None]] | None = None,
+        dry_run: bool = False,
+        simulated_archived_ids: set[str] | None = None,
+        now: datetime | None = None,
     ) -> ConsolidatorResult:
-        """スライディングウィンドウ内の記憶を走査して重複を統合する。
-
-        アルゴリズム:
-        1. last_cleanup_at 以降に作成された記憶を取得（スライディングウィンドウ）。
-           last_cleanup_at=None なら全記憶対象（初回実行）。
-        2. batch_size 件ずつバッチ処理。
-        3. 各記憶の embedding に対して vector_search(top_k=5) で近傍を検索。
-        4. 自身を除いて similarity >= dedup_threshold の記憶がある場合
-           → 古い方をアーカイブして SUPERSEDES エッジを作成（自己修復）。
-        5. consolidation_threshold <= similarity < dedup_threshold の場合も処理
-           （通常統合候補）だが、自己修復候補を優先。
-        6. ログ出力: 'Self-healing: archived duplicate memory {id} due to similarity {score}'
+        """重複記憶を統合するクリーンアップジョブ。
 
         Args:
             last_cleanup_at: この時刻以降に作成された記憶を対象とする。
                 None の場合は全記憶が対象。
+            last_cleanup_id: 最後に処理した記憶の ID。
             batch_size: 1サイクルで処理する最大記憶数。
+            heartbeat_fn: ハートビート用コールバック関数。
+            dry_run: True の場合は更新せず対象件数のみをカウント。
+            simulated_archived_ids: dry_run 時にアーカイブされたとみなす ID のセット。
+            now: 基準時刻。None の場合は現在時刻を使用。
 
         Returns:
             処理結果を格納した ConsolidatorResult。
         """
-        # スライディングウィンドウ: last_cleanup_at 以降の記憶を取得
-        filters = self._build_filters(last_cleanup_at)
-        all_memories = await self._storage.list_by_filter(filters)
-
-        # Python 側で last_cleanup_at によるフィルタリング
-        # （MemoryFilters に created_after フィールドがないため）
-        if last_cleanup_at is not None:
-            all_memories = [m for m in all_memories if m.created_at >= last_cleanup_at]
-
-        # batch_size で上限を設ける（メモリ枯渇防止）
-        window = all_memories[:batch_size]
+        if now is None:
+            now = datetime.now(timezone.utc)
 
         consolidated_count = 0
-        # 処理済み（アーカイブ済み）記憶 ID を追跡してスキップ
+        checked_count = 0
         archived_in_this_run: set[str] = set()
+        affected_memory_ids: set[str] = set()
 
-        for memory in window:
-            memory_id = str(memory.id)
+        current_last_at = last_cleanup_at
+        current_last_id = last_cleanup_id
 
-            # 既にこの実行でアーカイブされた記憶はスキップ
-            if memory_id in archived_in_this_run:
-                continue
+        while True:
+            # 安定したページングのために (created_at, id) ASC で取得
+            filters = self._build_filters(current_last_at)
+            filters.id_after = current_last_id
+            filters.limit = batch_size
+            filters.order_by = "created_at ASC, id ASC"
 
-            # embedding が空の場合は vector_search をスキップ
-            if not memory.embedding:
-                continue
+            memories = await self._storage.list_by_filter(filters)
+            if not memories:
+                break
 
-            # HNSW 経由の近似近傍探索（O(log N) per query）
-            scored_neighbors = await self._storage.vector_search(
-                memory.embedding, top_k=_VECTOR_SEARCH_TOP_K
-            )
+            for memory in memories:
+                if heartbeat_fn:
+                    await heartbeat_fn()
 
-            # 自身を除外し、類似度でフィルタリング
-            self_healing_candidates = []  # score >= dedup_threshold
-            regular_candidates = []       # consolidation_threshold <= score < dedup_threshold
-
-            for scored in scored_neighbors:
-                neighbor_id = str(scored.memory.id)
-                if neighbor_id == memory_id:
+                memory_id = str(memory.id)
+                # すでに統合対象になっている場合、またはシミュレート済みセットに含まれる場合はスキップ
+                if memory_id in archived_in_this_run:
                     continue
-                if neighbor_id in archived_in_this_run:
-                    continue
-                # アーカイブ済みの記憶はスキップ
-                if scored.memory.archived_at is not None:
+                if simulated_archived_ids is not None and memory_id in simulated_archived_ids:
                     continue
 
-                if scored.score >= self._dedup_threshold:
-                    self_healing_candidates.append(scored)
-                elif scored.score >= self._consolidation_threshold:
-                    regular_candidates.append(scored)
+                checked_count += 1
 
-            # 自己修復候補を優先して処理
-            for scored in self_healing_candidates:
-                older, newer = self._determine_order(memory, scored.memory)
-                older_id = str(older.id)
-
-                if older_id in archived_in_this_run:
+                # 類似記憶を検索
+                if not memory.embedding:
                     continue
 
-                await self._archive_memory(older_id)
-                archived_in_this_run.add(older_id)
-                consolidated_count += 1
-
-                # SUPERSEDES エッジを作成
-                if self._graph is not None:
-                    newer_id = str(newer.id)
-                    await self._graph.create_edge(
-                        newer_id,
-                        older_id,
-                        "SUPERSEDES",
-                        {"similarity": scored.score, "archived_at": datetime.now(timezone.utc)},
-                    )
-
-                logger.info(
-                    "Self-healing: archived duplicate memory %s due to similarity %s",
-                    older_id,
-                    scored.score,
+                candidates = await self._storage.vector_search(
+                    embedding=memory.embedding,
+                    top_k=5,
                 )
 
-            # 通常統合候補を処理（0.85 <= score < 0.90）
-            for scored in regular_candidates:
-                older, newer = self._determine_order(memory, scored.memory)
-                older_id = str(older.id)
+                # 自分自身を除外し、閾値以上の候補を抽出
+                self_healing_candidates = []
+                regular_candidates = []
 
-                if older_id in archived_in_this_run:
+                for scored in candidates:
+                    cand_id = str(scored.memory.id)
+                    # 自分自身、既にアーカイブ済み (物理・シミュレート双方) は除外
+                    if cand_id == memory_id or cand_id in archived_in_this_run:
+                        continue
+                    if simulated_archived_ids is not None and cand_id in simulated_archived_ids:
+                        continue
+
+                    # 異なるプロジェクトの記憶は統合しない
+                    if scored.memory.project != memory.project:
+                        continue
+
+                    if scored.score >= self._dedup_threshold:
+                        self_healing_candidates.append(scored)
+                    elif scored.score >= self._consolidation_threshold:
+                        regular_candidates.append(scored)
+
+                # 自己修復候補を優先して処理
+                for scored in self_healing_candidates:
+                    success, newer_id = await self._process_candidate(
+                        memory, scored, archived_in_this_run, "Self-healing", now, dry_run=dry_run
+                    )
+                    if success:
+                        consolidated_count += 1
+                        if newer_id:
+                            affected_memory_ids.add(newer_id)
+                        # dry_run 時に外部セットも更新 (常に older = scored.memory をアーカイブ)
+                        if dry_run and simulated_archived_ids is not None:
+                            simulated_archived_ids.add(str(scored.memory.id))
+
+                    # ベース側がアーカイブされた場合はこの記憶の処理を中断
+                    if memory_id in archived_in_this_run:
+                        break
+
+                # ベース側がアーカイブ済みならスキップ
+                if memory_id in archived_in_this_run:
                     continue
 
-                await self._archive_memory(older_id)
-                archived_in_this_run.add(older_id)
-                consolidated_count += 1
-
-                if self._graph is not None:
-                    newer_id = str(newer.id)
-                    await self._graph.create_edge(
-                        newer_id,
-                        older_id,
-                        "SUPERSEDES",
-                        {"similarity": scored.score, "archived_at": datetime.now(timezone.utc)},
+                # 通常統合候補を処理(0.85 <= score < 0.90)
+                for scored in regular_candidates:
+                    success, newer_id = await self._process_candidate(
+                        memory, scored, archived_in_this_run, "Consolidation", now, dry_run=dry_run
                     )
+                    if success:
+                        consolidated_count += 1
+                        if newer_id:
+                            affected_memory_ids.add(newer_id)
+                        # dry_run 時に外部セットも更新 (常に older = scored.memory をアーカイブ)
+                        if dry_run and simulated_archived_ids is not None:
+                            simulated_archived_ids.add(str(scored.memory.id))
 
-                logger.info(
-                    "Consolidation: archived similar memory %s due to similarity %s",
-                    older_id,
-                    scored.score,
-                )
+                    if memory_id in archived_in_this_run:
+                        break
 
-        # 埋め込み再計算（EmbeddingProvider が提供されている場合のみ）
-        # 現在は実装スコープ外（将来の拡張ポイント）
+            # ページング情報の更新
+            current_last_at = memories[-1].created_at
+            current_last_id = str(memories[-1].id)
+
+            # dry_run でない場合は 1 バッチで終了する
+            if not dry_run:
+                break
+            if len(memories) < batch_size:
+                break
+
+        # 影響を受けた記憶(生き残った方)の埋め込みを再計算(任意)
+        if not dry_run and self._embedding_provider and affected_memory_ids:
+            for mid in affected_memory_ids:
+                if mid in archived_in_this_run:
+                    continue
+                await self._recompute_embedding(mid)
 
         return ConsolidatorResult(
             consolidated_count=consolidated_count,
-            checked_count=len(window),
+            checked_count=checked_count,
+            last_processed_at=current_last_at if not dry_run else None,
+            last_processed_id=current_last_id if not dry_run else None,
+            has_more=(len(memories) == batch_size and not dry_run),
         )
 
     def _build_filters(self, last_cleanup_at: datetime | None) -> MemoryFilters:
-        """スライディングウィンドウのフィルタを構築する。
+        """検索フィルタを構築する。"""
+        return MemoryFilters(
+            created_after=last_cleanup_at,
+            archived=None,
+        )
 
-        Args:
-            last_cleanup_at: この時刻以降に作成された記憶を対象とする。
-                None の場合は全記憶が対象。
-
-        Returns:
-            MemoryFilters オブジェクト。
-        """
-        # archived=None はアクティブ記憶のみを示す（protocols.py 参照）
-        # last_cleanup_at の期間フィルタは MemoryFilters が対応していないため、
-        # 現状は list_by_filter で全アクティブ記憶を取得後、Python 側でフィルタリングする。
-        # （将来: MemoryFilters に created_after フィールドを追加してストレージ側でフィルタリング）
-        return MemoryFilters(archived=None)
-
-    @staticmethod
-    def _determine_order(mem_a: "Memory", mem_b: "Memory") -> tuple["Memory", "Memory"]:
-        """2つの記憶のうち古い方と新しい方を返す。
-
-        Args:
-            mem_a: 比較する記憶 A。
-            mem_b: 比較する記憶 B。
+    async def _process_candidate(
+        self,
+        memory: "Memory",
+        scored: "ScoredMemory",
+        archived_in_this_run: set[str],
+        log_prefix: str,
+        now: datetime,
+        dry_run: bool = False,
+    ) -> tuple[bool, str | None]:
+        """統合候補を処理(アーカイブ + エッジ作成)。
 
         Returns:
-            (older, newer) のタプル。created_at が古い方が older。
+            (成功したかどうか, 生き残った側の ID)
         """
-        if mem_a.created_at <= mem_b.created_at:
+        older, newer = self._determine_order(memory, scored.memory)
+        older_id = str(older.id)
+        newer_id = str(newer.id)
+
+        if older_id in archived_in_this_run:
+            return False, None
+
+        if dry_run:
+            archived_in_this_run.add(older_id)
+            return True, newer_id
+
+        # 記憶をアーカイブ
+        success = await self._archive_memory(older_id, now)
+        if not success:
+            return False, None
+
+        archived_in_this_run.add(older_id)
+
+        # SUPERSEDES エッジを作成
+        if self._graph is not None:
+            try:
+                await self._graph.create_edge(
+                    newer_id,
+                    older_id,
+                    "SUPERSEDES",
+                    {"similarity": scored.score, "archived_at": now},
+                )
+            except Exception:
+                logger.exception(
+                    "%s: failed to create SUPERSEDES edge from %s to %s",
+                    log_prefix,
+                    newer_id,
+                    older_id,
+                )
+
+        logger.info(
+            "%s: archived duplicate memory %s (similarity=%.2f), superseding with %s",
+            log_prefix,
+            older_id,
+            scored.score,
+            newer_id,
+        )
+        return True, newer_id
+
+    def _determine_order(self, mem_a: "Memory", mem_b: "Memory") -> tuple["Memory", "Memory"]:
+        """どちらが古く、どちらが新しいかを決定する。
+
+        created_at が古い方をアーカイブ対象(older)とする。
+        同時刻の場合は ID の辞書順で決定。
+        """
+        if (mem_a.created_at, str(mem_a.id)) <= (mem_b.created_at, str(mem_b.id)):
             return mem_a, mem_b
         return mem_b, mem_a
 
-    async def _archive_memory(self, memory_id: str) -> None:
+    async def _archive_memory(self, memory_id: str, now: datetime) -> bool:
         """記憶をアーカイブ状態に更新する。
 
         Args:
             memory_id: アーカイブする記憶の ID。
+            now: アーカイブ日時として使用するタイムスタンプ。
+
+        Returns:
+            成功した場合は True。
         """
-        now = datetime.now(timezone.utc)
-        await self._storage.update_memory(memory_id, {"archived_at": now})
+        return await self._storage.update_memory(memory_id, {"archived_at": now})
+
+    async def _recompute_embedding(self, memory_id: str) -> None:
+        """必要に応じて記憶の埋め込みを再計算する。"""
+        if not self._embedding_provider:
+            return
+
+        try:
+            memory = await self._storage.get_memory(memory_id)
+            if not memory:
+                return
+
+            new_embedding = await self._embedding_provider.embed(memory.content)
+            await self._storage.update_memory(memory_id, {"embedding": new_embedding})
+        except Exception:
+            logger.exception("Failed to recompute embedding for memory %s", memory_id)

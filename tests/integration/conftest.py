@@ -8,15 +8,8 @@ from __future__ import annotations
 
 import os
 
+import asyncpg
 import pytest
-
-try:
-    import asyncpg  # type: ignore  # noqa: F401
-    _ASYNCPG_AVAILABLE = True
-except ImportError:
-    asyncpg = None  # type: ignore
-    _ASYNCPG_AVAILABLE = False
-
 
 PG_HOST = os.getenv("PG_HOST", "localhost")
 PG_PORT = int(os.getenv("PG_PORT", "5433"))
@@ -28,8 +21,6 @@ PG_PASSWORD = os.getenv("PG_PASSWORD", "dev_password")
 @pytest.fixture
 async def postgres_pool():
     """Function-scoped asyncpg pool connecting to the Docker PostgreSQL."""
-    if asyncpg is None:
-        pytest.skip("asyncpg not installed")
     pool = await asyncpg.create_pool(
         host=PG_HOST,
         port=PG_PORT,

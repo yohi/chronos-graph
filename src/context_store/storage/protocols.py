@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
 from context_store.models.graph import GraphResult
@@ -27,6 +28,27 @@ class MemoryFilters:
     # None = active only, True = archived only, False = both
     archived: bool | None = None
     tags: list[str] = field(default_factory=list)
+    limit: int | None = None
+    order_by: str | None = None
+    session_id: str | None = None
+    created_after: datetime | None = None
+    archived_after: datetime | None = None
+    id_after: str | None = None
+
+
+ALLOWED_SORT_COLUMNS: set[str] = {
+    "id",
+    "memory_type",
+    "source_type",
+    "semantic_relevance",
+    "importance_score",
+    "access_count",
+    "last_accessed_at",
+    "created_at",
+    "updated_at",
+    "archived_at",
+    "project",
+}
 
 
 @runtime_checkable
@@ -39,6 +61,15 @@ class StorageAdapter(Protocol):
 
     async def get_memory(self, memory_id: str) -> Memory | None:
         """Retrieve a memory by ID. Returns None if not found."""
+        ...
+
+    async def get_memories_batch(self, memory_ids: list[str]) -> list[Memory]:
+        """Retrieve multiple memories by ID.
+
+        Returns a list of `Memory` objects containing only found memories.
+        Non-existent memory IDs are omitted from the returned list (i.e., no
+        placeholders or None entries). Callers must handle missing IDs client-side.
+        """
         ...
 
     async def delete_memory(self, memory_id: str) -> bool:
@@ -63,6 +94,25 @@ class StorageAdapter(Protocol):
 
     async def list_by_filter(self, filters: MemoryFilters) -> list[Memory]:
         """List memories matching the given filters."""
+        ...
+
+    async def count_by_filter(self, filters: MemoryFilters) -> int:
+        """Count memories matching the given filters."""
+        ...
+
+    async def list_projects(self) -> list[str]:
+        """List all unique project names present in the storage.
+
+        Returns:
+            A list of project names (excluding None/empty).
+        """
+        ...
+
+    async def increment_memory_access_count(self, memory_id: str) -> bool:
+        """Atomically increment the access count and update last_accessed_at.
+
+        Returns True on success, False if not found.
+        """
         ...
 
     async def get_vector_dimension(self) -> int | None:

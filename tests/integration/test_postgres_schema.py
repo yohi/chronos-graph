@@ -5,8 +5,8 @@ These tests require: docker compose up -d postgres
 They verify the schema was applied correctly.
 """
 
-import pytest
 import asyncpg
+import pytest
 
 from tests.integration.conftest import PG_DB, PG_HOST, PG_PASSWORD, PG_PORT, PG_USER
 

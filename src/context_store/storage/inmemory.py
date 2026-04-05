@@ -60,7 +60,19 @@ class InMemoryCacheAdapter:
     # ------------------------------------------------------------------
 
     async def set(self, key: str, value: Any, ttl: int) -> None:
-        """Store *value* under *key* with a TTL (seconds)."""
+        """Store *value* under *key* with a TTL (seconds).
+
+        Args:
+            key: キャッシュキー。
+            value: 保存する値。
+            ttl: 有効期限（秒）。正の整数である必要があります。
+
+        Raises:
+            ValueError: ttl が 0 以下の場。
+        """
+        if ttl <= 0:
+            raise ValueError(f"TTL must be a positive integer, got {ttl}")
+
         expiry = time.monotonic() + ttl
         async with self._lock:
             self._store[key] = (value, expiry)

@@ -1,5 +1,6 @@
-import pytest
 from uuid import uuid4
+
+import pytest
 from pydantic import ValidationError
 
 from context_store.models.graph import Edge, GraphResult

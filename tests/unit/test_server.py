@@ -2,6 +2,7 @@
 
 Orchestrator をモックし、実際の DB には接続しない。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,21 +26,25 @@ def mock_orchestrator() -> MagicMock:
     orch.search_graph = AsyncMock(return_value={"results": [], "total": 0})
     orch.delete = AsyncMock(return_value=True)
     orch.prune = AsyncMock(return_value=5)
-    orch.stats = AsyncMock(return_value={"active_count": 10, "archived_count": 2, "total_count": 12, "project": None})
+    orch.stats = AsyncMock(
+        return_value={"active_count": 10, "archived_count": 2, "total_count": 12, "project": None}
+    )
     orch.dispose = AsyncMock(return_value=None)
+    orch.start_lifecycle = AsyncMock(return_value=None)
+    orch.url_fetch_concurrency = 3
     return orch
 
 
 @pytest.fixture
 def chronos_server(mock_orchestrator: MagicMock):
-    """ChronosServer インスタンスを返す（初期化済み状態に設定）。"""
+    """ChronosServer インスタンスを返す(初期化済み状態に設定)。"""
     from context_store.server import ChronosServer
 
     server = ChronosServer()
     # テスト用に直接 orchestrator を注入して初期化済み状態にする
     server._orchestrator = mock_orchestrator
     server._initialized = True
-    server._init_lock = asyncio.Lock()
+    # self._init_lock は __init__ で初期化されるようになった
     server._url_semaphore = asyncio.Semaphore(3)
     return server
 
@@ -60,7 +65,10 @@ async def test_ensure_initialized_prevents_double_init():
     async def fake_do_initialize():
         nonlocal call_count
         call_count += 1
-        server._orchestrator = MagicMock()
+        orch = MagicMock()
+        orch.start_lifecycle = AsyncMock()
+        orch.url_fetch_concurrency = 3
+        server._orchestrator = orch
 
     server._do_initialize = fake_do_initialize
     server._url_semaphore = asyncio.Semaphore(3)
@@ -86,7 +94,7 @@ async def test_ensure_initialized_prevents_double_init():
 async def test_memory_save_default_source_is_conversation(
     chronos_server, mock_orchestrator: MagicMock
 ):
-    """source を省略すると "conversation" が使われること（回帰テスト）。"""
+    """source を省略すると "conversation" が使われること (回帰テスト)。"""
     await chronos_server.memory_save(content="test content")
 
     mock_orchestrator.save.assert_called_once()
@@ -102,9 +110,7 @@ async def test_memory_save_default_source_is_conversation(
 
 
 @pytest.mark.asyncio
-async def test_memory_save_explicit_source_manual(
-    chronos_server, mock_orchestrator: MagicMock
-):
+async def test_memory_save_explicit_source_manual(chronos_server, mock_orchestrator: MagicMock):
     """source="manual" を明示した場合は "manual" が保持されること。"""
     await chronos_server.memory_save(content="test content", source="manual")
 
@@ -119,9 +125,7 @@ async def test_memory_save_explicit_source_manual(
 
 
 @pytest.mark.asyncio
-async def test_memory_save_delegates_to_orchestrator(
-    chronos_server, mock_orchestrator: MagicMock
-):
+async def test_memory_save_delegates_to_orchestrator(chronos_server, mock_orchestrator: MagicMock):
     """memory_save が orchestrator.save() に委譲されること。"""
     result = await chronos_server.memory_save(
         content="hello",
@@ -166,9 +170,7 @@ async def test_memory_search_delegates_to_orchestrator(
 
 
 @pytest.mark.asyncio
-async def test_memory_search_passes_parameters(
-    chronos_server, mock_orchestrator: MagicMock
-):
+async def test_memory_search_passes_parameters(chronos_server, mock_orchestrator: MagicMock):
     """memory_search がパラメータを正しく渡すこと。"""
     await chronos_server.memory_search(
         query="test",
@@ -225,9 +227,7 @@ async def test_memory_delete_delegates_to_orchestrator(
 
 
 @pytest.mark.asyncio
-async def test_memory_prune_default_dry_run_true(
-    chronos_server, mock_orchestrator: MagicMock
-):
+async def test_memory_prune_default_dry_run_true(chronos_server, mock_orchestrator: MagicMock):
     """dry_run のデフォルトが True であること。"""
     await chronos_server.memory_prune()
 
@@ -239,9 +239,7 @@ async def test_memory_prune_default_dry_run_true(
 
 
 @pytest.mark.asyncio
-async def test_memory_prune_explicit_dry_run_false(
-    chronos_server, mock_orchestrator: MagicMock
-):
+async def test_memory_prune_explicit_dry_run_false(chronos_server, mock_orchestrator: MagicMock):
     """dry_run=False を明示した場合は False が渡されること。"""
     await chronos_server.memory_prune(dry_run=False)
 
@@ -257,9 +255,7 @@ async def test_memory_prune_explicit_dry_run_false(
 
 
 @pytest.mark.asyncio
-async def test_memory_stats_delegates_to_orchestrator(
-    chronos_server, mock_orchestrator: MagicMock
-):
+async def test_memory_stats_delegates_to_orchestrator(chronos_server, mock_orchestrator: MagicMock):
     """memory_stats が orchestrator.stats() に委譲されること。"""
     result = await chronos_server.memory_stats()
 
@@ -284,10 +280,8 @@ async def test_memory_save_url_delegates_to_orchestrator(
 
 
 @pytest.mark.asyncio
-async def test_memory_save_url_uses_semaphore(
-    chronos_server, mock_orchestrator: MagicMock
-):
-    """URL 取得時にセマフォが使われること（並行呼び出しで制限されること）。"""
+async def test_memory_save_url_uses_semaphore(chronos_server, mock_orchestrator: MagicMock):
+    """URL 取得時にセマフォが使われること(並行呼び出しで制限されること)。"""
     # セマフォのカウントを1にして排他制御を確認
     chronos_server._url_semaphore = asyncio.Semaphore(1)
 
@@ -316,11 +310,32 @@ async def test_memory_save_url_uses_semaphore(
 # ---------------------------------------------------------------------------
 
 
-def test_mcp_instance_has_tools():
-    """FastMCP インスタンスが tools を持つことを確認する。"""
+@pytest.mark.asyncio
+async def test_mcp_registers_core_tools():
+    """FastMCP インスタンスにツールとリソースが正しく登録されていることを確認する。"""
     from context_store import server as server_module
 
-    # mcp インスタンスが存在する
-    assert hasattr(server_module, "mcp")
     mcp = server_module.mcp
     assert mcp is not None
+
+    # ツールの一覧を取得して名前を検証
+    tools = await mcp.list_tools()
+    tool_names = {t.name for t in tools}
+    expected_tools = {
+        "memory_save",
+        "memory_save_url",
+        "memory_search",
+        "memory_search_graph",
+        "memory_delete",
+        "memory_prune",
+        "memory_stats",
+    }
+    for et in expected_tools:
+        assert et in tool_names, f"Tool {et} not registered"
+
+    # リソースの一覧を検証
+    resources = await mcp.list_resources()
+    resource_uris = {str(r.uri) for r in resources}
+    expected_resources = {"memory://stats", "memory://projects"}
+    for er in expected_resources:
+        assert er in resource_uris, f"Resource {er} not registered"

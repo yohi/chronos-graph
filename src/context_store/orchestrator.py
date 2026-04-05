@@ -3,6 +3,7 @@
 Settings から各アダプター・パイプラインを束ね、外部への操作インターフェースを提供する。
 RL 拡張フックを受け取り、None の場合は NoOp 実装を使用する。
 """
+
 from __future__ import annotations
 
 import logging
@@ -18,7 +19,7 @@ if TYPE_CHECKING:
     from context_store.extensions.protocols import ActionLogger, PolicyHook, RewardSignal
     from context_store.ingestion.pipeline import IngestionPipeline, IngestionResult
     from context_store.lifecycle.manager import LifecycleManager
-    from context_store.retrieval.pipeline import RetrievalPipeline
+    from context_store.retrieval.pipeline import RetrievalPipeline, RetrievalResponse
     from context_store.storage.protocols import CacheAdapter, GraphAdapter, StorageAdapter
     from context_store.embedding.protocols import EmbeddingProvider
 
@@ -72,9 +73,15 @@ class Orchestrator:
         self._settings = settings
 
         # RL 拡張フック（None の場合は NoOp）
-        self.action_logger: "ActionLogger" = action_logger if action_logger is not None else NoOpActionLogger()
-        self.reward_signal: "RewardSignal" = reward_signal if reward_signal is not None else NoOpRewardSignal()
-        self.policy_hook: "PolicyHook" = policy_hook if policy_hook is not None else NoOpPolicyHook()
+        self.action_logger: "ActionLogger" = (
+            action_logger if action_logger is not None else NoOpActionLogger()
+        )
+        self.reward_signal: "RewardSignal" = (
+            reward_signal if reward_signal is not None else NoOpRewardSignal()
+        )
+        self.policy_hook: "PolicyHook" = (
+            policy_hook if policy_hook is not None else NoOpPolicyHook()
+        )
 
     async def _check_vector_dimension(self) -> None:
         """ストレージに保存されたベクトル次元と現在の次元を比較する。
@@ -162,7 +169,7 @@ class Orchestrator:
         memory_type: str | None = None,
         top_k: int = 10,
         max_tokens: int | None = None,
-    ) -> dict[str, Any]:
+    ) -> RetrievalResponse:
         """コンテキストを検索する。
 
         PolicyHook.adjust_strategy() を通して検索戦略を調整してから
@@ -189,18 +196,14 @@ class Orchestrator:
             )
 
         base_strategy = SearchStrategy()
-        # TODO: adjusted_strategy は将来 RetrievalPipeline に渡される予定。
-        # 現在 RetrievalPipeline.search() は strategy パラメータを持たないため、
-        # QueryAnalyzer が内部で戦略を決定する設計になっている。
-        # RL 拡張時に RetrievalPipeline.search(strategy=adjusted_strategy) として
-        # 外部から戦略を注入できるよう拡張する。
-        adjusted_strategy = await self.policy_hook.adjust_strategy(query, base_strategy)  # noqa: F841
+        adjusted_strategy = await self.policy_hook.adjust_strategy(query, base_strategy)
 
         result = await self._retrieval_pipeline.search(
             query,
             project=project,
             top_k=top_k,
             max_tokens=max_tokens,
+            strategy=adjusted_strategy,
         )
         return result
 
@@ -210,7 +213,7 @@ class Orchestrator:
         edge_types: list[str] | None = None,
         depth: int = 2,
         project: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> RetrievalResponse:
         """グラフトラバーサル検索を実行する。
 
         Args:
@@ -226,14 +229,18 @@ class Orchestrator:
             RuntimeError: グラフが無効な場合。
         """
         if self._graph is None:
-            raise RuntimeError(
-                "グラフ機能が無効です。graph_enabled=true を設定してください。"
+            raise RuntimeError("グラフ機能が無効です。graph_enabled=true を設定してください。")
+
+        if edge_types or depth != 2:
+            logger.warning(
+                "グラフトラバーサル検索は現在開発中です。edge_types=%r, depth=%d は無視され、"
+                "代わりに標準の検索（top_k=5）が実行されます。",
+                edge_types,
+                depth,
             )
         # TODO(Phase 9): edge_types と depth を RetrievalPipeline の graph_traversal に渡す。
         # 現時点ではベクトル検索でシードノードを特定し、グラフアダプターへの委譲は未実装。
-        search_result = await self._retrieval_pipeline.search(
-            query, project=project, top_k=5
-        )
+        search_result = await self._retrieval_pipeline.search(query, project=project, top_k=5)
         return search_result
 
     async def delete(self, memory_id: str) -> bool:
@@ -249,9 +256,13 @@ class Orchestrator:
             削除成功時は True。
         """
         deleted = await self._storage.delete_memory(memory_id)
-        if self._graph is not None:
-            await self._graph.delete_node(memory_id)
-        await self._cache.invalidate(memory_id)
+        try:
+            if self._graph is not None:
+                await self._graph.delete_node(memory_id)
+        except Exception as e:
+            logger.error("Failed to delete node from graph for memory %s: %s", memory_id, e)
+        finally:
+            await self._cache.invalidate(memory_id)
         return deleted
 
     async def prune(
@@ -261,6 +272,9 @@ class Orchestrator:
     ) -> int:
         """古い記憶を削除する。
 
+        SQLite バックエンド以外（Postgres, Redis, In-Memory等）では
+        ライフサイクル状態ストアが永続化されないため、クリーンアップをスキップする。
+
         Args:
             older_than_days: この日数より古い記憶を削除対象とする。
             dry_run: True の場合は削除せず対象件数のみを返す。
@@ -268,27 +282,24 @@ class Orchestrator:
         Returns:
             削除した（または削除対象の）件数。
         """
-        if dry_run:
-            from datetime import datetime, timedelta, timezone
-            from context_store.models.memory import Memory
+        if self._settings is None:
+            raise RuntimeError("Orchestrator settings must be initialized before running prune.")
 
-            cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
-            archived_memories = await self._storage.list_by_filter(
-                MemoryFilters(archived=True)
+        if self._settings.storage_backend != "sqlite":
+            logger.warning(
+                "Lifecycle cleanup is only supported for 'sqlite' backend in this version. "
+                "Skipping prune for backend: %s",
+                self._settings.storage_backend,
             )
-            target_count = sum(
-                1
-                for m in archived_memories
-                if isinstance(m, Memory) and m.archived_at is not None and m.archived_at < cutoff
-            )
-            return target_count
+            return 0
 
-        await self._lifecycle_manager.run_cleanup()
-        return 0
+        # lifecycle_manager.run_cleanup() は削除またはアーカイブされた件数 (int) を返す。
+        count: int = await self._lifecycle_manager.run_cleanup(
+            older_than_days=older_than_days, dry_run=dry_run
+        )
+        return count
 
-    async def stats(
-        self, project: str | None = None
-    ) -> dict[str, Any]:
+    async def stats(self, project: str | None = None) -> dict[str, Any]:
         """ストレージの統計情報を返す。
 
         Args:
@@ -297,18 +308,33 @@ class Orchestrator:
         Returns:
             統計情報の dict。
         """
-        active_memories = await self._storage.list_by_filter(
+        active_count = await self._storage.count_by_filter(
             MemoryFilters(project=project, archived=None)
         )
-        archived_memories = await self._storage.list_by_filter(
+        archived_count = await self._storage.count_by_filter(
             MemoryFilters(project=project, archived=True)
         )
         return {
-            "active_count": len(active_memories),
-            "archived_count": len(archived_memories),
-            "total_count": len(active_memories) + len(archived_memories),
+            "active_count": active_count,
+            "archived_count": archived_count,
+            "total_count": active_count + archived_count,
             "project": project,
         }
+
+    async def list_projects(self) -> list[str]:
+        """プロジェクト一覧を返す。"""
+        return await self._storage.list_projects()
+
+    @property
+    def url_fetch_concurrency(self) -> int:
+        """URL フェッチの同時実行数を返す。"""
+        if self._settings is None:
+            return 1
+        return self._settings.url_fetch_concurrency
+
+    async def start_lifecycle(self) -> None:
+        """ライフサイクルマネージャーを開始する。"""
+        await self._lifecycle_manager.start()
 
     async def dispose(self) -> None:
         """全アダプターのリソースを解放する。"""
@@ -369,99 +395,109 @@ async def create_orchestrator(
     # アダプター生成
     storage, graph, cache = await create_storage(settings)
 
-    # 埋め込みプロバイダー生成
-    embedding_provider = create_embedding_provider(settings)
+    try:
+        # 埋め込みプロバイダー生成
+        embedding_provider = create_embedding_provider(settings)
 
-    # IngestionPipeline 組み立て
-    ingestion_pipeline = IngestionPipeline(
-        storage=storage,
-        graph=graph,
-        embedding_provider=embedding_provider,
-    )
+        # IngestionPipeline 組み立て
+        ingestion_pipeline = IngestionPipeline(
+            storage=storage,
+            graph=graph,
+            embedding_provider=embedding_provider,
+        )
 
-    # RetrievalPipeline 組み立て
-    query_analyzer = QueryAnalyzer()
-    vector_search = VectorSearch(
-        embedding_provider=embedding_provider,
-        storage_adapter=storage,
-    )
-    keyword_search = KeywordSearch(storage_adapter=storage)
-    graph_traversal = GraphTraversal(
-        graph_adapter=graph,
-        default_depth=settings.graph_max_logical_depth,
-        fanout_limit=settings.graph_fanout_limit,
-        max_physical_hops=settings.graph_max_physical_hops,
-    )
-    result_fusion = ResultFusion()
-    post_processor = PostProcessor(storage_adapter=storage)
-    retrieval_pipeline = RetrievalPipeline(
-        query_analyzer=query_analyzer,
-        vector_search=vector_search,
-        keyword_search=keyword_search,
-        graph_traversal=graph_traversal,
-        result_fusion=result_fusion,
-        post_processor=post_processor,
-        storage_adapter=storage,
-    )
+        # RetrievalPipeline 組み立て
+        query_analyzer = QueryAnalyzer()
+        vector_search = VectorSearch(
+            embedding_provider=embedding_provider,
+            storage_adapter=storage,
+        )
+        keyword_search = KeywordSearch(storage_adapter=storage)
+        graph_traversal = GraphTraversal(
+            graph_adapter=graph,
+            default_depth=settings.graph_max_logical_depth,
+            fanout_limit=settings.graph_fanout_limit,
+            max_physical_hops=settings.graph_max_physical_hops,
+        )
+        result_fusion = ResultFusion()
+        post_processor = PostProcessor(storage_adapter=storage)
+        retrieval_pipeline = RetrievalPipeline(
+            query_analyzer=query_analyzer,
+            vector_search=vector_search,
+            keyword_search=keyword_search,
+            graph_traversal=graph_traversal,
+            result_fusion=result_fusion,
+            post_processor=post_processor,
+            storage_adapter=storage,
+        )
 
-    # LifecycleManager 組み立て
-    if settings.storage_backend == "sqlite":
-        import os
+        # LifecycleManager 組み立て
+        if settings.storage_backend == "sqlite":
+            import os
 
-        db_path = os.path.expanduser(settings.sqlite_db_path)
-        state_store: InMemoryLifecycleStateStore | SQLiteLifecycleStateStore
-        if db_path == ":memory:":
-            state_store = InMemoryLifecycleStateStore()
+            db_path = os.path.expanduser(settings.sqlite_db_path)
+            state_store: InMemoryLifecycleStateStore | SQLiteLifecycleStateStore
+            if db_path == ":memory:":
+                state_store = InMemoryLifecycleStateStore()
+            else:
+                state_store = SQLiteLifecycleStateStore(
+                    db_path=db_path,
+                    stale_lock_timeout_seconds=settings.stale_lock_timeout_seconds,
+                )
         else:
-            state_store = SQLiteLifecycleStateStore(
-                db_path=db_path,
-                stale_lock_timeout_seconds=settings.stale_lock_timeout_seconds,
-            )
-    else:
-        state_store = InMemoryLifecycleStateStore()
+            state_store = InMemoryLifecycleStateStore()
 
-    decay_scorer = DecayScorer(settings=settings)
-    archiver = Archiver(storage=storage, scorer=decay_scorer)
-    consolidator = Consolidator(
-        storage=storage,
-        graph=graph,
-        embedding_provider=embedding_provider,
-        settings=settings,
-    )
-    purger = Purger(
-        storage=storage,
-        graph=graph,
-        retention_days=settings.purge_retention_days,
-    )
-    lifecycle_manager = LifecycleManager(
-        state_store=state_store,
-        archiver=archiver,
-        purger=purger,
-        consolidator=consolidator,
-        decay_scorer=decay_scorer,
-        storage=storage,
-        settings=settings,
-    )
+        decay_scorer = DecayScorer(settings=settings)
+        archiver = Archiver(storage=storage, scorer=decay_scorer)
+        consolidator = Consolidator(
+            storage=storage,
+            graph=graph,
+            embedding_provider=embedding_provider,
+            dedup_threshold=settings.dedup_threshold,
+            consolidation_threshold=settings.consolidation_threshold,
+        )
+        purger = Purger(
+            storage=storage,
+            graph=graph,
+            retention_days=settings.purge_retention_days,
+        )
+        lifecycle_manager = LifecycleManager(
+            state_store=state_store,
+            archiver=archiver,
+            purger=purger,
+            consolidator=consolidator,
+            decay_scorer=decay_scorer,
+            storage=storage,
+            settings=settings,
+        )
 
-    # Orchestrator 生成・初期化
-    orchestrator = Orchestrator(
-        storage=storage,
-        graph=graph,
-        cache=cache,
-        embedding_provider=embedding_provider,
-        ingestion_pipeline=ingestion_pipeline,
-        retrieval_pipeline=retrieval_pipeline,
-        lifecycle_manager=lifecycle_manager,
-        action_logger=action_logger,
-        reward_signal=reward_signal,
-        policy_hook=policy_hook,
-        settings=settings,
-    )
+        # Orchestrator 生成・初期化
+        orchestrator = Orchestrator(
+            storage=storage,
+            graph=graph,
+            cache=cache,
+            embedding_provider=embedding_provider,
+            ingestion_pipeline=ingestion_pipeline,
+            retrieval_pipeline=retrieval_pipeline,
+            lifecycle_manager=lifecycle_manager,
+            action_logger=action_logger,
+            reward_signal=reward_signal,
+            policy_hook=policy_hook,
+            settings=settings,
+        )
 
-    # フェイルファストチェック
-    await orchestrator._check_vector_dimension()
+        # フェイルファストチェック
+        await orchestrator._check_vector_dimension()
 
-    return orchestrator
+        return orchestrator
+
+    except Exception:
+        # 初期化失敗時は全アダプターのリソースを解放して再送
+        await storage.dispose()
+        if graph is not None:
+            await graph.dispose()
+        await cache.dispose()
+        raise
 
 
 __all__ = ["ConfigurationError", "Orchestrator", "create_orchestrator"]

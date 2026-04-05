@@ -1,6 +1,6 @@
 """Deduplicator: ベクトル類似度に基づく重複排除。
 
-- 類似度 >= 0.90: Append-only 置換（既存を Archived に、新規を INSERT）
+- 類似度 >= 0.90: Append-only 置換(既存を Archived に、新規を INSERT)
 - 0.85 <= 類似度 < 0.90: 統合候補としてマーク
 - 類似度 < 0.85: 新規挿入
 """
@@ -30,7 +30,7 @@ class DeduplicationAction(str, Enum):
     """重複排除の結果アクション。"""
 
     INSERT = "insert"  # 新規挿入
-    REPLACE = "replace"  # Append-only 置換（既存を Archive）
+    REPLACE = "replace"  # Append-only 置換 (既存を Archive)
     MERGE_CANDIDATE = "merge_candidate"  # 統合候補としてマーク
 
 
@@ -56,7 +56,7 @@ class Deduplicator:
             new_memory: 新しく追加しようとしている記憶
 
         Returns:
-            DeduplicationResult: 推奨アクションと既存記憶（存在する場合）
+            DeduplicationResult: 推奨アクションと既存記憶(存在する場合)
         """
         if not new_memory.embedding:
             # 埋め込みベクトルがない場合は新規挿入

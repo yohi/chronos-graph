@@ -54,8 +54,8 @@ def test_embedding_provider_validation(default_settings):
     [
         ({"storage_backend": "postgres", "postgres_password": ""}, "POSTGRES_PASSWORD"),
         ({"storage_backend": "postgres", "postgres_password": "   "}, "POSTGRES_PASSWORD"),
-        ({"storage_backend": "postgres", "graph_enabled": True, "neo4j_password": ""}, "NEO4J_PASSWORD"),
-        ({"storage_backend": "postgres", "graph_enabled": True, "neo4j_password": "   "}, "NEO4J_PASSWORD"),
+        ({"graph_enabled": True, "neo4j_password": ""}, "NEO4J_PASSWORD"),
+        ({"graph_enabled": True, "neo4j_password": "   "}, "NEO4J_PASSWORD"),
         (
             {"embedding_provider": "openai", "openai_api_key": ""},
             "OPENAI_API_KEY",
@@ -95,6 +95,22 @@ def test_embedding_provider_validation(default_settings):
                 "openai_api_key": "",
             },
             "LITELLM_API_BASE",
+        ),
+        (
+            {
+                "embedding_provider": "litellm",
+                "litellm_model": "",
+                "openai_api_key": "",
+            },
+            "LITELLM_MODEL",
+        ),
+        (
+            {
+                "embedding_provider": "litellm",
+                "litellm_model": "   ",
+                "openai_api_key": "",
+            },
+            "LITELLM_MODEL",
         ),
         (
             {
@@ -167,3 +183,12 @@ def test_postgres_dsn_url_encodes_credentials(default_settings):
 def test_numeric_settings_reject_out_of_range_values(default_settings, field_name, value):
     with pytest.raises(ValueError):
         make_settings(**{field_name: value})
+
+
+def test_embedding_dimension_must_be_positive(default_settings):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        make_settings(embedding_dimension=0)
+    with pytest.raises(ValidationError):
+        make_settings(embedding_dimension=-1)

@@ -1,4 +1,5 @@
 """記憶の減衰スコアを計算するモジュール。"""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -40,11 +41,7 @@ class DecayScorer:
         now = datetime.now(timezone.utc)
         days_elapsed = (now - memory.last_accessed_at).total_seconds() / 86400.0
         recency = 0.5 ** (days_elapsed / self.half_life_days)
-        composite = (
-            0.5 * memory.semantic_relevance
-            + 0.3 * recency
-            + 0.2 * memory.importance_score
-        )
+        composite = 0.5 * memory.semantic_relevance + 0.3 * recency + 0.2 * memory.importance_score
         return float(composite)
 
     def is_below_archive_threshold(self, memory: Memory) -> bool:

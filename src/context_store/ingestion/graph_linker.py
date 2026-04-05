@@ -26,9 +26,10 @@ SEMANTIC_RELATION_THRESHOLD = 0.70
 
 # URL と ファイルパスの検出パターン
 _URL_PATTERN = re.compile(
-    r"https?://[^\s\"\'>)]+",
+    r"https?://[^\s\"\'<>()\[\]{}]+?(?<![.,!?:;)\]}'\"])",
     re.IGNORECASE,
 )
+# TODO: Expand _FILE_PATH_PATTERN to support Windows absolute paths and ./ ../ relative paths.
 _FILE_PATH_PATTERN = re.compile(
     r"(?:^|[\s\"\(])(/(?:[a-zA-Z0-9_\-./]+))",
     re.MULTILINE,
@@ -50,7 +51,7 @@ class EdgeType:
 class GraphLinker:
     """記憶間のリレーションシップを推定してグラフに登録する。"""
 
-    def __init__(self, storage: StorageAdapter, graph: GraphAdapter) -> None:
+    def __init__(self, storage: StorageAdapter, graph: GraphAdapter | None) -> None:
         self._storage = storage
         self._graph = graph
 
@@ -70,6 +71,9 @@ class GraphLinker:
             supersedes: Append-only 置換で置き換えられた旧記憶
             chunk_neighbors: document_id → 同一ドキュメントのチャンクリスト
         """
+        if self._graph is None:
+            return
+
         edges: list[dict[str, Any]] = []
 
         # 1. SEMANTICALLY_RELATED エッジ
@@ -255,7 +259,7 @@ class GraphLinker:
         # chunk_index でソート
         sorted_chunks = sorted(
             chunks,
-            key=lambda m: m.source_metadata.get("chunk_index", 0),
+            key=self._get_chunk_index,
         )
 
         for i in range(len(sorted_chunks) - 1):
@@ -282,3 +286,23 @@ class GraphLinker:
             )
 
         return edges
+
+    @staticmethod
+    def _get_chunk_index(memory: Memory) -> int:
+        """source_metadata の chunk_index を int に正規化する。"""
+        raw_value = memory.source_metadata.get("chunk_index", 0)
+        if isinstance(raw_value, bool):
+            return int(raw_value)
+        if isinstance(raw_value, int):
+            return raw_value
+        if isinstance(raw_value, float):
+            return int(raw_value)
+        if isinstance(raw_value, str):
+            try:
+                return int(raw_value)
+            except ValueError:
+                return 0
+        try:
+            return int(str(raw_value))
+        except (TypeError, ValueError):
+            return 0

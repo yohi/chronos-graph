@@ -5,12 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import Any
+from uuid import UUID
 
-import asyncpg  # type: ignore
+import asyncpg  # type: ignore[import-not-found]
 
 from context_store.config import Settings
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
-from context_store.storage.protocols import MemoryFilters, StorageError
+from context_store.storage.protocols import ALLOWED_SORT_COLUMNS, MemoryFilters, StorageError
 
 
 def _content_hash(content: str) -> str:
@@ -153,12 +154,38 @@ class PostgresStorageAdapter:
             return None
         return _record_to_memory(dict(record))
 
+    async def get_memories_batch(self, memory_ids: list[str]) -> list[Memory]:
+        """Retrieve multiple memories by ID."""
+        if not memory_ids:
+            return []
+        cleaned_ids: list[str] = []
+        for memory_id in memory_ids:
+            try:
+                cleaned_ids.append(str(UUID(str(memory_id))))
+            except (TypeError, ValueError, AttributeError):
+                continue
+        if not cleaned_ids:
+            return []
+        sql = "SELECT * FROM memories WHERE id = ANY($1::uuid[])"
+        async with self._pool.acquire() as conn:
+            records = await conn.fetch(sql, cleaned_ids)
+        memory_map = {str(record["id"]): _record_to_memory(dict(record)) for record in records}
+        results: list[Memory] = []
+        for memory_id in memory_ids:
+            try:
+                norm_id = str(UUID(str(memory_id)))
+                if norm_id in memory_map:
+                    results.append(memory_map[norm_id])
+            except (TypeError, ValueError, AttributeError):
+                continue
+        return results
+
     async def delete_memory(self, memory_id: str) -> bool:
         """Delete a memory. Returns True if deleted."""
         sql = "DELETE FROM memories WHERE id = $1"
         async with self._pool.acquire() as conn:
             status = await conn.execute(sql, memory_id)
-        return status == "DELETE 1"  # type: ignore[no-any-return]
+        return str(status) == "DELETE 1"
 
     async def update_memory(self, memory_id: str, updates: dict[str, Any]) -> bool:
         """Apply partial updates to a memory."""
@@ -213,7 +240,7 @@ class PostgresStorageAdapter:
 
         async with self._pool.acquire() as conn:
             status = await conn.execute(sql, *params)
-        return status == "UPDATE 1"  # type: ignore[no-any-return]
+        return str(status) == "UPDATE 1"
 
     async def vector_search(
         self, embedding: list[float], top_k: int, project: str | None = None
@@ -292,8 +319,8 @@ class PostgresStorageAdapter:
             for r in records
         ]
 
-    async def list_by_filter(self, filters: MemoryFilters) -> list[Memory]:
-        """List memories matching the given filters."""
+    def _build_where_clause(self, filters: MemoryFilters) -> tuple[str, list[Any]]:
+        """共通の WHERE 句とパラメータを生成する。"""
         conditions: list[str] = []
         params: list[Any] = []
 
@@ -315,13 +342,116 @@ class PostgresStorageAdapter:
             params.append(filters.tags)
             conditions.append(f"tags && ${len(params)}")  # array overlap
 
+        if getattr(filters, "session_id", None) is not None:
+            params.append(filters.session_id)
+            conditions.append(f"source_metadata->>'session_id' = ${len(params)}")
+
+        if filters.created_after is not None:
+            if filters.id_after is not None:
+                params.append(filters.created_after)
+                params.append(filters.id_after)
+                conditions.append(f"(created_at, id) > (${len(params) - 1}, ${len(params)})")
+            else:
+                params.append(filters.created_after)
+                conditions.append(f"created_at >= ${len(params)}")
+
+        if filters.archived_after is not None:
+            if filters.id_after is not None:
+                params.append(filters.archived_after)
+                params.append(filters.id_after)
+                conditions.append(f"(archived_at, id) > (${len(params) - 1}, ${len(params)})")
+            else:
+                params.append(filters.archived_after)
+                conditions.append(f"archived_at >= ${len(params)}")
+
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        sql = f"SELECT * FROM memories {where_clause} ORDER BY created_at DESC"
+        return where_clause, params
+
+    async def list_by_filter(self, filters: MemoryFilters) -> list[Memory]:
+        """List memories matching the given filters."""
+        where_clause, params = self._build_where_clause(filters)
+
+        # Validate and whitelist ORDER BY columns
+        allowed_order_cols = ALLOWED_SORT_COLUMNS
+        order_clause = "ORDER BY created_at DESC"
+        if filters.order_by:
+            order_parts = []
+            for part in str(filters.order_by).split(","):
+                tokens = part.strip().split()
+                if tokens:
+                    col = tokens[0].lower()
+                    if col not in allowed_order_cols:
+                        raise StorageError(
+                            message=f"Invalid sort column: {col}",
+                            code="INVALID_PARAMETER",
+                        )
+                    direction = "DESC"
+                    if len(tokens) > 1:
+                        dir_token = tokens[1].upper()
+                        if dir_token not in ("ASC", "DESC"):
+                            raise StorageError(
+                                message=f"Invalid sort direction: {dir_token}",
+                                code="INVALID_PARAMETER",
+                            )
+                        direction = dir_token
+                    order_parts.append(f"{col} {direction}")
+            if order_parts:
+                order_clause = f"ORDER BY {', '.join(order_parts)}"
+
+        # Parameterize LIMIT
+        limit_clause = ""
+        limit_val = getattr(filters, "limit", None)
+        if limit_val is not None:
+            try:
+                limit_int = int(limit_val)
+                if limit_int < 0:
+                    raise StorageError(
+                        message=f"Invalid limit value: {limit_int}",
+                        code="INVALID_PARAMETER",
+                    )
+                params.append(limit_int)
+                limit_clause = f"LIMIT ${len(params)}"
+            except (ValueError, TypeError) as e:
+                raise StorageError(
+                    message=f"Invalid limit type: {type(limit_val)}",
+                    code="INVALID_PARAMETER",
+                ) from e
+
+        sql = f"SELECT * FROM memories {where_clause} {order_clause} {limit_clause}".strip()
 
         async with self._pool.acquire() as conn:
             records = await conn.fetch(sql, *params)
 
         return [_record_to_memory(dict(r)) for r in records]
+
+    async def count_by_filter(self, filters: MemoryFilters) -> int:
+        """Count memories matching the given filters."""
+        where_clause, params = self._build_where_clause(filters)
+        sql = f"SELECT COUNT(*) FROM memories {where_clause}"
+
+        async with self._pool.acquire() as conn:
+            count = await conn.fetchval(sql, *params)
+            return int(count) if count is not None else 0
+
+    async def list_projects(self) -> list[str]:
+        """List all unique project names present in the storage."""
+        sql = "SELECT DISTINCT project FROM memories WHERE project IS NOT NULL AND project != ''"
+        async with self._pool.acquire() as conn:
+            records = await conn.fetch(sql)
+            return [str(r["project"]) for r in records]
+
+    async def increment_memory_access_count(self, memory_id: str) -> bool:
+        """Atomically increment the access count and update last_accessed_at."""
+        sql = """
+            UPDATE memories
+            SET access_count = access_count + 1,
+                last_accessed_at = NOW(),
+                updated_at = NOW()
+            WHERE id = $1
+        """
+        async with self._pool.acquire() as conn:
+            status = await conn.execute(sql, memory_id)
+        return str(status) == "UPDATE 1"
 
     async def get_vector_dimension(self) -> int | None:
         """Return the dimension of stored vectors."""

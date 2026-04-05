@@ -1,10 +1,12 @@
 """Vector Search のテスト"""
 
-import pytest
 from typing import Protocol
 from unittest.mock import AsyncMock
-from context_store.retrieval.vector_search import VectorSearch
+
+import pytest
+
 from context_store.models.search import ScoredMemory
+from context_store.retrieval.vector_search import VectorSearch
 
 
 class MockEmbeddingProvider(Protocol):
@@ -16,7 +18,7 @@ class MockEmbeddingProvider(Protocol):
 
 
 @pytest.fixture
-def embedding_provider():
+def embedding_provider() -> MockEmbeddingProvider:
     """Embedding Provider のモック"""
     provider = AsyncMock()
     provider.embed = AsyncMock(return_value=[0.1, 0.2, 0.3, 0.4, 0.5])
@@ -26,8 +28,9 @@ def embedding_provider():
 @pytest.fixture
 def storage_adapter():
     """Storage Adapter のモック"""
-    from context_store.models.memory import Memory, MemoryType, SourceType, MemorySource
     from uuid import UUID
+
+    from context_store.models.memory import Memory, MemorySource, MemoryType, SourceType
 
     adapter = AsyncMock()
     mem1 = Memory(

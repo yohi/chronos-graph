@@ -766,16 +766,18 @@ class LifecycleManager:
             cleanup_start_save_count = state.save_count
             logger.info("Starting cleanup (save_count=%d).", cleanup_start_save_count)
 
+            async def heartbeat_fn():
+                await self._state_store.heartbeat_cleanup_lock(token)
+                await self._check_lock_integrity(token)
+
             # 1. Decay Scorer (各ジョブは暗黙的にスコアを使用)
             # 2. Archiver
-            archiver_result = await self._archiver.run()
+            archiver_result = await self._archiver.run(heartbeat_fn=heartbeat_fn)
             logger.info(
                 "Archiver: archived=%d, checked=%d",
                 archiver_result.archived_count,
                 archiver_result.checked_count,
             )
-            await self._state_store.heartbeat_cleanup_lock(token)
-            await self._check_lock_integrity(token)
 
             # 3. Consolidator
             # カーソル (timestamp + ID) を渡して、安定したページングを実現。
@@ -783,24 +785,21 @@ class LifecycleManager:
                 last_cleanup_at=state.last_cleanup_cursor_at,
                 last_cleanup_id=state.last_cleanup_id,
                 batch_size=CONSOLIDATION_BATCH_SIZE,
+                heartbeat_fn=heartbeat_fn,
             )
             logger.info(
                 "Consolidator: consolidated=%d, checked=%d",
                 consolidator_result.consolidated_count,
                 consolidator_result.checked_count,
             )
-            await self._state_store.heartbeat_cleanup_lock(token)
-            await self._check_lock_integrity(token)
 
             # 4. Purger
-            purger_result = await self._purger.run()
+            purger_result = await self._purger.run(heartbeat_fn=heartbeat_fn)
             logger.info(
                 "Purger: purged=%d, checked=%d",
                 purger_result.purged_count,
                 purger_result.checked_count,
             )
-            await self._state_store.heartbeat_cleanup_lock(token)
-            await self._check_lock_integrity(token)
 
             # 5. Stats Collector
             await self._collect_stats()

@@ -516,7 +516,7 @@ class TestGracefulShutdown:
 
     async def test_shutdown_waits_for_running_task(self):
         """実行中タスクの完了を待機すること。"""
-        manager, store = _make_manager()
+        manager, _ = _make_manager()
 
         completed = []
 
@@ -532,7 +532,7 @@ class TestGracefulShutdown:
 
     async def test_shutdown_times_out_after_5s(self):
         """5秒以内にシャットダウンが収束すること（タイムアウト発生でもエラーにならない）。"""
-        manager, store = _make_manager()
+        manager, _ = _make_manager()
 
         async def long_task():
             await asyncio.sleep(10)  # 5秒を超えるタスク

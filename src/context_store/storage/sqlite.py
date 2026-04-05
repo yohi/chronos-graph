@@ -550,8 +550,13 @@ class SQLiteStorageAdapter:
                 continue
 
             if col == "embedding":
-                if val is not None and not val:
-                    raise StorageError("Empty embedding not allowed", code="INVALID_PARAMETER")
+                if val is not None:
+                    if not isinstance(val, list) or not all(
+                        isinstance(v, (int, float)) for v in val
+                    ):
+                        raise StorageError("Invalid embedding", code="INVALID_PARAMETER")
+                    if not val:
+                        raise StorageError("Empty embedding not allowed", code="INVALID_PARAMETER")
                 embedding = val
                 continue
 
@@ -619,6 +624,12 @@ class SQLiteStorageAdapter:
                         return False
 
                 if embedding is not None:
+                    # Explicitly validate type and elements
+                    if not isinstance(embedding, list) or not all(
+                        isinstance(v, (int, float)) for v in embedding
+                    ):
+                        raise StorageError("Invalid embedding", code="INVALID_PARAMETER")
+
                     # Unconditionally check if memory exists before inserting embedding to avoid FK violations
                     async with conn.execute(
                         "SELECT 1 FROM memories WHERE id = ?", (memory_id,)

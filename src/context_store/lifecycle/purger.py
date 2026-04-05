@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Coroutine
 
 from context_store.storage.protocols import GraphAdapter, MemoryFilters, StorageAdapter
 
@@ -40,8 +41,14 @@ class Purger:
         self._graph = graph
         self._retention_days = retention_days
 
-    async def run(self) -> PurgerResult:
+    async def run(
+        self,
+        heartbeat_fn: Callable[[], Coroutine[Any, Any, None]] | None = None,
+    ) -> PurgerResult:
         """アーカイブ済み記憶をスキャンして期限切れのものを物理削除する。
+
+        Args:
+            heartbeat_fn: ハートビート用コールバック関数。
 
         Returns:
             処理結果を格納した PurgerResult。
@@ -55,7 +62,10 @@ class Purger:
         purged_count = 0
         checked_count = len(memories)
 
-        for memory in memories:
+        for i, memory in enumerate(memories):
+            if heartbeat_fn and i % 10 == 0:
+                await heartbeat_fn()
+
             # MemoryFilters(archived=True) で取得済みだが、ストレージ実装の保証に依存しないよう防御チェック
             if memory.archived_at is None:
                 continue

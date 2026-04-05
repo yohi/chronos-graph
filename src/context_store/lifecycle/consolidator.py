@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable, Coroutine
 
 from context_store.logger import get_logger
 from context_store.storage.protocols import GraphAdapter, MemoryFilters, StorageAdapter
@@ -85,6 +85,7 @@ class Consolidator:
         last_cleanup_at: datetime | None = None,
         last_cleanup_id: str | None = None,
         batch_size: int = CONSOLIDATION_BATCH_SIZE,
+        heartbeat_fn: Callable[[], Coroutine[Any, Any, None]] | None = None,
     ) -> ConsolidatorResult:
         """重複記憶を統合するクリーンアップジョブ。
 
@@ -93,6 +94,7 @@ class Consolidator:
                 None の場合は全記憶が対象。
             last_cleanup_id: 最後に処理した記憶の ID。
             batch_size: 1サイクルで処理する最大記憶数。
+            heartbeat_fn: ハートビート用コールバック関数。
 
         Returns:
             処理結果を格納した ConsolidatorResult。
@@ -123,7 +125,10 @@ class Consolidator:
         # 統合の影響を受けた（生き残った側の）記憶 ID を追跡
         affected_memory_ids: set[str] = set()
 
-        for memory in window:
+        for i, memory in enumerate(window):
+            if heartbeat_fn and i % 5 == 0:
+                await heartbeat_fn()
+
             memory_id = str(memory.id)
 
             # 既にこの実行でアーカイブされた記憶はスキップ

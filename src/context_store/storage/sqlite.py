@@ -987,9 +987,9 @@ class SQLiteStorageAdapter:
                     """,
                     (now, now, memory_id),
                 ) as cursor:
-                    updated = cursor.rowcount
+                    updated_count: int = cursor.rowcount
                 await conn.commit()
-                return updated > 0
+                return updated_count > 0
             except aiosqlite.OperationalError as exc:
                 _raise_if_locked(exc)
                 raise

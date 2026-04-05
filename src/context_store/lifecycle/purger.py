@@ -54,7 +54,7 @@ class Purger:
         heartbeat_fn: Callable[[], Coroutine[Any, Any, None]] | None = None,
         retention_days: int | None = None,
         dry_run: bool = False,
-        _simulated_archived_ids: set[str] | None = None,
+        simulated_archived_ids: set[str] | None = None,
     ) -> PurgerResult:
         """アーカイブ済み記憶をスキャンして期限切れのものを物理削除する。
 
@@ -62,7 +62,7 @@ class Purger:
             heartbeat_fn: ハートビート用コールバック関数。
             retention_days: 保持期間 (日数)。None の場合はデフォルト設定を使用。
             dry_run: True の場合は削除せず対象件数のみをカウント。
-            _simulated_archived_ids: dry_run 時にアーカイブされたとみなす ID のセット。
+            simulated_archived_ids: dry_run 時にアーカイブされたとみなす ID のセット。
                                      (API 互換性のために保持。現状は効果なし)
 
         Returns:

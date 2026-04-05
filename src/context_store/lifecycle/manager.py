@@ -378,8 +378,9 @@ class SQLiteLifecycleStateStore:
                 params.append(token)
 
             cursor = await conn.execute(query, params)
+            updated_count: int = cursor.rowcount
             await conn.commit()
-            return cursor.rowcount > 0
+            return updated_count > 0
 
     async def increment_save_count(self, threshold: int) -> bool:
         """SQLite でのアトミックなインクリメント。"""

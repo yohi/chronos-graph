@@ -36,13 +36,16 @@ embedding-litellm = [
     "litellm>=1.0.0",
 ]
 dev = [
-    "pytest>=8.0.0",
+    "pytest>=9.0.2",
     "pytest-asyncio>=0.23.0",
     "pytest-benchmark>=4.0.0",
     "pytest-cov>=5.0.0",
     "ruff>=0.4.0",
     "mypy>=1.10.0",
 ]
+
+[project.scripts]
+context-store = "context_store.__main__:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -378,8 +378,9 @@ class SQLiteLifecycleStateStore:
                 params.append(token)
 
             cursor = await conn.execute(query, params)
+            updated_count: int = cursor.rowcount
             await conn.commit()
-            return cursor.rowcount > 0
+            return updated_count > 0
 
     async def increment_save_count(self, threshold: int) -> bool:
         """SQLite でのアトミックなインクリメント。"""
@@ -630,6 +631,7 @@ class LifecycleManager:
 
             settings = Settings.model_construct()
 
+        self._settings = settings
         self._save_count_threshold = settings.cleanup_save_count_threshold
         self._cleanup_interval_hours = settings.cleanup_interval_hours
         self._stale_lock_timeout_seconds = settings.stale_lock_timeout_seconds
@@ -681,7 +683,7 @@ class LifecycleManager:
         except Exception:
             logger.exception("Time-based cleanup check failed.")
 
-    def _spawn_background_task(self, factory: Callable[[], Coroutine[Any, Any, None]]) -> None:
+    def _spawn_background_task(self, factory: Callable[[], Coroutine[Any, Any, Any]]) -> None:
         """例外ハンドリング付きでバックグラウンドタスクを開始する。"""
         if getattr(self, "_shutting_down", False):
             return
@@ -728,55 +730,132 @@ class LifecycleManager:
             logger.info("Save count threshold reached, triggering cleanup.")
             self._spawn_background_task(self.run_cleanup)
 
-    async def run_cleanup(self) -> None:
+    async def run_cleanup(
+        self,
+        older_than_days: int | None = None,
+        dry_run: bool = False,
+    ) -> int:
         """クリーンアップを実行する（filelock + DB ロック排他制御付き）。
 
         filelock によるプロセス間排他制御と DB レベルのロックを組み合わせて
         同時実行を防ぐ。ロック取得失敗時はサイレントにスキップする。
+
+        InMemoryLifecycleStateStore の場合は非永続的（共有されない）ため
+        クリーンアップをスキップする。
+
+        Args:
+            older_than_days: 保持期間（日数）。None の場合はデフォルト設定を使用。
+            dry_run: True の場合は更新せず対象件数のみをカウント。
+
+        Returns:
+            削除またはアーカイブされたアイテムの総数。
         """
+        # バリデーション
+        if older_than_days is not None:
+            if not isinstance(older_than_days, int) or isinstance(older_than_days, bool):
+                raise TypeError(
+                    f"older_than_days must be an int, got {type(older_than_days).__name__}"
+                )
+            if older_than_days < 0:
+                raise ValueError(f"older_than_days must be non-negative, got {older_than_days}")
+
+        if self._settings.storage_backend != "sqlite":
+            logger.debug(
+                "Cleanup skipped: lifecycle cleanup is not supported for backend '%s'.",
+                self._settings.storage_backend,
+            )
+            return 0
+
+        # 全工程で共通のタイムスタンプを使用
+        now = datetime.now(timezone.utc)
+
+        if dry_run:
+            # dry_run の場合はロックを取得せずに実行
+            _, total_count = await self._run_cleanup_inner(
+                older_than_days=older_than_days, dry_run=True, now=now
+            )
+            return total_count
+
         # OS レベルの排他ロック（timeout=0 = 非ブロッキング）
         file_lock = FileLock(self._lock_path, timeout=0)
         should_schedule_followup = False
+        total_count = 0
         try:
             with file_lock.acquire():
-                should_schedule_followup = await self._run_cleanup_inner()
+                should_schedule_followup, total_count = await self._run_cleanup_inner(
+                    older_than_days=older_than_days, dry_run=False, now=now
+                )
         except Timeout:
             logger.debug("Cleanup skipped: another process holds the file lock.")
-            return
+            return 0
 
         # ロック解放後に、必要に応じてフォローアップをスケジュール
         if should_schedule_followup:
             logger.info("Scheduling follow-up cleanup.")
             self._spawn_background_task(self.run_cleanup)
 
-    async def _run_cleanup_inner(self) -> bool:
+        return total_count
+
+    async def _run_cleanup_inner(
+        self,
+        older_than_days: int | None = None,
+        dry_run: bool = False,
+        now: datetime | None = None,
+    ) -> tuple[bool, int]:
         """クリーンアップ本体（DB ロック取得後に実行）。
 
+        Args:
+            older_than_days: 保持期間（日数）。
+            dry_run: True の場合は更新せず対象件数のみをカウント。
+            now: 基準時刻。None の場合は現在時刻を使用。
+
         Returns:
-            未処理の保存が残っており、次回のクリーンアップを即座にスケジュールすべきか。
+            (should_schedule_followup, total_items_count)
+            should_schedule_followup: 未処理の保存が残っており、次回のクリーンアップを即座にスケジュールすべきか。
+            total_items_count: 削除またはアーカイブされたアイテムの総数。
         """
+        if now is None:
+            now = datetime.now(timezone.utc)
+
         # DB レベルのロック取得
         token = str(uuid.uuid4())
-        acquired = await self._state_store.acquire_cleanup_lock(token)
-        if not acquired:
-            logger.debug("Cleanup skipped: DB lock already acquired.")
-            return False
+        if not dry_run:
+            acquired = await self._state_store.acquire_cleanup_lock(token)
+            if not acquired:
+                logger.debug("Cleanup skipped: DB lock already acquired.")
+                return False, 0
+        else:
+            # dry_run の場合はロックをスキップ
+            pass
 
         should_schedule_followup = False
+        total_count = 0
+        simulated_archived_ids: set[str] = set()
+
         try:
             state = await self._state_store.load_state()
             # クリーンアップ開始時のカウントをキャプチャ。
             # concurrent saves があった場合に、その分まで差し引かないようにする。
             cleanup_start_save_count = state.save_count
-            logger.info("Starting cleanup (save_count=%d).", cleanup_start_save_count)
+            if not dry_run:
+                logger.info("Starting cleanup (save_count=%d).", cleanup_start_save_count)
+            else:
+                logger.info("Starting cleanup preview.")
 
             async def heartbeat_fn() -> None:
-                await self._state_store.heartbeat_cleanup_lock(token)
-                await self._check_lock_integrity(token)
+                if not dry_run:
+                    await self._state_store.heartbeat_cleanup_lock(token)
+                    await self._check_lock_integrity(token)
 
             # 1. Decay Scorer (各ジョブは暗黙的にスコアを使用)
             # 2. Archiver
-            archiver_result = await self._archiver.run(heartbeat_fn=heartbeat_fn)
+            archiver_result = await self._archiver.run(
+                heartbeat_fn=heartbeat_fn,
+                dry_run=dry_run,
+                simulated_archived_ids=simulated_archived_ids if dry_run else None,
+                now=now,
+            )
+            total_count += archiver_result.archived_count
             logger.info(
                 "Archiver: archived=%d, checked=%d",
                 archiver_result.archived_count,
@@ -790,7 +869,11 @@ class LifecycleManager:
                 last_cleanup_id=state.last_cleanup_id,
                 batch_size=CONSOLIDATION_BATCH_SIZE,
                 heartbeat_fn=heartbeat_fn,
+                dry_run=dry_run,
+                simulated_archived_ids=simulated_archived_ids if dry_run else None,
+                now=now,
             )
+            total_count += consolidator_result.consolidated_count
             logger.info(
                 "Consolidator: consolidated=%d, checked=%d",
                 consolidator_result.consolidated_count,
@@ -798,12 +881,22 @@ class LifecycleManager:
             )
 
             # 4. Purger
-            purger_result = await self._purger.run(heartbeat_fn=heartbeat_fn)
+            purger_result = await self._purger.run(
+                heartbeat_fn=heartbeat_fn,
+                retention_days=older_than_days,
+                dry_run=dry_run,
+                simulated_archived_ids=simulated_archived_ids if dry_run else None,
+                now=now,
+            )
+            total_count += purger_result.purged_count
             logger.info(
                 "Purger: purged=%d, checked=%d",
                 purger_result.purged_count,
                 purger_result.checked_count,
             )
+
+            if dry_run:
+                return False, total_count
 
             # 5. Stats Collector
             await self._collect_stats()
@@ -817,7 +910,7 @@ class LifecycleManager:
             # 状態を更新（カウンターリセット + last_cleanup_at 更新）
             # ページングカーソル (last_processed_at/id) を保存
             # last_cleanup_at は「全ジョブ成功時」に現在時刻で更新
-            now = datetime.now(timezone.utc)
+            # now は開始時の基準時刻を使用（ただし updated_at などには最新時刻を使う場合もある）
             current_state = await self._state_store.load_state()
 
             next_cursor_at = (
@@ -829,12 +922,12 @@ class LifecycleManager:
             remaining_count = max(0, current_state.save_count - cleanup_start_save_count)
             new_state = LifecycleState(
                 save_count=remaining_count,
-                last_cleanup_at=now,  # 全工程成功につき更新
+                last_cleanup_at=now,  # 全工程成功につき更新（基準時刻 now を使用）
                 last_cleanup_cursor_at=next_cursor_at,
                 last_cleanup_id=next_cursor_id,
                 cleanup_lock_owner=token,  # finally で release_cleanup_lock を呼ぶまで保持
                 cleanup_lock_touched_at=datetime.now(timezone.utc),
-                updated_at=now,
+                updated_at=datetime.now(timezone.utc),
             )
             saved = await self._state_store.save_state(new_state, token=token)
             if not saved:
@@ -872,9 +965,10 @@ class LifecycleManager:
                 logger.exception("Failed to reset save_count after cleanup failure.")
             raise
         finally:
-            await self._state_store.release_cleanup_lock(token)
+            if not dry_run:
+                await self._state_store.release_cleanup_lock(token)
 
-        return should_schedule_followup
+        return should_schedule_followup, total_count
 
     async def _collect_stats(self) -> None:
         """統計情報をログに記録する（将来的に DB 保存へ拡張可能）。"""

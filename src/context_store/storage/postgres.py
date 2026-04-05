@@ -355,6 +355,15 @@ class PostgresStorageAdapter:
                 params.append(filters.created_after)
                 conditions.append(f"created_at >= ${len(params)}")
 
+        if filters.archived_after is not None:
+            if filters.id_after is not None:
+                params.append(filters.archived_after)
+                params.append(filters.id_after)
+                conditions.append(f"(archived_at, id) > (${len(params) - 1}, ${len(params)})")
+            else:
+                params.append(filters.archived_after)
+                conditions.append(f"archived_at >= ${len(params)}")
+
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         return where_clause, params
 
@@ -423,6 +432,13 @@ class PostgresStorageAdapter:
         async with self._pool.acquire() as conn:
             count = await conn.fetchval(sql, *params)
             return int(count) if count is not None else 0
+
+    async def list_projects(self) -> list[str]:
+        """List all unique project names present in the storage."""
+        sql = "SELECT DISTINCT project FROM memories WHERE project IS NOT NULL AND project != ''"
+        async with self._pool.acquire() as conn:
+            records = await conn.fetch(sql)
+            return [str(r["project"]) for r in records]
 
     async def increment_memory_access_count(self, memory_id: str) -> bool:
         """Atomically increment the access count and update last_accessed_at."""

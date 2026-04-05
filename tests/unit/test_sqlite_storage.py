@@ -1160,3 +1160,39 @@ async def test_update_memory_initializes_dimension(adapter):
     # Dimension should now be 3
     assert await adapter.get_vector_dimension() == 3
     assert adapter._vector_dim == 3
+
+
+# ---------------------------------------------------------------------------
+# list_projects
+# ---------------------------------------------------------------------------
+
+
+class TestListProjects:
+    @pytest.mark.asyncio
+    async def test_list_projects_returns_unique_names(self, adapter):
+        m1 = _make_memory(content="test1", project="project_a")
+        m2 = _make_memory(content="test2", project="project_b")
+        m3 = _make_memory(content="test3", project="project_a")
+        await adapter.save_memory(m1)
+        await adapter.save_memory(m2)
+        await adapter.save_memory(m3)
+
+        projects = await adapter.list_projects()
+        assert set(projects) == {"project_a", "project_b"}
+
+    @pytest.mark.asyncio
+    async def test_list_projects_excludes_empty_and_none(self, adapter):
+        m1 = _make_memory(content="test1", project="project_a")
+        m2 = _make_memory(content="test2", project=None)
+        m3 = _make_memory(content="test3", project="")
+        await adapter.save_memory(m1)
+        await adapter.save_memory(m2)
+        await adapter.save_memory(m3)
+
+        projects = await adapter.list_projects()
+        assert projects == ["project_a"]
+
+    @pytest.mark.asyncio
+    async def test_list_projects_empty_storage(self, adapter):
+        projects = await adapter.list_projects()
+        assert projects == []

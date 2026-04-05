@@ -853,6 +853,16 @@ class SQLiteStorageAdapter:
                 params.append(created_after_utc)
                 conditions.append(f"{prefix}created_at >= ?")
 
+        if filters.archived_after is not None:
+            archived_after_utc = filters.archived_after.astimezone(timezone.utc).isoformat()
+            if filters.id_after is not None:
+                params.append(archived_after_utc)
+                params.append(filters.id_after)
+                conditions.append(f"({prefix}archived_at, {prefix}id) > (?, ?)")
+            else:
+                params.append(archived_after_utc)
+                conditions.append(f"{prefix}archived_at >= ?")
+
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         return where_clause, params
 
@@ -949,6 +959,19 @@ class SQLiteStorageAdapter:
                 _raise_if_locked(exc)
                 raise
 
+    async def list_projects(self) -> list[str]:
+        """List all unique project names present in the storage."""
+        sql = "SELECT DISTINCT project FROM memories WHERE project IS NOT NULL AND project != ''"
+
+        async with self._db() as conn:
+            try:
+                async with conn.execute(sql) as cursor:
+                    rows = await cursor.fetchall()
+                return [row[0] for row in rows]
+            except aiosqlite.OperationalError as exc:
+                _raise_if_locked(exc)
+                raise
+
     async def increment_memory_access_count(self, memory_id: str) -> bool:
         """Atomically increment the access count and update last_accessed_at."""
         async with self._db() as conn:
@@ -964,9 +987,9 @@ class SQLiteStorageAdapter:
                     """,
                     (now, now, memory_id),
                 ) as cursor:
-                    updated = cursor.rowcount
+                    updated_count: int = cursor.rowcount
                 await conn.commit()
-                return updated > 0
+                return updated_count > 0
             except aiosqlite.OperationalError as exc:
                 _raise_if_locked(exc)
                 raise

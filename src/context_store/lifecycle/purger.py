@@ -52,36 +52,77 @@ class Purger:
     async def run(
         self,
         heartbeat_fn: Callable[[], Coroutine[Any, Any, None]] | None = None,
+        retention_days: int | None = None,
+        dry_run: bool = False,
+        simulated_archived_ids: set[str] | None = None,
+        now: datetime | None = None,
     ) -> PurgerResult:
         """アーカイブ済み記憶をスキャンして期限切れのものを物理削除する。
 
         Args:
             heartbeat_fn: ハートビート用コールバック関数。
+            retention_days: 保持期間 (日数)。None の場合はデフォルト設定を使用。
+            dry_run: True の場合は削除せず対象件数のみをカウント。
+            simulated_archived_ids: dry_run 時にアーカイブされたとみなす ID のセット。
+            now: 基準時刻。None の場合は現在時刻を使用。
 
         Returns:
             処理結果を格納した PurgerResult。
         """
-        filters = MemoryFilters(archived=True)
-        memories = await self._storage.list_by_filter(filters)
+        if retention_days is not None and retention_days < 0:
+            raise ValueError(f"retention_days must be non-negative, got {retention_days}")
 
-        now = datetime.now(timezone.utc)
-        expiry_threshold = now - timedelta(days=self._retention_days)
+        if now is None:
+            now = datetime.now(timezone.utc)
+        target_retention = retention_days if retention_days is not None else self._retention_days
+        expiry_threshold = now - timedelta(days=target_retention)
 
         purged_count = 0
-        checked_count = len(memories)
+        checked_count = 0
+        page_size = 100
+        last_id = None
+        last_archived_at = None
 
-        for i, memory in enumerate(memories):
-            if heartbeat_fn and i % 10 == 0:
-                await heartbeat_fn()
+        while True:
+            # 安定したページングのために (archived_at, id) ASC で取得
+            filters = MemoryFilters(
+                archived=True,
+                limit=page_size,
+                order_by="archived_at ASC, id ASC",
+                archived_after=last_archived_at,
+                id_after=last_id,
+            )
+            memories = await self._storage.list_by_filter(filters)
+            if not memories:
+                break
+            current_page_len = len(memories)
 
-            # MemoryFilters(archived=True) で取得済みだが、ストレージ実装の保証に依存しないよう防御チェック
-            if memory.archived_at is None:
-                continue
-            if memory.archived_at < expiry_threshold:
+            for memory in memories:
                 memory_id = str(memory.id)
-                await self._storage.delete_memory(memory_id)
-                if self._graph is not None:
-                    await self._graph.delete_node(memory_id)
-                purged_count += 1
+                # simulated_archived_ids に含まれる ID は、今アーカイブされたばかりなので
+                # この Purger 実行での削除対象（およびチェック対象）からは除外する。
+                if simulated_archived_ids and memory_id in simulated_archived_ids:
+                    continue
+
+                checked_count += 1
+                if heartbeat_fn and checked_count % 10 == 0:
+                    await heartbeat_fn()
+
+                # ページングを確実に進めるために ID とタイムスタンプを更新
+                last_id = memory_id
+                last_archived_at = memory.archived_at
+
+                # MemoryFilters(archived=True) で取得済みだが、ストレージ実装の保証に依存しないよう防御チェック
+                if memory.archived_at is None:
+                    continue
+                if memory.archived_at < expiry_threshold:
+                    if not dry_run:
+                        await self._storage.delete_memory(memory_id)
+                        if self._graph is not None:
+                            await self._graph.delete_node(memory_id)
+                    purged_count += 1
+
+            if current_page_len < page_size:
+                break
 
         return PurgerResult(purged_count=purged_count, checked_count=checked_count)

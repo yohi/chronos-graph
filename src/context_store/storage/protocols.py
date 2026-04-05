@@ -32,6 +32,7 @@ class MemoryFilters:
     order_by: str | None = None
     session_id: str | None = None
     created_after: datetime | None = None
+    archived_after: datetime | None = None
     id_after: str | None = None
 
 
@@ -97,6 +98,14 @@ class StorageAdapter(Protocol):
 
     async def count_by_filter(self, filters: MemoryFilters) -> int:
         """Count memories matching the given filters."""
+        ...
+
+    async def list_projects(self) -> list[str]:
+        """List all unique project names present in the storage.
+
+        Returns:
+            A list of project names (excluding None/empty).
+        """
         ...
 
     async def increment_memory_access_count(self, memory_id: str) -> bool:

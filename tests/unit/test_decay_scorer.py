@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+
 from context_store.lifecycle.decay_scorer import DecayScorer
 from context_store.models.memory import Memory, MemoryType, SourceType
 from tests.unit.conftest import make_settings

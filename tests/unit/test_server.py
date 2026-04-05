@@ -2,6 +2,7 @@
 
 Orchestrator をモックし、実際の DB には接続しない。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,7 +26,9 @@ def mock_orchestrator() -> MagicMock:
     orch.search_graph = AsyncMock(return_value={"results": [], "total": 0})
     orch.delete = AsyncMock(return_value=True)
     orch.prune = AsyncMock(return_value=5)
-    orch.stats = AsyncMock(return_value={"active_count": 10, "archived_count": 2, "total_count": 12, "project": None})
+    orch.stats = AsyncMock(
+        return_value={"active_count": 10, "archived_count": 2, "total_count": 12, "project": None}
+    )
     orch.dispose = AsyncMock(return_value=None)
     return orch
 
@@ -102,9 +105,7 @@ async def test_memory_save_default_source_is_conversation(
 
 
 @pytest.mark.asyncio
-async def test_memory_save_explicit_source_manual(
-    chronos_server, mock_orchestrator: MagicMock
-):
+async def test_memory_save_explicit_source_manual(chronos_server, mock_orchestrator: MagicMock):
     """source="manual" を明示した場合は "manual" が保持されること。"""
     await chronos_server.memory_save(content="test content", source="manual")
 
@@ -119,9 +120,7 @@ async def test_memory_save_explicit_source_manual(
 
 
 @pytest.mark.asyncio
-async def test_memory_save_delegates_to_orchestrator(
-    chronos_server, mock_orchestrator: MagicMock
-):
+async def test_memory_save_delegates_to_orchestrator(chronos_server, mock_orchestrator: MagicMock):
     """memory_save が orchestrator.save() に委譲されること。"""
     result = await chronos_server.memory_save(
         content="hello",
@@ -166,9 +165,7 @@ async def test_memory_search_delegates_to_orchestrator(
 
 
 @pytest.mark.asyncio
-async def test_memory_search_passes_parameters(
-    chronos_server, mock_orchestrator: MagicMock
-):
+async def test_memory_search_passes_parameters(chronos_server, mock_orchestrator: MagicMock):
     """memory_search がパラメータを正しく渡すこと。"""
     await chronos_server.memory_search(
         query="test",
@@ -225,9 +222,7 @@ async def test_memory_delete_delegates_to_orchestrator(
 
 
 @pytest.mark.asyncio
-async def test_memory_prune_default_dry_run_true(
-    chronos_server, mock_orchestrator: MagicMock
-):
+async def test_memory_prune_default_dry_run_true(chronos_server, mock_orchestrator: MagicMock):
     """dry_run のデフォルトが True であること。"""
     await chronos_server.memory_prune()
 
@@ -239,9 +234,7 @@ async def test_memory_prune_default_dry_run_true(
 
 
 @pytest.mark.asyncio
-async def test_memory_prune_explicit_dry_run_false(
-    chronos_server, mock_orchestrator: MagicMock
-):
+async def test_memory_prune_explicit_dry_run_false(chronos_server, mock_orchestrator: MagicMock):
     """dry_run=False を明示した場合は False が渡されること。"""
     await chronos_server.memory_prune(dry_run=False)
 
@@ -257,9 +250,7 @@ async def test_memory_prune_explicit_dry_run_false(
 
 
 @pytest.mark.asyncio
-async def test_memory_stats_delegates_to_orchestrator(
-    chronos_server, mock_orchestrator: MagicMock
-):
+async def test_memory_stats_delegates_to_orchestrator(chronos_server, mock_orchestrator: MagicMock):
     """memory_stats が orchestrator.stats() に委譲されること。"""
     result = await chronos_server.memory_stats()
 
@@ -284,9 +275,7 @@ async def test_memory_save_url_delegates_to_orchestrator(
 
 
 @pytest.mark.asyncio
-async def test_memory_save_url_uses_semaphore(
-    chronos_server, mock_orchestrator: MagicMock
-):
+async def test_memory_save_url_uses_semaphore(chronos_server, mock_orchestrator: MagicMock):
     """URL 取得時にセマフォが使われること（並行呼び出しで制限されること）。"""
     # セマフォのカウントを1にして排他制御を確認
     chronos_server._url_semaphore = asyncio.Semaphore(1)

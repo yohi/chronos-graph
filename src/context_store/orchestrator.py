@@ -3,6 +3,7 @@
 Settings から各アダプター・パイプラインを束ね、外部への操作インターフェースを提供する。
 RL 拡張フックを受け取り、None の場合は NoOp 実装を使用する。
 """
+
 from __future__ import annotations
 
 import logging
@@ -72,9 +73,15 @@ class Orchestrator:
         self._settings = settings
 
         # RL 拡張フック（None の場合は NoOp）
-        self.action_logger: "ActionLogger" = action_logger if action_logger is not None else NoOpActionLogger()
-        self.reward_signal: "RewardSignal" = reward_signal if reward_signal is not None else NoOpRewardSignal()
-        self.policy_hook: "PolicyHook" = policy_hook if policy_hook is not None else NoOpPolicyHook()
+        self.action_logger: "ActionLogger" = (
+            action_logger if action_logger is not None else NoOpActionLogger()
+        )
+        self.reward_signal: "RewardSignal" = (
+            reward_signal if reward_signal is not None else NoOpRewardSignal()
+        )
+        self.policy_hook: "PolicyHook" = (
+            policy_hook if policy_hook is not None else NoOpPolicyHook()
+        )
 
     async def _check_vector_dimension(self) -> None:
         """ストレージに保存されたベクトル次元と現在の次元を比較する。
@@ -226,14 +233,10 @@ class Orchestrator:
             RuntimeError: グラフが無効な場合。
         """
         if self._graph is None:
-            raise RuntimeError(
-                "グラフ機能が無効です。graph_enabled=true を設定してください。"
-            )
+            raise RuntimeError("グラフ機能が無効です。graph_enabled=true を設定してください。")
         # TODO(Phase 9): edge_types と depth を RetrievalPipeline の graph_traversal に渡す。
         # 現時点ではベクトル検索でシードノードを特定し、グラフアダプターへの委譲は未実装。
-        search_result = await self._retrieval_pipeline.search(
-            query, project=project, top_k=5
-        )
+        search_result = await self._retrieval_pipeline.search(query, project=project, top_k=5)
         return search_result
 
     async def delete(self, memory_id: str) -> bool:
@@ -273,9 +276,7 @@ class Orchestrator:
             from context_store.models.memory import Memory
 
             cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
-            archived_memories = await self._storage.list_by_filter(
-                MemoryFilters(archived=True)
-            )
+            archived_memories = await self._storage.list_by_filter(MemoryFilters(archived=True))
             target_count = sum(
                 1
                 for m in archived_memories
@@ -286,9 +287,7 @@ class Orchestrator:
         await self._lifecycle_manager.run_cleanup()
         return 0
 
-    async def stats(
-        self, project: str | None = None
-    ) -> dict[str, Any]:
+    async def stats(self, project: str | None = None) -> dict[str, Any]:
         """ストレージの統計情報を返す。
 
         Args:

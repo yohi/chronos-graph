@@ -4,6 +4,7 @@ FastMCP を使用して 7 ツールと 2 リソースを公開する。
 Orchestrator は初回ツール呼び出し時に遅延初期化する（MCPハンドシェイク時は
 重いモジュールをロードしない）。
 """
+
 from __future__ import annotations
 
 import asyncio

@@ -1,4 +1,5 @@
 """Orchestrator のユニットテスト。"""
+
 from __future__ import annotations
 
 import logging
@@ -140,7 +141,16 @@ async def _build_orchestrator(
     )
     # フェイルファストチェック（次元不一致時は ConfigurationError を raise）
     await orch._check_vector_dimension()
-    return orch, storage, graph, cache, embedding, ingestion_pipeline, retrieval_pipeline, lifecycle_manager
+    return (
+        orch,
+        storage,
+        graph,
+        cache,
+        embedding,
+        ingestion_pipeline,
+        retrieval_pipeline,
+        lifecycle_manager,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -312,9 +322,7 @@ class TestSearchOperation:
             side_effect=lambda q, s: s  # そのまま返す
         )
         retrieval = _make_mock_retrieval_pipeline()
-        orch, *_ = await _build_orchestrator(
-            retrieval_pipeline=retrieval, policy_hook=policy_hook
-        )
+        orch, *_ = await _build_orchestrator(retrieval_pipeline=retrieval, policy_hook=policy_hook)
 
         await orch.search("test query")
 
@@ -336,9 +344,7 @@ class TestSearchOperation:
         policy_hook.adjust_strategy = AsyncMock(return_value=custom_strategy)
 
         retrieval = _make_mock_retrieval_pipeline()
-        orch, *_ = await _build_orchestrator(
-            retrieval_pipeline=retrieval, policy_hook=policy_hook
-        )
+        orch, *_ = await _build_orchestrator(retrieval_pipeline=retrieval, policy_hook=policy_hook)
 
         await orch.search("test query")
 
@@ -448,9 +454,7 @@ class TestPruneOperation:
         lifecycle = _make_mock_lifecycle_manager()
         storage = _make_mock_storage()
         storage.list_by_filter = AsyncMock(return_value=[])
-        orch, *_ = await _build_orchestrator(
-            lifecycle_manager=lifecycle, storage=storage
-        )
+        orch, *_ = await _build_orchestrator(lifecycle_manager=lifecycle, storage=storage)
 
         result = await orch.prune(older_than_days=30, dry_run=True)
 

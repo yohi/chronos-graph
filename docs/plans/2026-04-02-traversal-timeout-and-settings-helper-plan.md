@@ -12,7 +12,7 @@ Execute this plan task-by-task using the project's standard plan-execution workf
 
 ---
 
-### Task 1: Refactor sqlite_graph.py Timeout Logic
+## Task 1: Refactor sqlite_graph.py Timeout Logic
 
 **Files:**
 - Modify: `src/context_store/storage/sqlite_graph.py:216-245`
@@ -60,7 +60,7 @@ Remove the logic that sets `partial` and `timeout` since it's now handled inside
 Run: `pytest tests/unit/test_sqlite_graph.py`
 Expected: PASS
 
-### Task 2: Centralize `make_settings` in `tests/unit/conftest.py`
+## Task 2: Centralize `make_settings` in `tests/unit/conftest.py`
 
 **Files:**
 - Modify: `tests/unit/conftest.py`
@@ -94,7 +94,7 @@ def make_settings(**kwargs) -> Settings:
     return Settings.model_construct(**defaults)
 ```
 
-### Task 3: Update Test Files to Use Shared `make_settings`
+## Task 3: Update Test Files to Use Shared `make_settings`
 
 **Files:**
 - Modify: `tests/unit/test_config.py`
@@ -116,7 +116,7 @@ def make_settings(**kwargs) -> Settings:
 - Remove local `make_settings`.
 - Import `make_settings` from `.conftest`.
 
-### Task 4: Final Verification
+## Task 4: Final Verification
 
 **Step 1: Run all unit tests**
 

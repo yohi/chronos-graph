@@ -1,7 +1,5 @@
 # ChronosGraph (旧: Context Store MCP v2.0) Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
 **Goal:** AIエージェント向けMCPベース長期記憶システムをPython + FastMCPで全面構築する
 
 **Architecture:** パイプライン指向アーキテクチャ。Ingestion / Retrieval / Lifecycle の3パイプラインを Orchestrator が統合。Storage Layer は Protocol ベースの抽象層を介して PostgreSQL + Neo4j + Redis に接続。

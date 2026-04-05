@@ -17,7 +17,6 @@ from context_store.extensions.protocols import (
 )
 from context_store.models.search import SearchStrategy
 
-
 # ---------------------------------------------------------------------------
 # AgentAction
 # ---------------------------------------------------------------------------

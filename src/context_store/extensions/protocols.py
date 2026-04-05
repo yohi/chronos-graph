@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from context_store.models.search import SearchStrategy
 
@@ -22,7 +22,7 @@ class AgentAction:
     action_type: str
     memory_id: str | None = None
     query: str | None = None
-    metadata: dict = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -38,7 +38,7 @@ class RewardSignal(Protocol):
     """報酬シグナルの収集。"""
 
     async def record_reward(
-        self, memory_id: str, signal: float, context: dict
+        self, memory_id: str, signal: float, context: dict[str, Any]
     ) -> None: ...
 
 

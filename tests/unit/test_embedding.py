@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from context_store.embedding.protocols import EmbeddingProvider
 from context_store.embedding.openai import OpenAIEmbeddingProvider
+from context_store.embedding.protocols import EmbeddingProvider
 
 
 class TestEmbeddingProtocol:
@@ -29,6 +29,15 @@ class TestEmbeddingProtocol:
     def test_dimension_ada_model(self) -> None:
         provider = OpenAIEmbeddingProvider(api_key="test-key", model="text-embedding-ada-002")
         assert provider.dimension == 1536
+
+    def test_dimension_unknown_model_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        provider = OpenAIEmbeddingProvider(api_key="test-key", model="text-embedding-unknown")
+
+        with caplog.at_level("WARNING"):
+            assert provider.dimension == 1536
+
+        assert "fallback=1536" in caplog.text
+        assert "text-embedding-unknown" in caplog.text
 
 
 class TestOpenAIEmbeddingProvider:
@@ -75,7 +84,7 @@ class TestOpenAIEmbeddingProvider:
             results = await provider.embed_batch(texts)
 
         assert len(results) == 5
-        for i, (result, expected) in enumerate(zip(results, vectors)):
+        for i, (result, expected) in enumerate(zip(results, vectors, strict=True)):
             assert result == expected, f"Order mismatch at index {i}"
 
     @pytest.mark.asyncio
@@ -179,3 +188,11 @@ class TestOpenAIEmbeddingProvider:
 
         assert len(results) == 1
         assert results[0] == expected_vector
+
+    @pytest.mark.asyncio
+    async def test_close_closes_shared_client(self, provider: OpenAIEmbeddingProvider) -> None:
+        provider._client.aclose = AsyncMock()
+
+        await provider.close()
+
+        provider._client.aclose.assert_awaited_once()

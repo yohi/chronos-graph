@@ -8,14 +8,13 @@ Each test runs inside a transaction that is rolled back after the test.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from context_store.models.memory import Memory, MemoryType, SourceType
 from context_store.storage.postgres import PostgresStorageAdapter
 from context_store.storage.protocols import MemoryFilters, StorageError
-
 
 pytestmark = pytest.mark.integration
 

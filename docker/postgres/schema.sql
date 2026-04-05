@@ -45,6 +45,7 @@ CREATE INDEX IF NOT EXISTS idx_memories_source_type  ON memories (source_type);
 CREATE INDEX IF NOT EXISTS idx_memories_archived_at  ON memories (archived_at);
 CREATE INDEX IF NOT EXISTS idx_memories_project      ON memories (project);
 CREATE INDEX IF NOT EXISTS idx_memories_created_at   ON memories (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memories_created_at_id ON memories (created_at ASC, id ASC);
 CREATE INDEX IF NOT EXISTS idx_memories_tags_gin     ON memories USING gin (tags);
 
 -- HNSW vector index (requires pgvector extension)

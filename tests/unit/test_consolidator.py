@@ -1,18 +1,20 @@
 """Consolidator のユニットテスト。"""
+
 from __future__ import annotations
 
-import asyncio
+import contextlib
 import logging
 import time
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
 
 from context_store.lifecycle.consolidator import Consolidator, ConsolidatorResult
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
-
+from context_store.storage.protocols import MemoryFilters
 
 # ---------------------------------------------------------------------------
 # ヘルパー
@@ -57,15 +59,44 @@ def _make_scored_memory(memory: Memory, score: float) -> ScoredMemory:
 def _make_storage(memories: list[Memory] | None = None) -> AsyncMock:
     """StorageAdapter モックを返す。"""
     storage = AsyncMock()
-    storage.list_by_filter.return_value = memories or []
+
+    async def list_by_filter(filters: MemoryFilters) -> list[Memory]:
+        mems = memories or []
+        # 簡易的なフィルタリング
+        if filters.created_after:
+            mems = [m for m in mems if m.created_at >= filters.created_after]
+
+        # 安定したソート (ASC)
+        mems = sorted(mems, key=lambda x: (x.created_at, x.id))
+
+        if filters.id_after:
+            # (created_at, id) > (cursor_ts, cursor_id) の比較をシミュレート
+            cursor_ts = filters.created_after or datetime.min.replace(tzinfo=timezone.utc)
+            cursor_id = filters.id_after
+            mems = [m for m in mems if (m.created_at, str(m.id)) > (cursor_ts, cursor_id)]
+
+        if filters.limit:
+            mems = mems[: filters.limit]
+        return mems
+
+    storage.list_by_filter.side_effect = list_by_filter
     storage.vector_search.return_value = []
     storage.update_memory.return_value = True
     return storage
 
 
+def extract_update_call(call) -> tuple[str, dict[str, Any]]:
+    """update_memory のコールから (id, updates) を抽出する。"""
+    if call.args:
+        # (memory_id, updates)
+        return str(call.args[0]), call.args[1]
+    return str(call.kwargs["memory_id"]), call.kwargs["updates"]
+
+
 # ---------------------------------------------------------------------------
 # 1. 重複検出ロジックのテスト
 # ---------------------------------------------------------------------------
+
 
 class TestDeduplicationLogic:
     """重複検出ロジックのテスト。"""
@@ -94,7 +125,11 @@ class TestDeduplicationLogic:
         assert result.consolidated_count >= 1
         # older_memory がアーカイブされること
         update_calls = storage.update_memory.call_args_list
-        archived_ids = [c.args[0] for c in update_calls if "archived_at" in c.args[1]]
+        archived_ids = [
+            extract_update_call(c)[0]
+            for c in update_calls
+            if "archived_at" in extract_update_call(c)[1]
+        ]
         assert str(older_memory.id) in archived_ids
 
     async def test_archives_regular_consolidation_candidate(self):
@@ -115,12 +150,13 @@ class TestDeduplicationLogic:
 
         # 0.85 <= score < 0.90 は通常統合候補として古い方がアーカイブされる
         update_calls_with_archive = [
-            c for c in storage.update_memory.call_args_list
-            if "archived_at" in c.args[1]
+            c
+            for c in storage.update_memory.call_args_list
+            if "archived_at" in extract_update_call(c)[1]
         ]
         # older_memory がアーカイブされること
         assert len(update_calls_with_archive) == 1
-        assert update_calls_with_archive[0].args[0] == str(other_memory.id)
+        assert extract_update_call(update_calls_with_archive[0])[0] == str(other_memory.id)
         assert result.consolidated_count == 1
 
     async def test_avoids_full_scan_uses_vector_search(self):
@@ -156,7 +192,10 @@ class TestDeduplicationLogic:
         await consolidator.run()
 
         call_args = storage.vector_search.call_args
-        assert call_args.kwargs.get("top_k", call_args.args[1] if len(call_args.args) > 1 else None) == 5
+        assert (
+            call_args.kwargs.get("top_k", call_args.args[1] if len(call_args.args) > 1 else None)
+            == 5
+        )
 
     async def test_skips_memory_without_embedding(self):
         """embedding が空のメモリは vector_search をスキップすること。"""
@@ -176,6 +215,7 @@ class TestDeduplicationLogic:
 # ---------------------------------------------------------------------------
 # 2. レースコンディションのシミュレーション（自己修復）
 # ---------------------------------------------------------------------------
+
 
 class TestSelfHealingRaceCondition:
     """レースコンディションによる重複見逃しの事後修復テスト。"""
@@ -199,7 +239,7 @@ class TestSelfHealingRaceCondition:
         storage.vector_search.side_effect = [
             # mem_a の検索結果
             [
-                _make_scored_memory(mem_a, 1.0),   # 自身
+                _make_scored_memory(mem_a, 1.0),  # 自身
                 _make_scored_memory(mem_b, 0.93),  # 重複！
             ],
             # mem_b の検索結果（既にアーカイブ済みのためスキップ or 検索後フィルタ）
@@ -240,7 +280,7 @@ class TestSelfHealingRaceCondition:
         ]
 
         consolidator = Consolidator(storage=storage)
-        result = await consolidator.run()
+        await consolidator.run()
 
         # older が archived_at 付きでアーカイブされること
         update_calls = storage.update_memory.call_args_list
@@ -251,7 +291,7 @@ class TestSelfHealingRaceCondition:
     async def test_already_archived_memory_skipped(self):
         """既にアーカイブ済みのメモリは処理対象に含まれないこと。"""
         active = _make_memory()
-        archived = _make_memory(
+        _make_memory(
             archived_at=datetime.now(timezone.utc) - timedelta(hours=1),
         )
 
@@ -267,6 +307,7 @@ class TestSelfHealingRaceCondition:
 # ---------------------------------------------------------------------------
 # 3. 優先順位テスト（自己修復 >= 0.90 を通常統合 0.85–0.89 より優先）
 # ---------------------------------------------------------------------------
+
 
 class TestPriorityProcessing:
     """優先順位テスト: 自己修復候補を通常統合候補より優先して処理することを検証。"""
@@ -302,9 +343,9 @@ class TestPriorityProcessing:
         ]
 
         consolidator = Consolidator(storage=storage)
-        result = await consolidator.run()
+        await consolidator.run(batch_size=1)
 
-        # 自己修復が実行されること（archived_at が設定されること）
+        # 自己修復が実行されること(archived_at が設定されること)
         update_calls = storage.update_memory.call_args_list
         archived_ids = {c.args[0] for c in update_calls if "archived_at" in c.args[1]}
         # mem_high_dup（古い方）がアーカイブされること
@@ -321,11 +362,11 @@ class TestPriorityProcessing:
         storage.vector_search.return_value = [
             _make_scored_memory(base, 1.0),
             _make_scored_memory(high_dup, 0.91),  # 自己修復
-            _make_scored_memory(low_dup, 0.87),   # 通常統合
+            _make_scored_memory(low_dup, 0.87),  # 通常統合
         ]
 
         consolidator = Consolidator(storage=storage)
-        result = await consolidator.run()
+        await consolidator.run()
 
         update_calls = storage.update_memory.call_args_list
         archived_ids = {c.args[0] for c in update_calls if "archived_at" in c.args[1]}
@@ -336,6 +377,7 @@ class TestPriorityProcessing:
 # ---------------------------------------------------------------------------
 # 4. パフォーマンステスト（10,000件モック）
 # ---------------------------------------------------------------------------
+
 
 class TestPerformance:
     """パフォーマンステスト: 10,000件のモックデータで O(M log N) であることを検証。"""
@@ -397,10 +439,8 @@ class TestPerformance:
         consolidator = Consolidator(storage=storage)
         await consolidator.run(batch_size=n)
 
-        # 各メモリに対して1回ずつ = N 回
+        # 各メモリに対して1回ずつ呼び出す（O(N^2) を避けるため N 回であることを確認）
         assert storage.vector_search.call_count == n
-        # O(N^2) = N*(N-1)/2 = 4950 にはなっていない
-        assert storage.vector_search.call_count < n * (n - 1) // 2
 
     async def test_batch_size_limits_processing(self):
         """batch_size が設定された件数だけ処理すること（メモリ枯渇防止）。"""
@@ -423,6 +463,8 @@ class TestPerformance:
 # 5. 監視ログのテスト
 # ---------------------------------------------------------------------------
 
+
+@contextlib.contextmanager
 def _capture_logs(logger_name: str) -> list[logging.LogRecord]:
     """指定ロガーのログレコードを一時的にキャプチャするヘルパー。
 
@@ -441,11 +483,6 @@ def _capture_logs(logger_name: str) -> list[logging.LogRecord]:
         yield records
     finally:
         log.removeHandler(handler)
-
-
-import contextlib
-
-_capture_logs = contextlib.contextmanager(_capture_logs)  # type: ignore[assignment]
 
 
 class TestMonitoringLogs:
@@ -545,6 +582,7 @@ class TestMonitoringLogs:
 # 6. GraphAdapter / EmbeddingProvider 連携テスト
 # ---------------------------------------------------------------------------
 
+
 class TestGraphAndEmbeddingIntegration:
     """GraphAdapter と EmbeddingProvider との連携テスト。"""
 
@@ -567,10 +605,23 @@ class TestGraphAndEmbeddingIntegration:
 
         # SUPERSEDES エッジが作成されること
         graph.create_edge.assert_called_once()
-        call_kwargs = graph.create_edge.call_args
-        # from=base(新), to=duplicate(古) または args として呼ばれること
-        args = call_kwargs.args if call_kwargs.args else list(call_kwargs.kwargs.values())
-        assert "SUPERSEDES" in args
+        call = graph.create_edge.call_args
+
+        # Newer (base) -> Older (duplicate)
+        # Positional: (from, to, type, props)
+        # Kwargs: from_id, to_id, edge_type, props
+        if call.args:
+            assert str(base.id) in str(call.args[0])
+            assert str(duplicate.id) in str(call.args[1])
+            assert "SUPERSEDES" == call.args[2]
+        else:
+            kwargs = call.kwargs
+            from_id = kwargs.get("from_id") or kwargs.get("from")
+            to_id = kwargs.get("to_id") or kwargs.get("to")
+            edge_type = kwargs.get("edge_type") or kwargs.get("type")
+            assert str(base.id) in str(from_id)
+            assert str(duplicate.id) in str(to_id)
+            assert "SUPERSEDES" == edge_type
 
     async def test_no_graph_edge_when_graph_not_provided(self):
         """GraphAdapter が None の場合、エッジ作成が呼ばれないこと。"""
@@ -609,14 +660,15 @@ class TestGraphAndEmbeddingIntegration:
         consolidator = Consolidator(storage=storage, embedding_provider=embedding_provider)
         await consolidator.run()
 
-        # embed が呼ばれること（マージ後の内容で再計算）
+        # embed が呼ばれること(マージ後の内容で再計算)
         # 少なくとも1回は呼ばれること
-        assert embedding_provider.embed.call_count >= 0  # Optional: 実装依存
+        assert embedding_provider.embed.call_count >= 1
 
 
 # ---------------------------------------------------------------------------
 # 7. sliding window (last_cleanup_at) テスト
 # ---------------------------------------------------------------------------
+
 
 class TestSlidingWindow:
     """スライディングウィンドウ（last_cleanup_at）のテスト。"""
@@ -626,7 +678,7 @@ class TestSlidingWindow:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
 
         recent_memory = _make_memory(created_at=datetime.now(timezone.utc))
-        old_memory = _make_memory(
+        _make_memory(
             created_at=datetime.now(timezone.utc) - timedelta(hours=2),
         )
 
@@ -662,13 +714,18 @@ class TestSlidingWindow:
         consolidator = Consolidator(storage=storage)
         await consolidator.run(last_cleanup_at=cutoff)
 
-        # list_by_filter が呼ばれること
-        storage.list_by_filter.assert_called()
+        # list_by_filter が正しいフィルタ(created_after == cutoff)で呼ばれること
+        # Note: 内部で MemoryFilters オブジェクトが渡されるため、属性をチェックするか
+        # 呼び出し時の引数をキャプチャして検証します。
+        storage.list_by_filter.assert_called_once()
+        call_args = storage.list_by_filter.call_args[0][0]
+        assert call_args.created_after == cutoff
 
 
 # ---------------------------------------------------------------------------
 # 8. ConsolidatorResult のテスト
 # ---------------------------------------------------------------------------
+
 
 class TestConsolidatorResult:
     """ConsolidatorResult のテスト。"""
@@ -709,3 +766,70 @@ class TestConsolidatorResult:
 
         assert result.checked_count == 1
         assert result.consolidated_count == 2  # dup1 と dup2 の両方がアーカイブ
+
+
+@pytest.mark.asyncio
+async def test_consolidator_skips_different_projects():
+    # Setup storage mock
+    mock_storage = AsyncMock()
+
+    # Base memory (project 'A')
+    memory_a = Memory(
+        id=uuid4(),
+        content="test",
+        memory_type=MemoryType.EPISODIC,
+        source_type=SourceType.CONVERSATION,
+        source_metadata={},
+        embedding=[0.1],
+        semantic_relevance=0.5,
+        importance_score=0.5,
+        access_count=0,
+        last_accessed_at=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        archived_at=None,
+        tags=[],
+        project="A",
+    )
+
+    # Neighbor memory (project 'B')
+    memory_b = Memory(
+        id=uuid4(),
+        content="test 2",
+        memory_type=MemoryType.EPISODIC,
+        source_type=SourceType.CONVERSATION,
+        source_metadata={},
+        embedding=[0.1],
+        semantic_relevance=0.5,
+        importance_score=0.5,
+        access_count=0,
+        last_accessed_at=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        archived_at=None,
+        tags=[],
+        project="B",
+    )
+
+    scored_b = ScoredMemory(memory=memory_b, score=0.99, source=MemorySource.VECTOR)
+
+    mock_storage.list_by_filter.return_value = [memory_a]
+    mock_storage.vector_search.return_value = [scored_b]
+
+    consolidator = Consolidator(storage=mock_storage)
+    result = await consolidator.run()
+
+    # Since neighbor is from project B and base is from A, it should be skipped
+    assert result.consolidated_count == 0
+    mock_storage.update_memory.assert_not_called()
+
+
+def test_consolidator_uses_settings_defaults():
+    from context_store.config import Settings
+    from context_store.lifecycle.consolidator import Consolidator
+
+    # We don't pass settings, it should use Settings.model_construct() defaults
+    consolidator = Consolidator(storage=MagicMock())
+    settings = Settings.model_construct()
+    assert consolidator._dedup_threshold == settings.dedup_threshold
+    assert consolidator._consolidation_threshold == settings.consolidation_threshold

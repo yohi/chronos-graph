@@ -8,9 +8,8 @@ from __future__ import annotations
 
 import os
 
-import pytest
 import asyncpg
-
+import pytest
 
 PG_HOST = os.getenv("PG_HOST", "localhost")
 PG_PORT = int(os.getenv("PG_PORT", "5433"))

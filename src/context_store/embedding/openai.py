@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import tenacity
@@ -15,6 +15,8 @@ _MODEL_DIMENSIONS: dict[str, int] = {
     "text-embedding-3-small": 1536,
     "text-embedding-3-large": 3072,
     "text-embedding-ada-002": 1536,
+    "text-embedding-4-small": 1536,
+    "text-embedding-4-large": 3072,
 }
 
 _DEFAULT_CHUNK_SIZE = 100
@@ -49,11 +51,23 @@ class OpenAIEmbeddingProvider:
         self._model = model
         self._chunk_size = chunk_size
         self._timeout = timeout
+        self._client = httpx.AsyncClient(timeout=self._timeout)
+        self._dimension_warning_emitted = False
 
     @property
     def dimension(self) -> int:
         """埋め込みベクトルの次元数を返す。"""
-        return _MODEL_DIMENSIONS.get(self._model, 1536)
+        dimension = _MODEL_DIMENSIONS.get(self._model)
+        if dimension is not None:
+            return dimension
+        if not self._dimension_warning_emitted:
+            logger.warning(
+                "Unknown OpenAI embedding model '%s'; using fallback=1536. "
+                "Add the model to _MODEL_DIMENSIONS if its dimension is known.",
+                self._model,
+            )
+            self._dimension_warning_emitted = True
+        return 1536
 
     async def embed(self, text: str) -> list[float]:
         """単一テキストを埋め込みベクトルに変換する。"""
@@ -92,14 +106,17 @@ class OpenAIEmbeddingProvider:
     )
     async def _post(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         """OpenAI API にPOSTリクエストを送信する。"""
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            response = await client.post(
-                endpoint,
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
-            )
-            response.raise_for_status()
-            return response.json()
+        response = await self._client.post(
+            endpoint,
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        response.raise_for_status()
+        return cast(dict[str, Any], response.json())
+
+    async def close(self) -> None:
+        """内部 AsyncClient をクローズする。"""
+        await self._client.aclose()

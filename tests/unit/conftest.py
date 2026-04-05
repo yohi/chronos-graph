@@ -18,8 +18,25 @@ def make_settings(**kwargs) -> Settings:
         "cache_coherence_poll_interval_seconds": 5.0,
         "postgres_host": "localhost",
         "postgres_password": "test",
+        "postgres_port": 5432,
+        "postgres_user": "postgres",
+        "postgres_db": "testdb",
+        "redis_url": "redis://localhost:6379",
+        "neo4j_uri": "bolt://localhost:7687",
+        "neo4j_user": "neo4j",
         "neo4j_password": "test",
+        "embedding_provider": "openai",
         "openai_api_key": "sk-test",
+        "local_model_name": "cl-nagoya/ruri-v3-310m",
+        "litellm_api_base": "http://localhost:4000",
+        "custom_api_endpoint": "http://localhost:8080/embed",
     }
+
+    # Detect unknown override keys using the actual Settings schema.
+    allowed_fields = set(Settings.model_fields.keys())
+    unknown = set(kwargs.keys()) - allowed_fields
+    if unknown:
+        raise ValueError(f"Unknown settings overrides: {sorted(list(unknown))}")
+
     defaults.update(kwargs)
     return Settings(_env_file=None, **defaults)

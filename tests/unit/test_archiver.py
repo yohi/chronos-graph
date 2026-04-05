@@ -1,10 +1,10 @@
 """Archiver のユニットテスト。"""
+
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
-
-import pytest
 
 from context_store.lifecycle.archiver import Archiver, ArchiverResult
 from context_store.models.memory import Memory, MemoryType, SourceType
@@ -31,6 +31,23 @@ def _make_memory(
 
 
 class TestArchiverBasic:
+    async def test_run_does_not_count_failed_update(self):
+        """ストレージの更新に失敗した場合、archived_count が増えないことを確認。"""
+        storage = AsyncMock()
+        scorer = MagicMock()
+
+        memory = _make_memory()
+        storage.list_by_filter.return_value = [memory]
+        scorer.is_below_archive_threshold.return_value = True
+        storage.update_memory.return_value = False
+
+        archiver = Archiver(storage=storage, scorer=scorer)
+        result = await archiver.run()
+
+        assert result.archived_count == 0
+        assert result.checked_count == 1
+        storage.update_memory.assert_called_once()
+
     """Archiver の基本動作テスト。"""
 
     async def test_archives_memory_below_threshold(self):
@@ -198,3 +215,64 @@ class TestArchiverResult:
 
         assert result.archived_count == 3
         assert result.checked_count == 5
+
+
+class TestArchiverPagination:
+    """Archiver のページネーションテスト。"""
+
+    async def test_pagination_multiple_pages(self):
+        """101件以上の記憶がある場合、ページ分割して全件処理されること。"""
+        storage = AsyncMock()
+        scorer = MagicMock()
+
+        # 120件の記憶を作成
+        all_memories = [_make_memory() for _ in range(120)]
+        # ID と作成日時をユニークにする（カーソル用）
+
+        base_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        for i, m in enumerate(all_memories):
+            m.id = uuid.uuid4()
+            m.created_at = base_time + timedelta(seconds=i)
+
+        # list_by_filter の戻り値をシミュレート（100件, 20件, 0件）
+        storage.list_by_filter.side_effect = [
+            all_memories[:100],
+            all_memories[100:120],
+            [],
+        ]
+        # 全てアーカイブ対象外とする
+        scorer.is_below_archive_threshold.return_value = False
+
+        archiver = Archiver(storage=storage, scorer=scorer)
+        result = await archiver.run()
+
+        # 合計 120 件がチェックされたことを確認
+        assert result.checked_count == 120
+        assert result.archived_count == 0
+        # 3回（データ取得用2回 + 終了確認用1回）呼び出されたことを確認
+        # ※ 実装によっては current_page_len < page_size で break するため 2 回になる可能性あり
+        assert storage.list_by_filter.call_count in (2, 3)
+
+        # 2回目の呼び出しで正しいカーソルが渡されているか確認
+        # list_by_filter.call_args_list[1] = (filters,)
+        filters_page2 = storage.list_by_filter.call_args_list[1][0][0]
+        assert filters_page2.limit == 100
+        assert filters_page2.order_by == "created_at ASC, id ASC"
+        # 1ページ目の最後の要素 (index 99) の値がセットされているはず
+        assert filters_page2.id_after == str(all_memories[99].id)
+        assert filters_page2.created_after == all_memories[99].created_at
+
+    async def test_pagination_stops_correctly_on_exact_page_size(self):
+        """ちょうどページサイズ（100件）の場合、1ページで終了すること。"""
+        storage = AsyncMock()
+        scorer = MagicMock()
+
+        memories = [_make_memory() for _ in range(100)]
+        storage.list_by_filter.side_effect = [memories, []]
+        scorer.is_below_archive_threshold.return_value = False
+
+        archiver = Archiver(storage=storage, scorer=scorer)
+        result = await archiver.run()
+
+        assert result.checked_count == 100
+        assert storage.list_by_filter.call_count == 2

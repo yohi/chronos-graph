@@ -1,10 +1,9 @@
 """Purger のユニットテスト。"""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
-
-import pytest
+from unittest.mock import AsyncMock
 
 from context_store.lifecycle.purger import Purger, PurgerResult
 from context_store.models.memory import Memory, MemoryType, SourceType
@@ -170,7 +169,7 @@ class TestPurgerBoundaryConditions:
     """Purger の境界値テスト。"""
 
     async def test_exactly_at_retention_boundary_is_not_purged(self):
-        """ちょうど retention_days 秒後の記憶は削除されないこと。"""
+        """ちょうど retention_days 日後の記憶は削除されないこと。"""
         storage = AsyncMock()
         graph = AsyncMock()
 

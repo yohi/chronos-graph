@@ -144,7 +144,7 @@ class Consolidator:
             if memory_id in archived_in_this_run:
                 continue
 
-            # 通常統合候補を処理（0.85 <= score < 0.90）
+            # 通常統合候補を処理(0.85 <= score < 0.90)
             for scored in regular_candidates:
                 success, newer_id = await self._process_candidate(
                     memory, scored, archived_in_this_run, "Consolidation", now
@@ -157,7 +157,7 @@ class Consolidator:
                 if memory_id in archived_in_this_run:
                     break
 
-        # 影響を受けた記憶（生き残った方）の埋め込みを再計算（任意）
+        # 影響を受けた記憶(生き残った方)の埋め込みを再計算(任意)
         if self._embedding_provider and affected_memory_ids:
             # ここでは簡単のため、生き残った側の内容で再計算するロジックのプレースホルダ
             # 実際には複数マージされた場合は内容を結合して再計算するのが望ましい
@@ -193,7 +193,7 @@ class Consolidator:
         log_prefix: str,
         now: datetime,
     ) -> tuple[bool, str | None]:
-        """統合候補を処理（アーカイブ + エッジ作成）。
+        """統合候補を処理(アーカイブ + エッジ作成)。
 
         Returns:
             (成功したかどうか, 生き残った側の ID)
@@ -241,7 +241,7 @@ class Consolidator:
     def _determine_order(self, mem_a: "Memory", mem_b: "Memory") -> tuple["Memory", "Memory"]:
         """どちらが古く、どちらが新しいかを決定する。
 
-        created_at が古い方をアーカイブ対象（older）とする。
+        created_at が古い方をアーカイブ対象(older)とする。
         同時刻の場合は ID の辞書順で決定。
         """
         if (mem_a.created_at, str(mem_a.id)) <= (mem_b.created_at, str(mem_b.id)):
@@ -265,9 +265,12 @@ class Consolidator:
         if not self._embedding_provider:
             return
 
-        memory = await self._storage.get_memory(memory_id)
-        if not memory:
-            return
+        try:
+            memory = await self._storage.get_memory(memory_id)
+            if not memory:
+                return
 
-        new_embedding = await self._embedding_provider.embed(memory.content)
-        await self._storage.update_memory(memory_id, {"embedding": new_embedding})
+            new_embedding = await self._embedding_provider.embed(memory.content)
+            await self._storage.update_memory(memory_id, {"embedding": new_embedding})
+        except Exception:
+            logger.exception("Failed to recompute embedding for memory %s", memory_id)

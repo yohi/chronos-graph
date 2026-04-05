@@ -167,18 +167,18 @@ async def create_storage(
         if cache_adp:
             try:
                 await cache_adp.dispose()
-            except Exception as e:
-                logger.error("Failed to dispose cache_adp: %s", e)
+            except Exception:
+                logger.exception("Failed to dispose cache_adp")
         if graph_adp:
             try:
                 await graph_adp.dispose()
-            except Exception as e:
-                logger.error("Failed to dispose graph_adp: %s", e)
+            except Exception:
+                logger.exception("Failed to dispose graph_adp")
         if storage:
             try:
                 await storage.dispose()
-            except Exception as e:
-                logger.error("Failed to dispose storage: %s", e)
+            except Exception:
+                logger.exception("Failed to dispose storage")
         raise
 
 

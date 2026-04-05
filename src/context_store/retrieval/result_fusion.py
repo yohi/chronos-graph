@@ -33,7 +33,7 @@ class ResultFusion:
 
         Args:
             k: RRF定数
-            half_life_days: 時間減衰の半減期（日）
+            half_life_days: 時間減衰の半減期(日)
             rrf_weight: RRFスコアの重み
             time_decay_weight: 時間減衰スコアの重み
             importance_weight: 重要度スコアの重み
@@ -41,8 +41,14 @@ class ResultFusion:
         if half_life_days <= 0:
             raise ValueError("half_life_days must be greater than zero")
 
-        # 重みの合計が 1.0 になるようにバリデーション（または正規化）
+        # 重みのバリデーション: 全て 0 以上で、合計が 0 より大きいことを確認
+        if rrf_weight < 0 or time_decay_weight < 0 or importance_weight < 0:
+            raise ValueError("All weights must be non-negative")
+
         weights_sum = rrf_weight + time_decay_weight + importance_weight
+        if weights_sum <= 0:
+            raise ValueError("Sum of weights must be greater than zero")
+
         if abs(weights_sum - 1.0) > 1e-6:
             # 1.0 でない場合は正規化する
             logger.warning(
@@ -77,7 +83,7 @@ class ResultFusion:
             k: RRF定数
 
         Returns:
-            正規化されたスコア（[0.0, 1.0]の範囲）
+            正規化されたスコア([0.0, 1.0]の範囲)
         """
         if k is None:
             k = self.k
@@ -110,18 +116,18 @@ class ResultFusion:
         graph_weight: float,
     ) -> float:
         """
-        複数の検索結果のRRFスコアを計算
+        複数の検索結果のRRFスコアを計算(0.0~1.0 に正規化)
 
         Args:
-            vector_rank: ベクトル検索でのランク（なければNone）
-            keyword_rank: キーワード検索でのランク（なければNone）
-            graph_rank: グラフ検索でのランク（なければNone）
+            vector_rank: ベクトル検索でのランク(なければNone)
+            keyword_rank: キーワード検索でのランク(なければNone)
+            graph_rank: グラフ検索でのランク(なければNone)
             vector_weight: ベクトル検索の重み
             keyword_weight: キーワード検索の重み
             graph_weight: グラフ検索の重み
 
         Returns:
-            RRFスコア
+            RRFスコア(0.0~1.0 に正規化)
         """
         score = 0.0
 
@@ -134,20 +140,24 @@ class ResultFusion:
         if graph_rank is not None:
             score += graph_weight * (1.0 / (self.k + graph_rank + 1))
 
-        return score
+        # [0.0, 1.0] の範囲に正規化 (全ソースで 1 位だった場合を 1.0 とする)
+        max_possible = (vector_weight + keyword_weight + graph_weight) / (self.k + 1)
+        if max_possible > 0:
+            return score / max_possible
+        return 0.0
 
     def compute_time_decay(
         self,
         last_accessed_at: datetime,
     ) -> float:
         """
-        時間減衰を計算（小数精度の経過時間を使用）
+        時間減衰を計算(小数精度の経過時間を使用)
 
         Args:
             last_accessed_at: 最終アクセス日時
 
         Returns:
-            時間減衰スコア（[0.0, 1.0]）
+            時間減衰スコア([0.0, 1.0])
         """
         now = datetime.now(timezone.utc)
         if last_accessed_at.tzinfo is None:
@@ -155,8 +165,8 @@ class ResultFusion:
         else:
             last_accessed_at = last_accessed_at.astimezone(timezone.utc)
         delta = now - last_accessed_at
-        # 日単位で切り捨てず、秒単位の精度で経過日数を算出
-        days_elapsed = delta.total_seconds() / 86400.0
+        # 未来の日時などで負になるのを防ぐため 0.0 にクランプ
+        days_elapsed = max(delta.total_seconds() / 86400.0, 0.0)
 
         recency: float = 0.5 ** (days_elapsed / self.half_life_days)
         return recency
@@ -167,7 +177,7 @@ class ResultFusion:
         strategy: SearchStrategy,
     ) -> list[dict[str, Any]]:
         """
-        検索結果を統合（単一ソース用）
+        検索結果を統合(単一ソース用)
 
         Args:
             results: ScoredMemoryのリスト
@@ -182,8 +192,8 @@ class ResultFusion:
         fused_results = []
 
         for rank, result in enumerate(results):
-            # RRFスコア（単一ソースなので、ランクが同じ）
-            rrf_raw = 1.0 / (self.k + rank + 1)
+            # RRFスコア(単一ソースなので、ランクを正規化)
+            rrf_raw = (self.k + 1) / (self.k + rank + 1)
 
             # 複合スコア計算
             time_decay = (

@@ -766,7 +766,7 @@ class LifecycleManager:
             cleanup_start_save_count = state.save_count
             logger.info("Starting cleanup (save_count=%d).", cleanup_start_save_count)
 
-            async def heartbeat_fn():
+            async def heartbeat_fn() -> None:
                 await self._state_store.heartbeat_cleanup_lock(token)
                 await self._check_lock_integrity(token)
 

@@ -79,6 +79,7 @@ class ChronosServer:
                     )
                 self._initialized = True
                 # ライフサイクルマネージャーを開始
+                assert self._orchestrator is not None
                 await self._orchestrator.start_lifecycle()
 
     # ---------------------------------------------------------------------------

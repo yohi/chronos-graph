@@ -32,6 +32,7 @@ class MemoryFilters:
     order_by: str | None = None
     session_id: str | None = None
     created_after: datetime | None = None
+    archived_after: datetime | None = None
     id_after: str | None = None
 
 

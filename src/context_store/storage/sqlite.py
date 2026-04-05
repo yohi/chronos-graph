@@ -853,6 +853,16 @@ class SQLiteStorageAdapter:
                 params.append(created_after_utc)
                 conditions.append(f"{prefix}created_at >= ?")
 
+        if filters.archived_after is not None:
+            archived_after_utc = filters.archived_after.astimezone(timezone.utc).isoformat()
+            if filters.id_after is not None:
+                params.append(archived_after_utc)
+                params.append(filters.id_after)
+                conditions.append(f"({prefix}archived_at, {prefix}id) > (?, ?)")
+            else:
+                params.append(archived_after_utc)
+                conditions.append(f"{prefix}archived_at >= ?")
+
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         return where_clause, params
 

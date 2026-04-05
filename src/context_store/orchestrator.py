@@ -282,6 +282,7 @@ class Orchestrator:
         Returns:
             削除した（または削除対象の）件数。
         """
+        assert self._settings is not None
         if self._settings.storage_backend != "sqlite":
             logger.warning(
                 "Lifecycle cleanup is only supported for 'sqlite' backend in this version. "

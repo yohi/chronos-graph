@@ -24,7 +24,7 @@ class GraphTraversal:
 
     def __init__(
         self,
-        graph_adapter: GraphTraversalAdapter,
+        graph_adapter: GraphTraversalAdapter | None,
         default_depth: int = 2,
         fanout_limit: int = 100,
         max_physical_hops: int = 50,
@@ -45,7 +45,7 @@ class GraphTraversal:
 
     async def traverse(
         self,
-        seed_ids: list[UUID],
+        seed_ids: list[UUID] | list[str],
         edge_types: list[str] | None = None,
         depth: int | None = None,
     ) -> GraphResult:
@@ -63,6 +63,9 @@ class GraphTraversal:
         # TODO: self.fanout_limit と self.max_physical_hops を
         # 探索ロジック（またはアダプターへのパラメータ渡し）に反映させる。
         # 現状はアダプター側のデフォルト挙動に依存している。
+
+        if self.graph_adapter is None:
+            return GraphResult(nodes=[], edges=[], traversal_depth=0)
 
         if depth is None:
             depth = self.default_depth

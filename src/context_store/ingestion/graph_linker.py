@@ -51,7 +51,7 @@ class EdgeType:
 class GraphLinker:
     """記憶間のリレーションシップを推定してグラフに登録する。"""
 
-    def __init__(self, storage: StorageAdapter, graph: GraphAdapter) -> None:
+    def __init__(self, storage: StorageAdapter, graph: GraphAdapter | None) -> None:
         self._storage = storage
         self._graph = graph
 
@@ -71,6 +71,9 @@ class GraphLinker:
             supersedes: Append-only 置換で置き換えられた旧記憶
             chunk_neighbors: document_id → 同一ドキュメントのチャンクリスト
         """
+        if self._graph is None:
+            return
+
         edges: list[dict[str, Any]] = []
 
         # 1. SEMANTICALLY_RELATED エッジ

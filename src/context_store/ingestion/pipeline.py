@@ -61,7 +61,7 @@ class IngestionPipeline:
     def __init__(
         self,
         storage: StorageAdapter,
-        graph: GraphAdapter,
+        graph: GraphAdapter | None,
         embedding_provider: EmbeddingProvider,
         settings: Settings | None = None,
     ) -> None:
@@ -324,15 +324,16 @@ class IngestionPipeline:
             # ステップ7: グラフノード作成
             node_created = False
             try:
-                await self._graph.create_node(
-                    str(memory_id),
-                    {
-                        "memory_type": persisted_memory.memory_type.value,
-                        "source_type": persisted_memory.source_type.value,
-                        "project": persisted_memory.project,
-                    },
-                )
-                node_created = True
+                if self._graph is not None:
+                    await self._graph.create_node(
+                        str(memory_id),
+                        {
+                            "memory_type": persisted_memory.memory_type.value,
+                            "source_type": persisted_memory.source_type.value,
+                            "project": persisted_memory.project,
+                        },
+                    )
+                    node_created = True
 
                 # ステップ8: グラフリンク（エッジ作成）
                 previous_memories = await self._get_previous_memories(persisted_memory)
@@ -350,7 +351,7 @@ class IngestionPipeline:
             except Exception:
                 # ロールバック処理
                 # 1. 作成したグラフノードを削除 (Best effort)
-                if node_created:
+                if node_created and self._graph is not None:
                     try:
                         await self._graph.delete_node(str(memory_id))
                     except Exception as e:

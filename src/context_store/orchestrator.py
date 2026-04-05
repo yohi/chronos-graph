@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from context_store.extensions.protocols import ActionLogger, PolicyHook, RewardSignal
     from context_store.ingestion.pipeline import IngestionPipeline, IngestionResult
     from context_store.lifecycle.manager import LifecycleManager
-    from context_store.retrieval.pipeline import RetrievalPipeline
+    from context_store.retrieval.pipeline import RetrievalPipeline, RetrievalResponse
     from context_store.storage.protocols import CacheAdapter, GraphAdapter, StorageAdapter
     from context_store.embedding.protocols import EmbeddingProvider
 
@@ -169,7 +169,7 @@ class Orchestrator:
         memory_type: str | None = None,
         top_k: int = 10,
         max_tokens: int | None = None,
-    ) -> dict[str, Any]:
+    ) -> RetrievalResponse:
         """コンテキストを検索する。
 
         PolicyHook.adjust_strategy() を通して検索戦略を調整してから
@@ -217,7 +217,7 @@ class Orchestrator:
         edge_types: list[str] | None = None,
         depth: int = 2,
         project: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> RetrievalResponse:
         """グラフトラバーサル検索を実行する。
 
         Args:
@@ -425,7 +425,8 @@ async def create_orchestrator(
         storage=storage,
         graph=graph,
         embedding_provider=embedding_provider,
-        settings=settings,
+        dedup_threshold=settings.dedup_threshold,
+        consolidation_threshold=settings.consolidation_threshold,
     )
     purger = Purger(
         storage=storage,

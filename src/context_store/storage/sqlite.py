@@ -638,16 +638,34 @@ class SQLiteStorageAdapter:
                             return False
 
                     # Validate dimension
-                    dim = await self.get_vector_dimension()
+                    # Use current connection directly to avoid deadlocks (re-entering self._db())
+                    # and ensuring we bypass any potentially stale self._vector_dim cache.
+                    async with conn.execute(
+                        "SELECT dimension FROM vectors_metadata LIMIT 1"
+                    ) as cursor:
+                        row = await cursor.fetchone()
+                        dim = row[0] if row else None
+
                     if dim is None:
                         # Auto-initialize dimension on first update with embedding
-                        dim = len(embedding)
+                        new_dim = len(embedding)
                         await conn.execute(
                             "INSERT OR IGNORE INTO vectors_metadata (dimension) VALUES (?)",
-                            (dim,),
+                            (new_dim,),
                         )
+                        # Re-read authoritative dimension to handle race conditions
+                        async with conn.execute(
+                            "SELECT dimension FROM vectors_metadata LIMIT 1"
+                        ) as cursor:
+                            row = await cursor.fetchone()
+                            dim = row[0] if row else None
+
+                        if dim is None:
+                            # Should not happen after INSERT
+                            raise StorageError("Failed to initialize vector dimension")
                         self._vector_dim = dim
-                    elif len(embedding) != dim:
+
+                    if len(embedding) != dim:
                         raise StorageError(
                             f"Dimension mismatch: expected {dim}, got {len(embedding)}",
                             code="INVALID_PARAMETER",

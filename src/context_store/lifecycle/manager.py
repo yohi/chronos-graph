@@ -670,6 +670,10 @@ class LifecycleManager:
                     should_run = True
 
             if should_run:
+                # シャットダウン中であれば実行しない
+                if getattr(self, "_shutting_down", False):
+                    return
+
                 logger.info(
                     "Time-based cleanup triggered (last_cleanup_at=%s).", state.last_cleanup_at
                 )

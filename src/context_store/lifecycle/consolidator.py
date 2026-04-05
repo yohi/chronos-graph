@@ -203,6 +203,10 @@ class Consolidator:
             # window 内にあるもののみ対象とする(効率のため)
             id_to_memory = {str(m.id): m for m in window}
             for mid in affected_memory_ids:
+                # 毎ループでハートビートを呼び出し、ロック状態を確認
+                if heartbeat_fn:
+                    await heartbeat_fn()
+
                 if mid in id_to_memory:
                     memory = id_to_memory[mid]
                     new_embedding = await self._embedding_provider.embed(memory.content)

@@ -18,6 +18,8 @@ from context_store.lifecycle.manager import (
 )
 from tests.unit.conftest import make_settings
 
+pytestmark = pytest.mark.asyncio
+
 
 def test_lifecycle_state_fields():
     state = LifecycleState()

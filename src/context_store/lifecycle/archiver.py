@@ -50,19 +50,37 @@ class Archiver:
             処理結果を格納した ArchiverResult。
         """
         # archived=None はアクティブ記憶のみを取得する（protocols.py MemoryFilters 参照）
-        filters = MemoryFilters(project=project, archived=None)
-        memories = await self._storage.list_by_filter(filters)
-
         archived_count = 0
-        checked_count = len(memories)
+        checked_count = 0
+        page_size = 100
+        last_id = None
 
-        for i, memory in enumerate(memories):
-            if heartbeat_fn and i % 10 == 0:
+        while True:
+            filters = MemoryFilters(
+                project=project,
+                archived=None,
+                limit=page_size,
+                order_by="id",
+                id_after=last_id,
+            )
+            memories = await self._storage.list_by_filter(filters)
+            if not memories:
+                break
+
+            current_page_len = len(memories)
+            checked_count += current_page_len
+
+            for memory in memories:
+                if self._scorer.is_below_archive_threshold(memory):
+                    now = datetime.now(timezone.utc)
+                    await self._storage.update_memory(str(memory.id), {"archived_at": now})
+                    archived_count += 1
+                last_id = str(memory.id)
+
+            if heartbeat_fn:
                 await heartbeat_fn()
 
-            if self._scorer.is_below_archive_threshold(memory):
-                now = datetime.now(timezone.utc)
-                await self._storage.update_memory(str(memory.id), {"archived_at": now})
-                archived_count += 1
+            if current_page_len < page_size:
+                break
 
         return ArchiverResult(archived_count=archived_count, checked_count=checked_count)

@@ -49,6 +49,23 @@ def sqlite_settings(tmp_db_path: str) -> Settings:
     )
 
 
+@pytest.fixture
+async def orchestrator(sqlite_settings: Settings) -> AsyncGenerator[Orchestrator, None]:
+    """テスト用 Orchestrator(モック Embedding Provider 使用)。
+
+    各クラス内の重複を削除し、一元化したモジュールレベルのフィクスチャ。
+    """
+    mock_provider = make_mock_embedding_provider(dim=16)
+
+    with patch(
+        "context_store.embedding.create_embedding_provider",
+        return_value=mock_provider,
+    ):
+        orch = await create_orchestrator(sqlite_settings)
+        yield orch
+        await orch.dispose()
+
+
 # ---------------------------------------------------------------------------
 # A) ライトウェイトモード E2E テスト
 # ---------------------------------------------------------------------------
@@ -56,19 +73,6 @@ def sqlite_settings(tmp_db_path: str) -> Settings:
 
 class TestLightweightE2E:
     """SQLiteバックエンドを使用した外部サービス不要のE2Eテスト。"""
-
-    @pytest.fixture
-    async def orchestrator(self, sqlite_settings: Settings) -> AsyncGenerator[Orchestrator, None]:
-        """テスト用 Orchestrator(モック Embedding Provider 使用)。"""
-        mock_provider = make_mock_embedding_provider(dim=16)
-
-        with patch(
-            "context_store.embedding.create_embedding_provider",
-            return_value=mock_provider,
-        ):
-            orch = await create_orchestrator(sqlite_settings)
-            yield orch
-            await orch.dispose()
 
     async def test_memory_save_and_search(self, orchestrator: Orchestrator) -> None:
         """memory_save → memory_search の基本フロー。"""
@@ -193,19 +197,6 @@ class TestLightweightE2E:
 class TestConcurrentWriteStress:
     """並行書き込み時のSQLite WAL動作確認。"""
 
-    @pytest.fixture
-    async def orchestrator(self, sqlite_settings: Settings) -> AsyncGenerator[Orchestrator, None]:
-        """テスト用 Orchestrator(並行性テスト用)。"""
-        mock_provider = make_mock_embedding_provider(dim=16)
-
-        with patch(
-            "context_store.embedding.create_embedding_provider",
-            return_value=mock_provider,
-        ):
-            orch = await create_orchestrator(sqlite_settings)
-            yield orch
-            await orch.dispose()
-
     async def test_concurrent_writes_no_busy_errors(self, orchestrator: Orchestrator) -> None:
         """複数の並行 memory_save が SQLITE_BUSY なしで成功すること。"""
         N = 5
@@ -224,11 +215,19 @@ class TestConcurrentWriteStress:
         # 事前データ保存
         await orchestrator.save("検索テスト用データ")
 
+        start_event = asyncio.Event()
+
         async def write_loop() -> None:
-            for i in range(3):
+            for i in range(5):
                 await orchestrator.save(f"書き込み中テスト {i}")
+                if i == 0:
+                    start_event.set()
+                # 検索が並走する時間を稼ぐためにスリープを入れる
+                await asyncio.sleep(0.05)
 
         async def search_loop() -> list[dict]:
+            # 最初の書き込みが開始されるのを待つ
+            await start_event.wait()
             results = []
             for _ in range(3):
                 # タイムアウトを設定し、ブロックされないことを検証

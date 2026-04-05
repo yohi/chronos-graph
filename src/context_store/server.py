@@ -77,10 +77,14 @@ class ChronosServer:
                         "現在のURLフェッチ制限はプロセススコープです。"
                         "マルチプロセス実行時は制限を超過する可能性があります。"
                     )
-                self._initialized = True
                 # ライフサイクルマネージャーを開始
                 assert self._orchestrator is not None
-                await self._orchestrator.start_lifecycle()
+                try:
+                    await self._orchestrator.start_lifecycle()
+                    self._initialized = True
+                except Exception as e:
+                    logger.error(f"Failed to start lifecycle manager: {e}")
+                    raise
 
     async def initialize_for_test(self, orchestrator: Orchestrator) -> None:
         """テスト用に Orchestrator を直接注入して初期化する。
@@ -94,9 +98,13 @@ class ChronosServer:
 
             self._orchestrator = orchestrator
             self._url_semaphore = asyncio.Semaphore(self._orchestrator.url_fetch_concurrency)
-            self._initialized = True
             # ライフサイクルマネージャーを開始
-            await self._orchestrator.start_lifecycle()
+            try:
+                await self._orchestrator.start_lifecycle()
+                self._initialized = True
+            except Exception as e:
+                logger.error(f"Failed to start lifecycle manager for test: {e}")
+                raise
 
     # ---------------------------------------------------------------------------
     # ツールハンドラ

@@ -41,6 +41,7 @@ class Archiver:
         heartbeat_fn: Callable[[], Coroutine[Any, Any, None]] | None = None,
         dry_run: bool = False,
         simulated_archived_ids: set[str] | None = None,
+        now: datetime | None = None,
     ) -> ArchiverResult:
         """アクティブ記憶をスキャンして閾値以下のものをアーカイブする。
 
@@ -49,10 +50,14 @@ class Archiver:
             heartbeat_fn: ハートビート用コールバック関数。
             dry_run: True の場合は更新せず対象件数のみをカウント。
             simulated_archived_ids: dry_run 時にアーカイブされたとみなす ID のセット。
+            now: 基準時刻。None の場合は現在時刻を使用。
 
         Returns:
             処理結果を格納した ArchiverResult。
         """
+        if now is None:
+            now = datetime.now(timezone.utc)
+
         # archived=None はアクティブ記憶のみを取得する（protocols.py MemoryFilters 参照）
         archived_count = 0
         checked_count = 0
@@ -80,7 +85,6 @@ class Archiver:
                 memory_id = str(memory.id)
                 if self._scorer.is_below_archive_threshold(memory):
                     if not dry_run:
-                        now = datetime.now(timezone.utc)
                         if await self._storage.update_memory(memory_id, {"archived_at": now}):
                             archived_count += 1
                     else:

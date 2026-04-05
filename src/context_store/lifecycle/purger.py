@@ -55,6 +55,7 @@ class Purger:
         retention_days: int | None = None,
         dry_run: bool = False,
         simulated_archived_ids: set[str] | None = None,
+        now: datetime | None = None,
     ) -> PurgerResult:
         """アーカイブ済み記憶をスキャンして期限切れのものを物理削除する。
 
@@ -63,7 +64,7 @@ class Purger:
             retention_days: 保持期間 (日数)。None の場合はデフォルト設定を使用。
             dry_run: True の場合は削除せず対象件数のみをカウント。
             simulated_archived_ids: dry_run 時にアーカイブされたとみなす ID のセット。
-                                     (API 互換性のために保持。現状は効果なし)
+            now: 基準時刻。None の場合は現在時刻を使用。
 
         Returns:
             処理結果を格納した PurgerResult。
@@ -71,7 +72,8 @@ class Purger:
         if retention_days is not None and retention_days < 0:
             raise ValueError(f"retention_days must be non-negative, got {retention_days}")
 
-        now = datetime.now(timezone.utc)
+        if now is None:
+            now = datetime.now(timezone.utc)
         target_retention = retention_days if retention_days is not None else self._retention_days
         expiry_threshold = now - timedelta(days=target_retention)
 
@@ -96,12 +98,18 @@ class Purger:
             current_page_len = len(memories)
 
             for memory in memories:
+                memory_id = str(memory.id)
+                # simulated_archived_ids に含まれる ID は、今アーカイブされたばかりなので
+                # この Purger 実行での削除対象（およびチェック対象）からは除外する。
+                if simulated_archived_ids and memory_id in simulated_archived_ids:
+                    continue
+
                 checked_count += 1
                 if heartbeat_fn and checked_count % 10 == 0:
                     await heartbeat_fn()
 
                 # ページングを確実に進めるために ID とタイムスタンプを更新
-                last_id = str(memory.id)
+                last_id = memory_id
                 last_archived_at = memory.archived_at
 
                 # MemoryFilters(archived=True) で取得済みだが、ストレージ実装の保証に依存しないよう防御チェック
@@ -109,7 +117,6 @@ class Purger:
                     continue
                 if memory.archived_at < expiry_threshold:
                     if not dry_run:
-                        memory_id = str(memory.id)
                         await self._storage.delete_memory(memory_id)
                         if self._graph is not None:
                             await self._graph.delete_node(memory_id)
@@ -117,9 +124,5 @@ class Purger:
 
             if current_page_len < page_size:
                 break
-
-        # no-op: _simulated_archived_ids にあるものは今アーカイブされたばかり (archived_at = now) なので、
-        # 常に expiry_threshold (now - N days) より新しいため除外対象にはなりません。
-        # manager.py との API 互換性のために引数として保持しています。
 
         return PurgerResult(purged_count=purged_count, checked_count=checked_count)

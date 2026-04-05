@@ -750,6 +750,15 @@ class LifecycleManager:
         Returns:
             削除またはアーカイブされたアイテムの総数。
         """
+        # バリデーション
+        if older_than_days is not None:
+            if not isinstance(older_than_days, int) or isinstance(older_than_days, bool):
+                raise TypeError(
+                    f"older_than_days must be an int, got {type(older_than_days).__name__}"
+                )
+            if older_than_days < 0:
+                raise ValueError(f"older_than_days must be non-negative, got {older_than_days}")
+
         if self._settings.storage_backend != "sqlite":
             logger.debug(
                 "Cleanup skipped: lifecycle cleanup is not supported for backend '%s'.",
@@ -757,10 +766,13 @@ class LifecycleManager:
             )
             return 0
 
+        # 全工程で共通のタイムスタンプを使用
+        now = datetime.now(timezone.utc)
+
         if dry_run:
             # dry_run の場合はロックを取得せずに実行
             _, total_count = await self._run_cleanup_inner(
-                older_than_days=older_than_days, dry_run=True
+                older_than_days=older_than_days, dry_run=True, now=now
             )
             return total_count
 
@@ -771,7 +783,7 @@ class LifecycleManager:
         try:
             with file_lock.acquire():
                 should_schedule_followup, total_count = await self._run_cleanup_inner(
-                    older_than_days=older_than_days, dry_run=False
+                    older_than_days=older_than_days, dry_run=False, now=now
                 )
         except Timeout:
             logger.debug("Cleanup skipped: another process holds the file lock.")
@@ -788,18 +800,23 @@ class LifecycleManager:
         self,
         older_than_days: int | None = None,
         dry_run: bool = False,
+        now: datetime | None = None,
     ) -> tuple[bool, int]:
         """クリーンアップ本体（DB ロック取得後に実行）。
 
         Args:
             older_than_days: 保持期間（日数）。
             dry_run: True の場合は更新せず対象件数のみをカウント。
+            now: 基準時刻。None の場合は現在時刻を使用。
 
         Returns:
             (should_schedule_followup, total_items_count)
             should_schedule_followup: 未処理の保存が残っており、次回のクリーンアップを即座にスケジュールすべきか。
             total_items_count: 削除またはアーカイブされたアイテムの総数。
         """
+        if now is None:
+            now = datetime.now(timezone.utc)
+
         # DB レベルのロック取得
         token = str(uuid.uuid4())
         if not dry_run:
@@ -836,6 +853,7 @@ class LifecycleManager:
                 heartbeat_fn=heartbeat_fn,
                 dry_run=dry_run,
                 simulated_archived_ids=simulated_archived_ids if dry_run else None,
+                now=now,
             )
             total_count += archiver_result.archived_count
             logger.info(
@@ -853,6 +871,7 @@ class LifecycleManager:
                 heartbeat_fn=heartbeat_fn,
                 dry_run=dry_run,
                 simulated_archived_ids=simulated_archived_ids if dry_run else None,
+                now=now,
             )
             total_count += consolidator_result.consolidated_count
             logger.info(
@@ -867,6 +886,7 @@ class LifecycleManager:
                 retention_days=older_than_days,
                 dry_run=dry_run,
                 simulated_archived_ids=simulated_archived_ids if dry_run else None,
+                now=now,
             )
             total_count += purger_result.purged_count
             logger.info(
@@ -890,7 +910,7 @@ class LifecycleManager:
             # 状態を更新（カウンターリセット + last_cleanup_at 更新）
             # ページングカーソル (last_processed_at/id) を保存
             # last_cleanup_at は「全ジョブ成功時」に現在時刻で更新
-            now = datetime.now(timezone.utc)
+            # now は開始時の基準時刻を使用（ただし updated_at などには最新時刻を使う場合もある）
             current_state = await self._state_store.load_state()
 
             next_cursor_at = (
@@ -902,12 +922,12 @@ class LifecycleManager:
             remaining_count = max(0, current_state.save_count - cleanup_start_save_count)
             new_state = LifecycleState(
                 save_count=remaining_count,
-                last_cleanup_at=now,  # 全工程成功につき更新
+                last_cleanup_at=now,  # 全工程成功につき更新（基準時刻 now を使用）
                 last_cleanup_cursor_at=next_cursor_at,
                 last_cleanup_id=next_cursor_id,
                 cleanup_lock_owner=token,  # finally で release_cleanup_lock を呼ぶまで保持
                 cleanup_lock_touched_at=datetime.now(timezone.utc),
-                updated_at=now,
+                updated_at=datetime.now(timezone.utc),
             )
             saved = await self._state_store.save_state(new_state, token=token)
             if not saved:

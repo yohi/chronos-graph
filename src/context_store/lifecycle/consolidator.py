@@ -56,6 +56,7 @@ class Consolidator:
         heartbeat_fn: Callable[[], Coroutine[Any, Any, None]] | None = None,
         dry_run: bool = False,
         simulated_archived_ids: set[str] | None = None,
+        now: datetime | None = None,
     ) -> ConsolidatorResult:
         """重複記憶を統合するクリーンアップジョブ。
 
@@ -67,11 +68,13 @@ class Consolidator:
             heartbeat_fn: ハートビート用コールバック関数。
             dry_run: True の場合は更新せず対象件数のみをカウント。
             simulated_archived_ids: dry_run 時にアーカイブされたとみなす ID のセット。
+            now: 基準時刻。None の場合は現在時刻を使用。
 
         Returns:
             処理結果を格納した ConsolidatorResult。
         """
-        now = datetime.now(timezone.utc)
+        if now is None:
+            now = datetime.now(timezone.utc)
 
         consolidated_count = 0
         checked_count = 0

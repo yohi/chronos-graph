@@ -94,7 +94,7 @@ async def test_ensure_initialized_prevents_double_init():
 async def test_memory_save_default_source_is_conversation(
     chronos_server, mock_orchestrator: MagicMock
 ):
-    """source を省略すると "conversation" が使われること（回帰テスト）。"""
+    """source を省略すると "conversation" が使われること (回帰テスト)。"""
     await chronos_server.memory_save(content="test content")
 
     mock_orchestrator.save.assert_called_once()
@@ -281,7 +281,7 @@ async def test_memory_save_url_delegates_to_orchestrator(
 
 @pytest.mark.asyncio
 async def test_memory_save_url_uses_semaphore(chronos_server, mock_orchestrator: MagicMock):
-    """URL 取得時にセマフォが使われること（並行呼び出しで制限されること）。"""
+    """URL 取得時にセマフォが使われること(並行呼び出しで制限されること)。"""
     # セマフォのカウントを1にして排他制御を確認
     chronos_server._url_semaphore = asyncio.Semaphore(1)
 

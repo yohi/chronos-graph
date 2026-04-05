@@ -54,7 +54,7 @@ class Purger:
         heartbeat_fn: Callable[[], Coroutine[Any, Any, None]] | None = None,
         retention_days: int | None = None,
         dry_run: bool = False,
-        simulated_archived_ids: set[str] | None = None,
+        _simulated_archived_ids: set[str] | None = None,
     ) -> PurgerResult:
         """アーカイブ済み記憶をスキャンして期限切れのものを物理削除する。
 
@@ -62,7 +62,8 @@ class Purger:
             heartbeat_fn: ハートビート用コールバック関数。
             retention_days: 保持期間 (日数)。None の場合はデフォルト設定を使用。
             dry_run: True の場合は削除せず対象件数のみをカウント。
-            simulated_archived_ids: dry_run 時にアーカイブされたとみなす ID のセット。
+            _simulated_archived_ids: dry_run 時にアーカイブされたとみなす ID のセット。
+                                     (API 互換性のために保持。現状は効果なし)
 
         Returns:
             処理結果を格納した PurgerResult。
@@ -99,6 +100,10 @@ class Purger:
                 if heartbeat_fn and checked_count % 10 == 0:
                     await heartbeat_fn()
 
+                # ページングを確実に進めるために ID とタイムスタンプを更新
+                last_id = str(memory.id)
+                last_archived_at = memory.archived_at
+
                 # MemoryFilters(archived=True) で取得済みだが、ストレージ実装の保証に依存しないよう防御チェック
                 if memory.archived_at is None:
                     continue
@@ -110,13 +115,10 @@ class Purger:
                             await self._graph.delete_node(memory_id)
                     purged_count += 1
 
-                last_id = str(memory.id)
-                last_archived_at = memory.archived_at
-
             if current_page_len < page_size:
                 break
 
-        # no-op: simulated_archived_ids にあるものは今アーカイブされたばかり (archived_at = now) なので、
+        # no-op: _simulated_archived_ids にあるものは今アーカイブされたばかり (archived_at = now) なので、
         # 常に expiry_threshold (now - N days) より新しいため除外対象にはなりません。
         # manager.py との API 互換性のために引数として保持しています。
 

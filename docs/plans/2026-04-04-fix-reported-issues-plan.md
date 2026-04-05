@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Fix Consolidator Project Boundaries
+## Task 1: Fix Consolidator Project Boundaries
 
 **Files:**
 - Modify: `src/context_store/lifecycle/consolidator.py`
@@ -117,7 +117,7 @@ git add src/context_store/lifecycle/consolidator.py tests/unit/test_consolidator
 git commit -m "fix(consolidator): skip cross-project neighbors in vector search"
 ```
 
-### Task 2: Fix SQLiteStorageAdapter update_memory FK Errors
+## Task 2: Fix SQLiteStorageAdapter update_memory FK Errors
 
 **Files:**
 - Modify: `src/context_store/storage/sqlite.py`
@@ -215,7 +215,7 @@ git add src/context_store/storage/sqlite.py tests/unit/test_sqlite_storage.py
 git commit -m "fix(storage): check memory existence unconditionally when updating embedding"
 ```
 
-### Task 3: Fix LifecycleManager Coroutine Leaks
+## Task 3: Fix LifecycleManager Coroutine Leaks
 
 **Files:**
 - Modify: `src/context_store/lifecycle/manager.py`
@@ -314,7 +314,7 @@ git add src/context_store/lifecycle/manager.py tests/unit/test_lifecycle_manager
 git commit -m "fix(lifecycle): prevent coroutine leaks during shutdown"
 ```
 
-### Task 4: Fix LifecycleState Lock Semantics - Interfaces and Types
+## Task 4: Fix LifecycleState Lock Semantics - Interfaces and Types
 
 **Files:**
 - Modify: `src/context_store/lifecycle/manager.py`
@@ -504,7 +504,7 @@ git add src/context_store/lifecycle/manager.py tests/unit/test_lifecycle_manager
 git commit -m "feat(lifecycle): update lock semantics interfaces to use tokens"
 ```
 
-### Task 5: Fix SQLiteLifecycleStateStore Lock Implementation
+## Task 5: Fix SQLiteLifecycleStateStore Lock Implementation
 
 **Files:**
 - Modify: `src/context_store/lifecycle/manager.py` (The `SQLiteLifecycleStateStore` class)

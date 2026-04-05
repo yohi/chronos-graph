@@ -1135,3 +1135,32 @@ async def test_update_memory_unconditional_existence_check(adapter):
     # This should return False
     result = await adapter.update_memory(bad_id, {"content": "new", "embedding": [1.0, 0.0]})
     assert result is False
+
+
+@pytest.mark.asyncio
+async def test_update_memory_initializes_dimension(adapter):
+    import uuid
+
+    from context_store.models.memory import Memory, MemoryType, SourceType
+
+    # Save memory WITHOUT embedding
+    mem_id = str(uuid.uuid4())
+    memory = Memory(
+        id=uuid.UUID(mem_id),
+        content="test",
+        memory_type=MemoryType.EPISODIC,
+        source_type=SourceType.MANUAL,
+        source_metadata={},
+        project="default",
+    )
+    await adapter.save_memory(memory)
+
+    assert await adapter.get_vector_dimension() is None
+
+    # Update with embedding
+    emb = [1.0, 2.0, 3.0]
+    await adapter.update_memory(mem_id, {"embedding": emb})
+
+    # Dimension should now be 3
+    assert await adapter.get_vector_dimension() == 3
+    assert adapter._vector_dim == 3

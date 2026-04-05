@@ -626,7 +626,15 @@ class SQLiteStorageAdapter:
 
                     # Validate dimension
                     dim = await self.get_vector_dimension()
-                    if dim is not None and len(embedding) != dim:
+                    if dim is None:
+                        # Auto-initialize dimension on first update with embedding
+                        dim = len(embedding)
+                        await conn.execute(
+                            "INSERT OR IGNORE INTO vectors_metadata (dimension) VALUES (?)",
+                            (dim,),
+                        )
+                        self._vector_dim = dim
+                    elif len(embedding) != dim:
                         raise StorageError(
                             f"Dimension mismatch: expected {dim}, got {len(embedding)}",
                             code="INVALID_PARAMETER",

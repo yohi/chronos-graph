@@ -6,13 +6,11 @@
   A) ライトウェイトモード（SQLite）
   B) 並行書き込みストレステスト（SQLite）
 """
+
 from __future__ import annotations
 
 import asyncio
-import os
-import tempfile
-from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 

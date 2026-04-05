@@ -7,12 +7,11 @@ pytest-benchmark を使用した各パイプラインコンポーネントの性
     pytest tests/benchmark/ -v --benchmark-json=results.json
     pytest tests/benchmark/ -v --benchmark-compare  # 前回結果との比較
 """
+
 from __future__ import annotations
 
 import asyncio
 import random
-import tempfile
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -156,9 +155,7 @@ def test_bench_memory_search_top50(benchmark, orchestrator, event_loop):
     """top_k=50 の memory_search レイテンシを計測する。"""
 
     def run():
-        return event_loop.run_until_complete(
-            orchestrator.search("設計決定", top_k=50)
-        )
+        return event_loop.run_until_complete(orchestrator.search("設計決定", top_k=50))
 
     benchmark(run)
 
@@ -210,10 +207,7 @@ def test_bench_concurrent_search(benchmark, orchestrator, event_loop):
     """5並行 memory_search のスループットを計測する。"""
 
     async def run_concurrent():
-        tasks = [
-            orchestrator.search(f"並行検索テスト {i}", top_k=5)
-            for i in range(5)
-        ]
+        tasks = [orchestrator.search(f"並行検索テスト {i}", top_k=5) for i in range(5)]
         return await asyncio.gather(*tasks)
 
     def run():
@@ -229,9 +223,7 @@ def test_bench_mixed_read_write(benchmark, orchestrator, event_loop):
 
     async def run_mixed():
         counter[0] += 1
-        tasks = [
-            orchestrator.save(f"混合テスト保存 {counter[0]}-{i}") for i in range(3)
-        ] + [
+        tasks = [orchestrator.save(f"混合テスト保存 {counter[0]}-{i}") for i in range(3)] + [
             orchestrator.search("混合テスト", top_k=3) for _ in range(2)
         ]
         return await asyncio.gather(*tasks)

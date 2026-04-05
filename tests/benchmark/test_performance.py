@@ -90,13 +90,6 @@ def seeded_orchestrator(
 # ---------------------------------------------------------------------------
 
 
-def bench_save(
-    orchestrator: Orchestrator, bench_event_loop: asyncio.AbstractEventLoop, content: str
-) -> Any:
-    """単一 save の実行時間を計測するヘルパー。"""
-    return bench_event_loop.run_until_complete(orchestrator.save(content))
-
-
 @pytest.mark.benchmark(group="ingestion")
 def test_bench_memory_save_single(
     benchmark: Any, orchestrator: Orchestrator, bench_event_loop: asyncio.AbstractEventLoop
@@ -107,7 +100,7 @@ def test_bench_memory_save_single(
     def run() -> Any:
         nonlocal i
         i += 1
-        return bench_save(orchestrator, bench_event_loop, f"ベンチマーク保存テスト {i}")
+        return bench_event_loop.run_until_complete(orchestrator.save(f"ベンチマーク保存テスト {i}"))
 
     benchmark(run)
 
@@ -206,6 +199,13 @@ def test_bench_memory_stats_with_project(
     benchmark: Any, seeded_orchestrator: Orchestrator, bench_event_loop: asyncio.AbstractEventLoop
 ) -> None:
     """プロジェクトフィルタ付き memory_stats のレイテンシを計測する。"""
+    # 明示的にプロジェクトフィルタ用のデータを投入する
+    bench_event_loop.run_until_complete(
+        seeded_orchestrator.save(
+            "ベンチマーク用プロジェクト統計テストデータ: コンポーネント設計",
+            metadata={"project": "benchmark"},
+        )
+    )
 
     def run() -> Any:
         return bench_event_loop.run_until_complete(seeded_orchestrator.stats(project="benchmark"))
@@ -238,7 +238,7 @@ def test_bench_concurrent_search(
 def test_bench_mixed_read_write(
     benchmark: Any, orchestrator: Orchestrator, bench_event_loop: asyncio.AbstractEventLoop
 ) -> None:
-    """読み書き混合アクセス（3 save + 2 search）の合計レイテンシを計測する。"""
+    """読み書き混合アクセス(3 save + 2 search)の合計レイテンシを計測する。"""
     counter = [0]
 
     async def run_mixed() -> list[Any]:

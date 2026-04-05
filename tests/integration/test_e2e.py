@@ -20,7 +20,6 @@ from pydantic import SecretStr
 
 from context_store.config import Settings
 from context_store.orchestrator import Orchestrator, create_orchestrator
-from context_store.retrieval.pipeline import RetrievalResponse
 from tests.conftest import make_mock_embedding_provider
 
 if TYPE_CHECKING:
@@ -158,13 +157,21 @@ class TestLightweightE2E:
         await orchestrator.save("APIデザインのベストプラクティスを記録した")
 
         result = await orchestrator.search("API設計", top_k=10)
-        for item in result.get("results", []):
+        hits = result.get("results", [])
+        assert len(hits) > 0, "No results returned, cannot validate score normalization."
+
+        for item in hits:
             score = item.get("score", 0.0)
             assert 0.0 <= score <= 1.0, f"Score {score} is out of [0.0, 1.0]"
 
     async def test_deduplication_append_only(self, orchestrator: Orchestrator) -> None:
         """Deduplicator の Append-only 動作確認。類似データをDELETEせず SUPERSEDES を作成。"""
         content = "JWTトークンの有効期限は24時間に設定した"
+
+        # 初期件数を取得
+        initial_stats = await orchestrator.stats()
+        initial_count = initial_stats["total_count"]
+
         # 同じコンテンツを2回保存
         results1 = await orchestrator.save(content)
         results2 = await orchestrator.save(content)
@@ -173,9 +180,9 @@ class TestLightweightE2E:
         assert len(results1) >= 1
         assert len(results2) >= 1
 
-        # 統計が正常に取得できること
+        # 統計が正常に取得できること。Append-onlyなので件数が2増える
         stats = await orchestrator.stats()
-        assert stats["total_count"] >= 1
+        assert stats["total_count"] == initial_count + 2
 
 
 # ---------------------------------------------------------------------------
@@ -221,10 +228,11 @@ class TestConcurrentWriteStress:
             for i in range(3):
                 await orchestrator.save(f"書き込み中テスト {i}")
 
-        async def search_loop() -> list[RetrievalResponse]:
+        async def search_loop() -> list[dict]:
             results = []
             for _ in range(3):
-                r = await orchestrator.search("テスト", top_k=3)
+                # タイムアウトを設定し、ブロックされないことを検証
+                r = await asyncio.wait_for(orchestrator.search("テスト", top_k=3), timeout=2.0)
                 results.append(r)
                 await asyncio.sleep(0.01)
             return results

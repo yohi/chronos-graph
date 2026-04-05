@@ -14,26 +14,43 @@ class MemoryScore(TypedDict):
     graph_rank: int | None
 
 
-RRF_WEIGHT = 0.5
-TIME_DECAY_WEIGHT = 0.3
-IMPORTANCE_WEIGHT = 0.2
-
-
 class ResultFusion:
     """RRF (Reciprocal Rank Fusion) + 時間減衰 + 複合スコアリング"""
 
-    def __init__(self, k: int = 60, half_life_days: int = 30) -> None:
+    def __init__(
+        self,
+        k: int = 60,
+        half_life_days: int = 30,
+        rrf_weight: float = 0.5,
+        time_decay_weight: float = 0.3,
+        importance_weight: float = 0.2,
+    ) -> None:
         """
         初期化
 
         Args:
             k: RRF定数
             half_life_days: 時間減衰の半減期（日）
+            rrf_weight: RRFスコアの重み
+            time_decay_weight: 時間減衰スコアの重み
+            importance_weight: 重要度スコアの重み
         """
         if half_life_days <= 0:
             raise ValueError("half_life_days must be greater than zero")
+
+        # 重みの合計が 1.0 になるようにバリデーション（または正規化）
+        weights_sum = rrf_weight + time_decay_weight + importance_weight
+        if abs(weights_sum - 1.0) > 1e-6:
+            # 1.0 でない場合は正規化する
+            rrf_weight /= weights_sum
+            time_decay_weight /= weights_sum
+            importance_weight /= weights_sum
+
         self.k = k
         self.half_life_days = half_life_days
+        self.rrf_weight = rrf_weight
+        self.time_decay_weight = time_decay_weight
+        self.importance_weight = importance_weight
 
     def normalize_rrf(
         self,
@@ -58,7 +75,7 @@ class ResultFusion:
         if not scores:
             return []
 
-        # 理論上の最大スコアを計算
+        # 理論上の最大スコアを計算 (rank=0 の時: 1/(k+0+1) = 1/(k+1))
         max_possible_score = weights_sum * (1.0 / (k + 1))
         if max_possible_score <= 0.0:
             return [0.0] * len(scores)
@@ -114,7 +131,7 @@ class ResultFusion:
         last_accessed_at: datetime,
     ) -> float:
         """
-        時間減衰を計算
+        時間減衰を計算（小数精度の経過時間を使用）
 
         Args:
             last_accessed_at: 最終アクセス日時
@@ -128,7 +145,8 @@ class ResultFusion:
         else:
             last_accessed_at = last_accessed_at.astimezone(timezone.utc)
         delta = now - last_accessed_at
-        days_elapsed = delta.days
+        # 日単位で切り捨てず、秒単位の精度で経過日数を算出
+        days_elapsed = delta.total_seconds() / 86400.0
 
         recency: float = 0.5 ** (days_elapsed / self.half_life_days)
         return recency
@@ -165,9 +183,9 @@ class ResultFusion:
             )
 
             final_score = (
-                RRF_WEIGHT * rrf_raw
-                + TIME_DECAY_WEIGHT * time_decay
-                + IMPORTANCE_WEIGHT * result.memory.importance_score
+                self.rrf_weight * rrf_raw
+                + self.time_decay_weight * time_decay
+                + self.importance_weight * result.memory.importance_score
             )
 
             fused_results.append(
@@ -262,9 +280,9 @@ class ResultFusion:
             )
 
             final_score = (
-                RRF_WEIGHT * rrf_score
-                + TIME_DECAY_WEIGHT * time_decay
-                + IMPORTANCE_WEIGHT * data["memory"].importance_score
+                self.rrf_weight * rrf_score
+                + self.time_decay_weight * time_decay
+                + self.importance_weight * data["memory"].importance_score
             )
 
             fused_results.append(

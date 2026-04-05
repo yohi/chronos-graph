@@ -65,7 +65,11 @@ def _make_manager(
     consolidator = AsyncMock()
     consolidator.run = AsyncMock(
         return_value=ConsolidatorResult(
-            consolidated_count=0, checked_count=0, last_processed_at=None
+            consolidated_count=0,
+            checked_count=0,
+            last_processed_at=None,
+            last_processed_id=None,
+            has_more=False,
         )
     )
 
@@ -102,15 +106,18 @@ class TestOnMemorySaved:
 
     async def test_increments_counter(self):
         """on_memory_saved() がカウンターをインクリメントすること。"""
-        manager, store = _make_manager()
+        manager, _ = _make_manager()
+        try:
+            await manager.on_memory_saved()
+            state = await manager._state_store.load_state()
+            assert state.save_count == 1
 
-        await manager.on_memory_saved()
-        state = await store.load_state()
-        assert state.save_count == 1
-
-        await manager.on_memory_saved()
-        state = await store.load_state()
-        assert state.save_count == 2
+            await manager.on_memory_saved()
+            state = await manager._state_store.load_state()
+            assert state.save_count == 2
+        finally:
+            if os.path.exists(manager._lock_path):
+                os.unlink(manager._lock_path)
 
     async def test_triggers_cleanup_at_threshold(self):
         """閾値到達時に run_cleanup がトリガーされること。"""
@@ -209,12 +216,15 @@ class TestRunCleanup:
     async def test_runs_all_jobs(self):
         """run_cleanup() が全ジョブを実行すること。"""
         manager, _ = _make_manager()
+        try:
+            await manager.run_cleanup()
 
-        await manager.run_cleanup()
-
-        manager._archiver.run.assert_called_once()
-        manager._consolidator.run.assert_called_once()
-        manager._purger.run.assert_called_once()
+            manager._archiver.run.assert_called_once()
+            manager._consolidator.run.assert_called_once()
+            manager._purger.run.assert_called_once()
+        finally:
+            if os.path.exists(manager._lock_path):
+                os.unlink(manager._lock_path)
 
     async def test_resets_save_count_after_cleanup(self):
         """クリーンアップ後に save_count がリセットされること。"""

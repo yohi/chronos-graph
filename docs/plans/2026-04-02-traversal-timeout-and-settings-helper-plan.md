@@ -1,6 +1,6 @@
 # Traversal Timeout and Settings Helper Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+Execute this plan task-by-task using the project's standard plan-execution workflow.
 
 **Goal:** Refine timeout handling in `sqlite_graph.py` and centralize `make_settings` helper.
 
@@ -127,3 +127,4 @@ Expected: ALL PASS
 
 Run: `pytest tests/unit/test_sqlite_graph.py::TestTimeout -v`
 Expected: ALL PASS (confirming the new flags logic)
+the new flags logic)

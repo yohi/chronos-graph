@@ -54,16 +54,16 @@ class TestAgentAction:
 
 class TestProtocolConformance:
     def test_noop_action_logger_conforms_to_protocol(self) -> None:
-        logger: ActionLogger = NoOpActionLogger()
-        assert hasattr(logger, "log_action")
+        logger = NoOpActionLogger()
+        assert isinstance(logger, ActionLogger)
 
     def test_noop_reward_signal_conforms_to_protocol(self) -> None:
-        reward: RewardSignal = NoOpRewardSignal()
-        assert hasattr(reward, "record_reward")
+        reward = NoOpRewardSignal()
+        assert isinstance(reward, RewardSignal)
 
     def test_noop_policy_hook_conforms_to_protocol(self) -> None:
-        hook: PolicyHook = NoOpPolicyHook()
-        assert hasattr(hook, "adjust_strategy")
+        hook = NoOpPolicyHook()
+        assert isinstance(hook, PolicyHook)
 
 
 # ---------------------------------------------------------------------------

@@ -949,6 +949,28 @@ class SQLiteStorageAdapter:
                 _raise_if_locked(exc)
                 raise
 
+    async def increment_memory_access_count(self, memory_id: str) -> bool:
+        """Atomically increment the access count and update last_accessed_at."""
+        async with self._db() as conn:
+            try:
+                now = datetime.now(timezone.utc).isoformat()
+                async with conn.execute(
+                    """
+                    UPDATE memories
+                    SET access_count = access_count + 1,
+                        last_accessed_at = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now, now, memory_id),
+                ) as cursor:
+                    updated = cursor.rowcount
+                await conn.commit()
+                return updated > 0
+            except aiosqlite.OperationalError as exc:
+                _raise_if_locked(exc)
+                raise
+
     # ------------------------------------------------------------------
     # StorageAdapter: get_vector_dimension
     # ------------------------------------------------------------------

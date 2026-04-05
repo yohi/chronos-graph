@@ -955,7 +955,10 @@ class LifecycleManager:
                 wal_state.wal_consecutive_passive_failures,
                 wal_state.wal_last_observed_size_bytes,
             )
-            assert self._wal_checkpoint_fn is not None
+            if self._wal_checkpoint_fn is None:
+                raise RuntimeError(
+                    "WAL checkpoint function is not configured in _handle_wal_passive_failure."
+                )
             try:
                 result = await self._wal_checkpoint_fn(self._wal_checkpoint_mode_truncate)
                 busy = result.get(_WAL_RESULT_KEY_BUSY, 0) if result else 0

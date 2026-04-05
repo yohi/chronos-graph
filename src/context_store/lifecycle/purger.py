@@ -37,9 +37,19 @@ class Purger:
         graph: GraphAdapter | None,
         retention_days: int,
     ) -> None:
+        # retention_days のバリデーション: 0 以上の整数であることを保証
+        try:
+            val = int(retention_days)
+            if val < 0:
+                raise ValueError
+        except (ValueError, TypeError):
+            raise ValueError(
+                f"retention_days must be a non-negative integer, got {retention_days!r}"
+            )
+
         self._storage = storage
         self._graph = graph
-        self._retention_days = retention_days
+        self._retention_days = val
 
     async def run(
         self,

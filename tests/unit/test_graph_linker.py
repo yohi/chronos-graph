@@ -201,8 +201,6 @@ async def test_graph_linker_references_url() -> None:
         source_metadata={"url": "https://example.com/docs"},
     )
 
-    # URL に対応するノードが存在するとして、vector_search でヒットさせる
-    _make_memory("example.com のドキュメント")
     # REFERENCESはURLメタデータから作成するため、vector_searchでヒットしなくても可
 
     linker = GraphLinker(storage=storage, graph=graph)

@@ -804,14 +804,7 @@ async def test_spawn_background_task_no_leak():
     # Simulate shutdown
     manager._shutting_down = True
 
-    called = False
-
-    async def dummy_task():
-        nonlocal called
-        called = True
-
-    def task_factory():
-        return dummy_task()
+    task_factory = AsyncMock()
 
     manager._spawn_background_task(task_factory)
 
@@ -819,5 +812,5 @@ async def test_spawn_background_task_no_leak():
     await asyncio.sleep(0.01)
 
     # The factory shouldn't be called, so the coroutine is never created, hence no leak.
-    assert called is False
+    task_factory.assert_not_called()
     assert len(manager._active_tasks) == 0

@@ -404,6 +404,7 @@ async def create_orchestrator(
             storage=storage,
             graph=graph,
             embedding_provider=embedding_provider,
+            settings=settings,
         )
 
         # RetrievalPipeline 組み立て

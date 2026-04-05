@@ -82,7 +82,7 @@ class SQLiteCacheCoherenceChecker:
     async def _poll_loop(self) -> None:
         """Poll until cancelled."""
         try:
-            import aiosqlite
+            import aiosqlite  # type: ignore[import-not-found]
 
             # Ensure the table exists
             async with aiosqlite.connect(self._db_path) as conn:
@@ -216,14 +216,18 @@ async def _create_graph_adapter(settings: "Settings") -> "GraphAdapter | None":
         # Neo4j is used as the graph backend for PostgreSQL mode
         from context_store.storage.neo4j import Neo4jGraphAdapter
 
-        if not settings.neo4j_uri or not settings.neo4j_user or not settings.neo4j_password:
+        if (
+            not settings.neo4j_uri
+            or not settings.neo4j_user
+            or not settings.neo4j_password.get_secret_value().strip()
+        ):
             raise ValueError(
                 "Neo4j uri, user, and password must be provided when graph is enabled with postgres backend."
             )
         return await Neo4jGraphAdapter.create(
             uri=settings.neo4j_uri,
             user=settings.neo4j_user,
-            password=settings.neo4j_password.get_secret_value(),
+            password=settings.neo4j_password,
         )
 
     raise ValueError(f"Unsupported storage_backend for graph: {settings.storage_backend!r}")

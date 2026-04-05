@@ -7,12 +7,16 @@ import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 # Mock asyncpg only if not installed to avoid ModuleNotFoundError during patch resolution.
 # We use find_spec to avoid importing it here if it exists.
 if importlib.util.find_spec("asyncpg") is None:
     sys.modules["asyncpg"] = MagicMock()
 
-from context_store.storage.factory import create_storage
+from pydantic import SecretStr
+
+from context_store.storage.factory import _create_graph_adapter, create_storage
 from context_store.storage.inmemory import InMemoryCacheAdapter
 from context_store.storage.protocols import CacheAdapter, GraphAdapter, StorageAdapter
 from context_store.storage.sqlite import SQLiteStorageAdapter
@@ -77,6 +81,47 @@ class TestSQLiteBackend:
             assert graph_adp is None
         finally:
             await dispose_adapters(storage, graph_adp, cache_adp)
+
+
+# ---------------------------------------------------------------------------
+# Tests: Graph backend
+# ---------------------------------------------------------------------------
+
+
+class TestGraphBackend:
+    @pytest.mark.asyncio
+    async def test_neo4j_validation_fails_with_empty_password(self) -> None:
+        """Postgres モードで graph_enabled=True の場合、Neo4j 認証情報が必須."""
+        # Settings をモック化して factory.py の内部バリデーションを直接テストする
+        settings = MagicMock()
+        settings.storage_backend = "postgres"
+        settings.graph_enabled = True
+        settings.neo4j_uri = "bolt://localhost"
+        settings.neo4j_user = "neo4j"
+        settings.neo4j_password = SecretStr("")  # 空
+
+        with pytest.raises(ValueError, match="Neo4j uri, user, and password must be provided"):
+            await _create_graph_adapter(settings)
+
+    @pytest.mark.asyncio
+    async def test_neo4j_validation_passes_with_sqlite_even_if_password_empty(
+        self, tmp_path: Path
+    ) -> None:
+        """SQLite モードでは graph_enabled=True でも Neo4j 認証情報は不要."""
+        db_path = str(tmp_path / "test.db")
+        settings = make_settings(
+            storage_backend="sqlite",
+            sqlite_db_path=db_path,
+            graph_enabled=True,
+            neo4j_password="",  # 空
+        )
+
+        adapter = await _create_graph_adapter(settings)
+        try:
+            assert isinstance(adapter, SQLiteGraphAdapter)
+        finally:
+            if adapter:
+                await adapter.dispose()
 
 
 # ---------------------------------------------------------------------------

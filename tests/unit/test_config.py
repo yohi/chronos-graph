@@ -54,8 +54,14 @@ def test_embedding_provider_validation(default_settings):
     [
         ({"storage_backend": "postgres", "postgres_password": ""}, "POSTGRES_PASSWORD"),
         ({"storage_backend": "postgres", "postgres_password": "   "}, "POSTGRES_PASSWORD"),
-        ({"graph_enabled": True, "neo4j_password": ""}, "NEO4J_PASSWORD"),
-        ({"graph_enabled": True, "neo4j_password": "   "}, "NEO4J_PASSWORD"),
+        (
+            {"storage_backend": "postgres", "graph_enabled": True, "neo4j_password": ""},
+            "NEO4J_PASSWORD",
+        ),
+        (
+            {"storage_backend": "postgres", "graph_enabled": True, "neo4j_password": "   "},
+            "NEO4J_PASSWORD",
+        ),
         (
             {"embedding_provider": "openai", "openai_api_key": ""},
             "OPENAI_API_KEY",

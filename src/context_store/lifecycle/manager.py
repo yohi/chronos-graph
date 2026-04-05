@@ -735,16 +735,16 @@ class LifecycleManager:
         older_than_days: int | None = None,
         dry_run: bool = False,
     ) -> int:
-        """クリーンアップを実行する（filelock + DB ロック排他制御付き）。
+        """クリーンアップを実行する(filelock + DB ロック排他制御付き)。
 
         filelock によるプロセス間排他制御と DB レベルのロックを組み合わせて
         同時実行を防ぐ。ロック取得失敗時はサイレントにスキップする。
 
-        InMemoryLifecycleStateStore の場合は非永続的（共有されない）ため
+        InMemoryLifecycleStateStore の場合は非永続的(共有されない)ため
         クリーンアップをスキップする。
 
         Args:
-            older_than_days: 保持期間（日数）。None の場合はデフォルト設定を使用。
+            older_than_days: 保持期間(日数)。None の場合はデフォルト設定を使用。
             dry_run: True の場合は更新せず対象件数のみをカウント。
 
         Returns:

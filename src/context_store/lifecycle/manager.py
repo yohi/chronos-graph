@@ -384,9 +384,11 @@ class SQLiteLifecycleStateStore:
         async with aiosqlite.connect(self._db_path) as conn:
             await self._ensure_tables(conn)
             now = datetime.now(timezone.utc).isoformat()
-            async with conn.execute("BEGIN IMMEDIATE"):
+
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
                 # UPSERT (INSERT or UPDATE) + RETURNING でアトミックに実行
-                cursor = await conn.execute(
+                async with conn.execute(
                     """
                     INSERT INTO lifecycle_state (id, save_count, updated_at)
                     VALUES (1, 1, ?)
@@ -396,10 +398,13 @@ class SQLiteLifecycleStateStore:
                     RETURNING save_count
                     """,
                     (now,),
-                )
-                row = await cursor.fetchone()
-                new_count = row[0] if row else 0
+                ) as cursor:
+                    row = await cursor.fetchone()
+                    new_count = row[0] if row else 0
                 await conn.commit()
+            except Exception:
+                await conn.execute("ROLLBACK")
+                raise
 
         # 閾値を「ちょうど」超えた場合に True を返すことで、
         # 同時実行時の重複トリガーを防ぐ。

@@ -306,16 +306,16 @@ class Orchestrator:
         Returns:
             統計情報の dict。
         """
-        active_memories = await self._storage.list_by_filter(
+        active_count = await self._storage.count_by_filter(
             MemoryFilters(project=project, archived=None)
         )
-        archived_memories = await self._storage.list_by_filter(
+        archived_count = await self._storage.count_by_filter(
             MemoryFilters(project=project, archived=True)
         )
         return {
-            "active_count": len(active_memories),
-            "archived_count": len(archived_memories),
-            "total_count": len(active_memories) + len(archived_memories),
+            "active_count": active_count,
+            "archived_count": archived_count,
+            "total_count": active_count + archived_count,
             "project": project,
         }
 

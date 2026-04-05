@@ -30,6 +30,8 @@ def mock_orchestrator() -> MagicMock:
         return_value={"active_count": 10, "archived_count": 2, "total_count": 12, "project": None}
     )
     orch.dispose = AsyncMock(return_value=None)
+    orch.start_lifecycle = AsyncMock(return_value=None)
+    orch.url_fetch_concurrency = 3
     return orch
 
 
@@ -63,7 +65,10 @@ async def test_ensure_initialized_prevents_double_init():
     async def fake_do_initialize():
         nonlocal call_count
         call_count += 1
-        server._orchestrator = MagicMock()
+        orch = MagicMock()
+        orch.start_lifecycle = AsyncMock()
+        orch.url_fetch_concurrency = 3
+        server._orchestrator = orch
 
     server._do_initialize = fake_do_initialize
     server._url_semaphore = asyncio.Semaphore(3)

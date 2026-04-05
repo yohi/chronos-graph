@@ -92,11 +92,10 @@ class Purger:
             memories = await self._storage.list_by_filter(filters)
             if not memories:
                 break
-
             current_page_len = len(memories)
-            checked_count += current_page_len
 
             for memory in memories:
+                checked_count += 1
                 if heartbeat_fn and checked_count % 10 == 0:
                     await heartbeat_fn()
 

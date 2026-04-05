@@ -144,13 +144,9 @@ class Consolidator:
                         consolidated_count += 1
                         if newer_id:
                             affected_memory_ids.add(newer_id)
-                        # dry_run 時に外部セットも更新
+                        # dry_run 時に外部セットも更新 (常に older = scored.memory をアーカイブ)
                         if dry_run and simulated_archived_ids is not None:
-                            simulated_archived_ids.add(
-                                str(scored.memory.id)
-                                if str(scored.memory.id) != memory_id
-                                else str(memory.id)
-                            )
+                            simulated_archived_ids.add(str(scored.memory.id))
 
                     # ベース側がアーカイブされた場合はこの記憶の処理を中断
                     if memory_id in archived_in_this_run:
@@ -169,11 +165,9 @@ class Consolidator:
                         consolidated_count += 1
                         if newer_id:
                             affected_memory_ids.add(newer_id)
-                        # dry_run 時に外部セットも更新
+                        # dry_run 時に外部セットも更新 (常に older = scored.memory をアーカイブ)
                         if dry_run and simulated_archived_ids is not None:
-                            # _process_candidate が older をアーカイブするので、そちらをセットに追加
-                            older, _ = self._determine_order(memory, scored.memory)
-                            simulated_archived_ids.add(str(older.id))
+                            simulated_archived_ids.add(str(scored.memory.id))
 
                     if memory_id in archived_in_this_run:
                         break

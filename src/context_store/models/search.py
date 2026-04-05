@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from context_store.models.memory import MemoryType, ScoredMemory
 
-__all__ = ["ScoredMemory", "SearchFilters", "SearchResult", "SearchStrategy"]
+__all__ = ["SearchStrategy", "SearchFilters", "SearchResult", "ScoredMemory"]
 
 
 class SearchStrategy(BaseModel):

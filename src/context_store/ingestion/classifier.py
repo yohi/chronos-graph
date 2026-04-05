@@ -81,7 +81,7 @@ _SEMANTIC_PATTERNS = [
     r"is a type of",
     r"is an abbreviation",
     r"stands for",
-    r"# ",  # Markdown 見出し (ドキュメント)
+    r"# ",  # Markdown 見出し(ドキュメント)
     r"## ",
 ]
 
@@ -99,7 +99,7 @@ _PROCEDURAL_PATTERNS = [
     r"^\d+\. ",  # 番号付きリスト (1. 〜)
     r"^\$ ",  # シェルコマンド
     r"^> ",  # コマンドプロンプト
-    r"```",  # コードブロック (コマンド例)
+    r"```",  # コードブロック(コマンド例)
     r"how to",
     r"instructions",
     r"procedure",
@@ -107,7 +107,7 @@ _PROCEDURAL_PATTERNS = [
 
 _PROCEDURAL_RE = re.compile("|".join(_PROCEDURAL_PATTERNS), re.IGNORECASE | re.MULTILINE)
 
-# コマンド列の検出（複数のコマンドが連続する）
+# コマンド列の検出(複数のコマンドが連続する)
 _COMMAND_LINE_RE = re.compile(
     r"(^\$\s+\S+|^>\s+\S+|^\d+\.\s+\S+)",
     re.MULTILINE,
@@ -181,7 +181,7 @@ class Classifier:
         """RawContent を分析して MemoryType に分類する。
 
         Returns:
-            ClassificationResult: 分類結果（memory_type, importance_score, is_fallback）
+            ClassificationResult: 分類結果(memory_type, importance_score, is_fallback)
         """
         content = raw.content
         source_type = raw.source_type
@@ -197,7 +197,7 @@ class Classifier:
         if max_score < 1.0:
             logger.warning(
                 "分類フォールバック: コンテンツが既定のパターンに合致しません。"
-                " EPISODIC にフォールバックします（importance_score にペナルティ適用）。"
+                " EPISODIC にフォールバックします(importance_score にペナルティ適用)。"
                 " content_preview=%r",
                 content[:50],
             )

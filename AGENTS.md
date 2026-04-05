@@ -8,6 +8,10 @@ MCP server providing persistent long-term memory for AI agents with temporal kno
 
 **Package manager**: uv
 
+**Git Hooks**:
+- **Commit Stage**: `ruff` (Lint/Format) runs automatically. Environment-agnostic.
+- **Push Stage**: `mypy` (Type Check) runs. Requires devcontainer or `uv sync` environment.
+
 **Devcontainer required**: All testing and static analysis MUST run in devcontainer. See `.devcontainer/`.
 
 ```bash

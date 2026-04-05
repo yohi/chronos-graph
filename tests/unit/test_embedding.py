@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from context_store.embedding.protocols import EmbeddingProvider
 from context_store.embedding.openai import OpenAIEmbeddingProvider
+from context_store.embedding.protocols import EmbeddingProvider
 
 
 class TestEmbeddingProtocol:

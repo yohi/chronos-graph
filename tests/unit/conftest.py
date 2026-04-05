@@ -7,7 +7,7 @@ def make_settings(**kwargs) -> Settings:
         "storage_backend": "sqlite",
         "graph_enabled": True,
         "cache_backend": "inmemory",
-        "sqlite_db_path": "/tmp/context-store-test.db",
+        "sqlite_db_path": ":memory:",
         "sqlite_max_concurrent_connections": 5,
         "sqlite_max_queued_requests": 20,
         "sqlite_acquire_timeout": 2.0,

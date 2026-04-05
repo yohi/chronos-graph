@@ -319,8 +319,8 @@ class PostgresStorageAdapter:
             for r in records
         ]
 
-    async def list_by_filter(self, filters: MemoryFilters) -> list[Memory]:
-        """List memories matching the given filters."""
+    def _build_where_clause(self, filters: MemoryFilters) -> tuple[str, list[Any]]:
+        """共通の WHERE 句とパラメータを生成する。"""
         conditions: list[str] = []
         params: list[Any] = []
 
@@ -346,7 +346,22 @@ class PostgresStorageAdapter:
             params.append(filters.session_id)
             conditions.append(f"source_metadata->>'session_id' = ${len(params)}")
 
+        if filters.created_after is not None:
+            if filters.id_after is not None:
+                params.append(filters.created_after)
+                params.append(filters.id_after)
+                conditions.append(f"(created_at, id) > (${len(params) - 1}, ${len(params)})")
+            else:
+                params.append(filters.created_after)
+                conditions.append(f"created_at >= ${len(params)}")
+
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        return where_clause, params
+
+    async def list_by_filter(self, filters: MemoryFilters) -> list[Memory]:
+        """List memories matching the given filters."""
+        where_clause, params = self._build_where_clause(filters)
+
         # Validate and whitelist ORDER BY columns
         allowed_order_cols = ALLOWED_SORT_COLUMNS
         order_clause = "ORDER BY created_at DESC"
@@ -399,6 +414,15 @@ class PostgresStorageAdapter:
             records = await conn.fetch(sql, *params)
 
         return [_record_to_memory(dict(r)) for r in records]
+
+    async def count_by_filter(self, filters: MemoryFilters) -> int:
+        """Count memories matching the given filters."""
+        where_clause, params = self._build_where_clause(filters)
+        sql = f"SELECT COUNT(*) FROM memories {where_clause}"
+
+        async with self._pool.acquire() as conn:
+            count = await conn.fetchval(sql, *params)
+            return int(count) if count is not None else 0
 
     async def get_vector_dimension(self) -> int | None:
         """Return the dimension of stored vectors."""

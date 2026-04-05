@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     archive_threshold: float = Field(default=0.05, ge=0.0, le=1.0)
     consolidation_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
     purge_retention_days: int = Field(default=90, ge=0)
+    cleanup_save_count_threshold: int = Field(default=50, ge=1)
+    cleanup_interval_hours: int = Field(default=24, ge=1)
 
     # --- Ingestion ---
     conversation_chunk_size: int = Field(default=5, ge=1)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
 from context_store.models.graph import GraphResult
@@ -30,6 +31,8 @@ class MemoryFilters:
     limit: int | None = None
     order_by: str | None = None
     session_id: str | None = None
+    created_after: datetime | None = None
+    id_after: str | None = None
 
 
 ALLOWED_SORT_COLUMNS: set[str] = {
@@ -90,6 +93,10 @@ class StorageAdapter(Protocol):
 
     async def list_by_filter(self, filters: MemoryFilters) -> list[Memory]:
         """List memories matching the given filters."""
+        ...
+
+    async def count_by_filter(self, filters: MemoryFilters) -> int:
+        """Count memories matching the given filters."""
         ...
 
     async def get_vector_dimension(self) -> int | None:

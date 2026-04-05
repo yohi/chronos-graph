@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
 import logging
+from collections.abc import Iterable, Mapping
 from typing import Any, cast
 
 import httpx

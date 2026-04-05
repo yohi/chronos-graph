@@ -26,6 +26,8 @@ class GraphTraversal:
         self,
         graph_adapter: GraphTraversalAdapter,
         default_depth: int = 2,
+        fanout_limit: int = 100,
+        max_physical_hops: int = 50,
     ) -> None:
         """
         初期化
@@ -33,9 +35,13 @@ class GraphTraversal:
         Args:
             graph_adapter: グラフアダプター
             default_depth: デフォルトのグラフ深さ
+            fanout_limit: 各ノードからのエッジ展開上限
+            max_physical_hops: 物理的な最大ホップ数
         """
         self.graph_adapter = graph_adapter
         self.default_depth = default_depth
+        self.fanout_limit = fanout_limit
+        self.max_physical_hops = max_physical_hops
 
     async def traverse(
         self,

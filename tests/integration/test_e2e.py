@@ -218,16 +218,21 @@ class TestConcurrentWriteStress:
         start_event = asyncio.Event()
 
         async def write_loop() -> None:
+            # 書き込みループ開始を通知
+            start_event.set()
             for i in range(5):
                 await orchestrator.save(f"書き込み中テスト {i}")
-                if i == 0:
-                    start_event.set()
                 # 検索が並走する時間を稼ぐためにスリープを入れる
                 await asyncio.sleep(0.05)
 
         async def search_loop() -> list[dict]:
             # 最初の書き込みが開始されるのを待つ
-            await start_event.wait()
+            # タイムアウトを設定し、不測のハングを回避
+            try:
+                await asyncio.wait_for(start_event.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                pytest.fail("Search loop timed out waiting for start_event")
+
             results = []
             for _ in range(3):
                 # タイムアウトを設定し、ブロックされないことを検証
@@ -237,9 +242,13 @@ class TestConcurrentWriteStress:
             return results
 
         # 並行実行
+        # write_loop と search_loop をタスクとして同時に開始
+        search_task = asyncio.create_task(search_loop())
         write_task = asyncio.create_task(write_loop())
-        search_results = await search_loop()
+
+        # 両方のタスクの終了を待つ
         await write_task
+        search_results = await search_task
 
         # 検索が3回ともエラーなく実行できること
         assert len(search_results) == 3

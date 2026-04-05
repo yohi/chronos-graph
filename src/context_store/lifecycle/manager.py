@@ -621,30 +621,24 @@ class LifecycleManager:
         self._lock_path = lock_path
         self._wal_checkpoint_fn = wal_checkpoint_fn
 
-        if settings is not None:
-            self._save_count_threshold = settings.cleanup_save_count_threshold
-            self._cleanup_interval_hours = settings.cleanup_interval_hours
-            self._stale_lock_timeout_seconds = settings.stale_lock_timeout_seconds
-            self._wal_truncate_size_bytes = settings.wal_truncate_size_bytes
-            self._wal_passive_fail_consecutive_threshold = (
-                settings.wal_passive_fail_consecutive_threshold
-            )
-            self._wal_passive_fail_window_seconds = settings.wal_passive_fail_window_seconds
-            self._wal_passive_fail_window_count_threshold = (
-                settings.wal_passive_fail_window_count_threshold
-            )
-            self._wal_checkpoint_mode_passive = settings.wal_checkpoint_mode_passive
-            self._wal_checkpoint_mode_truncate = settings.wal_checkpoint_mode_truncate
-        else:
-            self._save_count_threshold = _DEFAULT_SAVE_COUNT_THRESHOLD
-            self._cleanup_interval_hours = _DEFAULT_CLEANUP_INTERVAL_HOURS
-            self._stale_lock_timeout_seconds = 600
-            self._wal_truncate_size_bytes = 104857600  # 100MB
-            self._wal_passive_fail_consecutive_threshold = 3
-            self._wal_passive_fail_window_seconds = 600
-            self._wal_passive_fail_window_count_threshold = 5
-            self._wal_checkpoint_mode_passive = "PASSIVE"
-            self._wal_checkpoint_mode_truncate = "TRUNCATE"
+        if settings is None:
+            from context_store.config import Settings
+
+            settings = Settings.model_construct()
+
+        self._save_count_threshold = settings.cleanup_save_count_threshold
+        self._cleanup_interval_hours = settings.cleanup_interval_hours
+        self._stale_lock_timeout_seconds = settings.stale_lock_timeout_seconds
+        self._wal_truncate_size_bytes = settings.wal_truncate_size_bytes
+        self._wal_passive_fail_consecutive_threshold = (
+            settings.wal_passive_fail_consecutive_threshold
+        )
+        self._wal_passive_fail_window_seconds = settings.wal_passive_fail_window_seconds
+        self._wal_passive_fail_window_count_threshold = (
+            settings.wal_passive_fail_window_count_threshold
+        )
+        self._wal_checkpoint_mode_passive = settings.wal_checkpoint_mode_passive
+        self._wal_checkpoint_mode_truncate = settings.wal_checkpoint_mode_truncate
 
         self._active_tasks: list[asyncio.Task[None]] = []
         self._shutting_down = False

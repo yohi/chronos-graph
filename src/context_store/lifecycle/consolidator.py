@@ -75,7 +75,7 @@ class Consolidator:
         if settings is None:
             from context_store.config import Settings
 
-            settings = Settings()
+            settings = Settings.model_construct()
 
         self._dedup_threshold = settings.dedup_threshold
         self._consolidation_threshold = settings.consolidation_threshold

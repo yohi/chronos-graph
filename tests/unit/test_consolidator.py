@@ -829,8 +829,8 @@ def test_consolidator_uses_settings_defaults():
     from context_store.lifecycle.consolidator import Consolidator
     from context_store.config import Settings
 
-    # We don't pass settings, it should use Settings() defaults
+    # We don't pass settings, it should use Settings.model_construct() defaults
     consolidator = Consolidator(storage=MagicMock())
-    settings = Settings()
+    settings = Settings.model_construct()
     assert consolidator._dedup_threshold == settings.dedup_threshold
     assert consolidator._consolidation_threshold == settings.consolidation_threshold

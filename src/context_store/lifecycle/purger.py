@@ -1,8 +1,10 @@
 """アーカイブ後 N 日経過した記憶を物理削除するモジュール。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Coroutine
 
 from context_store.storage.protocols import GraphAdapter, MemoryFilters, StorageAdapter
 
@@ -35,12 +37,26 @@ class Purger:
         graph: GraphAdapter | None,
         retention_days: int,
     ) -> None:
+        # retention_days のバリデーション: 厳密に 0 以上の整数であることを要求
+        if isinstance(retention_days, bool) or not isinstance(retention_days, int):
+            raise TypeError(f"retention_days must be an int, got {type(retention_days).__name__}")
+
+        val = retention_days
+        if val < 0:
+            raise ValueError(f"retention_days must be non-negative, got {val}")
+
         self._storage = storage
         self._graph = graph
-        self._retention_days = retention_days
+        self._retention_days = val
 
-    async def run(self) -> PurgerResult:
+    async def run(
+        self,
+        heartbeat_fn: Callable[[], Coroutine[Any, Any, None]] | None = None,
+    ) -> PurgerResult:
         """アーカイブ済み記憶をスキャンして期限切れのものを物理削除する。
+
+        Args:
+            heartbeat_fn: ハートビート用コールバック関数。
 
         Returns:
             処理結果を格納した PurgerResult。
@@ -54,7 +70,10 @@ class Purger:
         purged_count = 0
         checked_count = len(memories)
 
-        for memory in memories:
+        for i, memory in enumerate(memories):
+            if heartbeat_fn and i % 10 == 0:
+                await heartbeat_fn()
+
             # MemoryFilters(archived=True) で取得済みだが、ストレージ実装の保証に依存しないよう防御チェック
             if memory.archived_at is None:
                 continue

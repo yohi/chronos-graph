@@ -1,0 +1,241 @@
+{
+  "name": "ChronosGraph Dev",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "..",
+    "args": {
+      "UV_VERSION": "0.4.0"
+    }
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "forwardPorts": [
+    5433,
+    7474,
+    7687,
+    6379
+  ],
+  "portsAttributes": {
+    "5433": {
+      "label": "PostgreSQL",
+      "onAutoForward": "openPreview"
+    },
+    "7474": {
+      "label": "Neo4j HTTP",
+      "onAutoForward": "openPreview"
+    },
+    "7687": {
+      "label": "Neo4j Bolt",
+      "onAutoForward": "silent"
+    },
+    "6379": {
+      "label": "Redis",
+      "onAutoForward": "silent"
+    }
+  },
+  "postCreateCommand": "bash .devcontainer/setup.sh && pre-commit install --hook-type pre-push",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.linting.enabled": true,
+        "python.linting.ruffEnabled": true,
+        "python.linting.ruffPath": "/usr/local/bin/ruff",
+        "python.linting.mypyEnabled": true,
+        "python.linting.mypyPath": "/usr/local/bin/mypy",
+        "python.formatting.provider": "ruff",
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff",
+          "editor.codeActionsOnSave": {
+            "source.fixAll": "explicit",
+            "source.organizeImports": "explicit"
+          }
+        },
+        "ruff.lint.args": ["--config=pyproject.toml"],
+        "ruff.format.args": ["--config=pyproject.toml"],
+        "mypy.configFile": "pyproject.toml",
+        "files.trimTrailingWhitespace": true
+      },
+      "extensions": [
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "ms-python.vscode-pylance",
+        "mutantdino.resolution-status",
+        "editorconfig.editorconfig",
+        "njpwerner.autodocstring"
+      ],
+      "tasks": {
+        "version": "2.0.0",
+        "tasks": [
+          {
+            "label": "Install Dependencies",
+            "type": "shell",
+            "command": "pip install -e \".[dev,storage-postgres]\"",
+            "problemMatcher": [],
+            "presentation": {
+              "clear": true,
+              "panel": "shared"
+            }
+          },
+          {
+            "label": "Run Tests",
+            "type": "shell",
+            "command": "pytest tests/ -v",
+            "problemMatcher": [
+              "$pytest"
+            ],
+            "presentation": {
+              "reveal": "always",
+              "panel": "shared"
+            },
+            "dependsOn": [
+              "Install Dependencies"
+            ],
+            "group": {
+              "kind": "test",
+              "isDefault": true
+            }
+          },
+          {
+            "label": "Run Unit Tests Only",
+            "type": "shell",
+            "command": "pytest tests/unit -v --cov=src/context_store",
+            "problemMatcher": [
+              "$pytest"
+            ],
+            "presentation": {
+              "reveal": "always",
+              "panel": "shared"
+            },
+            "dependsOn": [
+              "Install Dependencies"
+            ],
+            "group": "test"
+          },
+          {
+            "label": "Run Ruff Check",
+            "type": "shell",
+            "command": "ruff check src/ tests/",
+            "problemMatcher": [
+              "$rustc"
+            ],
+            "presentation": {
+              "reveal": "always",
+              "panel": "shared"
+            },
+            "dependsOn": [
+              "Install Dependencies"
+            ],
+            "group": "lint"
+          },
+          {
+            "label": "Run Ruff Format",
+            "type": "shell",
+            "command": "ruff format src/ tests/",
+            "problemMatcher": [
+              "$rustc"
+            ],
+            "presentation": {
+              "reveal": "always",
+              "panel": "shared"
+            },
+            "dependsOn": [
+              "Install Dependencies"
+            ],
+            "group": "lint"
+          },
+          {
+            "label": "Run MyPy",
+            "type": "shell",
+            "command": "mypy src/",
+            "problemMatcher": [
+              "$mypy"
+            ],
+            "presentation": {
+              "reveal": "always",
+              "panel": "shared"
+            },
+            "dependsOn": [
+              "Install Dependencies"
+            ],
+            "group": "lint"
+          },
+          {
+            "label": "Run Full Lint",
+            "type": "shell",
+            "command": "ruff check src/ tests/ && ruff format --check src/ tests/ && mypy src/",
+            "problemMatcher": [
+              "$rustc",
+              "$mypy"
+            ],
+            "presentation": {
+              "reveal": "always",
+              "panel": "shared"
+            },
+            "dependsOn": [
+              "Install Dependencies"
+            ],
+            "group": "lint"
+          },
+          {
+            "label": "Run All Checks (CI)",
+            "type": "shell",
+            "command": "ruff check src/ tests/ && ruff format --check src/ tests/ && mypy src/ && pytest tests/unit -v --cov=src/context_store",
+            "problemMatcher": [
+              "$rustc",
+              "$mypy",
+              "$pytest"
+            ],
+            "presentation": {
+              "reveal": "always",
+              "panel": "shared"
+            },
+            "dependsOn": [
+              "Install Dependencies"
+            ]
+          },
+          {
+            "label": "Start Infrastructure (Docker Compose)",
+            "type": "shell",
+            "command": "docker compose up -d",
+            "problemMatcher": [],
+            "presentation": {
+              "reveal": "always",
+              "panel": "dedicated",
+              "close": false
+            },
+            "runOptions": {
+              "instance": "local"
+            }
+          },
+          {
+            "label": "Stop Infrastructure",
+            "type": "shell",
+            "command": "docker compose down",
+            "problemMatcher": [],
+            "presentation": {
+              "reveal": "always",
+              "panel": "dedicated"
+            },
+            "runOptions": {
+              "instance": "local"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "remoteEnv": {
+    "POSTGRES_HOST": "localhost:5433",
+    "NEO4J_HOST": "localhost:7687",
+    "REDIS_HOST": "localhost:6379"
+  },
+  "remoteUser": "vscode",
+  "containerEnv": {
+    "PYTHONUNBUFFERED": "1",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  }
+}

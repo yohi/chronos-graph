@@ -16,7 +16,7 @@ import pytest
 
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
 from context_store.storage.protocols import MemoryFilters, StorageError
-
+from context_store.storage.sqlite import SQLiteStorageAdapter
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -56,7 +56,6 @@ async def _fetch_one_value(adapter, sql: str) -> Any:
 async def adapter(tmp_path):
     """SQLiteStorageAdapter を tmpdir の DB ファイルで作成して返す。"""
     from context_store.config import Settings
-    from context_store.storage.sqlite import SQLiteStorageAdapter
 
     db_path = str(tmp_path / "test_memories.db")
     settings = Settings(
@@ -77,7 +76,6 @@ async def adapter(tmp_path):
 async def adapter_with_backpressure(tmp_path):
     """バックプレッシャーテスト用の厳格な制限付きアダプター。"""
     from context_store.config import Settings
-    from context_store.storage.sqlite import SQLiteStorageAdapter
 
     db_path = str(tmp_path / "bp_memories.db")
     settings = Settings(
@@ -303,6 +301,41 @@ class TestUpdateMemory:
         # 新ワードで見つかる
         new_results = await adapter.keyword_search("updated content xyz", top_k=10)
         assert len(new_results) == 1
+
+
+class TestUpdateMemoryValidation:
+    @pytest.mark.asyncio
+    async def test_update_memory_invalid_json(self, adapter):
+        memory = _make_memory()
+        mid = await adapter.save_memory(memory)
+        with pytest.raises(StorageError) as exc:
+            await adapter.update_memory(mid, {"tags": "invalid-json["})
+        assert exc.value.code == "INVALID_PARAMETER"
+
+    @pytest.mark.asyncio
+    async def test_update_memory_invalid_tags_type(self, adapter):
+        memory = _make_memory()
+        mid = await adapter.save_memory(memory)
+        with pytest.raises(StorageError) as exc:
+            await adapter.update_memory(mid, {"tags": '{"not": "a list"}'})
+        assert exc.value.code == "INVALID_PARAMETER"
+
+    @pytest.mark.asyncio
+    async def test_update_memory_invalid_metadata_type(self, adapter):
+        memory = _make_memory()
+        mid = await adapter.save_memory(memory)
+        with pytest.raises(StorageError) as exc:
+            await adapter.update_memory(mid, {"source_metadata": "[not, an, object]"})
+        assert exc.value.code == "INVALID_PARAMETER"
+
+    @pytest.mark.asyncio
+    async def test_update_memory_reject_empty_embedding(self, adapter):
+        memory = _make_memory()
+        mid = await adapter.save_memory(memory)
+        with pytest.raises(StorageError) as exc:
+            await adapter.update_memory(mid, {"embedding": []})
+        assert exc.value.code == "INVALID_PARAMETER"
+        assert "Empty embedding not allowed" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------
@@ -558,6 +591,61 @@ class TestListByFilter:
         assert str(other.id) not in ids
 
 
+class TestSqlInjection:
+    async def test_list_by_filter_order_by_injection(self, adapter):
+        # Malicious order_by to drop a table or cause syntax error
+        malicious_order = "id; DROP TABLE memories;"
+        filters = MemoryFilters(order_by=malicious_order)
+
+        # Before fix, this will likely raise aiosqlite.OperationalError (syntax error)
+        # We expect a StorageError with code 'INVALID_PARAMETER' after our fix.
+        with pytest.raises(StorageError) as exc_info:
+            await adapter.list_by_filter(filters)
+        assert exc_info.value.code == "INVALID_PARAMETER"
+
+    async def test_list_by_filter_order_by_extra_tokens(self, adapter):
+        # Even if columns are valid, extra tokens should be rejected
+        filters = MemoryFilters(order_by="id DESC extra")
+        with pytest.raises(StorageError) as exc_info:
+            await adapter.list_by_filter(filters)
+        assert exc_info.value.code == "INVALID_PARAMETER"
+        assert "Extra tokens detected" in str(exc_info.value)
+
+    async def test_list_by_filter_limit_injection(self, adapter):
+        malicious_limit = "1; DROP TABLE memories;"
+        filters = MemoryFilters()
+        filters.limit = malicious_limit
+
+        with pytest.raises(StorageError) as exc_info:
+            await adapter.list_by_filter(filters)
+        assert exc_info.value.code == "INVALID_PARAMETER"
+
+    async def test_list_by_filter_valid_parameters(self, adapter):
+        # 1. Whitelisted order_by (ASC/DESC)
+        filters = MemoryFilters(order_by="id ASC")
+        # Should NOT raise StorageError
+        await adapter.list_by_filter(filters)
+
+        filters = MemoryFilters(order_by="id DESC")
+        await adapter.list_by_filter(filters)
+
+        # 2. Valid integer limit
+        filters = MemoryFilters(limit=10)
+        # Should NOT raise StorageError
+        await adapter.list_by_filter(filters)
+
+        # 3. Valid session_id filter
+        memory = _make_memory(content="metadata search test")
+        memory.source_metadata = {"session_id": "test_session_id"}
+        await adapter.save_memory(memory)
+
+        filters = MemoryFilters(session_id="test_session_id")
+        results = await adapter.list_by_filter(filters)
+        # Verify success and check property (source_metadata is a dict in Memory)
+        assert len(results) >= 1
+        assert results[0].source_metadata["session_id"] == "test_session_id"
+
+
 # ---------------------------------------------------------------------------
 # GetVectorDimension Tests
 # ---------------------------------------------------------------------------
@@ -592,7 +680,6 @@ class TestGetVectorDimension:
 class TestWalMode:
     async def test_journal_mode_is_wal(self, adapter):
         """PRAGMA journal_mode が 'wal' を返すこと。"""
-        from context_store.storage.sqlite import SQLiteStorageAdapter
 
         assert isinstance(adapter, SQLiteStorageAdapter)
         async with adapter._connect() as conn:
@@ -603,7 +690,6 @@ class TestWalMode:
 
     async def test_foreign_keys_enabled(self, adapter):
         """PRAGMA foreign_keys が ON であること。"""
-        from context_store.storage.sqlite import SQLiteStorageAdapter
 
         assert isinstance(adapter, SQLiteStorageAdapter)
         async with adapter._connect() as conn:
@@ -660,7 +746,6 @@ class TestBackpressureControl:
         成功=5, 拒否=5 の厳密テスト（遅い操作で保証）。
         """
         from context_store.config import Settings
-        from context_store.storage.sqlite import SQLiteStorageAdapter
 
         db_path = str(tmp_path / "bp_strict.db")
         settings = Settings(
@@ -714,7 +799,6 @@ class TestBackpressureControl:
     async def test_semaphore_acquire_timeout(self, tmp_path):
         """タイムアウトで STORAGE_BUSY (recoverable=True) が発生すること。"""
         from context_store.config import Settings
-        from context_store.storage.sqlite import SQLiteStorageAdapter
 
         db_path = str(tmp_path / "timeout.db")
         settings = Settings(
@@ -765,7 +849,6 @@ class TestBackpressureControl:
     async def test_no_semaphore_leak_after_error(self, tmp_path):
         """エラー後もセマフォ・待機カウンタがリークしないこと。"""
         from context_store.config import Settings
-        from context_store.storage.sqlite import SQLiteStorageAdapter
 
         db_path = str(tmp_path / "leak.db")
         settings = Settings(
@@ -837,7 +920,6 @@ class TestEmbeddingSerDes:
     async def test_nan_in_embedding_raises_error(self, tmp_path):
         """NaN を含む埋め込みは拒否されること。"""
         from context_store.config import Settings
-        from context_store.storage.sqlite import SQLiteStorageAdapter
 
         db_path = str(tmp_path / "nan_test.db")
         settings = Settings(
@@ -858,7 +940,6 @@ class TestEmbeddingSerDes:
     async def test_inf_in_embedding_raises_error(self, tmp_path):
         """Inf を含む埋め込みは拒否されること。"""
         from context_store.config import Settings
-        from context_store.storage.sqlite import SQLiteStorageAdapter
 
         db_path = str(tmp_path / "inf_test.db")
         settings = Settings(
@@ -956,7 +1037,6 @@ class TestDispose:
     async def test_dispose_can_be_called_multiple_times(self, tmp_path):
         """dispose は複数回呼んでもエラーにならない。"""
         from context_store.config import Settings
-        from context_store.storage.sqlite import SQLiteStorageAdapter
 
         db_path = str(tmp_path / "dispose.db")
         settings = Settings(
@@ -968,3 +1048,115 @@ class TestDispose:
         adp = await SQLiteStorageAdapter.create(settings)
         await adp.dispose()
         await adp.dispose()  # 2 回目もエラーなし
+
+
+# ---------------------------------------------------------------------------
+# get_memories_batch
+# ---------------------------------------------------------------------------
+
+
+class TestGetMemoriesBatch:
+    @pytest.mark.asyncio
+    async def test_get_memories_batch_basic(self, adapter):
+        # Save some memories
+        m1 = _make_memory(content="test1")
+        m2 = _make_memory(content="test2")
+        await adapter.save_memory(m1)
+        await adapter.save_memory(m2)
+
+        # Retrieve in batch
+        results = await adapter.get_memories_batch([str(m1.id), str(m2.id)])
+        assert len(results) == 2
+        ids = [str(m.id) for m in results]
+        assert str(m1.id) in ids
+        assert str(m2.id) in ids
+
+    @pytest.mark.asyncio
+    async def test_get_memories_batch_order_and_duplicates(self, adapter):
+        m1 = _make_memory(content="test1")
+        m2 = _make_memory(content="test2")
+        await adapter.save_memory(m1)
+        await adapter.save_memory(m2)
+
+        # Duplicate IDs and specific order
+        results = await adapter.get_memories_batch([str(m2.id), str(m1.id), str(m2.id)])
+        assert len(results) == 3
+        assert str(results[0].id) == str(m2.id)
+        assert str(results[1].id) == str(m1.id)
+        assert str(results[2].id) == str(m2.id)
+
+    @pytest.mark.asyncio
+    async def test_get_memories_batch_large(self, adapter):
+        # Trigger chunking (chunk_size=900)
+        ids = []
+        # Using 950 to trigger 2 chunks (900 + 50)
+        # 1000 items save one-by-one is slow in CI
+        for i in range(950):
+            m = _make_memory(content=f"test{i}")
+            await adapter.save_memory(m)
+            ids.append(str(m.id))
+
+        # This should trigger chunking (chunk_size=900)
+        results = await adapter.get_memories_batch(ids)
+        assert len(results) == 950
+        for i, m in enumerate(results):
+            assert str(m.id) == ids[i]
+        assert results[0].content == "test0"
+        assert results[-1].content == "test949"
+
+    @pytest.mark.asyncio
+    async def test_get_memories_batch_empty(self, adapter):
+        results = await adapter.get_memories_batch([])
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_get_memories_batch_missing_ids(self, adapter):
+        m1 = _make_memory(content="test1")
+        await adapter.save_memory(m1)
+
+        results = await adapter.get_memories_batch([str(m1.id), str(uuid4())])
+        assert len(results) == 1
+        assert str(results[0].id) == str(m1.id)
+
+
+@pytest.mark.asyncio
+async def test_update_memory_non_existent_with_embedding(adapter):
+    # Try to update a non-existent memory with an embedding AND other fields
+    bad_id = str(uuid4())
+    result = await adapter.update_memory(bad_id, {"content": "new", "embedding": [1.0, 0.0]})
+
+    # Should safely return False, not raise SQLite FK error
+    assert result is False
+
+    # Try to update ONLY embedding
+    result_only_emb = await adapter.update_memory(bad_id, {"embedding": [1.0, 0.0]})
+    assert result_only_emb is False
+
+
+@pytest.mark.asyncio
+async def test_update_memory_initializes_dimension(adapter):
+    import uuid
+
+    from context_store.models.memory import Memory, MemoryType, SourceType
+
+    # Save memory WITHOUT embedding
+    mem_id = str(uuid.uuid4())
+    memory = Memory(
+        id=uuid.UUID(mem_id),
+        content="test",
+        memory_type=MemoryType.EPISODIC,
+        source_type=SourceType.MANUAL,
+        source_metadata={},
+        project="default",
+    )
+    await adapter.save_memory(memory)
+
+    assert await adapter.get_vector_dimension() is None
+
+    # Update with embedding
+    emb = [1.0, 2.0, 3.0]
+    await adapter.update_memory(mem_id, {"embedding": emb})
+
+    # Dimension should now be 3
+    assert await adapter.get_vector_dimension() == 3
+    assert adapter._vector_dim == 3

@@ -1,6 +1,8 @@
-"""RL 拡張ポイント（Extension Protocols + NoOp 実装）のユニットテスト。"""
+"""RL 拡張ポイント (Extension Protocols + NoOp 実装) のユニットテスト。"""
 
 from __future__ import annotations
+
+from datetime import datetime, timezone
 
 import pytest
 
@@ -16,7 +18,6 @@ from context_store.extensions.protocols import (
     RewardSignal,
 )
 from context_store.models.search import SearchStrategy
-
 
 # ---------------------------------------------------------------------------
 # AgentAction
@@ -36,35 +37,38 @@ class TestAgentAction:
         assert action.timestamp is not None
 
     def test_create_with_all_fields(self) -> None:
+        ts = datetime(2026, 4, 5, 12, 0, 0, tzinfo=timezone.utc)
         action = AgentAction(
             action_type="search",
             memory_id="mem-123",
             query="検索クエリ",
             metadata={"project": "test"},
+            timestamp=ts,
         )
         assert action.action_type == "search"
         assert action.memory_id == "mem-123"
         assert action.query == "検索クエリ"
         assert action.metadata == {"project": "test"}
+        assert action.timestamp == ts
 
 
 # ---------------------------------------------------------------------------
-# Protocol 準拠チェック（ランタイム duck typing）
+# Protocol 準拠チェック (ランタイム duck typing)
 # ---------------------------------------------------------------------------
 
 
 class TestProtocolConformance:
     def test_noop_action_logger_conforms_to_protocol(self) -> None:
-        logger: ActionLogger = NoOpActionLogger()
-        assert hasattr(logger, "log_action")
+        logger = NoOpActionLogger()
+        assert isinstance(logger, ActionLogger)
 
     def test_noop_reward_signal_conforms_to_protocol(self) -> None:
-        reward: RewardSignal = NoOpRewardSignal()
-        assert hasattr(reward, "record_reward")
+        reward = NoOpRewardSignal()
+        assert isinstance(reward, RewardSignal)
 
     def test_noop_policy_hook_conforms_to_protocol(self) -> None:
-        hook: PolicyHook = NoOpPolicyHook()
-        assert hasattr(hook, "adjust_strategy")
+        hook = NoOpPolicyHook()
+        assert isinstance(hook, PolicyHook)
 
 
 # ---------------------------------------------------------------------------

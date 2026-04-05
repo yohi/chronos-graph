@@ -1,8 +1,8 @@
 """Vector Search - ベクトル検索"""
 
-from typing import Any
-from context_store.storage.protocols import StorageAdapter
+from context_store.embedding.protocols import EmbeddingProvider
 from context_store.models.search import ScoredMemory
+from context_store.storage.protocols import StorageAdapter
 
 
 class VectorSearch:
@@ -10,10 +10,10 @@ class VectorSearch:
 
     def __init__(
         self,
-        embedding_provider: Any,  # EmbeddingProvider
+        embedding_provider: EmbeddingProvider,
         storage_adapter: StorageAdapter,
         default_top_k: int = 10,
-    ):
+    ) -> None:
         """
         初期化
 
@@ -32,7 +32,7 @@ class VectorSearch:
 
         Args:
             query: クエリテキスト
-            top_k: 返す結果の数（Noneの場合はデフォルト値）
+            top_k: 返す結果の数(Noneの場合はデフォルト値)
 
         Returns:
             ScoredMemory のリスト

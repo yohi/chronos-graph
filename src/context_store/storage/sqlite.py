@@ -16,7 +16,7 @@ import aiosqlite
 
 from context_store.config import Settings
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
-from context_store.storage.protocols import MemoryFilters, StorageError
+from context_store.storage.protocols import ALLOWED_SORT_COLUMNS, MemoryFilters, StorageError
 from context_store.utils.stale_lock import StaleAwareFileLock
 
 # ---------------------------------------------------------------------------
@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS memories (
     tags               TEXT NOT NULL DEFAULT '[]',
     project            TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_memories_created_id ON memories(created_at, id);
 """
 
 _DDL_VECTORS_METADATA = """
@@ -166,7 +167,7 @@ def _parse_dt(val: str | None) -> datetime | None:
 def _dt_to_str(dt: datetime | None) -> str | None:
     if dt is None:
         return None
-    return dt.isoformat()
+    return dt.astimezone(timezone.utc).isoformat()
 
 
 def _row_to_memory(row: dict[str, Any], embedding: list[float] | None = None) -> Memory:
@@ -328,7 +329,7 @@ class SQLiteStorageAdapter:
     async def _migrate(self) -> None:
         """Create tables and indexes if they do not exist."""
         async with self._connect() as conn:
-            await conn.execute(_DDL_MEMORIES)
+            await conn.executescript(_DDL_MEMORIES)
             await conn.execute(_DDL_VECTORS_METADATA)
             await conn.execute(_DDL_EMBEDDINGS)
             await conn.executescript(_DDL_FTS + _DDL_FTS_TRIGGERS)
@@ -458,6 +459,42 @@ class SQLiteStorageAdapter:
                 _raise_if_locked(exc)
                 raise
 
+    async def get_memories_batch(self, memory_ids: list[str]) -> list[Memory]:
+        """Retrieve multiple memories by ID efficiently."""
+        if not memory_ids:
+            return []
+
+        # Unique IDs to avoid redundant fetching
+        unique_ids = list(dict.fromkeys(memory_ids))
+        all_found: dict[str, Memory] = {}
+
+        # Chunk to respect SQLite parameter limit (default ~999)
+        chunk_size = 900
+        async with self._db() as conn:
+            for i in range(0, len(unique_ids), chunk_size):
+                chunk = unique_ids[i : i + chunk_size]
+                placeholders = ", ".join("?" * len(chunk))
+                sql = f"""
+                    SELECT m.*, me.embedding
+                    FROM memories m
+                    LEFT JOIN memory_embeddings me ON me.memory_id = m.id
+                    WHERE m.id IN ({placeholders})
+                """
+                try:
+                    async with conn.execute(sql, chunk) as cursor:
+                        rows = await cursor.fetchall()
+                    for row in rows:
+                        row_dict = dict(row)
+                        emb_blob = row_dict.pop("embedding", None)
+                        emb = decode_embedding(bytes(emb_blob)) if emb_blob else []
+                        all_found[row_dict["id"]] = _row_to_memory(row_dict, emb)
+                except aiosqlite.OperationalError as exc:
+                    _raise_if_locked(exc)
+                    raise
+
+        # Return in the original order, omitting missing ones
+        return [all_found[mid] for mid in memory_ids if mid in all_found]
+
     # ------------------------------------------------------------------
     # StorageAdapter: delete_memory
     # ------------------------------------------------------------------
@@ -501,18 +538,67 @@ class SQLiteStorageAdapter:
             "archived_at",
             "tags",
             "project",
+            "embedding",
         }
 
         set_parts: list[str] = []
         params: list[Any] = []
+        embedding: list[float] | None = None
+
         for col, val in updates.items():
             if col not in allowed_columns:
                 continue
-            # Serialise special types
-            if col == "tags" and isinstance(val, list):
-                val = json.dumps(val)
-            elif col == "source_metadata" and isinstance(val, dict):
-                val = json.dumps(val)
+
+            if col == "embedding":
+                if val is not None:
+                    if not isinstance(val, list) or not all(
+                        isinstance(v, (int, float)) for v in val
+                    ):
+                        raise StorageError("Invalid embedding", code="INVALID_PARAMETER")
+                    if not val:
+                        raise StorageError("Empty embedding not allowed", code="INVALID_PARAMETER")
+                embedding = val
+                continue
+
+            # Serialise and validate special types
+            if col in ("tags", "source_metadata"):
+                if isinstance(val, str):
+                    try:
+                        parsed = json.loads(val)
+                        if col == "tags" and not isinstance(parsed, list):
+                            raise StorageError(
+                                f"Invalid tags type: expected list, got {type(parsed).__name__}",
+                                code="INVALID_PARAMETER",
+                            )
+                        if col == "source_metadata" and not isinstance(parsed, dict):
+                            raise StorageError(
+                                f"Invalid source_metadata type: expected dict, got {type(parsed).__name__}",
+                                code="INVALID_PARAMETER",
+                            )
+                    except json.JSONDecodeError as exc:
+                        raise StorageError(
+                            f"Invalid JSON for {col}: {exc}",
+                            code="INVALID_PARAMETER",
+                        ) from exc
+                else:
+                    # Not a string, must be the actual object
+                    if col == "tags" and not isinstance(val, list):
+                        raise StorageError(
+                            f"Invalid tags type: expected list, got {type(val).__name__}",
+                            code="INVALID_PARAMETER",
+                        )
+                    if col == "source_metadata" and not isinstance(val, dict):
+                        raise StorageError(
+                            f"Invalid source_metadata type: expected dict, got {type(val).__name__}",
+                            code="INVALID_PARAMETER",
+                        )
+                    try:
+                        val = json.dumps(val)
+                    except (TypeError, ValueError) as exc:
+                        raise StorageError(
+                            f"Failed to serialise {col}: {exc}",
+                            code="INVALID_PARAMETER",
+                        ) from exc
             elif col in ("last_accessed_at", "updated_at", "archived_at") and isinstance(
                 val, datetime
             ):
@@ -520,25 +606,83 @@ class SQLiteStorageAdapter:
             set_parts.append(f"{col} = ?")
             params.append(val)
 
-        if not set_parts:
+        if not set_parts and embedding is None:
             return False
-
-        params.append(memory_id)
 
         async with self._db() as conn:
             try:
-                async with conn.execute(
-                    f"UPDATE memories SET {', '.join(set_parts)} WHERE id = ?",
-                    params,
-                ) as cursor:
-                    updated = cursor.rowcount
+                updated = 0
+                if set_parts:
+                    params.append(memory_id)
+                    async with conn.execute(
+                        f"UPDATE memories SET {', '.join(set_parts)} WHERE id = ?",
+                        params,
+                    ) as cursor:
+                        updated = cursor.rowcount
 
-                if updated == 0:
+                    if updated == 0:
+                        return False
+
+                if embedding is not None:
+                    # Explicitly validate type and elements
+                    if not isinstance(embedding, list) or not all(
+                        isinstance(v, (int, float)) for v in embedding
+                    ):
+                        raise StorageError("Invalid embedding", code="INVALID_PARAMETER")
+
+                    # Unconditionally check if memory exists before inserting embedding to avoid FK violations
+                    async with conn.execute(
+                        "SELECT 1 FROM memories WHERE id = ?", (memory_id,)
+                    ) as cursor:
+                        if not await cursor.fetchone():
+                            return False
+
+                    # Validate dimension
+                    # Use current connection directly to avoid deadlocks (re-entering self._db())
+                    # and ensuring we bypass any potentially stale self._vector_dim cache.
+                    async with conn.execute(
+                        "SELECT dimension FROM vectors_metadata LIMIT 1"
+                    ) as cursor:
+                        row = await cursor.fetchone()
+                        dim = row[0] if row else None
+
+                    if dim is None:
+                        # Auto-initialize dimension on first update with embedding
+                        new_dim = len(embedding)
+                        await conn.execute(
+                            "INSERT OR IGNORE INTO vectors_metadata (dimension) VALUES (?)",
+                            (new_dim,),
+                        )
+                        # Re-read authoritative dimension to handle race conditions
+                        async with conn.execute(
+                            "SELECT dimension FROM vectors_metadata LIMIT 1"
+                        ) as cursor:
+                            row = await cursor.fetchone()
+                            dim = row[0] if row else None
+
+                        if dim is None:
+                            # Should not happen after INSERT
+                            raise StorageError("Failed to initialize vector dimension")
+                        self._vector_dim = dim
+
+                    if len(embedding) != dim:
+                        raise StorageError(
+                            f"Dimension mismatch: expected {dim}, got {len(embedding)}",
+                            code="INVALID_PARAMETER",
+                        )
+                    validate_embedding(embedding)
+                    blob = encode_embedding(embedding)
+                    await conn.execute(
+                        "INSERT OR REPLACE INTO memory_embeddings (memory_id, embedding) VALUES (?, ?)",
+                        (memory_id, blob),
+                    )
+                    # If only embedding was updated, we still want to return True
+                    if not set_parts:
+                        updated = 1
+
+                if updated == 0 and embedding is None:
                     return False
 
-                # FTS is maintained by triggers for INSERT/DELETE/UPDATE OF content,
-                # but we need to manually handle content update because we do a generic UPDATE.
-                # The trigger memories_au fires on UPDATE OF content, so this is handled.
                 await conn.commit()
                 return True
             except aiosqlite.OperationalError as exc:
@@ -665,53 +809,115 @@ class SQLiteStorageAdapter:
     # StorageAdapter: list_by_filter
     # ------------------------------------------------------------------
 
-    async def list_by_filter(self, filters: MemoryFilters) -> list[Memory]:
-        """List memories matching filters."""
+    def _build_where_clause(
+        self, filters: MemoryFilters, prefix: str = "m."
+    ) -> tuple[str, list[Any]]:
+        """共通の WHERE 句とパラメータを生成する。"""
         conditions: list[str] = []
         params: list[Any] = []
 
         if filters.archived is None:
-            conditions.append("archived_at IS NULL")
+            conditions.append(f"{prefix}archived_at IS NULL")
         elif filters.archived is True:
-            conditions.append("archived_at IS NOT NULL")
-        # archived=False → both active and archived, no condition
+            conditions.append(f"{prefix}archived_at IS NOT NULL")
 
         if filters.project is not None:
             params.append(filters.project)
-            conditions.append("project = ?")
+            conditions.append(f"{prefix}project = ?")
 
         if filters.memory_type is not None:
             params.append(filters.memory_type)
-            conditions.append("memory_type = ?")
+            conditions.append(f"{prefix}memory_type = ?")
 
         if filters.tags:
-            # SQLite JSON tag matching: check if any tag is present
             tag_conditions = []
             for tag in filters.tags:
                 params.append(f'%"{tag}"%')
-                tag_conditions.append("tags LIKE ?")
+                tag_conditions.append(f"{prefix}tags LIKE ?")
             conditions.append("(" + " OR ".join(tag_conditions) + ")")
 
+        if getattr(filters, "session_id", None) is not None:
+            params.append(filters.session_id)
+            conditions.append(
+                f"CASE WHEN json_valid({prefix}source_metadata) "
+                f"THEN json_extract({prefix}source_metadata, '$.session_id') END = ?"
+            )
+
+        if filters.created_after is not None:
+            created_after_utc = filters.created_after.astimezone(timezone.utc).isoformat()
+            if filters.id_after is not None:
+                params.append(created_after_utc)
+                params.append(filters.id_after)
+                conditions.append(f"({prefix}created_at, {prefix}id) > (?, ?)")
+            else:
+                params.append(created_after_utc)
+                conditions.append(f"{prefix}created_at >= ?")
+
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        prefixed_where = ""
-        if where_clause:
-            prefixed_where = where_clause
-            replacements = {
-                "archived_at IS NULL": "m.archived_at IS NULL",
-                "archived_at IS NOT NULL": "m.archived_at IS NOT NULL",
-                "project = ?": "m.project = ?",
-                "memory_type = ?": "m.memory_type = ?",
-                "tags LIKE ?": "m.tags LIKE ?",
-            }
-            for original, prefixed in replacements.items():
-                prefixed_where = prefixed_where.replace(original, prefixed)
+        return where_clause, params
+
+    async def list_by_filter(self, filters: MemoryFilters) -> list[Memory]:
+        """List memories matching filters."""
+        where_clause, params = self._build_where_clause(filters, prefix="m.")
+
+        # ------------------------------------------------------------------
+        # ORDER BY validation (whitelist)
+        # ------------------------------------------------------------------
+        allowed_sort_columns = ALLOWED_SORT_COLUMNS
+
+        order_clause = "ORDER BY m.created_at DESC"
+        if filters.order_by:
+            order_parts = []
+            # Support comma-separated columns
+            for part in str(filters.order_by).split(","):
+                tokens = part.strip().split()
+                if not tokens:
+                    continue
+                col = tokens[0].replace("m.", "").lower()
+                if col not in allowed_sort_columns:
+                    raise StorageError(f"Invalid sort column: {col}", code="INVALID_PARAMETER")
+
+                direction = "DESC"
+                if len(tokens) > 1:
+                    dir_part = tokens[1].upper()
+                    if dir_part not in ("ASC", "DESC"):
+                        raise StorageError(
+                            f"Invalid sort direction: {dir_part}", code="INVALID_PARAMETER"
+                        )
+                    direction = dir_part
+
+                if len(tokens) > 2:
+                    raise StorageError(
+                        f"Invalid order_by format: {part}. Extra tokens detected.",
+                        code="INVALID_PARAMETER",
+                    )
+                order_parts.append(f"m.{col} {direction}")
+
+            if order_parts:
+                order_clause = f"ORDER BY {', '.join(order_parts)}"
+
+        # ------------------------------------------------------------------
+        # LIMIT validation (integer check)
+        # ------------------------------------------------------------------
+        limit_clause = ""
+        if filters.limit is not None:
+            limit_val = filters.limit
+            if not isinstance(limit_val, int) or limit_val < 0:
+                raise StorageError(
+                    message="Limit must be a non-negative integer",
+                    code="INVALID_PARAMETER",
+                )
+            limit_clause = "LIMIT ?"
+            params.append(limit_val)
+
         sql = (
             "SELECT m.*, me.embedding "
             "FROM memories m "
             "LEFT JOIN memory_embeddings me ON me.memory_id = m.id "
-            f"{prefixed_where} "
-            "ORDER BY m.created_at DESC"
-        )
+            f"{where_clause} "
+            f"{order_clause} "
+            f"{limit_clause}"
+        ).strip()
 
         async with self._db() as conn:
             try:
@@ -724,6 +930,43 @@ class SQLiteStorageAdapter:
                     emb = decode_embedding(bytes(emb_blob)) if emb_blob else []
                     memories.append(_row_to_memory(row_dict, emb))
                 return memories
+            except aiosqlite.OperationalError as exc:
+                _raise_if_locked(exc)
+                raise
+
+    async def count_by_filter(self, filters: MemoryFilters) -> int:
+        """Count memories matching filters."""
+        where_clause, params = self._build_where_clause(filters, prefix="m.")
+
+        sql = (f"SELECT COUNT(*) FROM memories m {where_clause}").strip()
+
+        async with self._db() as conn:
+            try:
+                async with conn.execute(sql, params) as cursor:
+                    row = await cursor.fetchone()
+                return row[0] if row else 0
+            except aiosqlite.OperationalError as exc:
+                _raise_if_locked(exc)
+                raise
+
+    async def increment_memory_access_count(self, memory_id: str) -> bool:
+        """Atomically increment the access count and update last_accessed_at."""
+        async with self._db() as conn:
+            try:
+                now = datetime.now(timezone.utc).isoformat()
+                async with conn.execute(
+                    """
+                    UPDATE memories
+                    SET access_count = access_count + 1,
+                        last_accessed_at = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now, now, memory_id),
+                ) as cursor:
+                    updated = cursor.rowcount
+                await conn.commit()
+                return updated > 0
             except aiosqlite.OperationalError as exc:
                 _raise_if_locked(exc)
                 raise

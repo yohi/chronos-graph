@@ -1,11 +1,12 @@
 """LifecycleManager のユニットテスト。"""
+
 from __future__ import annotations
 
 import asyncio
 import os
 import tempfile
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -17,6 +18,24 @@ from context_store.lifecycle.manager import (
 )
 from tests.unit.conftest import make_settings
 
+pytestmark = pytest.mark.asyncio
+
+
+async def test_lifecycle_state_fields():
+    state = LifecycleState()
+    assert hasattr(state, "cleanup_lock_owner")
+    assert hasattr(state, "cleanup_lock_touched_at")
+    assert not hasattr(state, "cleanup_running")
+
+
+# ─────────────────────────── フィクスチャ ───────────────────────────
+
+
+@pytest.fixture
+def temp_lock_path(tmp_path):
+    """テスト用のロックファイルパス。"""
+    return str(tmp_path / "lifecycle.lock")
+
 
 # ─────────────────────────── ヘルパー ───────────────────────────
 
@@ -27,7 +46,7 @@ def _make_manager(
     save_count_threshold: int = 50,
     stale_lock_timeout_seconds: int = 600,
     wal_checkpoint_fn=None,
-    lock_path: str | None = None,
+    lock_path: str = ".lifecycle.lock",
 ) -> tuple[LifecycleManager, InMemoryLifecycleStateStore]:
     """テスト用 LifecycleManager を生成するヘルパー。"""
     if state_store is None:
@@ -41,20 +60,29 @@ def _make_manager(
     purger = AsyncMock()
     purger.run = AsyncMock(return_value=MagicMock(purged_count=0, checked_count=0))
 
+    from context_store.lifecycle.consolidator import ConsolidatorResult
+
     consolidator = AsyncMock()
     consolidator.run = AsyncMock(
-        return_value=MagicMock(consolidated_count=0, checked_count=0)
+        return_value=ConsolidatorResult(
+            consolidated_count=0,
+            checked_count=0,
+            last_processed_at=None,
+            last_processed_id=None,
+            has_more=False,
+        )
     )
 
     decay_scorer = MagicMock()
 
     storage = AsyncMock()
     storage.list_by_filter = AsyncMock(return_value=[])
+    storage.count_by_filter = AsyncMock(return_value=0)
 
-    settings = make_settings(stale_lock_timeout_seconds=stale_lock_timeout_seconds)
-
-    with tempfile.NamedTemporaryFile(suffix=".lock", delete=False) as f:
-        tmp_lock_path = lock_path or f.name
+    settings = make_settings(
+        stale_lock_timeout_seconds=stale_lock_timeout_seconds,
+        cleanup_save_count_threshold=save_count_threshold,
+    )
 
     manager = LifecycleManager(
         state_store=state_store,
@@ -64,7 +92,7 @@ def _make_manager(
         decay_scorer=decay_scorer,
         storage=storage,
         settings=settings,
-        lock_path=tmp_lock_path,
+        lock_path=lock_path,
         wal_checkpoint_fn=wal_checkpoint_fn,
     )
     return manager, state_store
@@ -78,19 +106,23 @@ class TestOnMemorySaved:
 
     async def test_increments_counter(self):
         """on_memory_saved() がカウンターをインクリメントすること。"""
-        manager, store = _make_manager()
+        manager, _ = _make_manager()
+        try:
+            await manager.on_memory_saved()
+            state = await manager._state_store.load_state()
+            assert state.save_count == 1
 
-        await manager.on_memory_saved()
-        state = await store.load_state()
-        assert state.save_count == 1
-
-        await manager.on_memory_saved()
-        state = await store.load_state()
-        assert state.save_count == 2
+            await manager.on_memory_saved()
+            state = await manager._state_store.load_state()
+            assert state.save_count == 2
+        finally:
+            if os.path.exists(manager._lock_path):
+                os.unlink(manager._lock_path)
 
     async def test_triggers_cleanup_at_threshold(self):
         """閾値到達時に run_cleanup がトリガーされること。"""
-        manager, store = _make_manager(save_count_threshold=50)
+        manager, _ = _make_manager(save_count_threshold=50)
+
         # _save_count_threshold を 3 に上書きしてテストを軽くする
         manager._save_count_threshold = 3
 
@@ -114,7 +146,7 @@ class TestOnMemorySaved:
 
     async def test_does_not_trigger_cleanup_below_threshold(self):
         """閾値未満では run_cleanup がトリガーされないこと。"""
-        manager, store = _make_manager()
+        manager, _ = _make_manager()
         manager._save_count_threshold = 10
 
         cleanup_called = []
@@ -143,21 +175,56 @@ class TestOnMemorySaved:
         assert state.save_count == 5
 
 
-# ─────────────────────────── run_cleanup テスト ───────────────────────────
-
-
 class TestRunCleanup:
     """run_cleanup() のテスト。"""
 
+    async def test_run_cleanup_aborts_on_lock_loss(self, temp_lock_path):
+        """クリーンアップ中にロックが他者に奪われた場合、中断されることを確認。"""
+        manager, state_store = _make_manager(lock_path=temp_lock_path)
+
+        # 初期状態: ロックなし
+        state = await state_store.load_state()
+        assert state.cleanup_lock_owner is None
+
+        # 最初の heartbeat は通るが、その後の _check_lock_integrity で失敗させる
+        # state_store は InMemoryLifecycleStateStore なので、直接 _state を書き換える
+        original_heartbeat = state_store.heartbeat_cleanup_lock
+        call_count = 0
+
+        async def mocked_heartbeat(token):
+            nonlocal call_count
+            await original_heartbeat(token)
+            call_count += 1
+            if call_count == 1:  # Archiver 実行後の heartbeat の直後にロックを奪う
+                state_store._state.cleanup_lock_owner = "someone-else"
+
+        state_store.heartbeat_cleanup_lock = mocked_heartbeat
+
+        # 閾値に達してクリーンアップ開始
+        for _ in range(50):
+            await manager.on_memory_saved()
+
+        # バックグラウンドタスクの完了を待機
+        await asyncio.gather(*manager._active_tasks)
+
+        # ロック喪失により中断されたため、last_cleanup_at が更新されていないことを確認
+        final_state = await state_store.load_state()
+        assert final_state.last_cleanup_at is None
+        # ロックが奪われた状態が維持されていること（自分のトークンで上書きされていないこと）
+        assert final_state.cleanup_lock_owner == "someone-else"
+
     async def test_runs_all_jobs(self):
         """run_cleanup() が全ジョブを実行すること。"""
-        manager, store = _make_manager()
+        manager, _ = _make_manager()
+        try:
+            await manager.run_cleanup()
 
-        await manager.run_cleanup()
-
-        manager._archiver.run.assert_called_once()
-        manager._consolidator.run.assert_called_once()
-        manager._purger.run.assert_called_once()
+            manager._archiver.run.assert_called_once()
+            manager._consolidator.run.assert_called_once()
+            manager._purger.run.assert_called_once()
+        finally:
+            if os.path.exists(manager._lock_path):
+                os.unlink(manager._lock_path)
 
     async def test_resets_save_count_after_cleanup(self):
         """クリーンアップ後に save_count がリセットされること。"""
@@ -208,16 +275,13 @@ class TestRunCleanup:
         # save_count はどちらも 0 にリセットされること
         assert state_after_second.save_count == 0
 
-    async def test_skips_when_filelock_acquired(self):
+    async def test_skips_when_filelock_acquired(self, temp_lock_path):
         """filelock が既に取得されている場合にスキップすること。"""
-        with tempfile.NamedTemporaryFile(suffix=".lock", delete=False) as f:
-            lock_path = f.name
-
-        manager, store = _make_manager(lock_path=lock_path)
+        manager, _ = _make_manager(lock_path=temp_lock_path)
 
         from filelock import FileLock
 
-        outer_lock = FileLock(lock_path, timeout=0)
+        outer_lock = FileLock(temp_lock_path, timeout=0)
 
         # 外部からロックを保持
         with outer_lock.acquire():
@@ -236,7 +300,7 @@ class TestRunCleanup:
         await manager.run_cleanup()
 
         state = await store.load_state()
-        assert state.cleanup_running is False
+        assert state.cleanup_lock_owner is None
 
     async def test_releases_db_lock_on_exception(self):
         """例外発生時でも DB ロックが解放されること。"""
@@ -247,7 +311,7 @@ class TestRunCleanup:
             await manager.run_cleanup()
 
         state = await store.load_state()
-        assert state.cleanup_running is False
+        assert state.cleanup_lock_owner is None
 
 
 # ─────────────────────────── スタルロックテスト ───────────────────────────
@@ -257,51 +321,60 @@ class TestStaleLock:
     """スタルロックの検出と解放テスト。"""
 
     async def test_stale_lock_is_force_released(self):
-        """古い cleanup_running フラグが強制解放されること。"""
+        """古い cleanup_lock_owner が強制解放されること。"""
         # stale_lock_timeout_seconds を 1 秒に設定
         store = InMemoryLifecycleStateStore(stale_lock_timeout_seconds=1)
 
-        # 2秒以上前の updated_at で cleanup_running=True を設定
+        # 2秒以上前の touched_at で cleanup_lock_owner="old_token" を設定
         old_time = datetime.now(timezone.utc) - timedelta(seconds=2)
         stale_state = LifecycleState(
             save_count=0,
             last_cleanup_at=None,
-            cleanup_running=True,
+            cleanup_lock_owner="old_token",
+            cleanup_lock_touched_at=old_time,
             updated_at=old_time,
         )
         store._state = stale_state
 
-        # load_state() がスタルロックを検出して解放すること
+        # acquire_cleanup_lock() がスタルロックを検出して取得できること
+        token = "new_token"
+        acquired = await store.acquire_cleanup_lock(token)
+        assert acquired is True
         state = await store.load_state()
-        assert state.cleanup_running is False
+        assert state.cleanup_lock_owner == token
 
     async def test_recent_lock_is_not_released(self):
-        """新しい cleanup_running フラグは解放されないこと。"""
+        """新しい cleanup_lock_owner は解放されないこと。"""
         store = InMemoryLifecycleStateStore(stale_lock_timeout_seconds=600)
 
-        # 最近の updated_at で cleanup_running=True を設定
+        # 最近の touched_at で cleanup_lock_owner="current_token" を設定
         recent_time = datetime.now(timezone.utc)
         running_state = LifecycleState(
             save_count=0,
             last_cleanup_at=None,
-            cleanup_running=True,
+            cleanup_lock_owner="current_token",
+            cleanup_lock_touched_at=recent_time,
             updated_at=recent_time,
         )
         store._state = running_state
 
+        # acquire_cleanup_lock() が False を返すことを確認（最近のロックなので解放されない）
+        acquired = await store.acquire_cleanup_lock("new_token")
+        assert acquired is False
         state = await store.load_state()
-        assert state.cleanup_running is True
+        assert state.cleanup_lock_owner == "current_token"
 
     async def test_cleanup_skipped_when_db_lock_held(self):
         """DB ロックが保持されている場合はクリーンアップをスキップすること。"""
         manager, store = _make_manager()
 
-        # 手動で cleanup_running=True に設定
+        # 手動で cleanup_lock_owner を設定
         now = datetime.now(timezone.utc)
         store._state = LifecycleState(
             save_count=0,
             last_cleanup_at=None,
-            cleanup_running=True,
+            cleanup_lock_owner="other_token",
+            cleanup_lock_touched_at=now,
             updated_at=now,
         )
 
@@ -320,7 +393,7 @@ class TestTimeBasedCleanup:
 
     async def test_triggers_cleanup_when_never_run(self):
         """last_cleanup_at が None の場合にクリーンアップがトリガーされること。"""
-        manager, store = _make_manager()
+        manager, _ = _make_manager()
         cleanup_called = []
 
         async def fake_cleanup():
@@ -338,7 +411,7 @@ class TestTimeBasedCleanup:
         store._state = LifecycleState(
             save_count=0,
             last_cleanup_at=old_time,
-            cleanup_running=False,
+            cleanup_lock_owner=None,
             updated_at=datetime.now(timezone.utc),
         )
         manager, _ = _make_manager(state_store=store)
@@ -360,7 +433,7 @@ class TestTimeBasedCleanup:
         store._state = LifecycleState(
             save_count=0,
             last_cleanup_at=recent_time,
-            cleanup_running=False,
+            cleanup_lock_owner=None,
             updated_at=datetime.now(timezone.utc),
         )
         manager, _ = _make_manager(state_store=store)
@@ -377,7 +450,7 @@ class TestTimeBasedCleanup:
 
     async def test_start_schedules_time_based_check(self):
         """start() が時間ベースのチェックをスケジュールすること。"""
-        manager, store = _make_manager()
+        manager, _ = _make_manager()
 
         check_called = []
 
@@ -499,7 +572,7 @@ class TestWalCheckpoint:
             checkpoint_calls.append(mode)
             return {"busy": 0, "log": 10, "checkpointed": 10}
 
-        manager, store = _make_manager(wal_checkpoint_fn=mock_wal_fn)
+        manager, _ = _make_manager(wal_checkpoint_fn=mock_wal_fn)
 
         await manager.run_cleanup()
         assert len(checkpoint_calls) == 1
@@ -586,7 +659,7 @@ class TestSQLiteLifecycleStateStore:
             state = await store.load_state()
             assert state.save_count == 0
             assert state.last_cleanup_at is None
-            assert state.cleanup_running is False
+            assert state.cleanup_lock_owner is None
         finally:
             os.unlink(db_path)
 
@@ -603,7 +676,7 @@ class TestSQLiteLifecycleStateStore:
             state = LifecycleState(
                 save_count=42,
                 last_cleanup_at=now,
-                cleanup_running=False,
+                cleanup_lock_owner="some_token",
                 updated_at=now,
             )
             await store.save_state(state)
@@ -613,6 +686,7 @@ class TestSQLiteLifecycleStateStore:
             # タイムスタンプは秒単位で比較
             assert loaded.last_cleanup_at is not None
             assert abs((loaded.last_cleanup_at - now).total_seconds()) < 2
+            assert loaded.cleanup_lock_owner == "some_token"
         finally:
             os.unlink(db_path)
 
@@ -626,21 +700,22 @@ class TestSQLiteLifecycleStateStore:
         try:
             store = SQLiteLifecycleStateStore(db_path=db_path)
 
+            token = "test_token"
             # ロック取得成功
-            acquired = await store.acquire_cleanup_lock()
+            acquired = await store.acquire_cleanup_lock(token)
             assert acquired is True
 
             # 同じロックを再取得しようとすると失敗
-            acquired_again = await store.acquire_cleanup_lock()
+            acquired_again = await store.acquire_cleanup_lock("other_token")
             assert acquired_again is False
 
             # ロック解放
-            await store.release_cleanup_lock()
+            await store.release_cleanup_lock(token)
 
             # 解放後は再取得可能
-            acquired_after_release = await store.acquire_cleanup_lock()
+            acquired_after_release = await store.acquire_cleanup_lock("new_token")
             assert acquired_after_release is True
-            await store.release_cleanup_lock()
+            await store.release_cleanup_lock("new_token")
         finally:
             os.unlink(db_path)
 
@@ -652,9 +727,7 @@ class TestSQLiteLifecycleStateStore:
             db_path = f.name
 
         try:
-            store = SQLiteLifecycleStateStore(
-                db_path=db_path, stale_lock_timeout_seconds=1
-            )
+            store = SQLiteLifecycleStateStore(db_path=db_path, stale_lock_timeout_seconds=1)
 
             # 手動でスタルなロック状態を作る
             import aiosqlite
@@ -666,20 +739,24 @@ class TestSQLiteLifecycleStateStore:
                         id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
                         save_count INTEGER NOT NULL DEFAULT 0,
                         last_cleanup_at TIMESTAMP,
-                        cleanup_running INTEGER NOT NULL DEFAULT 0,
+                        cleanup_lock_owner TEXT,
+                        cleanup_lock_touched_at TIMESTAMP,
                         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
                 await conn.execute(
-                    "INSERT OR REPLACE INTO lifecycle_state (id, cleanup_running, updated_at) "
-                    "VALUES (1, 1, ?)",
-                    (old_time,),
+                    "INSERT OR REPLACE INTO lifecycle_state (id, cleanup_lock_owner, cleanup_lock_touched_at, updated_at) "
+                    "VALUES (1, 'old_token', ?, ?)",
+                    (old_time, old_time),
                 )
                 await conn.commit()
 
-            # load_state() がスタルロックを検出して解放すること
+            # acquire_cleanup_lock() がスタルロックを検出して取得できること
+            new_token = "new_token"
+            acquired = await store.acquire_cleanup_lock(new_token)
+            assert acquired is True
             state = await store.load_state()
-            assert state.cleanup_running is False
+            assert state.cleanup_lock_owner == new_token
         finally:
             os.unlink(db_path)
 
@@ -712,3 +789,71 @@ class TestSQLiteLifecycleStateStore:
             assert len(loaded.wal_failure_window) == 1
         finally:
             os.unlink(db_path)
+
+    async def test_save_state_requires_correct_token(self, tmp_path):
+        """正しいトークンがないと save_state が失敗することを確認。"""
+        from context_store.lifecycle.manager import SQLiteLifecycleStateStore
+
+        db_path = str(tmp_path / "test_cas.db")
+        store = SQLiteLifecycleStateStore(db_path)
+
+        token = "owner-token"
+        await store.acquire_cleanup_lock(token)
+
+        # Try to save state with wrong token
+        wrong_token = "wrong-token"
+        state = await store.load_state()
+        new_state = LifecycleState(
+            save_count=10,
+            last_cleanup_at=state.last_cleanup_at,
+            last_cleanup_cursor_at=state.last_cleanup_cursor_at,
+            last_cleanup_id=state.last_cleanup_id,
+            cleanup_lock_owner=state.cleanup_lock_owner,
+            cleanup_lock_touched_at=state.cleanup_lock_touched_at,
+            updated_at=datetime.now(timezone.utc),
+        )
+
+        # 正しく False が返されることを確認
+        result = await store.save_state(new_state, token=wrong_token)
+        assert result is False
+
+        # 正しいトークンでの保存
+        result = await store.save_state(new_state, token=token)
+        assert result is True
+        state_after = await store.load_state()
+        assert state_after.save_count == 10
+
+
+@pytest.mark.asyncio
+async def test_spawn_background_task_no_leak():
+    # Setup mocks
+    mock_store = MagicMock()
+    mock_archiver = MagicMock()
+    mock_purger = MagicMock()
+    mock_consolidator = MagicMock()
+    mock_decay = MagicMock()
+    mock_storage = MagicMock()
+
+    manager = LifecycleManager(
+        state_store=mock_store,
+        archiver=mock_archiver,
+        purger=mock_purger,
+        consolidator=mock_consolidator,
+        decay_scorer=mock_decay,
+        storage=mock_storage,
+        settings=MagicMock(),
+    )
+
+    # Simulate shutdown
+    manager._shutting_down = True
+
+    task_factory = AsyncMock()
+
+    manager._spawn_background_task(task_factory)
+
+    # Wait a bit just in case
+    await asyncio.sleep(0.01)
+
+    # The factory shouldn't be called, so the coroutine is never created, hence no leak.
+    task_factory.assert_not_called()
+    assert len(manager._active_tasks) == 0

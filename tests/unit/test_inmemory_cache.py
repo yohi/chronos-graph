@@ -9,7 +9,6 @@ import pytest
 from context_store.storage.inmemory import InMemoryCacheAdapter
 from context_store.storage.protocols import CacheAdapter
 
-
 # ---------------------------------------------------------------------------
 # Fixture
 # ---------------------------------------------------------------------------

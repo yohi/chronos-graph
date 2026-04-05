@@ -1,7 +1,7 @@
 """Keyword Search - キーワード検索"""
 
-from context_store.storage.protocols import StorageAdapter
 from context_store.models.search import ScoredMemory
+from context_store.storage.protocols import StorageAdapter
 
 
 class KeywordSearch:
@@ -28,7 +28,7 @@ class KeywordSearch:
 
         Args:
             query: 検索クエリ
-            top_k: 返す結果の数（Noneの場合はデフォルト値）
+            top_k: 返す結果の数(Noneの場合はデフォルト値)
 
         Returns:
             ScoredMemory のリスト

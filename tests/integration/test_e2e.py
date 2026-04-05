@@ -325,6 +325,9 @@ class TestMCPServerE2E:
 
         # 保存されたアイテムを検索して source を検証
         search_res = json.loads(await server.memory_search(query=content))
+        assert len(search_res["results"]) > 0, (
+            "Search results should not be empty before testing for 'conversation' source_type"
+        )
         assert any(item["source_type"] == "conversation" for item in search_res["results"])
 
     async def test_memory_save_explicit_source(self, server_with_mock: ChronosServer) -> None:
@@ -338,6 +341,9 @@ class TestMCPServerE2E:
 
         # 保存されたアイテムを検索して source を検証
         search_res = json.loads(await server.memory_search(query=content))
+        assert len(search_res["results"]) > 0, (
+            "Search results should not be empty before testing for 'manual' source_type"
+        )
         assert any(item["source_type"] == "manual" for item in search_res["results"])
 
     async def test_memory_search(self, server_with_mock: ChronosServer) -> None:

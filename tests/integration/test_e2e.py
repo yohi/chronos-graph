@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import AsyncGenerator, TYPE_CHECKING
 from pathlib import Path
 from unittest.mock import patch
@@ -233,8 +234,8 @@ class TestConcurrentWriteStress:
         search_results = await search_loop()
         await write_task
 
-        # 検索が少なくとも1回はエラーなく実行できること
-        assert len(search_results) >= 1
+        # 検索が3回ともエラーなく実行できること
+        assert len(search_results) == 3
 
     async def test_db_integrity_after_stress(self, orchestrator: Orchestrator) -> None:
         """ストレステスト後にDBの整合性が保たれていること。"""
@@ -295,7 +296,6 @@ class TestMCPServerE2E:
         server = server_with_mock
         content = "テストコンテンツ"
         result = await server.memory_save(content=content)
-        import json
 
         data = json.loads(result)
         assert data.get("saved", 0) >= 1
@@ -309,7 +309,6 @@ class TestMCPServerE2E:
         server = server_with_mock
         content = "手動入力テスト"
         result = await server.memory_save(content=content, source="manual")
-        import json
 
         data = json.loads(result)
         assert data.get("saved", 0) >= 1
@@ -323,7 +322,6 @@ class TestMCPServerE2E:
         server = server_with_mock
         await server.memory_save(content="検索テスト用コンテンツ")
         result = await server.memory_search(query="テスト")
-        import json
 
         data = json.loads(result)
         assert "results" in data
@@ -332,7 +330,6 @@ class TestMCPServerE2E:
         """memory_stats がJSON文字列を返すこと。"""
         server = server_with_mock
         result = await server.memory_stats()
-        import json
 
         data = json.loads(result)
         assert "total_count" in data
@@ -341,7 +338,6 @@ class TestMCPServerE2E:
         """memory_prune dry_run がJSON文字列を返すこと。"""
         server = server_with_mock
         result = await server.memory_prune(older_than_days=90, dry_run=True)
-        import json
 
         data = json.loads(result)
         assert "count" in data

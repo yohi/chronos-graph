@@ -216,6 +216,7 @@ class TestConcurrentWriteStress:
         await orchestrator.save("検索テスト用データ")
 
         start_event = asyncio.Event()
+        search_during_write = False
 
         async def write_loop() -> None:
             # 書き込みループ開始を通知
@@ -225,9 +226,9 @@ class TestConcurrentWriteStress:
                 # 検索が並走する時間を稼ぐためにスリープを入れる
                 await asyncio.sleep(0.05)
 
-        async def search_loop() -> list[dict]:
+        async def search_loop(w_task: asyncio.Task) -> list[dict]:
+            nonlocal search_during_write
             # 最初の書き込みが開始されるのを待つ
-            # タイムアウトを設定し、不測のハングを回避
             try:
                 await asyncio.wait_for(start_event.wait(), timeout=5.0)
             except asyncio.TimeoutError:
@@ -237,14 +238,17 @@ class TestConcurrentWriteStress:
             for _ in range(3):
                 # タイムアウトを設定し、ブロックされないことを検証
                 r = await asyncio.wait_for(orchestrator.search("テスト", top_k=3), timeout=2.0)
+                # 書き込みタスクがまだ実行中かチェック
+                if not w_task.done():
+                    search_during_write = True
                 results.append(r)
                 await asyncio.sleep(0.01)
             return results
 
         # 並行実行
-        # write_loop と search_loop をタスクとして同時に開始
-        search_task = asyncio.create_task(search_loop())
+        # write_loop を先に作成し、search_loop に渡す
         write_task = asyncio.create_task(write_loop())
+        search_task = asyncio.create_task(search_loop(write_task))
 
         # 両方のタスクの終了を待つ
         await write_task
@@ -252,16 +256,24 @@ class TestConcurrentWriteStress:
 
         # 検索が3回ともエラーなく実行できること
         assert len(search_results) == 3
+        # 書き込み中に少なくとも1回は検索が完了したこと
+        assert search_during_write is True
 
     async def test_db_integrity_after_stress(self, orchestrator: Orchestrator) -> None:
-        """ストレステスト後にDBの整合性が保たれていること。"""
-        # 数件の保存
-        for i in range(5):
+        """ストレステスト(並行書き込み)後にDBの整合性が保たれていること。"""
+        # 並行書き込みによる負荷
+        N = 10
+
+        async def save_one(i: int) -> None:
             await orchestrator.save(f"整合性テスト記憶 {i}")
+
+        tasks = [save_one(i) for i in range(N)]
+        await asyncio.gather(*tasks)
 
         # 統計が取れること
         stats = await orchestrator.stats()
-        assert stats["total_count"] >= 5
+        # 少なくとも N 件以上（以前のテストデータが含まれる可能性があるため >= N）
+        assert stats["total_count"] >= N
         # アーカイブとアクティブの合計が total と一致
         assert stats["active_count"] + stats["archived_count"] == stats["total_count"]
 

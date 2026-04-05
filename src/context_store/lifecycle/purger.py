@@ -100,7 +100,7 @@ class Purger:
             for memory in memories:
                 memory_id = str(memory.id)
                 # simulated_archived_ids に含まれる ID は、今アーカイブされたばかりなので
-                # この Purger 実行での削除対象（およびチェック対象）からは除外する。
+                # この Purger 実行での削除対象(およびチェック対象)からは除外する。
                 if simulated_archived_ids and memory_id in simulated_archived_ids:
                     continue
 

@@ -310,6 +310,8 @@ class Orchestrator:
     @property
     def url_fetch_concurrency(self) -> int:
         """URL フェッチの同時実行数を返す。"""
+        if self._settings is None:
+            return 1
         return self._settings.url_fetch_concurrency
 
     async def dispose(self) -> None:

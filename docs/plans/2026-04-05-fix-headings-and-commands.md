@@ -2,15 +2,15 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Correct markdown headings and pre-commit commands in planning documents to ensure they follow markdownlint MD001 and use correct verification commands.
+**Goal:** Correct Markdown headings and pre-commit commands in planning documents to ensure they follow Markdownlint MD001 and use correct verification commands.
 
-**Architecture:** Surgical replacement of markdown headings and command strings in existing plan files.
+**Architecture:** Surgical replacement of Markdown headings and command strings in existing plan files.
 
 **Tech Stack:** Markdown
 
 ---
 
-### Task 1: Fix `docs/plans/2026-04-03-pre-commit-task-2-verification.md`
+## Task 1: Fix `docs/plans/2026-04-03-pre-commit-task-2-verification.md`
 
 **Files:**
 - Modify: `docs/plans/2026-04-03-pre-commit-task-2-verification.md`
@@ -19,9 +19,10 @@
 
 Action:
 1. Replace `### Task 2.x` headings with `## Task 2.x`.
-2. In Task 2.3 Step 2, replace `pre-commit run ruff-check --files src/context_store/config.py` with `pre-commit run ruff --files src/context_store/config.py`.
-3. In Task 2.4 Step 1, replace `pre-commit run mypy --files some_random_file.py` with `pre-commit run mypy --files README.md`.
+2. In Task 2.3 Step 2, replace `pre-commit run ruff --files src/context_store/config.py` with `pre-commit run ruff --files src/context_store/config.py`.
+3. In Task 2.4 Step 1, replace `pre-commit run mypy --files README.md` with `pre-commit run mypy --files README.md`.
 4. Add a note in Task 2.4 about `pass_filenames: false` for mypy.
+   > Note: For mypy, `pass_filenames: false` is set in `.pre-commit-config.yaml` to ensure it runs on the entire project context.
 
 **Step 2: Verify changes**
 
@@ -41,7 +42,7 @@ git add docs/plans/2026-04-03-pre-commit-task-2-verification.md
 git commit -m "docs: fix headings and commands in task 2 verification plan"
 ```
 
-### Task 2: Fix `docs/plans/2026-04-04-fix-reported-issues-plan.md`
+## Task 2: Fix `docs/plans/2026-04-04-fix-reported-issues-plan.md`
 
 **Files:**
 - Modify: `docs/plans/2026-04-04-fix-reported-issues-plan.md`

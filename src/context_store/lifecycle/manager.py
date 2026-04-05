@@ -12,8 +12,8 @@ from typing import TYPE_CHECKING, Any, Callable, Coroutine, Protocol, runtime_ch
 
 from filelock import FileLock, Timeout
 
-from context_store.storage.protocols import MemoryFilters
 from context_store.lifecycle.consolidator import CONSOLIDATION_BATCH_SIZE
+from context_store.storage.protocols import MemoryFilters
 
 if TYPE_CHECKING:
     from context_store.config import Settings

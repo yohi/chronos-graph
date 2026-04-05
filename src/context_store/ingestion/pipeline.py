@@ -19,8 +19,8 @@ import weakref
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from uuid import UUID
 from typing import Any
+from uuid import UUID
 
 from context_store.config import Settings
 from context_store.embedding.protocols import EmbeddingProvider

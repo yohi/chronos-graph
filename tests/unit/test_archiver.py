@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
-
 
 from context_store.lifecycle.archiver import Archiver, ArchiverResult
 from context_store.models.memory import Memory, MemoryType, SourceType
@@ -31,6 +31,23 @@ def _make_memory(
 
 
 class TestArchiverBasic:
+    async def test_run_does_not_count_failed_update(self):
+        """ストレージの更新に失敗した場合、archived_count が増えないことを確認。"""
+        storage = AsyncMock()
+        scorer = MagicMock()
+
+        memory = _make_memory()
+        storage.list_by_filter.return_value = [memory]
+        scorer.is_below_archive_threshold.return_value = True
+        storage.update_memory.return_value = False
+
+        archiver = Archiver(storage=storage, scorer=scorer)
+        result = await archiver.run()
+
+        assert result.archived_count == 0
+        assert result.checked_count == 1
+        storage.update_memory.assert_called_once()
+
     """Archiver の基本動作テスト。"""
 
     async def test_archives_memory_below_threshold(self):
@@ -211,8 +228,6 @@ class TestArchiverPagination:
         # 120件の記憶を作成
         all_memories = [_make_memory() for _ in range(120)]
         # ID と作成日時をユニークにする（カーソル用）
-        import uuid
-        from datetime import timedelta
 
         base_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
         for i, m in enumerate(all_memories):

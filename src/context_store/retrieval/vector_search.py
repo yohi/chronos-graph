@@ -1,7 +1,7 @@
 """Vector Search - ベクトル検索"""
 
-from context_store.models.search import ScoredMemory
 from context_store.embedding.protocols import EmbeddingProvider
+from context_store.models.search import ScoredMemory
 from context_store.storage.protocols import StorageAdapter
 
 

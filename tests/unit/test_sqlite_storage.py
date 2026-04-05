@@ -18,7 +18,6 @@ from context_store.models.memory import Memory, MemorySource, MemoryType, Scored
 from context_store.storage.protocols import MemoryFilters, StorageError
 from context_store.storage.sqlite import SQLiteStorageAdapter
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

@@ -5,17 +5,16 @@ from __future__ import annotations
 import contextlib
 import logging
 import time
-import pytest
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
+import pytest
 
 from context_store.lifecycle.consolidator import Consolidator, ConsolidatorResult
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
 from context_store.storage.protocols import MemoryFilters
-
 
 # ---------------------------------------------------------------------------
 # ヘルパー
@@ -826,8 +825,8 @@ async def test_consolidator_skips_different_projects():
 
 
 def test_consolidator_uses_settings_defaults():
-    from context_store.lifecycle.consolidator import Consolidator
     from context_store.config import Settings
+    from context_store.lifecycle.consolidator import Consolidator
 
     # We don't pass settings, it should use Settings.model_construct() defaults
     consolidator = Consolidator(storage=MagicMock())

@@ -21,7 +21,7 @@ from tests.unit.conftest import make_settings
 pytestmark = pytest.mark.asyncio
 
 
-def test_lifecycle_state_fields():
+async def test_lifecycle_state_fields():
     state = LifecycleState()
     assert hasattr(state, "cleanup_lock_owner")
     assert hasattr(state, "cleanup_lock_touched_at")
@@ -167,7 +167,9 @@ class TestOnMemorySaved:
         state = await store.load_state()
         assert state.save_count == 5
 
-    # ─────────────────────────── run_cleanup テスト ───────────────────────────
+
+class TestRunCleanup:
+    """run_cleanup() のテスト。"""
 
     async def test_run_cleanup_aborts_on_lock_loss(self, temp_lock_path):
         """クリーンアップ中にロックが他者に奪われた場合、中断されることを確認。"""
@@ -203,10 +205,6 @@ class TestOnMemorySaved:
         assert final_state.last_cleanup_at is None
         # ロックが奪われた状態が維持されていること（自分のトークンで上書きされていないこと）
         assert final_state.cleanup_lock_owner == "someone-else"
-
-
-class TestRunCleanup:
-    """run_cleanup() のテスト。"""
 
     async def test_runs_all_jobs(self):
         """run_cleanup() が全ジョブを実行すること。"""
@@ -782,11 +780,9 @@ class TestSQLiteLifecycleStateStore:
         finally:
             os.unlink(db_path)
 
-    @pytest.mark.asyncio
     async def test_save_state_requires_correct_token(self, tmp_path):
         """正しいトークンがないと save_state が失敗することを確認。"""
-        from context_store.lifecycle.manager import SQLiteLifecycleStateStore, LifecycleState
-        from datetime import datetime, timezone
+        from context_store.lifecycle.manager import SQLiteLifecycleStateStore
 
         db_path = str(tmp_path / "test_cas.db")
         store = SQLiteLifecycleStateStore(db_path)

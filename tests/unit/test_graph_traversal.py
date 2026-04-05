@@ -1,10 +1,11 @@
 """Graph Traversal のテスト"""
 
-import pytest
-from uuid import UUID
 from unittest.mock import AsyncMock, MagicMock
+from uuid import UUID
 
-from context_store.models.graph import GraphResult, Edge
+import pytest
+
+from context_store.models.graph import Edge, GraphResult
 from context_store.retrieval.graph_traversal import GraphTraversal
 
 

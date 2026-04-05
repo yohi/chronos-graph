@@ -1,12 +1,14 @@
 """Result Fusion (RRF + 複合スコアリング) のテスト"""
 
-import pytest
 from datetime import datetime, timedelta, timezone
-from context_store.retrieval.result_fusion import ResultFusion
-from context_store.retrieval.query_analyzer import SearchStrategy
-from context_store.models.search import ScoredMemory
-from context_store.models.memory import Memory, MemoryType, SourceType, MemorySource
 from uuid import UUID
+
+import pytest
+
+from context_store.models.memory import Memory, MemorySource, MemoryType, SourceType
+from context_store.models.search import ScoredMemory
+from context_store.retrieval.query_analyzer import SearchStrategy
+from context_store.retrieval.result_fusion import ResultFusion
 
 
 @pytest.fixture

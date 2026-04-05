@@ -18,7 +18,6 @@ from context_store.ingestion.adapters import (
 )
 from context_store.models.memory import SourceType
 
-
 # ===========================================================================
 # RawContent テスト
 # ===========================================================================

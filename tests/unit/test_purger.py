@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
-
 from context_store.lifecycle.purger import Purger, PurgerResult
 from context_store.models.memory import Memory, MemoryType, SourceType
 from context_store.storage.protocols import MemoryFilters

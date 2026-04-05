@@ -75,8 +75,8 @@ class Archiver:
             for memory in memories:
                 if self._scorer.is_below_archive_threshold(memory):
                     now = datetime.now(timezone.utc)
-                    await self._storage.update_memory(str(memory.id), {"archived_at": now})
-                    archived_count += 1
+                    if await self._storage.update_memory(str(memory.id), {"archived_at": now}):
+                        archived_count += 1
                 last_id = str(memory.id)
                 last_created_at = memory.created_at
 

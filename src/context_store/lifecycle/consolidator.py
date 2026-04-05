@@ -182,7 +182,7 @@ class Consolidator:
         """検索フィルタを構築する。"""
         return MemoryFilters(
             created_after=last_cleanup_at,
-            archived=False,
+            archived=None,
         )
 
     async def _process_candidate(
@@ -222,7 +222,7 @@ class Consolidator:
                     {"similarity": scored.score, "archived_at": now},
                 )
             except Exception:
-                logger.error(
+                logger.exception(
                     "%s: failed to create SUPERSEDES edge from %s to %s",
                     log_prefix,
                     newer_id,

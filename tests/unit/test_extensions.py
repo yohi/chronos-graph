@@ -1,6 +1,8 @@
-"""RL 拡張ポイント（Extension Protocols + NoOp 実装）のユニットテスト。"""
+"""RL 拡張ポイント (Extension Protocols + NoOp 実装) のユニットテスト。"""
 
 from __future__ import annotations
+
+from datetime import datetime, timezone
 
 import pytest
 
@@ -35,16 +37,19 @@ class TestAgentAction:
         assert action.timestamp is not None
 
     def test_create_with_all_fields(self) -> None:
+        ts = datetime(2026, 4, 5, 12, 0, 0, tzinfo=timezone.utc)
         action = AgentAction(
             action_type="search",
             memory_id="mem-123",
             query="検索クエリ",
             metadata={"project": "test"},
+            timestamp=ts,
         )
         assert action.action_type == "search"
         assert action.memory_id == "mem-123"
         assert action.query == "検索クエリ"
         assert action.metadata == {"project": "test"}
+        assert action.timestamp == ts
 
 
 # ---------------------------------------------------------------------------

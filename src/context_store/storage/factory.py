@@ -161,7 +161,7 @@ async def create_storage(
                 cache_adp.set_coherence_checker(checker)
 
         return storage, graph_adp, cache_adp
-    except Exception as exc:
+    except Exception:
         # 各リソースの dispose() を個別に try/except で囲むことで、
         # 途中で例外が発生しても全リソースの解放を試みる。
         if cache_adp:
@@ -179,7 +179,7 @@ async def create_storage(
                 await storage.dispose()
             except Exception as e:
                 logger.error("Failed to dispose storage: %s", e)
-        raise exc
+        raise
 
 
 async def _create_storage_adapter(settings: "Settings") -> "StorageAdapter":

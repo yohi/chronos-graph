@@ -45,7 +45,7 @@ class Purger:
         except (ValueError, TypeError):
             raise ValueError(
                 f"retention_days must be a non-negative integer, got {retention_days!r}"
-            )
+            ) from None
 
         self._storage = storage
         self._graph = graph

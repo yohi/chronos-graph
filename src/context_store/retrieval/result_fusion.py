@@ -1,10 +1,13 @@
 """Result Fusion - RRF + 複合スコアリング"""
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, TypedDict, cast
 
 from context_store.models.memory import Memory, MemorySource, ScoredMemory
 from context_store.models.search import SearchStrategy
+
+logger = logging.getLogger(__name__)
 
 
 class MemoryScore(TypedDict):
@@ -42,6 +45,13 @@ class ResultFusion:
         weights_sum = rrf_weight + time_decay_weight + importance_weight
         if abs(weights_sum - 1.0) > 1e-6:
             # 1.0 でない場合は正規化する
+            logger.warning(
+                "Weights (rrf=%.2f, time_decay=%.2f, importance=%.2f) sum to %.2f, normalizing to 1.0",
+                rrf_weight,
+                time_decay_weight,
+                importance_weight,
+                weights_sum,
+            )
             rrf_weight /= weights_sum
             time_decay_weight /= weights_sum
             importance_weight /= weights_sum

@@ -433,6 +433,23 @@ class TestDeleteOperation:
 
         graph.delete_node.assert_called_once_with("memory-id-123")
 
+    @pytest.mark.asyncio
+    async def test_delete_invalidates_cache_even_if_graph_fails(self, caplog):
+        """グラフノードの削除が失敗してもキャッシュが無効化されること。"""
+        storage = _make_mock_storage()
+        graph = _make_mock_graph()
+        graph.delete_node.side_effect = Exception("Graph error")
+        cache = _make_mock_cache()
+        orch, *_ = await _build_orchestrator(storage=storage, graph=graph, cache=cache)
+
+        with caplog.at_level(logging.ERROR):
+            await orch.delete("memory-id-123")
+
+        # グラフ削除が失敗しても、キャッシュ無効化が呼ばれていること
+        cache.invalidate.assert_called_once_with("memory-id-123")
+        # エラーログが出力されていること
+        assert "Failed to delete node from graph" in caplog.text
+
 
 class TestPruneOperation:
     """prune() 操作のテスト。"""

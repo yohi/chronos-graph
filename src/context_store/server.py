@@ -78,6 +78,8 @@ class ChronosServer:
                         "マルチプロセス実行時は制限を超過する可能性があります。"
                     )
                 self._initialized = True
+                # ライフサイクルマネージャーを開始
+                await self._orchestrator.start_lifecycle()
 
     # ---------------------------------------------------------------------------
     # ツールハンドラ

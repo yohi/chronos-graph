@@ -630,6 +630,7 @@ class LifecycleManager:
 
             settings = Settings.model_construct()
 
+        self._settings = settings
         self._save_count_threshold = settings.cleanup_save_count_threshold
         self._cleanup_interval_hours = settings.cleanup_interval_hours
         self._stale_lock_timeout_seconds = settings.stale_lock_timeout_seconds
@@ -738,6 +739,9 @@ class LifecycleManager:
         filelock によるプロセス間排他制御と DB レベルのロックを組み合わせて
         同時実行を防ぐ。ロック取得失敗時はサイレントにスキップする。
 
+        InMemoryLifecycleStateStore の場合は非永続的（共有されない）ため
+        クリーンアップをスキップする。
+
         Args:
             older_than_days: 保持期間（日数）。None の場合はデフォルト設定を使用。
             dry_run: True の場合は更新せず対象件数のみをカウント。
@@ -745,6 +749,13 @@ class LifecycleManager:
         Returns:
             削除またはアーカイブされたアイテムの総数。
         """
+        if self._settings.storage_backend != "sqlite":
+            logger.debug(
+                "Cleanup skipped: lifecycle cleanup is not supported for backend '%s'.",
+                self._settings.storage_backend,
+            )
+            return 0
+
         if dry_run:
             # dry_run の場合はロックを取得せずに実行
             _, total_count = await self._run_cleanup_inner(
@@ -801,6 +812,8 @@ class LifecycleManager:
 
         should_schedule_followup = False
         total_count = 0
+        simulated_archived_ids: set[str] = set()
+
         try:
             state = await self._state_store.load_state()
             # クリーンアップ開始時のカウントをキャプチャ。
@@ -818,7 +831,11 @@ class LifecycleManager:
 
             # 1. Decay Scorer (各ジョブは暗黙的にスコアを使用)
             # 2. Archiver
-            archiver_result = await self._archiver.run(heartbeat_fn=heartbeat_fn, dry_run=dry_run)
+            archiver_result = await self._archiver.run(
+                heartbeat_fn=heartbeat_fn,
+                dry_run=dry_run,
+                simulated_archived_ids=simulated_archived_ids if dry_run else None,
+            )
             total_count += archiver_result.archived_count
             logger.info(
                 "Archiver: archived=%d, checked=%d",
@@ -834,6 +851,7 @@ class LifecycleManager:
                 batch_size=CONSOLIDATION_BATCH_SIZE,
                 heartbeat_fn=heartbeat_fn,
                 dry_run=dry_run,
+                simulated_archived_ids=simulated_archived_ids if dry_run else None,
             )
             total_count += consolidator_result.consolidated_count
             logger.info(
@@ -844,7 +862,10 @@ class LifecycleManager:
 
             # 4. Purger
             purger_result = await self._purger.run(
-                heartbeat_fn=heartbeat_fn, retention_days=older_than_days, dry_run=dry_run
+                heartbeat_fn=heartbeat_fn,
+                retention_days=older_than_days,
+                dry_run=dry_run,
+                simulated_archived_ids=simulated_archived_ids if dry_run else None,
             )
             total_count += purger_result.purged_count
             logger.info(

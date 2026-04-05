@@ -40,6 +40,7 @@ class Archiver:
         project: str | None = None,
         heartbeat_fn: Callable[[], Coroutine[Any, Any, None]] | None = None,
         dry_run: bool = False,
+        simulated_archived_ids: set[str] | None = None,
     ) -> ArchiverResult:
         """アクティブ記憶をスキャンして閾値以下のものをアーカイブする。
 
@@ -47,6 +48,7 @@ class Archiver:
             project: フィルタするプロジェクト名。None の場合は全プロジェクト対象。
             heartbeat_fn: ハートビート用コールバック関数。
             dry_run: True の場合は更新せず対象件数のみをカウント。
+            simulated_archived_ids: dry_run 時にアーカイブされたとみなす ID のセット。
 
         Returns:
             処理結果を格納した ArchiverResult。
@@ -75,14 +77,17 @@ class Archiver:
             checked_count += current_page_len
 
             for memory in memories:
+                memory_id = str(memory.id)
                 if self._scorer.is_below_archive_threshold(memory):
                     if not dry_run:
                         now = datetime.now(timezone.utc)
-                        if await self._storage.update_memory(str(memory.id), {"archived_at": now}):
+                        if await self._storage.update_memory(memory_id, {"archived_at": now}):
                             archived_count += 1
                     else:
                         archived_count += 1
-                last_id = str(memory.id)
+                        if simulated_archived_ids is not None:
+                            simulated_archived_ids.add(memory_id)
+                last_id = memory_id
                 last_created_at = memory.created_at
 
             if heartbeat_fn:

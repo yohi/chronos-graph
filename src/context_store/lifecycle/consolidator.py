@@ -55,6 +55,7 @@ class Consolidator:
         batch_size: int = CONSOLIDATION_BATCH_SIZE,
         heartbeat_fn: Callable[[], Coroutine[Any, Any, None]] | None = None,
         dry_run: bool = False,
+        simulated_archived_ids: set[str] | None = None,
     ) -> ConsolidatorResult:
         """重複記憶を統合するクリーンアップジョブ。
 
@@ -65,119 +66,141 @@ class Consolidator:
             batch_size: 1サイクルで処理する最大記憶数。
             heartbeat_fn: ハートビート用コールバック関数。
             dry_run: True の場合は更新せず対象件数のみをカウント。
+            simulated_archived_ids: dry_run 時にアーカイブされたとみなす ID のセット。
 
         Returns:
             処理結果を格納した ConsolidatorResult。
         """
         now = datetime.now(timezone.utc)
 
-        # 安定したページングのために (created_at, id) ASC で取得
-        filters = self._build_filters(last_cleanup_at)
-        filters.id_after = last_cleanup_id
-        filters.limit = batch_size
-        filters.order_by = "created_at ASC, id ASC"
-
-        memories = await self._storage.list_by_filter(filters)
-        if not memories:
-            return ConsolidatorResult(
-                consolidated_count=0,
-                checked_count=0,
-                last_processed_at=None,
-                last_processed_id=None,
-            )
-
         consolidated_count = 0
         checked_count = 0
         archived_in_this_run: set[str] = set()
         affected_memory_ids: set[str] = set()
 
-        for memory in memories:
-            if heartbeat_fn:
-                await heartbeat_fn()
+        current_last_at = last_cleanup_at
+        current_last_id = last_cleanup_id
 
-            memory_id = str(memory.id)
-            if memory_id in archived_in_this_run:
-                continue
+        while True:
+            # 安定したページングのために (created_at, id) ASC で取得
+            filters = self._build_filters(current_last_at)
+            filters.id_after = current_last_id
+            filters.limit = batch_size
+            filters.order_by = "created_at ASC, id ASC"
 
-            checked_count += 1
+            memories = await self._storage.list_by_filter(filters)
+            if not memories:
+                break
 
-            # 類似記憶を検索
-            if not memory.embedding:
-                continue
+            for memory in memories:
+                if heartbeat_fn:
+                    await heartbeat_fn()
 
-            candidates = await self._storage.vector_search(
-                embedding=memory.embedding,
-                top_k=5,
-            )
-
-            # 自分自身を除外し、閾値以上の候補を抽出
-            self_healing_candidates = []
-            regular_candidates = []
-
-            for scored in candidates:
-                cand_id = str(scored.memory.id)
-                if cand_id == memory_id or cand_id in archived_in_this_run:
+                memory_id = str(memory.id)
+                # すでに統合対象になっている場合、またはシミュレート済みセットに含まれる場合はスキップ
+                if memory_id in archived_in_this_run:
+                    continue
+                if simulated_archived_ids is not None and memory_id in simulated_archived_ids:
                     continue
 
-                # 異なるプロジェクトの記憶は統合しない
-                if scored.memory.project != memory.project:
+                checked_count += 1
+
+                # 類似記憶を検索
+                if not memory.embedding:
                     continue
 
-                if scored.score >= self._dedup_threshold:
-                    self_healing_candidates.append(scored)
-                elif scored.score >= self._consolidation_threshold:
-                    regular_candidates.append(scored)
-
-            # 自己修復候補を優先して処理
-            for scored in self_healing_candidates:
-                success, newer_id = await self._process_candidate(
-                    memory, scored, archived_in_this_run, "Self-healing", now, dry_run=dry_run
+                candidates = await self._storage.vector_search(
+                    embedding=memory.embedding,
+                    top_k=5,
                 )
-                if success:
-                    consolidated_count += 1
-                    if newer_id:
-                        affected_memory_ids.add(newer_id)
 
-                # ベース側がアーカイブされた場合はこの記憶の処理を中断
+                # 自分自身を除外し、閾値以上の候補を抽出
+                self_healing_candidates = []
+                regular_candidates = []
+
+                for scored in candidates:
+                    cand_id = str(scored.memory.id)
+                    # 自分自身、既にアーカイブ済み（物理・シミュレート双方）は除外
+                    if cand_id == memory_id or cand_id in archived_in_this_run:
+                        continue
+                    if simulated_archived_ids is not None and cand_id in simulated_archived_ids:
+                        continue
+
+                    # 異なるプロジェクトの記憶は統合しない
+                    if scored.memory.project != memory.project:
+                        continue
+
+                    if scored.score >= self._dedup_threshold:
+                        self_healing_candidates.append(scored)
+                    elif scored.score >= self._consolidation_threshold:
+                        regular_candidates.append(scored)
+
+                # 自己修復候補を優先して処理
+                for scored in self_healing_candidates:
+                    success, newer_id = await self._process_candidate(
+                        memory, scored, archived_in_this_run, "Self-healing", now, dry_run=dry_run
+                    )
+                    if success:
+                        consolidated_count += 1
+                        if newer_id:
+                            affected_memory_ids.add(newer_id)
+                        # dry_run 時に外部セットも更新
+                        if dry_run and simulated_archived_ids is not None:
+                            simulated_archived_ids.add(
+                                str(scored.memory.id)
+                                if str(scored.memory.id) != memory_id
+                                else str(memory.id)
+                            )
+
+                    # ベース側がアーカイブされた場合はこの記憶の処理を中断
+                    if memory_id in archived_in_this_run:
+                        break
+
+                # ベース側がアーカイブ済みならスキップ
                 if memory_id in archived_in_this_run:
-                    break
+                    continue
 
-            # ベース側がアーカイブ済みならスキップ
-            if memory_id in archived_in_this_run:
-                continue
+                # 通常統合候補を処理(0.85 <= score < 0.90)
+                for scored in regular_candidates:
+                    success, newer_id = await self._process_candidate(
+                        memory, scored, archived_in_this_run, "Consolidation", now, dry_run=dry_run
+                    )
+                    if success:
+                        consolidated_count += 1
+                        if newer_id:
+                            affected_memory_ids.add(newer_id)
+                        # dry_run 時に外部セットも更新
+                        if dry_run and simulated_archived_ids is not None:
+                            # _process_candidate が older をアーカイブするので、そちらをセットに追加
+                            older, _ = self._determine_order(memory, scored.memory)
+                            simulated_archived_ids.add(str(older.id))
 
-            # 通常統合候補を処理(0.85 <= score < 0.90)
-            for scored in regular_candidates:
-                success, newer_id = await self._process_candidate(
-                    memory, scored, archived_in_this_run, "Consolidation", now, dry_run=dry_run
-                )
-                if success:
-                    consolidated_count += 1
-                    if newer_id:
-                        affected_memory_ids.add(newer_id)
+                    if memory_id in archived_in_this_run:
+                        break
 
-                if memory_id in archived_in_this_run:
-                    break
+            # ページング情報の更新
+            current_last_at = memories[-1].created_at
+            current_last_id = str(memories[-1].id)
+
+            # dry_run でない場合は 1 バッチで終了する
+            if not dry_run:
+                break
+            if len(memories) < batch_size:
+                break
 
         # 影響を受けた記憶(生き残った方)の埋め込みを再計算(任意)
         if not dry_run and self._embedding_provider and affected_memory_ids:
-            # ここでは簡単のため、生き残った側の内容で再計算するロジックのプレースホルダ
-            # 実際には複数マージされた場合は内容を結合して再計算するのが望ましい
             for mid in affected_memory_ids:
                 if mid in archived_in_this_run:
                     continue
                 await self._recompute_embedding(mid)
 
-        last_processed_at = memories[-1].created_at if memories and not dry_run else None
-        last_processed_id = str(memories[-1].id) if memories and not dry_run else None
-        has_more = len(memories) == batch_size and not dry_run
-
         return ConsolidatorResult(
             consolidated_count=consolidated_count,
             checked_count=checked_count,
-            last_processed_at=last_processed_at,
-            last_processed_id=last_processed_id,
-            has_more=has_more,
+            last_processed_at=current_last_at if not dry_run else None,
+            last_processed_id=current_last_id if not dry_run else None,
+            has_more=(len(memories) == batch_size and not dry_run),
         )
 
     def _build_filters(self, last_cleanup_at: datetime | None) -> MemoryFilters:

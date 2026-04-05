@@ -256,9 +256,13 @@ class Orchestrator:
             削除成功時は True。
         """
         deleted = await self._storage.delete_memory(memory_id)
-        if self._graph is not None:
-            await self._graph.delete_node(memory_id)
-        await self._cache.invalidate(memory_id)
+        try:
+            if self._graph is not None:
+                await self._graph.delete_node(memory_id)
+        except Exception as e:
+            logger.error("Failed to delete node from graph for memory %s: %s", memory_id, e)
+        finally:
+            await self._cache.invalidate(memory_id)
         return deleted
 
     async def prune(
@@ -268,6 +272,9 @@ class Orchestrator:
     ) -> int:
         """古い記憶を削除する。
 
+        SQLite バックエンド以外（Postgres, Redis, In-Memory等）では
+        ライフサイクル状態ストアが永続化されないため、クリーンアップをスキップする。
+
         Args:
             older_than_days: この日数より古い記憶を削除対象とする。
             dry_run: True の場合は削除せず対象件数のみを返す。
@@ -275,6 +282,14 @@ class Orchestrator:
         Returns:
             削除した（または削除対象の）件数。
         """
+        if self._settings.storage_backend != "sqlite":
+            logger.warning(
+                "Lifecycle cleanup is only supported for 'sqlite' backend in this version. "
+                "Skipping prune for backend: %s",
+                self._settings.storage_backend,
+            )
+            return 0
+
         # lifecycle_manager.run_cleanup() は削除またはアーカイブされた件数 (int) を返す。
         count: int = await self._lifecycle_manager.run_cleanup(
             older_than_days=older_than_days, dry_run=dry_run
@@ -313,6 +328,10 @@ class Orchestrator:
         if self._settings is None:
             return 1
         return self._settings.url_fetch_concurrency
+
+    async def start_lifecycle(self) -> None:
+        """ライフサイクルマネージャーを開始する。"""
+        await self._lifecycle_manager.start()
 
     async def dispose(self) -> None:
         """全アダプターのリソースを解放する。"""

@@ -120,7 +120,7 @@ class Consolidator:
 
                 for scored in candidates:
                     cand_id = str(scored.memory.id)
-                    # 自分自身、既にアーカイブ済み（物理・シミュレート双方）は除外
+                    # 自分自身、既にアーカイブ済み (物理・シミュレート双方) は除外
                     if cand_id == memory_id or cand_id in archived_in_this_run:
                         continue
                     if simulated_archived_ids is not None and cand_id in simulated_archived_ids:

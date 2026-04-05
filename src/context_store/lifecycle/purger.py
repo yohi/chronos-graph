@@ -60,7 +60,7 @@ class Purger:
 
         Args:
             heartbeat_fn: ハートビート用コールバック関数。
-            retention_days: 保持期間（日数）。None の場合はデフォルト設定を使用。
+            retention_days: 保持期間 (日数)。None の場合はデフォルト設定を使用。
             dry_run: True の場合は削除せず対象件数のみをカウント。
             simulated_archived_ids: dry_run 時にアーカイブされたとみなす ID のセット。
 
@@ -116,13 +116,8 @@ class Purger:
             if current_page_len < page_size:
                 break
 
-        # simulated_archived_ids のチェック
-        # 注意: simulated_archived_ids にあるものは今アーカイブされたばかりなので、
-        # 通常は expiry_threshold を超えることはないが、実装の完全性のために構造は整えておく。
-        if simulated_archived_ids:
-            # ここでは ID から Memory オブジェクトを取得し直す必要があるが、
-            # 「今アーカイブされた」という前提（archived_at = now）があるなら
-            # 常に expiry_threshold (now - N days) より新しいため、カウントされない。
-            pass
+        # no-op: simulated_archived_ids にあるものは今アーカイブされたばかり (archived_at = now) なので、
+        # 常に expiry_threshold (now - N days) より新しいため除外対象にはなりません。
+        # manager.py との API 互換性のために引数として保持しています。
 
         return PurgerResult(purged_count=purged_count, checked_count=checked_count)

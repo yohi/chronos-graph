@@ -52,11 +52,15 @@ class Purger:
     async def run(
         self,
         heartbeat_fn: Callable[[], Coroutine[Any, Any, None]] | None = None,
+        retention_days: int | None = None,
+        dry_run: bool = False,
     ) -> PurgerResult:
         """アーカイブ済み記憶をスキャンして期限切れのものを物理削除する。
 
         Args:
             heartbeat_fn: ハートビート用コールバック関数。
+            retention_days: 保持期間（日数）。None の場合はデフォルト設定を使用。
+            dry_run: True の場合は削除せず対象件数のみをカウント。
 
         Returns:
             処理結果を格納した PurgerResult。
@@ -65,7 +69,8 @@ class Purger:
         memories = await self._storage.list_by_filter(filters)
 
         now = datetime.now(timezone.utc)
-        expiry_threshold = now - timedelta(days=self._retention_days)
+        target_retention = retention_days if retention_days is not None else self._retention_days
+        expiry_threshold = now - timedelta(days=target_retention)
 
         purged_count = 0
         checked_count = len(memories)
@@ -78,10 +83,11 @@ class Purger:
             if memory.archived_at is None:
                 continue
             if memory.archived_at < expiry_threshold:
-                memory_id = str(memory.id)
-                await self._storage.delete_memory(memory_id)
-                if self._graph is not None:
-                    await self._graph.delete_node(memory_id)
+                if not dry_run:
+                    memory_id = str(memory.id)
+                    await self._storage.delete_memory(memory_id)
+                    if self._graph is not None:
+                        await self._graph.delete_node(memory_id)
                 purged_count += 1
 
         return PurgerResult(purged_count=purged_count, checked_count=checked_count)

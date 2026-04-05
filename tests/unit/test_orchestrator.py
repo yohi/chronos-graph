@@ -333,12 +333,7 @@ class TestSearchOperation:
 
     @pytest.mark.asyncio
     async def test_adjusted_strategy_is_computed_from_policy_hook(self):
-        """PolicyHook.adjust_strategy() が返した戦略が計算されること（将来の拡張に備えた設計検証）。
-
-        現時点では RetrievalPipeline.search() に strategy パラメータがないため、
-        adjusted_strategy は直接渡されないが、PolicyHook が正しく呼ばれ、
-        adjusted_strategy オブジェクトが生成されることを確認する。
-        """
+        """PolicyHook.adjust_strategy() が返した戦略が RetrievalPipeline.search() に渡されること。"""
         custom_strategy = SearchStrategy(vector_weight=0.8, keyword_weight=0.1, graph_weight=0.1)
         policy_hook = AsyncMock()
         policy_hook.adjust_strategy = AsyncMock(return_value=custom_strategy)
@@ -353,8 +348,12 @@ class TestSearchOperation:
         call_args = policy_hook.adjust_strategy.call_args[0]
         assert call_args[0] == "test query"
         assert isinstance(call_args[1], SearchStrategy)
-        # RetrievalPipeline.search() は引数なしで呼ばれる（strategy未対応）
+
+        # RetrievalPipeline.search() に custom_strategy が渡されたことを確認
         retrieval.search.assert_called_once()
+        search_kwargs = retrieval.search.call_args.kwargs
+        assert "strategy" in search_kwargs
+        assert search_kwargs["strategy"] is custom_strategy
 
 
 class TestSearchGraphOperation:
@@ -449,17 +448,16 @@ class TestPruneOperation:
         lifecycle.run_cleanup.assert_called()
 
     @pytest.mark.asyncio
-    async def test_prune_dry_run_does_not_call_run_cleanup(self):
-        """prune(dry_run=True) は run_cleanup() を呼ばず対象数を返す。"""
+    async def test_prune_dry_run_calls_run_cleanup_preview(self):
+        """prune(dry_run=True) は run_cleanup() を preview モードで呼び出す。"""
         lifecycle = _make_mock_lifecycle_manager()
-        storage = _make_mock_storage()
-        storage.list_by_filter = AsyncMock(return_value=[])
-        orch, *_ = await _build_orchestrator(lifecycle_manager=lifecycle, storage=storage)
+        lifecycle.run_cleanup = AsyncMock(return_value=10)
+        orch, *_ = await _build_orchestrator(lifecycle_manager=lifecycle)
 
         result = await orch.prune(older_than_days=30, dry_run=True)
 
-        lifecycle.run_cleanup.assert_not_called()
-        assert isinstance(result, int)
+        lifecycle.run_cleanup.assert_called_once_with(older_than_days=30, dry_run=True)
+        assert result == 10
 
 
 class TestStatsOperation:

@@ -68,11 +68,10 @@ class ChronosServer:
             if not self._initialized:
                 await self._do_initialize()
                 if self._url_semaphore is None:
-                    # 指摘に基づき、Orchestrator が保持する設定を再利用する
+                    # 指摘に基づき、Orchestrator が提供する公開プロパティを再利用する
                     assert self._orchestrator is not None
-                    assert self._orchestrator._settings is not None
                     self._url_semaphore = asyncio.Semaphore(
-                        self._orchestrator._settings.url_fetch_concurrency
+                        self._orchestrator.url_fetch_concurrency
                     )
                     logger.warning(
                         "現在のURLフェッチ制限はプロセススコープです。"

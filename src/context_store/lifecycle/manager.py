@@ -728,22 +728,39 @@ class LifecycleManager:
             logger.info("Save count threshold reached, triggering cleanup.")
             self._spawn_background_task(self.run_cleanup)
 
-    async def run_cleanup(self) -> int:
+    async def run_cleanup(
+        self,
+        older_than_days: int | None = None,
+        dry_run: bool = False,
+    ) -> int:
         """クリーンアップを実行する（filelock + DB ロック排他制御付き）。
 
         filelock によるプロセス間排他制御と DB レベルのロックを組み合わせて
         同時実行を防ぐ。ロック取得失敗時はサイレントにスキップする。
 
+        Args:
+            older_than_days: 保持期間（日数）。None の場合はデフォルト設定を使用。
+            dry_run: True の場合は更新せず対象件数のみをカウント。
+
         Returns:
             削除またはアーカイブされたアイテムの総数。
         """
+        if dry_run:
+            # dry_run の場合はロックを取得せずに実行
+            _, total_count = await self._run_cleanup_inner(
+                older_than_days=older_than_days, dry_run=True
+            )
+            return total_count
+
         # OS レベルの排他ロック（timeout=0 = 非ブロッキング）
         file_lock = FileLock(self._lock_path, timeout=0)
         should_schedule_followup = False
         total_count = 0
         try:
             with file_lock.acquire():
-                should_schedule_followup, total_count = await self._run_cleanup_inner()
+                should_schedule_followup, total_count = await self._run_cleanup_inner(
+                    older_than_days=older_than_days, dry_run=False
+                )
         except Timeout:
             logger.debug("Cleanup skipped: another process holds the file lock.")
             return 0
@@ -755,8 +772,16 @@ class LifecycleManager:
 
         return total_count
 
-    async def _run_cleanup_inner(self) -> tuple[bool, int]:
+    async def _run_cleanup_inner(
+        self,
+        older_than_days: int | None = None,
+        dry_run: bool = False,
+    ) -> tuple[bool, int]:
         """クリーンアップ本体（DB ロック取得後に実行）。
+
+        Args:
+            older_than_days: 保持期間（日数）。
+            dry_run: True の場合は更新せず対象件数のみをカウント。
 
         Returns:
             (should_schedule_followup, total_items_count)
@@ -765,10 +790,14 @@ class LifecycleManager:
         """
         # DB レベルのロック取得
         token = str(uuid.uuid4())
-        acquired = await self._state_store.acquire_cleanup_lock(token)
-        if not acquired:
-            logger.debug("Cleanup skipped: DB lock already acquired.")
-            return False, 0
+        if not dry_run:
+            acquired = await self._state_store.acquire_cleanup_lock(token)
+            if not acquired:
+                logger.debug("Cleanup skipped: DB lock already acquired.")
+                return False, 0
+        else:
+            # dry_run の場合はロックをスキップ
+            pass
 
         should_schedule_followup = False
         total_count = 0
@@ -777,15 +806,19 @@ class LifecycleManager:
             # クリーンアップ開始時のカウントをキャプチャ。
             # concurrent saves があった場合に、その分まで差し引かないようにする。
             cleanup_start_save_count = state.save_count
-            logger.info("Starting cleanup (save_count=%d).", cleanup_start_save_count)
+            if not dry_run:
+                logger.info("Starting cleanup (save_count=%d).", cleanup_start_save_count)
+            else:
+                logger.info("Starting cleanup preview.")
 
             async def heartbeat_fn() -> None:
-                await self._state_store.heartbeat_cleanup_lock(token)
-                await self._check_lock_integrity(token)
+                if not dry_run:
+                    await self._state_store.heartbeat_cleanup_lock(token)
+                    await self._check_lock_integrity(token)
 
             # 1. Decay Scorer (各ジョブは暗黙的にスコアを使用)
             # 2. Archiver
-            archiver_result = await self._archiver.run(heartbeat_fn=heartbeat_fn)
+            archiver_result = await self._archiver.run(heartbeat_fn=heartbeat_fn, dry_run=dry_run)
             total_count += archiver_result.archived_count
             logger.info(
                 "Archiver: archived=%d, checked=%d",
@@ -800,6 +833,7 @@ class LifecycleManager:
                 last_cleanup_id=state.last_cleanup_id,
                 batch_size=CONSOLIDATION_BATCH_SIZE,
                 heartbeat_fn=heartbeat_fn,
+                dry_run=dry_run,
             )
             total_count += consolidator_result.consolidated_count
             logger.info(
@@ -809,13 +843,18 @@ class LifecycleManager:
             )
 
             # 4. Purger
-            purger_result = await self._purger.run(heartbeat_fn=heartbeat_fn)
+            purger_result = await self._purger.run(
+                heartbeat_fn=heartbeat_fn, retention_days=older_than_days, dry_run=dry_run
+            )
             total_count += purger_result.purged_count
             logger.info(
                 "Purger: purged=%d, checked=%d",
                 purger_result.purged_count,
                 purger_result.checked_count,
             )
+
+            if dry_run:
+                return False, total_count
 
             # 5. Stats Collector
             await self._collect_stats()
@@ -884,7 +923,8 @@ class LifecycleManager:
                 logger.exception("Failed to reset save_count after cleanup failure.")
             raise
         finally:
-            await self._state_store.release_cleanup_lock(token)
+            if not dry_run:
+                await self._state_store.release_cleanup_lock(token)
 
         return should_schedule_followup, total_count
 

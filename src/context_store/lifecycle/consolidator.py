@@ -54,6 +54,7 @@ class Consolidator:
         last_cleanup_id: str | None = None,
         batch_size: int = CONSOLIDATION_BATCH_SIZE,
         heartbeat_fn: Callable[[], Coroutine[Any, Any, None]] | None = None,
+        dry_run: bool = False,
     ) -> ConsolidatorResult:
         """重複記憶を統合するクリーンアップジョブ。
 
@@ -63,6 +64,7 @@ class Consolidator:
             last_cleanup_id: 最後に処理した記憶の ID。
             batch_size: 1サイクルで処理する最大記憶数。
             heartbeat_fn: ハートビート用コールバック関数。
+            dry_run: True の場合は更新せず対象件数のみをカウント。
 
         Returns:
             処理結果を格納した ConsolidatorResult。
@@ -129,7 +131,7 @@ class Consolidator:
             # 自己修復候補を優先して処理
             for scored in self_healing_candidates:
                 success, newer_id = await self._process_candidate(
-                    memory, scored, archived_in_this_run, "Self-healing", now
+                    memory, scored, archived_in_this_run, "Self-healing", now, dry_run=dry_run
                 )
                 if success:
                     consolidated_count += 1
@@ -147,7 +149,7 @@ class Consolidator:
             # 通常統合候補を処理(0.85 <= score < 0.90)
             for scored in regular_candidates:
                 success, newer_id = await self._process_candidate(
-                    memory, scored, archived_in_this_run, "Consolidation", now
+                    memory, scored, archived_in_this_run, "Consolidation", now, dry_run=dry_run
                 )
                 if success:
                     consolidated_count += 1
@@ -158,7 +160,7 @@ class Consolidator:
                     break
 
         # 影響を受けた記憶(生き残った方)の埋め込みを再計算(任意)
-        if self._embedding_provider and affected_memory_ids:
+        if not dry_run and self._embedding_provider and affected_memory_ids:
             # ここでは簡単のため、生き残った側の内容で再計算するロジックのプレースホルダ
             # 実際には複数マージされた場合は内容を結合して再計算するのが望ましい
             for mid in affected_memory_ids:
@@ -166,9 +168,9 @@ class Consolidator:
                     continue
                 await self._recompute_embedding(mid)
 
-        last_processed_at = memories[-1].created_at if memories else None
-        last_processed_id = str(memories[-1].id) if memories else None
-        has_more = len(memories) == batch_size
+        last_processed_at = memories[-1].created_at if memories and not dry_run else None
+        last_processed_id = str(memories[-1].id) if memories and not dry_run else None
+        has_more = len(memories) == batch_size and not dry_run
 
         return ConsolidatorResult(
             consolidated_count=consolidated_count,
@@ -192,6 +194,7 @@ class Consolidator:
         archived_in_this_run: set[str],
         log_prefix: str,
         now: datetime,
+        dry_run: bool = False,
     ) -> tuple[bool, str | None]:
         """統合候補を処理(アーカイブ + エッジ作成)。
 
@@ -204,6 +207,10 @@ class Consolidator:
 
         if older_id in archived_in_this_run:
             return False, None
+
+        if dry_run:
+            archived_in_this_run.add(older_id)
+            return True, newer_id
 
         # 記憶をアーカイブ
         success = await self._archive_memory(older_id, now)

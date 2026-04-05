@@ -329,6 +329,15 @@ class TestUpdateMemoryValidation:
             await adapter.update_memory(mid, {"source_metadata": "[not, an, object]"})
         assert exc.value.code == "INVALID_PARAMETER"
 
+    @pytest.mark.asyncio
+    async def test_update_memory_reject_empty_embedding(self, adapter):
+        memory = _make_memory()
+        mid = await adapter.save_memory(memory)
+        with pytest.raises(StorageError) as exc:
+            await adapter.update_memory(mid, {"embedding": []})
+        assert exc.value.code == "INVALID_PARAMETER"
+        assert "Empty embedding not allowed" in str(exc.value)
+
 
 # ---------------------------------------------------------------------------
 # Vector Search Tests

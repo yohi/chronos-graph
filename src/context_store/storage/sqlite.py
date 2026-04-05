@@ -550,6 +550,8 @@ class SQLiteStorageAdapter:
                 continue
 
             if col == "embedding":
+                if val is not None and not val:
+                    raise StorageError("Empty embedding not allowed", code="INVALID_PARAMETER")
                 embedding = val
                 continue
 

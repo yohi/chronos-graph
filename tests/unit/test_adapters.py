@@ -202,7 +202,7 @@ async def test_url_adapter_rejects_ipv6_multicast() -> None:
         mock_dns.return_value = [
             (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("ff02::1", 80, 0, 0))
         ]
-        with pytest.raises(ValueError, match="[Mm]ulticast|[Bb]locked|[Ss]SRF|[Rr]estricted"):
+        with pytest.raises(ValueError, match=r"[Mm]ulticast|[Bb]locked|[Ss]SRF|[Rr]estricted"):
             await adapter.adapt("http://example.com/")
 
 
@@ -297,7 +297,7 @@ async def test_url_adapter_rejects_oversized_response() -> None:
         patch.object(adapter, "_resolve_and_validate_ips", return_value=["203.0.113.1"]),
         patch("httpx.AsyncClient.stream", return_value=MockAsyncContextManager()),
     ):
-        with pytest.raises(ValueError, match="Response size exceeds max limit"):
+        with pytest.raises(ValueError, match=r"Response size exceeds max limit"):
             await adapter.adapt("http://example.com/")
 
 

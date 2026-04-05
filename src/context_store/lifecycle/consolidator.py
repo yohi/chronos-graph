@@ -6,79 +6,47 @@ O(M log N) で重複を検出・アーカイブする。
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable, Coroutine
+from typing import Any, Callable, Coroutine
 
-from context_store.logger import get_logger
+from context_store.models.memory import Memory, ScoredMemory
 from context_store.storage.protocols import GraphAdapter, MemoryFilters, StorageAdapter
 
-if TYPE_CHECKING:
-    from context_store.config import Settings
-    from context_store.embedding.protocols import EmbeddingProvider
-    from context_store.models.memory import Memory, ScoredMemory
+logger = logging.getLogger(__name__)
 
-
-logger = get_logger(__name__)
-
-# vector_search の近傍数
-_VECTOR_SEARCH_TOP_K = 5
-# 1サイクルで処理する記憶数の上限
+# 一度に処理する最大記憶数
 CONSOLIDATION_BATCH_SIZE = 100
 
 
 @dataclass
 class ConsolidatorResult:
-    """Consolidator の実行結果。
-
-    Attributes:
-        consolidated_count: アーカイブした重複数。
-        checked_count: チェックした記憶数。
-        last_processed_at: 最後にチェックした記憶の作成日時。
-        last_processed_id: 最後にチェックした記憶の ID。
-        has_more: さらに処理すべきページが存在するかどうか。
-    """
+    """統合処理の結果。"""
 
     consolidated_count: int
     checked_count: int
-    last_processed_at: datetime | None = None
-    last_processed_id: str | None = None
+    last_processed_at: datetime | None
+    last_processed_id: str | None
     has_more: bool = False
 
 
 class Consolidator:
-    """重複記憶を統合・自己修復するクラス。
-
-    スライディングウィンドウ（last_cleanup_at 以降の記憶）に対して
-    HNSW インデックスを利用した近似近傍探索を行い、
-    類似度 >= dedup_threshold の記憶を事後的にアーカイブする（自己修復）。
-    類似度 0.85 <= score < 0.90 は通常統合候補として処理する。
-
-    Args:
-        storage: ストレージアダプター。
-        graph: グラフアダプター。None の場合は SUPERSEDES エッジ作成をスキップ。
-        embedding_provider: 埋め込みプロバイダー。None の場合は埋め込み再計算をスキップ。
-        settings: アプリ設定。None の場合はデフォルト閾値を使用。
-    """
+    """重複記憶を統合・アーカイブするクラス。"""
 
     def __init__(
         self,
         storage: StorageAdapter,
         graph: GraphAdapter | None = None,
-        embedding_provider: "EmbeddingProvider | None" = None,
-        settings: "Settings | None" = None,
+        embedding_provider: Any | None = None,
+        dedup_threshold: float = 0.90,
+        consolidation_threshold: float = 0.85,
     ) -> None:
         self._storage = storage
         self._graph = graph
         self._embedding_provider = embedding_provider
-
-        if settings is None:
-            from context_store.config import Settings
-
-            settings = Settings.model_construct()
-
-        self._dedup_threshold = settings.dedup_threshold
-        self._consolidation_threshold = settings.consolidation_threshold
+        self._dedup_threshold = dedup_threshold
+        self._consolidation_threshold = consolidation_threshold
 
     async def run(
         self,
@@ -99,65 +67,58 @@ class Consolidator:
         Returns:
             処理結果を格納した ConsolidatorResult。
         """
+        now = datetime.now(timezone.utc)
+
         # 安定したページングのために (created_at, id) ASC で取得
         filters = self._build_filters(last_cleanup_at)
         filters.id_after = last_cleanup_id
         filters.limit = batch_size
         filters.order_by = "created_at ASC, id ASC"
 
-        window = await self._storage.list_by_filter(filters)
-
-        if not window:
+        memories = await self._storage.list_by_filter(filters)
+        if not memories:
             return ConsolidatorResult(
                 consolidated_count=0,
                 checked_count=0,
-                last_processed_at=last_cleanup_at,
-                last_processed_id=last_cleanup_id,
+                last_processed_at=None,
+                last_processed_id=None,
             )
 
-        last_processed_at = window[-1].created_at
-        last_processed_id = str(window[-1].id)
-        has_more = len(window) >= batch_size
-
         consolidated_count = 0
-        # 処理済み（アーカイブ済み）記憶 ID を追跡してスキップ
+        checked_count = 0
         archived_in_this_run: set[str] = set()
-        # 統合の影響を受けた（生き残った側の）記憶 ID を追跡
         affected_memory_ids: set[str] = set()
 
-        for i, memory in enumerate(window):
-            if heartbeat_fn and i % 5 == 0:
+        for memory in memories:
+            if heartbeat_fn:
                 await heartbeat_fn()
 
             memory_id = str(memory.id)
-
-            # 既にこの実行でアーカイブされた記憶はスキップ
             if memory_id in archived_in_this_run:
                 continue
 
-            # embedding が空の場合は vector_search をスキップ
+            checked_count += 1
+
+            # 類似記憶を検索
             if not memory.embedding:
                 continue
 
-            # HNSW 経由の近似近傍探索（O(log N) per query）
-            scored_neighbors = await self._storage.vector_search(
-                memory.embedding, top_k=_VECTOR_SEARCH_TOP_K, project=memory.project
+            candidates = await self._storage.vector_search(
+                embedding=memory.embedding,
+                top_k=5,
             )
 
-            # 自身を除外し、類似度でフィルタリング
-            self_healing_candidates = []  # score >= dedup_threshold
-            regular_candidates = []  # consolidation_threshold <= score < dedup_threshold
+            # 自分自身を除外し、閾値以上の候補を抽出
+            self_healing_candidates = []
+            regular_candidates = []
 
-            for scored in scored_neighbors:
-                neighbor_id = str(scored.memory.id)
-                if neighbor_id == memory_id:
+            for scored in candidates:
+                cand_id = str(scored.memory.id)
+                if cand_id == memory_id or cand_id in archived_in_this_run:
                     continue
-                if neighbor_id in archived_in_this_run:
-                    continue
+
+                # 異なるプロジェクトの記憶は統合しない
                 if scored.memory.project != memory.project:
-                    continue
-                # アーカイブ済みの記憶はスキップ
-                if scored.memory.archived_at is not None:
                     continue
 
                 if scored.score >= self._dedup_threshold:
@@ -168,7 +129,7 @@ class Consolidator:
             # 自己修復候補を優先して処理
             for scored in self_healing_candidates:
                 success, newer_id = await self._process_candidate(
-                    memory, scored, archived_in_this_run, "Self-healing"
+                    memory, scored, archived_in_this_run, "Self-healing", now
                 )
                 if success:
                     consolidated_count += 1
@@ -183,41 +144,45 @@ class Consolidator:
             if memory_id in archived_in_this_run:
                 continue
 
-            # 通常統合候補を処理（0.85 <= score < 0.90）
+            # 通常統合候補を処理(0.85 <= score < 0.90)
             for scored in regular_candidates:
                 success, newer_id = await self._process_candidate(
-                    memory, scored, archived_in_this_run, "Consolidation"
+                    memory, scored, archived_in_this_run, "Consolidation", now
                 )
                 if success:
                     consolidated_count += 1
                     if newer_id:
                         affected_memory_ids.add(newer_id)
 
-                # ベース側がアーカイブされた場合は中断
                 if memory_id in archived_in_this_run:
                     break
 
-        # 埋め込み再計算(EmbeddingProvider が提供されている場合のみ)
-        if self._embedding_provider is not None and affected_memory_ids:
-            # 統合の影響を受けた（生き残った側の）記憶の埋め込みを更新
-            # window 内にあるもののみ対象とする(効率のため)
-            id_to_memory = {str(m.id): m for m in window}
+        # 影響を受けた記憶(生き残った方)の埋め込みを再計算(任意)
+        if self._embedding_provider and affected_memory_ids:
+            # ここでは簡単のため、生き残った側の内容で再計算するロジックのプレースホルダ
+            # 実際には複数マージされた場合は内容を結合して再計算するのが望ましい
             for mid in affected_memory_ids:
-                # 毎ループでハートビートを呼び出し、ロック状態を確認
-                if heartbeat_fn:
-                    await heartbeat_fn()
+                if mid in archived_in_this_run:
+                    continue
+                await self._recompute_embedding(mid)
 
-                if mid in id_to_memory:
-                    memory = id_to_memory[mid]
-                    new_embedding = await self._embedding_provider.embed(memory.content)
-                    await self._storage.update_memory(mid, {"embedding": new_embedding})
+        last_processed_at = memories[-1].created_at if memories else None
+        last_processed_id = str(memories[-1].id) if memories else None
+        has_more = len(memories) == batch_size
 
         return ConsolidatorResult(
             consolidated_count=consolidated_count,
-            checked_count=len(window),
+            checked_count=checked_count,
             last_processed_at=last_processed_at,
             last_processed_id=last_processed_id,
             has_more=has_more,
+        )
+
+    def _build_filters(self, last_cleanup_at: datetime | None) -> MemoryFilters:
+        """検索フィルタを構築する。"""
+        return MemoryFilters(
+            created_after=last_cleanup_at,
+            archived=None,
         )
 
     async def _process_candidate(
@@ -226,8 +191,9 @@ class Consolidator:
         scored: "ScoredMemory",
         archived_in_this_run: set[str],
         log_prefix: str,
+        now: datetime,
     ) -> tuple[bool, str | None]:
-        """統合候補を処理（アーカイブ + エッジ作成）。
+        """統合候補を処理(アーカイブ + エッジ作成)。
 
         Returns:
             (成功したかどうか, 生き残った側の ID)
@@ -240,7 +206,7 @@ class Consolidator:
             return False, None
 
         # 記憶をアーカイブ
-        success = await self._archive_memory(older_id)
+        success = await self._archive_memory(older_id, now)
         if not success:
             return False, None
 
@@ -253,62 +219,58 @@ class Consolidator:
                     newer_id,
                     older_id,
                     "SUPERSEDES",
-                    {"similarity": scored.score, "archived_at": datetime.now(timezone.utc)},
+                    {"similarity": scored.score, "archived_at": now},
                 )
             except Exception:
-                logger.error(
+                logger.exception(
                     "%s: failed to create SUPERSEDES edge from %s to %s",
                     log_prefix,
                     newer_id,
                     older_id,
-                    exc_info=True,
                 )
 
         logger.info(
-            "%s: archived memory %s due to similarity %s",
+            "%s: archived duplicate memory %s (similarity=%.2f), superseding with %s",
             log_prefix,
             older_id,
             scored.score,
+            newer_id,
         )
         return True, newer_id
 
-    def _build_filters(self, last_cleanup_at: datetime | None) -> MemoryFilters:
-        """スライディングウィンドウのフィルタを構築する。
+    def _determine_order(self, mem_a: "Memory", mem_b: "Memory") -> tuple["Memory", "Memory"]:
+        """どちらが古く、どちらが新しいかを決定する。
 
-        Args:
-            last_cleanup_at: この時刻以降に作成された記憶を対象とする。
-                None の場合は全記憶が対象。
-
-        Returns:
-            MemoryFilters オブジェクト。
-        """
-        # archived=None はアクティブ記憶のみを示す(protocols.py 参照)
-        return MemoryFilters(archived=None, created_after=last_cleanup_at)
-
-    @staticmethod
-    def _determine_order(mem_a: "Memory", mem_b: "Memory") -> tuple["Memory", "Memory"]:
-        """2つの記憶のうち古い方と新しい方を返す。
-
-        Args:
-            mem_a: 比較する記憶 A。
-            mem_b: 比較する記憶 B。
-
-        Returns:
-            (older, newer) のタプル。
-            (created_at, id) のタプルで比較を行い、小さい方が older。
+        created_at が古い方をアーカイブ対象(older)とする。
+        同時刻の場合は ID の辞書順で決定。
         """
         if (mem_a.created_at, str(mem_a.id)) <= (mem_b.created_at, str(mem_b.id)):
             return mem_a, mem_b
         return mem_b, mem_a
 
-    async def _archive_memory(self, memory_id: str) -> bool:
+    async def _archive_memory(self, memory_id: str, now: datetime) -> bool:
         """記憶をアーカイブ状態に更新する。
 
         Args:
             memory_id: アーカイブする記憶の ID。
+            now: アーカイブ日時として使用するタイムスタンプ。
 
         Returns:
             成功した場合は True。
         """
-        now = datetime.now(timezone.utc)
         return await self._storage.update_memory(memory_id, {"archived_at": now})
+
+    async def _recompute_embedding(self, memory_id: str) -> None:
+        """必要に応じて記憶の埋め込みを再計算する。"""
+        if not self._embedding_provider:
+            return
+
+        try:
+            memory = await self._storage.get_memory(memory_id)
+            if not memory:
+                return
+
+            new_embedding = await self._embedding_provider.embed(memory.content)
+            await self._storage.update_memory(memory_id, {"embedding": new_embedding})
+        except Exception:
+            logger.exception("Failed to recompute embedding for memory %s", memory_id)

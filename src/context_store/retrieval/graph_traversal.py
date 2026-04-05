@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class GraphTraversalAdapter(Protocol):
-    """GraphTraversal が依存する最小限のアダプター契約。"""
+    """GraphTraversal が依存する minimum なアダプター契約。"""
 
     async def traverse(self, seed_ids: list[str], edge_types: list[str], depth: int) -> GraphResult:
         """指定条件でグラフを探索する。"""
@@ -60,6 +60,10 @@ class GraphTraversal:
         Returns:
             GraphResult: トラバーサル結果
         """
+        # TODO: self.fanout_limit と self.max_physical_hops を
+        # 探索ロジック（またはアダプターへのパラメータ渡し）に反映させる。
+        # 現状はアダプター側のデフォルト挙動に依存している。
+
         if depth is None:
             depth = self.default_depth
 
@@ -73,11 +77,12 @@ class GraphTraversal:
 
         except (ConnectionError, TimeoutError, OSError) as exc:
             # Graceful Degradation: 接続系の期待された障害のみ空結果に変換
+            # RUF010: f-string や str() ではなく、フォーマット指定子を使用
             logger.warning(
                 "Graph traversal failed: %s: %s. Returning empty results.",
                 type(exc).__name__,
-                str(exc),
-                exc_info=exc,
+                exc,
+                exc_info=True,
             )
             return GraphResult(
                 nodes=[],

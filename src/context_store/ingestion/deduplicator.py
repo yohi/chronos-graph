@@ -30,7 +30,7 @@ class DeduplicationAction(str, Enum):
     """重複排除の結果アクション。"""
 
     INSERT = "insert"  # 新規挿入
-    REPLACE = "replace"  # Append-only 置換(既存を Archive)
+    REPLACE = "replace"  # Append-only 置換 (既存を Archive)
     MERGE_CANDIDATE = "merge_candidate"  # 統合候補としてマーク
 
 

@@ -28,7 +28,7 @@ class KeywordSearch:
 
         Args:
             query: 検索クエリ
-            top_k: 返す結果の数（Noneの場合はデフォルト値）
+            top_k: 返す結果の数(Noneの場合はデフォルト値)
 
         Returns:
             ScoredMemory のリスト

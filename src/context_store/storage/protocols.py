@@ -99,6 +99,13 @@ class StorageAdapter(Protocol):
         """Count memories matching the given filters."""
         ...
 
+    async def increment_memory_access_count(self, memory_id: str) -> bool:
+        """Atomically increment the access count and update last_accessed_at.
+
+        Returns True on success, False if not found.
+        """
+        ...
+
     async def get_vector_dimension(self) -> int | None:
         """Return the dimension of stored vectors.
 

@@ -262,12 +262,11 @@ class TestDeleteNode:
         await adapter.create_edge("p", "q", "TEMPORAL_NEXT", {})
         await adapter.delete_node("p")
 
-        async with adapter._connect() as conn:
-            async with conn.execute(
-                "SELECT COUNT(*) FROM memory_edges WHERE from_id = ? OR to_id = ?", ("p", "p")
-            ) as cursor:
-                count = (await cursor.fetchone())[0]
-        assert count == 0
+        # 公開 API である traverse を使用してエッジが削除されたことを確認する
+        # p が削除されたので、q からの探索でも p とのエッジは見つからないはず
+        result = await adapter.traverse(["q"], [], depth=1)
+        assert len(result.edges) == 0
+        assert "p" not in {n["id"] for n in result.nodes}
 
     async def test_delete_nonexistent_node(self, adapter: SQLiteGraphAdapter) -> None:
         """存在しないノードの削除でも例外が発生しない."""

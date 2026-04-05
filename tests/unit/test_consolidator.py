@@ -465,7 +465,7 @@ class TestPerformance:
 
 
 @contextlib.contextmanager
-def _capture_logs(logger_name: str) -> list[logging.LogRecord]:
+def _capture_logs(logger_name: str):
     """指定ロガーのログレコードを一時的にキャプチャするヘルパー。
 
     propagate=False のカスタムロガーでも動作する。
@@ -478,11 +478,14 @@ def _capture_logs(logger_name: str) -> list[logging.LogRecord]:
 
     handler = _Capture()
     log = logging.getLogger(logger_name)
+    old_level = log.level
+    log.setLevel(logging.DEBUG)
     log.addHandler(handler)
     try:
         yield records
     finally:
         log.removeHandler(handler)
+        log.setLevel(old_level)
 
 
 class TestMonitoringLogs:

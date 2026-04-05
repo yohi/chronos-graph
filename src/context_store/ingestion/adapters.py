@@ -208,7 +208,10 @@ class _SSRFBlockingTransport(httpx.AsyncBaseTransport):
         inner: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._verified_ip = verified_ip
-        self._transport = inner or httpx.AsyncHTTPTransport(retries=0)
+        if inner is not None:
+            self._inner = inner
+        else:
+            self._inner = httpx.AsyncHTTPTransport(retries=0)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         """検証済みIPへ接続するため、URLだけを差し替えて内部 transport に転送する。"""
@@ -240,10 +243,10 @@ class _SSRFBlockingTransport(httpx.AsyncBaseTransport):
             stream=request.stream,
             extensions=new_extensions,
         )
-        return await self._transport.handle_async_request(forwarded_request)
+        return await self._inner.handle_async_request(forwarded_request)
 
     async def aclose(self) -> None:
-        await self._transport.aclose()
+        await self._inner.aclose()
 
 
 class URLAdapter:

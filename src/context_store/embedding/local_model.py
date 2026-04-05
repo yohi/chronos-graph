@@ -59,7 +59,16 @@ class LocalModelEmbeddingProvider:
                     self._model = SentenceTransformer(self._model_name)
                     # モデルから次元数を取得(コンストラクタで指定されていない場合のみ)
                     if self._dimension is None:
-                        self._dimension = int(self._model.get_sentence_embedding_dimension())
+                        dim = self._model.get_sentence_embedding_dimension()
+                        if dim is not None:
+                            self._dimension = int(dim)
+                        else:
+                            # フォールバック: サンプルテキストをエンコードして次元数を特定
+                            logger.info(
+                                "次元数を自動取得するためにサンプルテキストをエンコードします"
+                            )
+                            sample_emb = self._model.encode(["dim check"])[0]
+                            self._dimension = len(sample_emb)
                     logger.info(f"モデルのロード完了: dimension={self._dimension}")
         return self._model
 

@@ -45,14 +45,17 @@ class TestGraphTraversal:
     async def test_traverse_with_seed_ids(self, graph_traversal, graph_adapter):
         """Traverse the graph starting from seed node IDs."""
         seed_ids = [UUID("00000000-0000-0000-0000-000000000010")]
+        edge_types = ["SEMANTICALLY_RELATED"]
         result = await graph_traversal.traverse(
             seed_ids=seed_ids,
-            edge_types=["SEMANTICALLY_RELATED"],
+            edge_types=edge_types,
             depth=2,
         )
 
         graph_adapter.traverse.assert_called_once()
         call_args = graph_adapter.traverse.call_args
+        assert call_args[1]["seed_ids"] == [str(s) for s in seed_ids]
+        assert call_args[1]["edge_types"] == edge_types
         assert call_args[1]["depth"] == 2
         assert isinstance(result, GraphResult)
 
@@ -127,7 +130,7 @@ class TestGraphTraversal:
         await graph_traversal.traverse(seed_ids=seed_ids)
 
         call_args = graph_adapter.traverse.call_args
-        assert call_args[1]["depth"] == 2  # デフォルト
+        assert call_args[1]["depth"] == graph_traversal.default_depth  # デフォルト
         assert call_args[1]["edge_types"] == []
 
     @pytest.mark.asyncio

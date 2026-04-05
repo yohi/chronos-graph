@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+import math
 
 from context_store.models.memory import ScoredMemory
 from context_store.storage.protocols import StorageAdapter
@@ -103,8 +103,7 @@ class PostProcessor:
         if max_tokens <= 0:
             return []
 
-        # 簡単な推定: 1トークン ≈ 4文字（英語主体）または 3文字（日本語主体）
-        # テキストのASCII比率で判定
+        # 推定: ASCII文字比率で言語を判定し、安全側（過大推定）でトークン数を推定
         limited_results: list[ScoredMemory] = []
         total_tokens = 0
         safety_margin = 1.5
@@ -114,21 +113,20 @@ class PostProcessor:
             if not content:
                 estimated_tokens = 0
             else:
-                # ASCII文字比率で言語を判定し、安全側（過大推定）でトークン数を推定
                 ascii_count = sum(1 for c in content if ord(c) < 128)
                 ascii_ratio = ascii_count / len(content)
 
                 if ascii_ratio >= 0.9:
-                    estimated_tokens = int((len(content) / 4.0) * safety_margin)
+                    estimated_tokens = math.ceil((len(content) / 4.0) * safety_margin)
                 else:
-                    estimated_tokens = int((len(content) / 3.0) * safety_margin)
+                    estimated_tokens = math.ceil((len(content) / 3.0) * safety_margin)
                 estimated_tokens = max(1, estimated_tokens)
 
+            # total_tokens + estimated_tokens が max_tokens を超えないことを保証
             if total_tokens + estimated_tokens <= max_tokens:
                 limited_results.append(result)
                 total_tokens += estimated_tokens
             else:
-                # トークン制限に達した
                 logger.info(
                     f"Token limit ({max_tokens}) reached. Returning {len(limited_results)} results."
                 )
@@ -138,22 +136,17 @@ class PostProcessor:
 
     async def _update_access_record(self, result: ScoredMemory) -> None:
         """
-        アクセス記録を更新
+        アクセス記録をアトミックに更新
 
         Args:
             result: 検索結果
         """
         try:
-            # アクセス情報を更新
-            await self.storage_adapter.update_memory(
-                memory_id=str(result.memory.id),
-                updates={
-                    "access_count": result.memory.access_count + 1,
-                    "last_accessed_at": datetime.now(timezone.utc),
-                },
-            )
+            # アトミックなインクリメント API を使用して、競合による更新消失を防ぐ
+            memory_id = str(result.memory.id)
+            await self.storage_adapter.increment_memory_access_count(memory_id)
         except Exception as e:
-            # アクセス記録更新失敗は警告で処理（検索結果は返す）
+            # 更新失敗は警告に留める（検索機能自体は継続）
             logger.warning(
                 f"Failed to update access record for memory {result.memory.id}: {str(e)}"
             )

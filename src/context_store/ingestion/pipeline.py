@@ -68,14 +68,14 @@ class IngestionPipeline:
         self._storage = storage
         self._graph = graph
         self._embedding_provider = embedding_provider
-        self._settings = settings or Settings()
+        self._settings = settings
 
         self._chunker = Chunker()
         self._classifier = Classifier()
         self._deduplicator = Deduplicator(storage=storage)
         self._graph_linker = GraphLinker(storage=storage, graph=graph)
         self._conversation_adapter = ConversationAdapter(
-            chunk_size=self._settings.conversation_chunk_size
+            chunk_size=self._settings.conversation_chunk_size if self._settings else 5
         )
         self._url_adapter: URLAdapter | None = None  # 遅延初期化
 

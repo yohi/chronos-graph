@@ -142,7 +142,7 @@ REDIS_URL=redis://localhost:6379
 
 ## アーキテクチャ
 
-```
+```text
 MCP Client (Claude / Cursor / etc.)
         │  MCP Protocol (stdio / SSE)
         ▼

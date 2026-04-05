@@ -16,6 +16,7 @@ import pytest
 
 from context_store.config import Settings
 from context_store.orchestrator import Orchestrator, create_orchestrator
+from tests.conftest import make_mock_embedding_provider
 
 
 # ---------------------------------------------------------------------------
@@ -39,24 +40,6 @@ def sqlite_settings(tmp_db_path):
         openai_api_key="test-key",
         graph_enabled=True,  # SQLiteGraphAdapter を使う (sqlite モードでは常に有効)
     )
-
-
-def make_mock_embedding_provider(dim: int = 16):
-    """固定ベクトルを返すモック EmbeddingProvider を作成する。"""
-    import random
-
-    class MockEmbeddingProvider:
-        dimension = dim
-
-        async def embed(self, text: str) -> list[float]:
-            # テキストのハッシュに基づいた決定論的なベクトルを返す
-            rng = random.Random(hash(text) % (2**31))
-            return [rng.uniform(-1, 1) for _ in range(dim)]
-
-        async def embed_batch(self, texts: list[str]) -> list[list[float]]:
-            return [await self.embed(t) for t in texts]
-
-    return MockEmbeddingProvider()
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +84,9 @@ class TestLightweightE2E:
         assert "results" in search_result
         found_ids = [r["memory_id"] for r in search_result["results"]]
         # 保存したメモリが検索結果に含まれるか（ベクトル/キーワード検索）
-        assert memory_id in found_ids or len(found_ids) >= 0  # 少なくともエラーなく実行
+        assert memory_id in found_ids, (
+            f"Saved memory {memory_id} not found in search results: {found_ids}"
+        )
 
     async def test_memory_stats(self, orchestrator: Orchestrator):
         """memory_stats の動作確認。"""

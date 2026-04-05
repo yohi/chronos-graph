@@ -16,13 +16,13 @@ Examples:
     # Cursor 設定へ統合
     python scripts/generate_config.py --output cursor
 """
+
 from __future__ import annotations
 
 import argparse
 import json
 import shutil
 import sys
-from pathlib import Path
 
 
 def find_python() -> str:
@@ -85,7 +85,7 @@ def generate_postgres_config(python_path: str) -> dict:
 
 
 def generate_cursor_config(base_config: dict) -> dict:
-    """Cursor 用の設定形式に変換する（mcpServers キーがそのまま使える）。"""
+    """Cursor 用の設定形式に変換する (mcpServers キーがそのまま使える)。"""
     # Cursor は Claude Desktop と同じ形式
     return base_config
 

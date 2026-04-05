@@ -11,42 +11,18 @@ pytest-benchmark を使用した各パイプラインコンポーネントの性
 from __future__ import annotations
 
 import asyncio
-import random
 from unittest.mock import patch
 
 import pytest
 
 from context_store.config import Settings
 from context_store.orchestrator import create_orchestrator
+from tests.conftest import make_mock_embedding_provider
 
 
 # ---------------------------------------------------------------------------
 # 共通フィクスチャ
 # ---------------------------------------------------------------------------
-
-
-def make_mock_embedding_provider(dim: int = 16):
-    """固定次元のモック EmbeddingProvider。"""
-
-    class MockEmbeddingProvider:
-        dimension = dim
-
-        async def embed(self, text: str) -> list[float]:
-            rng = random.Random(hash(text) % (2**31))
-            return [rng.uniform(-1, 1) for _ in range(dim)]
-
-        async def embed_batch(self, texts: list[str]) -> list[list[float]]:
-            return [await self.embed(t) for t in texts]
-
-    return MockEmbeddingProvider()
-
-
-@pytest.fixture(scope="module")
-def event_loop():
-    """モジュールスコープのイベントループ。"""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
 
 
 @pytest.fixture(scope="module")

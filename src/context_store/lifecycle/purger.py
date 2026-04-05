@@ -99,6 +99,11 @@ class Purger:
 
             for memory in memories:
                 memory_id = str(memory.id)
+                # ページングを確実に進めるために ID とタイムスタンプを更新
+                # スキップ判定の前に更新することで、全件スキップ時でも無限ループを回避する
+                last_id = memory_id
+                last_archived_at = memory.archived_at
+
                 # simulated_archived_ids に含まれる ID は、今アーカイブされたばかりなので
                 # この Purger 実行での削除対象(およびチェック対象)からは除外する。
                 if simulated_archived_ids and memory_id in simulated_archived_ids:
@@ -107,10 +112,6 @@ class Purger:
                 checked_count += 1
                 if heartbeat_fn and checked_count % 10 == 0:
                     await heartbeat_fn()
-
-                # ページングを確実に進めるために ID とタイムスタンプを更新
-                last_id = memory_id
-                last_archived_at = memory.archived_at
 
                 # MemoryFilters(archived=True) で取得済みだが、ストレージ実装の保証に依存しないよう防御チェック
                 if memory.archived_at is None:

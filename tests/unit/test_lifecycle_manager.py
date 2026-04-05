@@ -164,8 +164,42 @@ class TestOnMemorySaved:
         state = await store.load_state()
         assert state.save_count == 5
 
+    # ─────────────────────────── run_cleanup テスト ───────────────────────────
 
-# ─────────────────────────── run_cleanup テスト ───────────────────────────
+    async def test_run_cleanup_aborts_on_lock_loss(self, temp_lock_path):
+        """クリーンアップ中にロックが他者に奪われた場合、中断されることを確認。"""
+        manager, state_store = _make_manager(lock_path=temp_lock_path)
+
+        # 初期状態: ロックなし
+        state = await state_store.load_state()
+        assert state.cleanup_lock_owner is None
+
+        # 最初の heartbeat は通るが、その後の _check_lock_integrity で失敗させる
+        # state_store は InMemoryLifecycleStateStore なので、直接 _state を書き換える
+        original_heartbeat = state_store.heartbeat_cleanup_lock
+        call_count = 0
+
+        async def mocked_heartbeat(token):
+            nonlocal call_count
+            await original_heartbeat(token)
+            call_count += 1
+            if call_count == 1:  # Archiver 実行後の heartbeat の直後にロックを奪う
+                state_store._state.cleanup_lock_owner = "someone-else"
+
+        state_store.heartbeat_cleanup_lock = mocked_heartbeat
+
+        # 閾値に達してクリーンアップ開始
+        for _ in range(50):
+            await manager.on_memory_saved()
+
+        # バックグラウンドタスクの完了を待機
+        await asyncio.gather(*manager._active_tasks)
+
+        # ロック喪失により中断されたため、last_cleanup_at が更新されていないことを確認
+        final_state = await state_store.load_state()
+        assert final_state.last_cleanup_at is None
+        # ロックが奪われた状態が維持されていること（自分のトークンで上書きされていないこと）
+        assert final_state.cleanup_lock_owner == "someone-else"
 
 
 class TestRunCleanup:

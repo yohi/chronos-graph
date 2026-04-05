@@ -775,6 +775,7 @@ class LifecycleManager:
                 archiver_result.checked_count,
             )
             await self._state_store.heartbeat_cleanup_lock(token)
+            await self._check_lock_integrity(token)
 
             # 3. Consolidator
             # カーソル (timestamp + ID) を渡して、安定したページングを実現。
@@ -789,6 +790,7 @@ class LifecycleManager:
                 consolidator_result.checked_count,
             )
             await self._state_store.heartbeat_cleanup_lock(token)
+            await self._check_lock_integrity(token)
 
             # 4. Purger
             purger_result = await self._purger.run()
@@ -798,6 +800,7 @@ class LifecycleManager:
                 purger_result.checked_count,
             )
             await self._state_store.heartbeat_cleanup_lock(token)
+            await self._check_lock_integrity(token)
 
             # 5. Stats Collector
             await self._collect_stats()
@@ -806,6 +809,7 @@ class LifecycleManager:
             if self._wal_checkpoint_fn is not None:
                 await self._run_wal_checkpoint()
             await self._state_store.heartbeat_cleanup_lock(token)
+            await self._check_lock_integrity(token)
 
             # 状態を更新（カウンターリセット + last_cleanup_at 更新）
             # ページングカーソル (last_processed_at/id) を保存
@@ -829,7 +833,9 @@ class LifecycleManager:
                 cleanup_lock_touched_at=datetime.now(timezone.utc),
                 updated_at=now,
             )
-            await self._state_store.save_state(new_state, token=token)
+            saved = await self._state_store.save_state(new_state, token=token)
+            if not saved:
+                raise LockLostError("Final state save failed: lock lost")
 
             # 未処理の保存がまだ残っているか、Consolidator に次ページがある場合は、フォローアップを要求
             if remaining_count >= self._save_count_threshold or consolidator_result.has_more:
@@ -840,6 +846,8 @@ class LifecycleManager:
                 )
                 should_schedule_followup = True
 
+        except LockLostError as exc:
+            logger.warning("Cleanup aborted: %s", exc)
         except Exception:
             logger.exception("Cleanup failed.")
             # カウンターを閾値未満にリセットして、無限ループを防ぎつつ次のサイクルを待つ

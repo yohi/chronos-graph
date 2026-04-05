@@ -699,6 +699,17 @@ class LifecycleManager:
 
         task.add_done_callback(done_callback)
 
+    async def _check_lock_integrity(self, token: str) -> None:
+        """現在のロック所有者が自身であることを確認する。
+
+        一致しない場合は LockLostError を送出する。
+        """
+        state = await self._state_store.load_state()
+        if state.cleanup_lock_owner != token:
+            raise LockLostError(
+                f"Cleanup lock lost (expected {token}, got {state.cleanup_lock_owner})"
+            )
+
     async def on_memory_saved(self) -> None:
         """記憶が保存されるたびに呼び出す。カウンターをインクリメント。
 

@@ -28,13 +28,13 @@ from tests.conftest import make_mock_embedding_provider
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
-def tmp_db(tmp_path_factory: pytest.TempPathFactory) -> str:
-    """モジュールスコープの一時 DB パス。"""
-    return str(tmp_path_factory.mktemp("bench") / "bench.db")
+@pytest.fixture
+def tmp_db(tmp_path: Any) -> str:
+    """一時 DB パス。"""
+    return str(tmp_path / "bench.db")
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def settings(tmp_db: str) -> Settings:
     """ベンチマーク用 Settings。"""
     return Settings(
@@ -46,11 +46,20 @@ def settings(tmp_db: str) -> Settings:
     )
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
+def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
+    """ベンチマーク用のイベントループ。"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    yield loop
+    loop.close()
+
+
+@pytest.fixture
 def orchestrator(
     settings: Settings, event_loop: asyncio.AbstractEventLoop
 ) -> Generator[Orchestrator, None, None]:
-    """モジュールスコープの Orchestrator（ベンチマーク間で共有）。"""
+    """Orchestrator fixture (fresh state for each test)."""
     mock_provider = make_mock_embedding_provider(dim=16)
     with patch("context_store.embedding.create_embedding_provider", return_value=mock_provider):
         orch = event_loop.run_until_complete(create_orchestrator(settings))
@@ -58,9 +67,9 @@ def orchestrator(
     event_loop.run_until_complete(orch.dispose())
 
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(autouse=True)
 def seed_data(orchestrator: Orchestrator, event_loop: asyncio.AbstractEventLoop) -> None:
-    """ベンチマーク前にデータを投入する。"""
+    """Seed data before each benchmark."""
     contents = [
         f"ベンチマーク用データ {i}: システムアーキテクチャの設計決定事項を記録する。"
         for i in range(50)
@@ -156,6 +165,13 @@ def test_bench_memory_search_with_project_filter(
     benchmark: Any, orchestrator: Orchestrator, event_loop: asyncio.AbstractEventLoop
 ) -> None:
     """プロジェクトフィルタ付き memory_search のレイテンシを計測する。"""
+    # 明示的にプロジェクトフィルタ用のデータを投入する
+    event_loop.run_until_complete(
+        orchestrator.save(
+            "ベンチマーク用プロジェクトフィルタテストデータ: アーキテクチャの概要",
+            metadata={"project": "benchmark"},
+        )
+    )
 
     def run() -> Any:
         return event_loop.run_until_complete(

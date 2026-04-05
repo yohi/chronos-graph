@@ -209,7 +209,7 @@ class TestConcurrentWriteStress:
         tasks = [save_one(i) for i in range(N)]
         ids = await asyncio.gather(*tasks)
 
-        assert len([i for i in ids if i]) >= N - 1  # ほぼ全て成功
+        assert all(ids)  # すべて成功すること（SQLITE_BUSY 回避の検証）
 
     async def test_search_during_concurrent_writes(self, orchestrator: Orchestrator) -> None:
         """書き込み中でも memory_search がブロックされないこと。"""
@@ -283,7 +283,7 @@ class TestMCPServerE2E:
         server._orchestrator = orch
         server._initialized = True
         server._init_lock = _asyncio.Lock()
-        server._url_semaphore = _asyncio.Semaphore(settings.url_fetch_concurrency)
+        server._url_semaphore = _asyncio.Semaphore(orch.url_fetch_concurrency)
 
         yield server
 
@@ -293,21 +293,30 @@ class TestMCPServerE2E:
     async def test_memory_save_default_source(self, server_with_mock: ChronosServer) -> None:
         """memory_save の source デフォルト値が 'conversation' であること。"""
         server = server_with_mock
-        result = await server.memory_save(content="テストコンテンツ")
+        content = "テストコンテンツ"
+        result = await server.memory_save(content=content)
         import json
 
         data = json.loads(result)
-        assert "saved" in data
-        assert data["saved"] >= 1
+        assert data.get("saved", 0) >= 1
+
+        # 保存されたアイテムを検索して source を検証
+        search_res = json.loads(await server.memory_search(query=content))
+        assert any(item["source_type"] == "conversation" for item in search_res["results"])
 
     async def test_memory_save_explicit_source(self, server_with_mock: ChronosServer) -> None:
         """memory_save に source='manual' を指定したとき正しく保持されること。"""
         server = server_with_mock
-        result = await server.memory_save(content="手動入力テスト", source="manual")
+        content = "手動入力テスト"
+        result = await server.memory_save(content=content, source="manual")
         import json
 
         data = json.loads(result)
-        assert data["saved"] >= 1
+        assert data.get("saved", 0) >= 1
+
+        # 保存されたアイテムを検索して source を検証
+        search_res = json.loads(await server.memory_search(query=content))
+        assert any(item["source_type"] == "manual" for item in search_res["results"])
 
     async def test_memory_search(self, server_with_mock: ChronosServer) -> None:
         """memory_search がJSON文字列を返すこと。"""

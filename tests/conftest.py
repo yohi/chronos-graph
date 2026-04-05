@@ -23,8 +23,12 @@ def make_mock_embedding_provider(dim: int = 16) -> EmbeddingProvider:
             return dim
 
         async def embed(self, text: str) -> list[float]:
-            # テキストのハッシュに基づいた決定論的なベクトルを返す
-            rng = random.Random(hash(text) % (2**31))
+            import hashlib
+
+            # テキストのハッシュに基づいた決定論的なベクトルを返す（hash() ではなく hashlib を使用）
+            h = hashlib.sha256(text.encode("utf-8")).digest()
+            seed = int.from_bytes(h[:4], "little") % (2**31)
+            rng = random.Random(seed)
             return [rng.uniform(-1, 1) for _ in range(dim)]
 
         async def embed_batch(self, texts: list[str]) -> list[list[float]]:

@@ -182,7 +182,13 @@ class RetrievalPipeline:
                 "time_decay_enabled": strategy.time_decay_enabled,
             },
             "results": [
-                {"memory_id": str(m.memory.id), "content": m.memory.content, "score": m.score}
+                {
+                    "memory_id": str(m.memory.id),
+                    "content": m.memory.content,
+                    "score": m.score,
+                    "source_type": m.memory.source_type,
+                    "metadata": m.memory.source_metadata,
+                }
                 for m in scored
             ],
             "total_count": len(filtered),

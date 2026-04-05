@@ -216,7 +216,11 @@ async def _create_graph_adapter(settings: "Settings") -> "GraphAdapter | None":
         # Neo4j is used as the graph backend for PostgreSQL mode
         from context_store.storage.neo4j import Neo4jGraphAdapter
 
-        if not settings.neo4j_uri or not settings.neo4j_user or not settings.neo4j_password:
+        if (
+            not settings.neo4j_uri
+            or not settings.neo4j_user
+            or not settings.neo4j_password.get_secret_value().strip()
+        ):
             raise ValueError(
                 "Neo4j uri, user, and password must be provided when graph is enabled with postgres backend."
             )

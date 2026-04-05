@@ -3,8 +3,8 @@
 外部サービス不要。一時ファイルを使用して Ingestion → Retrieval 全フローを検証する。
 
 カバー範囲:
-  A) ライトウェイトモード（SQLite）
-  B) 並行書き込みストレステスト（SQLite）
+  A) ライトウェイトモード(SQLite)
+  B) 並行書き込みストレステスト(SQLite)
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ class TestLightweightE2E:
 
     @pytest.fixture
     async def orchestrator(self, sqlite_settings: Settings) -> AsyncGenerator[Orchestrator, None]:
-        """テスト用 Orchestrator（モック Embedding Provider 使用）。"""
+        """テスト用 Orchestrator(モック Embedding Provider 使用)。"""
         mock_provider = make_mock_embedding_provider(dim=16)
 
         with patch(
@@ -90,7 +90,7 @@ class TestLightweightE2E:
         assert isinstance(search_result, dict)
         assert "results" in search_result
         found_ids = [r["memory_id"] for r in search_result["results"]]
-        # 保存したメモリが検索結果に含まれるか（ベクトル/キーワード検索）
+        # 保存したメモリが検索結果に含まれるか(ベクトル/キーワード検索)
         assert memory_id in found_ids, (
             f"Saved memory {memory_id} not found in search results: {found_ids}"
         )
@@ -195,7 +195,7 @@ class TestConcurrentWriteStress:
 
     @pytest.fixture
     async def orchestrator(self, sqlite_settings: Settings) -> AsyncGenerator[Orchestrator, None]:
-        """テスト用 Orchestrator（並行性テスト用）。"""
+        """テスト用 Orchestrator(並行性テスト用)。"""
         mock_provider = make_mock_embedding_provider(dim=16)
 
         with patch(
@@ -217,7 +217,7 @@ class TestConcurrentWriteStress:
         tasks = [save_one(i) for i in range(N)]
         ids = await asyncio.gather(*tasks)
 
-        assert all(ids)  # すべて成功すること（SQLITE_BUSY 回避の検証）
+        assert all(ids)  # すべて成功すること(SQLITE_BUSY 回避の検証)
 
     async def test_search_during_concurrent_writes(self, orchestrator: Orchestrator) -> None:
         """書き込み中でも memory_search がブロックされないこと。"""
@@ -259,12 +259,12 @@ class TestConcurrentWriteStress:
 
 
 # ---------------------------------------------------------------------------
-# C) MCP Server E2E（ChronosServer ラッパー経由）
+# C) MCP Server E2E(ChronosServer ラッパー経由)
 # ---------------------------------------------------------------------------
 
 
 class TestMCPServerE2E:
-    """ChronosServer（MCPラッパー）経由の全ツール動作確認。"""
+    """ChronosServer(MCPラッパー)経由の全ツール動作確認。"""
 
     @pytest.fixture
     async def server_with_mock(self, tmp_db_path: str) -> AsyncGenerator[ChronosServer, None]:
@@ -284,15 +284,10 @@ class TestMCPServerE2E:
         )
 
         # create_orchestrator を実際の SQLite + MockProvider で実行
-        import asyncio as _asyncio
-
         with patch("context_store.embedding.create_embedding_provider", return_value=mock_provider):
             orch = await create_orchestrator(settings)
 
-        server._orchestrator = orch
-        server._initialized = True
-        server._init_lock = _asyncio.Lock()
-        server._url_semaphore = _asyncio.Semaphore(orch.url_fetch_concurrency)
+        await server.initialize_for_test(orch)
 
         yield server
 

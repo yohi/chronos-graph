@@ -82,6 +82,22 @@ class ChronosServer:
                 assert self._orchestrator is not None
                 await self._orchestrator.start_lifecycle()
 
+    async def initialize_for_test(self, orchestrator: Orchestrator) -> None:
+        """テスト用に Orchestrator を直接注入して初期化する。
+
+        Args:
+            orchestrator: 使用する Orchestrator インスタンス。
+        """
+        async with self._init_lock:
+            if self._initialized:
+                return
+
+            self._orchestrator = orchestrator
+            self._url_semaphore = asyncio.Semaphore(self._orchestrator.url_fetch_concurrency)
+            self._initialized = True
+            # ライフサイクルマネージャーを開始
+            await self._orchestrator.start_lifecycle()
+
     # ---------------------------------------------------------------------------
     # ツールハンドラ
     # ---------------------------------------------------------------------------

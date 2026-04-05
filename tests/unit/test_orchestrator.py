@@ -251,7 +251,7 @@ class TestSaveOperation:
     async def test_save_delegates_to_ingestion_pipeline(self):
         """save() が IngestionPipeline.ingest() に委譲される。"""
         ingestion = _make_mock_ingestion_pipeline()
-        orch, *_, lifecycle_manager = await _build_orchestrator(ingestion_pipeline=ingestion)
+        orch, *_, _lifecycle_manager = await _build_orchestrator(ingestion_pipeline=ingestion)
 
         results = await orch.save("test content", source_type=SourceType.MANUAL)
 

@@ -335,19 +335,19 @@ class IngestionPipeline:
                     )
                     node_created = True
 
-                # ステップ8: グラフリンク（エッジ作成）
-                previous_memories = await self._get_previous_memories(persisted_memory)
-                chunk_neighbors = self._build_chunk_neighbors(
-                    persisted_memory,
-                    prior_document_memories,
-                    supersedes_memory,
-                )
-                await self._graph_linker.link(
-                    persisted_memory,
-                    supersedes=supersedes_memory,
-                    previous_memories=previous_memories,
-                    chunk_neighbors=chunk_neighbors,
-                )
+                    # ステップ8: グラフリンク（エッジ作成）
+                    previous_memories = await self._get_previous_memories(persisted_memory)
+                    chunk_neighbors = self._build_chunk_neighbors(
+                        persisted_memory,
+                        prior_document_memories,
+                        supersedes_memory,
+                    )
+                    await self._graph_linker.link(
+                        persisted_memory,
+                        supersedes=supersedes_memory,
+                        previous_memories=previous_memories,
+                        chunk_neighbors=chunk_neighbors,
+                    )
             except Exception:
                 # ロールバック処理
                 # 1. 作成したグラフノードを削除 (Best effort)

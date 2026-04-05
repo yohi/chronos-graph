@@ -7,6 +7,7 @@ import logging
 from typing import Any, Awaitable, Callable, TypedDict
 
 from context_store.models.memory import MemorySource, ScoredMemory
+from context_store.models.search import SearchStrategy
 from context_store.retrieval.graph_traversal import GraphTraversal
 from context_store.retrieval.keyword_search import KeywordSearch
 from context_store.retrieval.post_processor import PostProcessor
@@ -68,6 +69,7 @@ class RetrievalPipeline:
         project: str | None = None,
         top_k: int = 10,
         max_tokens: int | None = None,
+        strategy: SearchStrategy | None = None,
     ) -> RetrievalResponse:
         """
         統合検索を実行
@@ -77,6 +79,7 @@ class RetrievalPipeline:
             project: プロジェクトフィルタ
             top_k: 返す結果数
             max_tokens: 最大トークン数
+            strategy: 検索戦略 (None の場合は QueryAnalyzer で生成)
 
         Returns:
             検索結果
@@ -88,13 +91,21 @@ class RetrievalPipeline:
             max_tokens = None
 
         # ステップ 1: クエリ分析
-        strategy = self.query_analyzer.analyze(query)
-        logger.info(
-            "Query analyzed. Strategy: vector=%0.2f, keyword=%0.2f, graph=%0.2f",
-            strategy.vector_weight,
-            strategy.keyword_weight,
-            strategy.graph_weight,
-        )
+        if strategy is None:
+            strategy = self.query_analyzer.analyze(query)
+            logger.info(
+                "Query analyzed. Strategy: vector=%0.2f, keyword=%0.2f, graph=%0.2f",
+                strategy.vector_weight,
+                strategy.keyword_weight,
+                strategy.graph_weight,
+            )
+        else:
+            logger.info(
+                "Using provided strategy. Strategy: vector=%0.2f, keyword=%0.2f, graph=%0.2f",
+                strategy.vector_weight,
+                strategy.keyword_weight,
+                strategy.graph_weight,
+            )
 
         # ステップ 2: ベクトル検索とキーワード検索を並列実行
         vector_task = self._safe_search(

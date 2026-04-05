@@ -949,6 +949,19 @@ class SQLiteStorageAdapter:
                 _raise_if_locked(exc)
                 raise
 
+    async def list_projects(self) -> list[str]:
+        """List all unique project names present in the storage."""
+        sql = "SELECT DISTINCT project FROM memories WHERE project IS NOT NULL AND project != ''"
+
+        async with self._db() as conn:
+            try:
+                async with conn.execute(sql) as cursor:
+                    rows = await cursor.fetchall()
+                return [row[0] for row in rows]
+            except aiosqlite.OperationalError as exc:
+                _raise_if_locked(exc)
+                raise
+
     async def increment_memory_access_count(self, memory_id: str) -> bool:
         """Atomically increment the access count and update last_accessed_at."""
         async with self._db() as conn:

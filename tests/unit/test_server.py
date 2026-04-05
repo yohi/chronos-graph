@@ -35,14 +35,14 @@ def mock_orchestrator() -> MagicMock:
 
 @pytest.fixture
 def chronos_server(mock_orchestrator: MagicMock):
-    """ChronosServer インスタンスを返す（初期化済み状態に設定）。"""
+    """ChronosServer インスタンスを返す(初期化済み状態に設定)。"""
     from context_store.server import ChronosServer
 
     server = ChronosServer()
     # テスト用に直接 orchestrator を注入して初期化済み状態にする
     server._orchestrator = mock_orchestrator
     server._initialized = True
-    server._init_lock = asyncio.Lock()
+    # self._init_lock は __init__ で初期化されるようになった
     server._url_semaphore = asyncio.Semaphore(3)
     return server
 
@@ -305,11 +305,32 @@ async def test_memory_save_url_uses_semaphore(chronos_server, mock_orchestrator:
 # ---------------------------------------------------------------------------
 
 
-def test_mcp_instance_has_tools():
-    """FastMCP インスタンスが tools を持つことを確認する。"""
+@pytest.mark.asyncio
+async def test_mcp_registers_core_tools():
+    """FastMCP インスタンスにツールとリソースが正しく登録されていることを確認する。"""
     from context_store import server as server_module
 
-    # mcp インスタンスが存在する
-    assert hasattr(server_module, "mcp")
     mcp = server_module.mcp
     assert mcp is not None
+
+    # ツールの一覧を取得して名前を検証
+    tools = await mcp.list_tools()
+    tool_names = {t.name for t in tools}
+    expected_tools = {
+        "memory_save",
+        "memory_save_url",
+        "memory_search",
+        "memory_search_graph",
+        "memory_delete",
+        "memory_prune",
+        "memory_stats",
+    }
+    for et in expected_tools:
+        assert et in tool_names, f"Tool {et} not registered"
+
+    # リソースの一覧を検証
+    resources = await mcp.list_resources()
+    resource_uris = {str(r.uri) for r in resources}
+    expected_resources = {"memory://stats", "memory://projects"}
+    for er in expected_resources:
+        assert er in resource_uris, f"Resource {er} not registered"

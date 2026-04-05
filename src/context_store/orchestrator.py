@@ -196,18 +196,14 @@ class Orchestrator:
             )
 
         base_strategy = SearchStrategy()
-        # TODO: adjusted_strategy は将来 RetrievalPipeline に渡される予定。
-        # 現在 RetrievalPipeline.search() は strategy パラメータを持たないため、
-        # QueryAnalyzer が内部で戦略を決定する設計になっている。
-        # RL 拡張時に RetrievalPipeline.search(strategy=adjusted_strategy) として
-        # 外部から戦略を注入できるよう拡張する。
-        adjusted_strategy = await self.policy_hook.adjust_strategy(query, base_strategy)  # noqa: F841
+        adjusted_strategy = await self.policy_hook.adjust_strategy(query, base_strategy)
 
         result = await self._retrieval_pipeline.search(
             query,
             project=project,
             top_k=top_k,
             max_tokens=max_tokens,
+            strategy=adjusted_strategy,
         )
         return result
 
@@ -234,6 +230,14 @@ class Orchestrator:
         """
         if self._graph is None:
             raise RuntimeError("グラフ機能が無効です。graph_enabled=true を設定してください。")
+
+        if edge_types or depth != 2:
+            logger.warning(
+                "グラフトラバーサル検索は現在開発中です。edge_types=%r, depth=%d は無視され、"
+                "代わりに標準の検索（top_k=5）が実行されます。",
+                edge_types,
+                depth,
+            )
         # TODO(Phase 9): edge_types と depth を RetrievalPipeline の graph_traversal に渡す。
         # 現時点ではベクトル検索でシードノードを特定し、グラフアダプターへの委譲は未実装。
         search_result = await self._retrieval_pipeline.search(query, project=project, top_k=5)
@@ -273,6 +277,7 @@ class Orchestrator:
         """
         if dry_run:
             from datetime import datetime, timedelta, timezone
+
             from context_store.models.memory import Memory
 
             cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
@@ -284,8 +289,9 @@ class Orchestrator:
             )
             return target_count
 
-        await self._lifecycle_manager.run_cleanup()
-        return 0
+        # lifecycle_manager.run_cleanup() は削除件数 (int) を返す。
+        count: int = await self._lifecycle_manager.run_cleanup()
+        return count
 
     async def stats(self, project: str | None = None) -> dict[str, Any]:
         """ストレージの統計情報を返す。
@@ -308,6 +314,10 @@ class Orchestrator:
             "total_count": len(active_memories) + len(archived_memories),
             "project": project,
         }
+
+    async def list_projects(self) -> list[str]:
+        """プロジェクト一覧を返す。"""
+        return await self._storage.list_projects()
 
     async def dispose(self) -> None:
         """全アダプターのリソースを解放する。"""

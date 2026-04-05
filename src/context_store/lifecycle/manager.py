@@ -681,7 +681,7 @@ class LifecycleManager:
         except Exception:
             logger.exception("Time-based cleanup check failed.")
 
-    def _spawn_background_task(self, factory: Callable[[], Coroutine[Any, Any, None]]) -> None:
+    def _spawn_background_task(self, factory: Callable[[], Coroutine[Any, Any, Any]]) -> None:
         """例外ハンドリング付きでバックグラウンドタスクを開始する。"""
         if getattr(self, "_shutting_down", False):
             return
@@ -728,41 +728,50 @@ class LifecycleManager:
             logger.info("Save count threshold reached, triggering cleanup.")
             self._spawn_background_task(self.run_cleanup)
 
-    async def run_cleanup(self) -> None:
+    async def run_cleanup(self) -> int:
         """クリーンアップを実行する（filelock + DB ロック排他制御付き）。
 
         filelock によるプロセス間排他制御と DB レベルのロックを組み合わせて
         同時実行を防ぐ。ロック取得失敗時はサイレントにスキップする。
+
+        Returns:
+            削除またはアーカイブされたアイテムの総数。
         """
         # OS レベルの排他ロック（timeout=0 = 非ブロッキング）
         file_lock = FileLock(self._lock_path, timeout=0)
         should_schedule_followup = False
+        total_count = 0
         try:
             with file_lock.acquire():
-                should_schedule_followup = await self._run_cleanup_inner()
+                should_schedule_followup, total_count = await self._run_cleanup_inner()
         except Timeout:
             logger.debug("Cleanup skipped: another process holds the file lock.")
-            return
+            return 0
 
         # ロック解放後に、必要に応じてフォローアップをスケジュール
         if should_schedule_followup:
             logger.info("Scheduling follow-up cleanup.")
             self._spawn_background_task(self.run_cleanup)
 
-    async def _run_cleanup_inner(self) -> bool:
+        return total_count
+
+    async def _run_cleanup_inner(self) -> tuple[bool, int]:
         """クリーンアップ本体（DB ロック取得後に実行）。
 
         Returns:
-            未処理の保存が残っており、次回のクリーンアップを即座にスケジュールすべきか。
+            (should_schedule_followup, total_items_count)
+            should_schedule_followup: 未処理の保存が残っており、次回のクリーンアップを即座にスケジュールすべきか。
+            total_items_count: 削除またはアーカイブされたアイテムの総数。
         """
         # DB レベルのロック取得
         token = str(uuid.uuid4())
         acquired = await self._state_store.acquire_cleanup_lock(token)
         if not acquired:
             logger.debug("Cleanup skipped: DB lock already acquired.")
-            return False
+            return False, 0
 
         should_schedule_followup = False
+        total_count = 0
         try:
             state = await self._state_store.load_state()
             # クリーンアップ開始時のカウントをキャプチャ。
@@ -777,6 +786,7 @@ class LifecycleManager:
             # 1. Decay Scorer (各ジョブは暗黙的にスコアを使用)
             # 2. Archiver
             archiver_result = await self._archiver.run(heartbeat_fn=heartbeat_fn)
+            total_count += archiver_result.archived_count
             logger.info(
                 "Archiver: archived=%d, checked=%d",
                 archiver_result.archived_count,
@@ -791,6 +801,7 @@ class LifecycleManager:
                 batch_size=CONSOLIDATION_BATCH_SIZE,
                 heartbeat_fn=heartbeat_fn,
             )
+            total_count += consolidator_result.consolidated_count
             logger.info(
                 "Consolidator: consolidated=%d, checked=%d",
                 consolidator_result.consolidated_count,
@@ -799,6 +810,7 @@ class LifecycleManager:
 
             # 4. Purger
             purger_result = await self._purger.run(heartbeat_fn=heartbeat_fn)
+            total_count += purger_result.purged_count
             logger.info(
                 "Purger: purged=%d, checked=%d",
                 purger_result.purged_count,
@@ -874,7 +886,7 @@ class LifecycleManager:
         finally:
             await self._state_store.release_cleanup_lock(token)
 
-        return should_schedule_followup
+        return should_schedule_followup, total_count
 
     async def _collect_stats(self) -> None:
         """統計情報をログに記録する（将来的に DB 保存へ拡張可能）。"""

@@ -54,13 +54,15 @@ class Archiver:
         checked_count = 0
         page_size = 100
         last_id = None
+        last_created_at = None
 
         while True:
             filters = MemoryFilters(
                 project=project,
                 archived=None,
                 limit=page_size,
-                order_by="id",
+                order_by="created_at ASC, id ASC",
+                created_after=last_created_at,
                 id_after=last_id,
             )
             memories = await self._storage.list_by_filter(filters)
@@ -76,6 +78,7 @@ class Archiver:
                     await self._storage.update_memory(str(memory.id), {"archived_at": now})
                     archived_count += 1
                 last_id = str(memory.id)
+                last_created_at = memory.created_at
 
             if heartbeat_fn:
                 await heartbeat_fn()

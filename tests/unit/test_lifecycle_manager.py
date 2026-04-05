@@ -73,6 +73,7 @@ def _make_manager(
 
     storage = AsyncMock()
     storage.list_by_filter = AsyncMock(return_value=[])
+    storage.count_by_filter = AsyncMock(return_value=0)
 
     settings = make_settings(
         stale_lock_timeout_seconds=stale_lock_timeout_seconds,

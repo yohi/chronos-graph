@@ -8,7 +8,7 @@ import time
 import pytest
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 
@@ -823,3 +823,14 @@ async def test_consolidator_skips_different_projects():
     # Since neighbor is from project B and base is from A, it should be skipped
     assert result.consolidated_count == 0
     mock_storage.update_memory.assert_not_called()
+
+
+def test_consolidator_uses_settings_defaults():
+    from context_store.lifecycle.consolidator import Consolidator
+    from context_store.config import Settings
+
+    # We don't pass settings, it should use Settings() defaults
+    consolidator = Consolidator(storage=MagicMock())
+    settings = Settings()
+    assert consolidator._dedup_threshold == settings.dedup_threshold
+    assert consolidator._consolidation_threshold == settings.consolidation_threshold

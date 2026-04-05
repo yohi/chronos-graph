@@ -21,10 +21,6 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# 自己修復の類似度閾値（デフォルト）
-_DEFAULT_DEDUP_THRESHOLD = 0.90
-# 通常統合候補の類似度閾値（デフォルト）
-_DEFAULT_CONSOLIDATION_THRESHOLD = 0.85
 # vector_search の近傍数
 _VECTOR_SEARCH_TOP_K = 5
 # 1サイクルで処理する記憶数の上限
@@ -75,12 +71,14 @@ class Consolidator:
         self._storage = storage
         self._graph = graph
         self._embedding_provider = embedding_provider
-        if settings is not None:
-            self._dedup_threshold = settings.dedup_threshold
-            self._consolidation_threshold = settings.consolidation_threshold
-        else:
-            self._dedup_threshold = _DEFAULT_DEDUP_THRESHOLD
-            self._consolidation_threshold = _DEFAULT_CONSOLIDATION_THRESHOLD
+
+        if settings is None:
+            from context_store.config import Settings
+
+            settings = Settings()
+
+        self._dedup_threshold = settings.dedup_threshold
+        self._consolidation_threshold = settings.consolidation_threshold
 
     async def run(
         self,

@@ -272,7 +272,7 @@ class TestConcurrentWriteStress:
 
         # 統計が取れること
         stats = await orchestrator.stats()
-        # 少なくとも N 件以上（以前のテストデータが含まれる可能性があるため >= N）
+        # 少なくとも N 件以上(以前のテストデータが含まれる可能性があるため >= N)
         assert stats["total_count"] >= N
         # アーカイブとアクティブの合計が total と一致
         assert stats["active_count"] + stats["archived_count"] == stats["total_count"]

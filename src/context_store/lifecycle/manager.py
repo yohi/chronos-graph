@@ -35,6 +35,10 @@ _WAL_RESULT_KEY_LOG = "log"
 _WAL_RESULT_KEY_CHECKPOINTED = "checkpointed"
 
 
+class LockLostError(Exception):
+    """クリーンアップロックを喪失したことを示す例外。"""
+
+
 @dataclass
 class LifecycleState:
     """ライフサイクルの永続化状態。

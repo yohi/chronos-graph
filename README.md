@@ -104,7 +104,7 @@ REDIS_URL=redis://localhost:6379
 | `SQLITE_DB_PATH` | `~/.context-store/memories.db` | SQLite DB ファイルパス |
 | `EMBEDDING_PROVIDER` | `openai` | 埋め込みプロバイダー (`openai` / `local-model` / `litellm` / `custom-api`) |
 | `OPENAI_API_KEY` | `` | OpenAI API キー |
-| `LOCAL_MODEL_NAME` | `cl-nagoya/ruri-v3-310m` | ローカルモデル名 |
+| `LOCAL_MODEL_NAME` | `cl-nagoya/ruri-v3-310m` | ローカルモデル名（詳細は [埋め込みモデル選定ガイド](docs/embedding-models.md) を参照） |
 | `GRAPH_ENABLED` | `false` | グラフ機能の有効化 |
 | `DECAY_HALF_LIFE_DAYS` | `30` | 記憶の半減期（日数） |
 | `ARCHIVE_THRESHOLD` | `0.05` | アーカイブ閾値 |

@@ -7,14 +7,15 @@ Usage:
     python scripts/generate_config.py                    # SQLite (デフォルト)
     python scripts/generate_config.py --backend postgres # PostgreSQL モード
     python scripts/generate_config.py --output claude    # Claude Desktop 形式
+    python scripts/generate_config.py --method uvx       # uvx モード
 
 Examples:
     # Claude Desktop 設定ファイルへ追記
     python scripts/generate_config.py > /tmp/chronos-config.json
     python -m json.tool /tmp/chronos-config.json  # 検証
 
-    # Cursor 設定へ統合
-    python scripts/generate_config.py --output cursor
+    # uvx を使用したワンライナー設定
+    python scripts/generate_config.py --method uvx --output claude
 """
 
 from __future__ import annotations
@@ -57,7 +58,9 @@ def get_embedding_envs(provider: str) -> dict[str, str]:
     return envs
 
 
-def generate_sqlite_config(python_path: str, embedding: str, graph: bool) -> dict:
+def generate_sqlite_config(
+    python_path: str, embedding: str, graph: bool, method: str = "python", uv_from: str | None = None
+) -> dict:
     """SQLite ライトウェイトモードの設定を生成する。"""
     env = {
         "STORAGE_BACKEND": "sqlite",
@@ -69,18 +72,30 @@ def generate_sqlite_config(python_path: str, embedding: str, graph: bool) -> dic
     }
     env.update(get_embedding_envs(embedding))
 
+    if method == "uvx":
+        command = "uvx"
+        args = []
+        if uv_from:
+            args.extend(["--from", uv_from])
+        args.append("context-store")
+    else:
+        command = python_path
+        args = ["-m", "context_store"]
+
     return {
         "mcpServers": {
             "chronos-graph": {
-                "command": python_path,
-                "args": ["-m", "context_store"],
+                "command": command,
+                "args": args,
                 "env": env,
             }
         }
     }
 
 
-def generate_postgres_config(python_path: str, embedding: str, graph: bool) -> dict:
+def generate_postgres_config(
+    python_path: str, embedding: str, graph: bool, method: str = "python", uv_from: str | None = None
+) -> dict:
     """PostgreSQL + Neo4j + Redis フルモードの設定を生成する。"""
     env = {
         "STORAGE_BACKEND": "postgres",
@@ -101,11 +116,21 @@ def generate_postgres_config(python_path: str, embedding: str, graph: bool) -> d
     }
     env.update(get_embedding_envs(embedding))
 
+    if method == "uvx":
+        command = "uvx"
+        args = []
+        if uv_from:
+            args.extend(["--from", uv_from])
+        args.append("context-store")
+    else:
+        command = python_path
+        args = ["-m", "context_store"]
+
     return {
         "mcpServers": {
             "chronos-graph": {
-                "command": python_path,
-                "args": ["-m", "context_store"],
+                "command": command,
+                "args": args,
                 "env": env,
             }
         }
@@ -149,6 +174,17 @@ def main() -> None:
         help="グラフ機能を有効にするか (デフォルト: true)",
     )
     parser.add_argument(
+        "--method",
+        choices=["python", "uvx"],
+        default="python",
+        help="MCP 起動方法 (デフォルト: python)",
+    )
+    parser.add_argument(
+        "--uv-from",
+        default="git+https://github.com/yohi/chronos-graph.git",
+        help="uvx モード時の --from オプション値 (デフォルト: リポジトリの Git URL)",
+    )
+    parser.add_argument(
         "--python",
         default=None,
         help="使用する Python インタープリタのパス (デフォルト: 自動検出)",
@@ -165,9 +201,13 @@ def main() -> None:
     graph_enabled = args.graph
 
     if args.backend == "postgres":
-        config = generate_postgres_config(python_path, args.embedding, graph_enabled)
+        config = generate_postgres_config(
+            python_path, args.embedding, graph_enabled, args.method, args.uv_from
+        )
     else:
-        config = generate_sqlite_config(python_path, args.embedding, graph_enabled)
+        config = generate_sqlite_config(
+            python_path, args.embedding, graph_enabled, args.method, args.uv_from
+        )
 
     if args.output == "cursor":
         config = generate_cursor_config(config)

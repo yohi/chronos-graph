@@ -12,6 +12,7 @@ BACKEND="sqlite"
 EMBEDDING_PROVIDER="openai"
 SKIP_TESTS=false
 MCP_OUTPUT="generic"
+MCP_METHOD="python"
 GRAPH_ENABLED=true
 
 # Parse arguments
@@ -27,6 +28,9 @@ while [[ "$#" -gt 0 ]]; do
         --mcp-output)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --mcp-output requires a value (claude|cursor|generic)"; exit 1; fi
             MCP_OUTPUT="$2"; shift ;;
+        --mcp-method)
+            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --mcp-method requires a value (python|uvx)"; exit 1; fi
+            MCP_METHOD="$2"; shift ;;
         --graph)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --graph requires a value (true|false)"; exit 1; fi
             GRAPH_ENABLED="$2"; shift ;;
@@ -37,6 +41,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --embedding [openai|litellm|local|custom] Set embedding provider (default: openai)"
             echo "  --skip-tests                      Skip running unit tests"
             echo "  --mcp-output [claude|cursor|generic] Set MCP configuration output format (default: generic)"
+            echo "  --mcp-method [python|uvx]         Set MCP activation method (default: python)"
             echo "  --graph [true|false]             Enable/disable graph features (default: true)"
             echo "  -h, --help                        Show this help message"
             exit 0
@@ -59,7 +64,7 @@ else
 fi
 
 echo -e "${BLUE}Starting ChronosGraph bootstrap process...${NC}"
-echo -e "${BLUE}Backend: ${BACKEND}, Embedding: ${EMBEDDING_PROVIDER}, Skip Tests: ${SKIP_TESTS}, MCP Output: ${MCP_OUTPUT}, Graph: ${GRAPH_ENABLED}${NC}"
+echo -e "${BLUE}Backend: ${BACKEND}, Embedding: ${EMBEDDING_PROVIDER}, Skip Tests: ${SKIP_TESTS}, MCP Output: ${MCP_OUTPUT}, MCP Method: ${MCP_METHOD}, Graph: ${GRAPH_ENABLED}${NC}"
 
 # 1. Dependency Resolution
 if command -v uv &> /dev/null; then
@@ -115,8 +120,7 @@ echo -e "${BLUE}Generating MCP configuration for ${MCP_OUTPUT}...${NC}"
 TMP_CONFIG=$(mktemp)
 trap 'rm -f "$TMP_CONFIG"' EXIT
 
-GEN_CONFIG_ARGS=("scripts/generate_config.py" "--backend" "$BACKEND" "--embedding" "$EMBEDDING_PROVIDER" "--graph" "$GRAPH_ENABLED" "--output" "$MCP_OUTPUT")
-
+GEN_CONFIG_ARGS=("scripts/generate_config.py" "--backend" "$BACKEND" "--embedding" "$EMBEDDING_PROVIDER" "--graph" "$GRAPH_ENABLED" "--output" "$MCP_OUTPUT" "--method" "$MCP_METHOD")
 if command -v uv &> /dev/null; then
     GEN_CONFIG_CMD=(uv run python "${GEN_CONFIG_ARGS[@]}")
 else

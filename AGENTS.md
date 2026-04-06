@@ -28,6 +28,7 @@ MCP server providing persistent long-term memory for AI agents with temporal kno
 - **ストレージバックエンド**: `sqlite` (軽量) または `postgres` (フル機能)
 - **モデルプロバイダー**: `openai`, `litellm`, `local`, `custom`
 - **MCP設定のターゲット**: `claude`, `cursor`, または `generic`
+- **MCP起動方法**: `python` (直接実行) または `uvx` (パッケージ管理ツール経由)
 
 **注記**: `bootstrap.sh` は内部的に `local` を `local-model` に、`custom` を `custom-api` にマッピングして環境変数を設定します。
 

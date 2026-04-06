@@ -13,6 +13,7 @@ EMBEDDING_PROVIDER="openai"
 SKIP_TESTS=false
 MCP_OUTPUT="generic"
 MCP_METHOD="python"
+UV_FROM=""
 GRAPH_ENABLED=true
 
 # Parse arguments
@@ -31,6 +32,9 @@ while [[ "$#" -gt 0 ]]; do
         --mcp-method)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --mcp-method requires a value (python|uvx)"; exit 1; fi
             MCP_METHOD="$2"; shift ;;
+        --uv-from)
+            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --uv-from requires a value"; exit 1; fi
+            UV_FROM="$2"; shift ;;
         --graph)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --graph requires a value (true|false)"; exit 1; fi
             GRAPH_ENABLED="$2"; shift ;;
@@ -42,6 +46,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --skip-tests                      Skip running unit tests"
             echo "  --mcp-output [claude|cursor|generic] Set MCP configuration output format (default: generic)"
             echo "  --mcp-method [python|uvx]         Set MCP activation method (default: python)"
+            echo "  --uv-from [source]                Set source for uvx (e.g. git URL or PyPI package)"
             echo "  --graph [true|false]             Enable/disable graph features (default: true)"
             echo "  -h, --help                        Show this help message"
             exit 0
@@ -121,6 +126,10 @@ TMP_CONFIG=$(mktemp)
 trap 'rm -f "$TMP_CONFIG"' EXIT
 
 GEN_CONFIG_ARGS=("scripts/generate_config.py" "--backend" "$BACKEND" "--embedding" "$EMBEDDING_PROVIDER" "--graph" "$GRAPH_ENABLED" "--output" "$MCP_OUTPUT" "--method" "$MCP_METHOD")
+if [[ -n "$UV_FROM" ]]; then
+    GEN_CONFIG_ARGS+=("--uv-from" "$UV_FROM")
+fi
+
 if command -v uv &> /dev/null; then
     GEN_CONFIG_CMD=(uv run python "${GEN_CONFIG_ARGS[@]}")
 else

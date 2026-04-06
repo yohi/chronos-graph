@@ -58,6 +58,22 @@ def get_embedding_envs(provider: str) -> dict[str, str]:
     return envs
 
 
+def _build_command(
+    method: str, python_path: str, uv_from: str | None = None
+) -> tuple[str, list[str]]:
+    """MCP サーバーを起動するためのコマンドと引数を構築する。"""
+    if method == "uvx":
+        command = "uvx"
+        args = []
+        if uv_from:
+            args.extend(["--from", uv_from])
+        args.append("context-store")
+    else:
+        command = python_path
+        args = ["-m", "context_store"]
+    return command, args
+
+
 def generate_sqlite_config(
     python_path: str, embedding: str, graph: bool, method: str = "python", uv_from: str | None = None
 ) -> dict:
@@ -72,15 +88,7 @@ def generate_sqlite_config(
     }
     env.update(get_embedding_envs(embedding))
 
-    if method == "uvx":
-        command = "uvx"
-        args = []
-        if uv_from:
-            args.extend(["--from", uv_from])
-        args.append("context-store")
-    else:
-        command = python_path
-        args = ["-m", "context_store"]
+    command, args = _build_command(method, python_path, uv_from)
 
     return {
         "mcpServers": {
@@ -116,15 +124,7 @@ def generate_postgres_config(
     }
     env.update(get_embedding_envs(embedding))
 
-    if method == "uvx":
-        command = "uvx"
-        args = []
-        if uv_from:
-            args.extend(["--from", uv_from])
-        args.append("context-store")
-    else:
-        command = python_path
-        args = ["-m", "context_store"]
+    command, args = _build_command(method, python_path, uv_from)
 
     return {
         "mcpServers": {

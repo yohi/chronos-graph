@@ -65,10 +65,16 @@ def build_start_command(
     if method == "uvx":
         command = "uv"
         args = ["tool", "run"]
-        if uv_from:
-            args.extend(["--from", uv_from])
+        # Use provided uv_from or the default
+        actual_uv_from = uv_from or "git+https://github.com/yohi/chronos-graph.git"
+        args.extend(["--from", actual_uv_from])
         args.append("context-store")
     elif method == "uv":
+        if uv_from:
+            print(
+                "Warning: --uv-from is only used with the 'uvx' method and will be ignored for 'uv'",
+                file=sys.stderr,
+            )
         command = "uv"
         args = ["run", "context-store"]
     else:
@@ -184,7 +190,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--uv-from",
-        default="git+https://github.com/yohi/chronos-graph.git",
+        default=None,
         help="uvx モード時の --from オプション値 (デフォルト: リポジトリの Git URL)",
     )
     parser.add_argument(

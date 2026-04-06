@@ -133,8 +133,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--graph",
-        choices=["true", "false"],
-        default="true",
+        type=lambda x: x.lower() == "true",
+        default=True,
         help="グラフ機能を有効にするか (デフォルト: true)",
     )
     parser.add_argument(
@@ -151,7 +151,7 @@ def main() -> None:
     args = parser.parse_args()
 
     python_path = args.python or find_python()
-    graph_enabled = args.graph == "true"
+    graph_enabled = args.graph
 
     if args.backend == "postgres":
         config = generate_postgres_config(python_path, args.embedding, graph_enabled)

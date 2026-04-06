@@ -43,6 +43,13 @@ GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Detect OS for portable sed -i
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    SED_INPLACE=(sed -i '')
+else
+    SED_INPLACE=(sed -i)
+fi
+
 echo -e "${BLUE}Starting ChronosGraph bootstrap process...${NC}"
 echo -e "${BLUE}Backend: ${BACKEND}, Embedding: ${EMBEDDING_PROVIDER}, Skip Tests: ${SKIP_TESTS}, MCP Output: ${MCP_OUTPUT}, Graph: ${GRAPH_ENABLED}${NC}"
 
@@ -75,7 +82,7 @@ for VAR in "STORAGE_BACKEND" "EMBEDDING_PROVIDER" "GRAPH_ENABLED"; do
     esac
     
     if grep -q "^$VAR=" .env; then
-        sed -i "s/^$VAR=.*/$VAR=$VAL/" .env
+        "${SED_INPLACE[@]}" "s/^$VAR=.*/$VAR=$VAL/" .env
     else
         echo "$VAR=$VAL" >> .env
     fi
@@ -100,14 +107,18 @@ echo -e "${BLUE}Generating MCP configuration for ${MCP_OUTPUT}...${NC}"
 TMP_CONFIG=$(mktemp)
 trap 'rm -f "$TMP_CONFIG"' EXIT
 
-GEN_CONFIG_CMD="python scripts/generate_config.py --backend $BACKEND --embedding $EMBEDDING_PROVIDER --graph $GRAPH_ENABLED --output $MCP_OUTPUT"
-echo -e "Debug: Executing $GEN_CONFIG_CMD"
+GEN_CONFIG_ARGS=("scripts/generate_config.py" "--backend" "$BACKEND" "--embedding" "$EMBEDDING_PROVIDER" "--graph" "$GRAPH_ENABLED" "--output" "$MCP_OUTPUT")
+
 if command -v uv &> /dev/null; then
-    GEN_CONFIG_CMD="uv run $GEN_CONFIG_CMD"
+    GEN_CONFIG_CMD=(uv run python "${GEN_CONFIG_ARGS[@]}")
+else
+    GEN_CONFIG_CMD=(python "${GEN_CONFIG_ARGS[@]}")
 fi
 
+[[ "${VERBOSE:-false}" == "true" ]] && echo -e "Debug: Executing ${GEN_CONFIG_CMD[*]}"
+
 # Generate config and check for success + non-empty file in one step
-if $GEN_CONFIG_CMD > "$TMP_CONFIG" && [ -s "$TMP_CONFIG" ]; then
+if "${GEN_CONFIG_CMD[@]}" > "$TMP_CONFIG" && [ -s "$TMP_CONFIG" ]; then
     mv "$TMP_CONFIG" mcp_config.json
     echo -e "${GREEN}mcp_config.json generated successfully.${NC}"
 else

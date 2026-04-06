@@ -59,6 +59,12 @@ https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
     *   `uv run python scripts/generate_config.py > mcp_config.json` を実行し、MCPクライアント用の設定ファイルを生成してください。
 
 上記の全手順を、ユーザーと対話しながら一括で行うには `bash scripts/bootstrap.sh` を実行してください。
+
+フラグを使用して非対話的に実行することも可能です：
+```bash
+bash scripts/bootstrap.sh --backend sqlite --embedding openai --graph true --mcp-output cursor
+```
+各フラグの詳細は [AGENTS.md](AGENTS.md) を参照してください。
 </details>
 
 ---

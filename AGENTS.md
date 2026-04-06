@@ -26,8 +26,10 @@ MCP server providing persistent long-term memory for AI agents with temporal kno
 
 ### 1. 基本構成の確認
 - **ストレージバックエンド**: `sqlite` (軽量) または `postgres` (フル機能)
-- **モデルプロバイダー**: `openai`, `litellm`, `local-model`, `custom-api`
+- **モデルプロバイダー**: `openai`, `litellm`, `local`, `custom`
 - **MCP設定のターゲット**: `claude`, `cursor`, または `generic`
+
+**注記**: `bootstrap.sh` は内部的に `local` を `local-model` に、`custom` を `custom-api` にマッピングして環境変数を設定します。
 
 ### 2. 環境変数の確認
 - **APIキーの準備**: `OPENAI_API_KEY` などのキーを今すぐ設定するか、後で `.env` を手動編集するか。
@@ -47,12 +49,14 @@ MCP server providing persistent long-term memory for AI agents with temporal kno
 bash scripts/bootstrap.sh --backend sqlite --embedding openai --mcp-output cursor
 
 # ローカルモデルを使用し、テストをスキップする場合
-bash scripts/bootstrap.sh --backend sqlite --embedding local-model --skip-tests --mcp-output claude
+bash scripts/bootstrap.sh --backend sqlite --embedding local --skip-tests --mcp-output claude
 ```
 
 **個別のコマンド**:
+```bash
 uv sync --all-extras    # 依存関係のインストール
 uv run pytest tests/unit/ -v  # テスト実行
+```
 
 **Tasks** (Ctrl+Shift+P → Tasks: Run Task):
 - `Run Tests` — pytest tests/ -v

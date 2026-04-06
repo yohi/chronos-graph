@@ -17,11 +17,19 @@ GRAPH_ENABLED=true
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
     case $1 in
-        --backend) BACKEND="$2"; shift ;;
-        --embedding) EMBEDDING_PROVIDER="$2"; shift ;;
+        --backend)
+            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --backend requires a value (sqlite|postgres)"; exit 1; fi
+            BACKEND="$2"; shift ;;
+        --embedding)
+            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --embedding requires a value (openai|litellm|local|custom)"; exit 1; fi
+            EMBEDDING_PROVIDER="$2"; shift ;;
         --skip-tests) SKIP_TESTS=true ;;
-        --mcp-output) MCP_OUTPUT="$2"; shift ;;
-        --graph) GRAPH_ENABLED="$2"; shift ;;
+        --mcp-output)
+            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --mcp-output requires a value (claude|cursor|generic)"; exit 1; fi
+            MCP_OUTPUT="$2"; shift ;;
+        --graph)
+            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --graph requires a value (true|false)"; exit 1; fi
+            GRAPH_ENABLED="$2"; shift ;;
         -h|--help)
             echo "Usage: $0 [options]"
             echo "Options:"

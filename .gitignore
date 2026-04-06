@@ -30,6 +30,7 @@ wheels/
 
 # Testing
 .pytest_cache/
+.benchmarks/
 .coverage
 .coverage.*
 htmlcov/

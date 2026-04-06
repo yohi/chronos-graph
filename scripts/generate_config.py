@@ -7,15 +7,15 @@ Usage:
     python scripts/generate_config.py                    # SQLite (デフォルト)
     python scripts/generate_config.py --backend postgres # PostgreSQL モード
     python scripts/generate_config.py --output claude    # Claude Desktop 形式
-    python scripts/generate_config.py --method uvx       # uvx モード
+    python scripts/generate_config.py --method uv       # uv モード
 
 Examples:
     # Claude Desktop 設定ファイルへ追記
     python scripts/generate_config.py > /tmp/chronos-config.json
     python -m json.tool /tmp/chronos-config.json  # 検証
 
-    # uvx を使用したワンライナー設定
-    python scripts/generate_config.py --method uvx --output claude
+    # uv を使用したワンライナー設定
+    python scripts/generate_config.py --method uv --output claude
 """
 
 from __future__ import annotations
@@ -63,11 +63,14 @@ def build_start_command(
 ) -> tuple[str, list[str]]:
     """MCP サーバーを起動するためのコマンドと引数を構築する。"""
     if method == "uvx":
-        command = "uvx"
-        args = []
+        command = "uv"
+        args = ["tool", "run"]
         if uv_from:
             args.extend(["--from", uv_from])
         args.append("context-store")
+    elif method == "uv":
+        command = "uv"
+        args = ["run", "context-store"]
     else:
         command = python_path
         args = ["-m", "context_store"]
@@ -175,7 +178,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--method",
-        choices=["python", "uvx"],
+        choices=["python", "uv", "uvx"],
         default="python",
         help="MCP 起動方法 (デフォルト: python)",
     )

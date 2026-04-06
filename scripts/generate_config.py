@@ -25,6 +25,17 @@ import shutil
 import sys
 
 
+def str_to_bool(value: str) -> bool:
+    """文字列をブール値に変換する。"""
+    if isinstance(value, bool):
+        return value
+    if value.lower() in ("yes", "true", "t", "y", "1", "on"):
+        return True
+    if value.lower() in ("no", "false", "f", "n", "0", "off"):
+        return False
+    raise argparse.ArgumentTypeError(f"Boolean value expected, got {value}")
+
+
 def find_python() -> str:
     """現在アクティブな Python インタープリタのパスを返す。"""
     python = shutil.which("python3") or shutil.which("python") or sys.executable
@@ -133,7 +144,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--graph",
-        type=lambda x: x.lower() == "true",
+        type=str_to_bool,
         default=True,
         help="グラフ機能を有効にするか (デフォルト: true)",
     )

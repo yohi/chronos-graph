@@ -91,7 +91,7 @@ done
 echo -e "${BLUE}NOTE: Please edit .env to add your API keys (e.g., OPENAI_API_KEY).${NC}"
 
 # 3. Verification
-if [ "$SKIP_TESTS" = false ]; then
+if [ "$SKIP_TESTS" = "false" ]; then
     echo -e "${BLUE}Running unit tests to verify installation...${NC}"
     if command -v uv &> /dev/null; then
         uv run pytest tests/unit/ -v

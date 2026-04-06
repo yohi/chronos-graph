@@ -375,6 +375,21 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+all = [
+    { name = "asyncpg" },
+    { name = "litellm" },
+    { name = "mypy" },
+    { name = "neo4j" },
+    { name = "numpy" },
+    { name = "openai" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-benchmark" },
+    { name = "pytest-cov" },
+    { name = "redis" },
+    { name = "ruff" },
+    { name = "sentence-transformers" },
+]
 dev = [
     { name = "mypy" },
     { name = "pytest" },
@@ -409,6 +424,7 @@ dev = [
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.21.0" },
     { name = "asyncpg", marker = "extra == 'storage-postgres'", specifier = ">=0.29.0" },
+    { name = "context-store-mcp", extras = ["storage-postgres", "embedding-local", "embedding-openai", "embedding-litellm", "dev"], marker = "extra == 'all'" },
     { name = "filelock", specifier = ">=3.13.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "litellm", marker = "extra == 'embedding-litellm'", specifier = ">=1.0.0" },
@@ -430,7 +446,7 @@ requires-dist = [
     { name = "tenacity", specifier = ">=8.0.0" },
     { name = "tiktoken", specifier = ">=0.6.0" },
 ]
-provides-extras = ["storage-postgres", "embedding-local", "embedding-openai", "embedding-litellm", "dev"]
+provides-extras = ["storage-postgres", "embedding-local", "embedding-openai", "embedding-litellm", "dev", "all"]
 
 [package.metadata.requires-dev]
 dev = [

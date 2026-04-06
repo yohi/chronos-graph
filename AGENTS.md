@@ -29,7 +29,7 @@ bash scripts/bootstrap.sh
 
 # 2. 個別のコマンド
 uv sync --all-extras    # 依存関係のインストール
-pytest tests/ -v        # テスト実行
+uv run pytest tests/unit/ -v  # テスト実行
 ```
 
 **Tasks** (Ctrl+Shift+P → Tasks: Run Task):
@@ -38,5 +38,3 @@ pytest tests/ -v        # テスト実行
 - `Run MyPy` — mypy src/
 - `Run Full Lint` — ruff + mypy
 - `Run All Checks (CI)` — lint + tests
-
-## Commands

@@ -1,6 +1,12 @@
 #!/bin/bash
 set -e
 
+# Ensure the script is run from the project root
+if [ ! -f "pyproject.toml" ]; then
+    echo -e "\033[0;31mError: Please run this script from the project root directory.\033[0m" >&2
+    exit 2
+fi
+
 # Colors for output
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
@@ -14,7 +20,7 @@ if command -v uv &> /dev/null; then
     uv sync --all-extras
 else
     echo -e "${GREEN}uv not found, falling back to pip...${NC}"
-    pip install -e ".[dev]"
+    pip install -e ".[all]"
 fi
 
 # 2. Environment Configuration
@@ -36,10 +42,21 @@ fi
 
 # 4. MCP Configuration Generation
 echo -e "${BLUE}Generating MCP configuration...${NC}"
+TMP_CONFIG=$(mktemp)
+trap 'rm -f "$TMP_CONFIG"' EXIT
+
 if command -v uv &> /dev/null; then
-    uv run python scripts/generate_config.py > mcp_config.json
+    uv run python scripts/generate_config.py > "$TMP_CONFIG"
 else
-    python scripts/generate_config.py > mcp_config.json
+    python scripts/generate_config.py > "$TMP_CONFIG"
+fi
+
+if [ $? -eq 0 ] && [ -s "$TMP_CONFIG" ]; then
+    mv "$TMP_CONFIG" mcp_config.json
+    echo -e "${GREEN}mcp_config.json generated successfully.${NC}"
+else
+    echo -e "\033[0;31mError: Failed to generate MCP configuration.\033[0m"
+    exit 1
 fi
 
 echo -e "${GREEN}Bootstrap complete!${NC}"

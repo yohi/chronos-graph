@@ -7,15 +7,15 @@ Usage:
     python scripts/generate_config.py                    # SQLite (デフォルト)
     python scripts/generate_config.py --backend postgres # PostgreSQL モード
     python scripts/generate_config.py --output claude    # Claude Desktop 形式
-    python scripts/generate_config.py --method uvx       # uvx モード
+    python scripts/generate_config.py --method uv       # uv モード
 
 Examples:
     # Claude Desktop 設定ファイルへ追記
     python scripts/generate_config.py > /tmp/chronos-config.json
     python -m json.tool /tmp/chronos-config.json  # 検証
 
-    # uvx を使用したワンライナー設定
-    python scripts/generate_config.py --method uvx --output claude
+    # uv を使用したワンライナー設定
+    python scripts/generate_config.py --method uv --output claude
 """
 
 from __future__ import annotations
@@ -63,11 +63,18 @@ def build_start_command(
 ) -> tuple[str, list[str]]:
     """MCP サーバーを起動するためのコマンドと引数を構築する。"""
     if method == "uvx":
-        command = "uvx"
-        args = []
-        if uv_from:
-            args.extend(["--from", uv_from])
+        command = "uv"
+        args = ["tool", "run"]
+        # Use provided uv_from or the default (pinned to a commit hash)
+        actual_uv_from = (
+            uv_from
+            or "git+https://github.com/yohi/chronos-graph.git@4666e27f5486ea86c16d7b5a4ec1c58f20d279d6"
+        )
+        args.extend(["--from", actual_uv_from])
         args.append("context-store")
+    elif method == "uv":
+        command = "uv"
+        args = ["run", "context-store"]
     else:
         command = python_path
         args = ["-m", "context_store"]
@@ -75,7 +82,11 @@ def build_start_command(
 
 
 def generate_sqlite_config(
-    python_path: str, embedding: str, graph: bool, method: str = "python", uv_from: str | None = None
+    python_path: str,
+    embedding: str,
+    graph: bool,
+    method: str = "python",
+    uv_from: str | None = None,
 ) -> dict:
     """SQLite ライトウェイトモードの設定を生成する。"""
     env = {
@@ -102,7 +113,11 @@ def generate_sqlite_config(
 
 
 def generate_postgres_config(
-    python_path: str, embedding: str, graph: bool, method: str = "python", uv_from: str | None = None
+    python_path: str,
+    embedding: str,
+    graph: bool,
+    method: str = "python",
+    uv_from: str | None = None,
 ) -> dict:
     """PostgreSQL + Neo4j + Redis フルモードの設定を生成する。"""
     env = {
@@ -175,13 +190,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--method",
-        choices=["python", "uvx"],
+        choices=["python", "uv", "uvx"],
         default="python",
         help="MCP 起動方法 (デフォルト: python)",
     )
     parser.add_argument(
         "--uv-from",
-        default="git+https://github.com/yohi/chronos-graph.git",
+        default=None,
         help="uvx モード時の --from オプション値 (デフォルト: リポジトリの Git URL)",
     )
     parser.add_argument(
@@ -196,6 +211,10 @@ def main() -> None:
         help="JSON インデント幅 (デフォルト: 2)",
     )
     args = parser.parse_args()
+
+    # --uv-from requires --method uvx
+    if args.uv_from is not None and args.method != "uvx":
+        parser.error("--uv-from is only supported when --method is set to 'uvx'")
 
     python_path = args.python or find_python()
     graph_enabled = args.graph

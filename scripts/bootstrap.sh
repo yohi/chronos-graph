@@ -30,10 +30,10 @@ while [[ "$#" -gt 0 ]]; do
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --mcp-output requires a value (claude|cursor|generic)"; exit 1; fi
             MCP_OUTPUT="$2"; shift ;;
         --mcp-method)
-            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --mcp-method requires a value (python|uvx)"; exit 1; fi
+            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --mcp-method requires a value (python|uv|uvx)"; exit 1; fi
             MCP_METHOD="$2"
-            if [[ "$MCP_METHOD" != "python" && "$MCP_METHOD" != "uvx" ]]; then
-                echo "Error: --mcp-method must be 'python' or 'uvx'"
+            if [[ "$MCP_METHOD" != "python" && "$MCP_METHOD" != "uv" && "$MCP_METHOD" != "uvx" ]]; then
+                echo "Error: --mcp-method must be 'python', 'uv', or 'uvx'"
                 exit 1
             fi
             shift ;;
@@ -50,7 +50,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --embedding [openai|litellm|local|custom] Set embedding provider (default: openai)"
             echo "  --skip-tests                      Skip running unit tests"
             echo "  --mcp-output [claude|cursor|generic] Set MCP configuration output format (default: generic)"
-            echo "  --mcp-method [python|uvx]         Set MCP activation method (default: python)"
+            echo "  --mcp-method [python|uv|uvx]         Set MCP activation method (default: python)"
             echo "  --uv-from [source]                Set source for uvx (e.g. git URL or PyPI package)"
             echo "  --graph [true|false]             Enable/disable graph features (default: true)"
             echo "  -h, --help                        Show this help message"
@@ -157,7 +157,9 @@ echo -e "Next steps:"
 echo -e "1. Edit .env if you haven't already."
 echo -e "2. Use mcp_config.json to configure your MCP client (Claude Desktop/Cursor)."
 if [[ "$MCP_METHOD" == "uvx" ]]; then
-    echo -e "3. Start the server with: ${BLUE}uvx context-store${NC}"
+    echo -e "3. Start the server with: ${BLUE}uv tool run context-store${NC}"
+elif [[ "$MCP_METHOD" == "uv" ]]; then
+    echo -e "3. Start the server with: ${BLUE}uv run context-store${NC}"
 else
     echo -e "3. Start the server with: ${BLUE}python -m context_store${NC}"
 fi

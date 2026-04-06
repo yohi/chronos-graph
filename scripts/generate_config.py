@@ -65,16 +65,14 @@ def build_start_command(
     if method == "uvx":
         command = "uv"
         args = ["tool", "run"]
-        # Use provided uv_from or the default
-        actual_uv_from = uv_from or "git+https://github.com/yohi/chronos-graph.git"
+        # Use provided uv_from or the default (pinned to a commit hash)
+        actual_uv_from = (
+            uv_from
+            or "git+https://github.com/yohi/chronos-graph.git@4666e27f5486ea86c16d7b5a4ec1c58f20d279d6"
+        )
         args.extend(["--from", actual_uv_from])
         args.append("context-store")
     elif method == "uv":
-        if uv_from:
-            print(
-                "Warning: --uv-from is only used with the 'uvx' method and will be ignored for 'uv'",
-                file=sys.stderr,
-            )
         command = "uv"
         args = ["run", "context-store"]
     else:
@@ -84,7 +82,11 @@ def build_start_command(
 
 
 def generate_sqlite_config(
-    python_path: str, embedding: str, graph: bool, method: str = "python", uv_from: str | None = None
+    python_path: str,
+    embedding: str,
+    graph: bool,
+    method: str = "python",
+    uv_from: str | None = None,
 ) -> dict:
     """SQLite ライトウェイトモードの設定を生成する。"""
     env = {
@@ -111,7 +113,11 @@ def generate_sqlite_config(
 
 
 def generate_postgres_config(
-    python_path: str, embedding: str, graph: bool, method: str = "python", uv_from: str | None = None
+    python_path: str,
+    embedding: str,
+    graph: bool,
+    method: str = "python",
+    uv_from: str | None = None,
 ) -> dict:
     """PostgreSQL + Neo4j + Redis フルモードの設定を生成する。"""
     env = {
@@ -205,6 +211,10 @@ def main() -> None:
         help="JSON インデント幅 (デフォルト: 2)",
     )
     args = parser.parse_args()
+
+    # --uv-from requires --method uvx
+    if args.uv_from is not None and args.method != "uvx":
+        parser.error("--uv-from is only supported when --method is set to 'uvx'")
 
     python_path = args.python or find_python()
     graph_enabled = args.graph

@@ -31,7 +31,12 @@ while [[ "$#" -gt 0 ]]; do
             MCP_OUTPUT="$2"; shift ;;
         --mcp-method)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --mcp-method requires a value (python|uvx)"; exit 1; fi
-            MCP_METHOD="$2"; shift ;;
+            MCP_METHOD="$2"
+            if [[ "$MCP_METHOD" != "python" && "$MCP_METHOD" != "uvx" ]]; then
+                echo "Error: --mcp-method must be 'python' or 'uvx'"
+                exit 1
+            fi
+            shift ;;
         --uv-from)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --uv-from requires a value"; exit 1; fi
             UV_FROM="$2"; shift ;;
@@ -151,4 +156,8 @@ echo -e "${GREEN}Bootstrap complete!${NC}"
 echo -e "Next steps:"
 echo -e "1. Edit .env if you haven't already."
 echo -e "2. Use mcp_config.json to configure your MCP client (Claude Desktop/Cursor)."
-echo -e "3. Start the server with: ${BLUE}python -m context_store${NC}"
+if [[ "$MCP_METHOD" == "uvx" ]]; then
+    echo -e "3. Start the server with: ${BLUE}uvx context-store${NC}"
+else
+    echo -e "3. Start the server with: ${BLUE}python -m context_store${NC}"
+fi

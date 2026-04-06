@@ -45,13 +45,8 @@ echo -e "${BLUE}Generating MCP configuration...${NC}"
 TMP_CONFIG=$(mktemp)
 trap 'rm -f "$TMP_CONFIG"' EXIT
 
-if command -v uv &> /dev/null; then
-    uv run python scripts/generate_config.py > "$TMP_CONFIG"
-else
-    python scripts/generate_config.py > "$TMP_CONFIG"
-fi
-
-if [ $? -eq 0 ] && [ -s "$TMP_CONFIG" ]; then
+# Generate config and check for success + non-empty file in one step
+if (if command -v uv &> /dev/null; then uv run python scripts/generate_config.py; else python scripts/generate_config.py; fi) > "$TMP_CONFIG" && [ -s "$TMP_CONFIG" ]; then
     mv "$TMP_CONFIG" mcp_config.json
     echo -e "${GREEN}mcp_config.json generated successfully.${NC}"
 else

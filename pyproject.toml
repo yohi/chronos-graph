@@ -43,6 +43,9 @@ dev = [
     "ruff>=0.4.0",
     "mypy>=1.10.0",
 ]
+all = [
+    "context-store-mcp[storage-postgres,embedding-local,embedding-openai,embedding-litellm,dev]",
+]
 
 [project.scripts]
 context-store = "context_store.__main__:main"

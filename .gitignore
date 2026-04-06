@@ -41,6 +41,9 @@ coverage.xml
 *.sqlite
 *.sqlite3
 
+# Generated MCP config
+mcp_config.json
+
 # IDE
 .idea/
 .vscode/

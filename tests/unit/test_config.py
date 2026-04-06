@@ -19,9 +19,14 @@ def default_settings(monkeypatch):
     }
 
 
-def test_default_settings():
+def test_default_settings(monkeypatch):
     # 直接インスタンス化して、真のデフォルト値を検証する
-    settings = Settings(openai_api_key="sk-test")
+    # monkeypatch を使用して、テスト実行時のみ環境変数をクリアする
+    for field_name in Settings.model_fields.keys():
+        monkeypatch.delenv(field_name.upper(), raising=False)
+
+    # _env_file=None を指定して、.env ファイルの読み込みも回避する
+    settings = Settings(_env_file=None, openai_api_key="sk-test")
     assert settings.postgres_port == 5432
     assert settings.embedding_provider == "openai"
     assert settings.decay_half_life_days == 30

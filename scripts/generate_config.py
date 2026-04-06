@@ -25,60 +25,88 @@ import shutil
 import sys
 
 
+def str_to_bool(value: str) -> bool:
+    """文字列をブール値に変換する。"""
+    if isinstance(value, bool):
+        return value
+    if value.lower() in ("yes", "true", "t", "y", "1", "on"):
+        return True
+    if value.lower() in ("no", "false", "f", "n", "0", "off"):
+        return False
+    raise argparse.ArgumentTypeError(f"Boolean value expected, got {value}")
+
+
 def find_python() -> str:
     """現在アクティブな Python インタープリタのパスを返す。"""
     python = shutil.which("python3") or shutil.which("python") or sys.executable
     return python
 
 
-def generate_sqlite_config(python_path: str) -> dict:
+def get_embedding_envs(provider: str) -> dict[str, str]:
+    """プロバイダーに応じた埋め込み設定の環境変数を返す。"""
+    envs = {"EMBEDDING_PROVIDER": provider}
+    if provider == "openai":
+        envs["OPENAI_API_KEY"] = "<your-openai-api-key>"
+    elif provider == "local-model":
+        envs["LOCAL_MODEL_NAME"] = "cl-nagoya/ruri-v3-310m"
+    elif provider == "litellm":
+        envs["LITELLM_API_BASE"] = "http://localhost:4000"
+        envs["LITELLM_MODEL"] = "openai/text-embedding-3-small"
+    elif provider == "custom-api":
+        envs["CUSTOM_API_ENDPOINT"] = "http://localhost:8080/v1/embeddings"
+    return envs
+
+
+def generate_sqlite_config(python_path: str, embedding: str, graph: bool) -> dict:
     """SQLite ライトウェイトモードの設定を生成する。"""
+    env = {
+        "STORAGE_BACKEND": "sqlite",
+        "SQLITE_DB_PATH": "~/.context-store/memories.db",
+        "GRAPH_ENABLED": "true" if graph else "false",
+        "DECAY_HALF_LIFE_DAYS": "30",
+        "SIMILARITY_THRESHOLD": "0.70",
+        "DEDUP_THRESHOLD": "0.90",
+    }
+    env.update(get_embedding_envs(embedding))
+
     return {
         "mcpServers": {
             "chronos-graph": {
                 "command": python_path,
                 "args": ["-m", "context_store"],
-                "env": {
-                    "STORAGE_BACKEND": "sqlite",
-                    "SQLITE_DB_PATH": "~/.context-store/memories.db",
-                    "EMBEDDING_PROVIDER": "openai",
-                    "OPENAI_API_KEY": "<your-openai-api-key>",
-                    "GRAPH_ENABLED": "true",
-                    "DECAY_HALF_LIFE_DAYS": "30",
-                    "SIMILARITY_THRESHOLD": "0.70",
-                    "DEDUP_THRESHOLD": "0.90",
-                },
+                "env": env,
             }
         }
     }
 
 
-def generate_postgres_config(python_path: str) -> dict:
+def generate_postgres_config(python_path: str, embedding: str, graph: bool) -> dict:
     """PostgreSQL + Neo4j + Redis フルモードの設定を生成する。"""
+    env = {
+        "STORAGE_BACKEND": "postgres",
+        "POSTGRES_HOST": "localhost",
+        "POSTGRES_PORT": "5432",
+        "POSTGRES_DB": "context_store",
+        "POSTGRES_USER": "context_store",
+        "POSTGRES_PASSWORD": "<your-postgres-password>",
+        "GRAPH_ENABLED": "true" if graph else "false",
+        "NEO4J_URI": "bolt://localhost:7687",
+        "NEO4J_USER": "neo4j",
+        "NEO4J_PASSWORD": "<your-neo4j-password>",
+        "CACHE_BACKEND": "redis",
+        "REDIS_URL": "redis://localhost:6379",
+        "DECAY_HALF_LIFE_DAYS": "30",
+        "SIMILARITY_THRESHOLD": "0.70",
+        "DEDUP_THRESHOLD": "0.90",
+    }
+    env.update(get_embedding_envs(embedding))
+
     return {
         "mcpServers": {
             "chronos-graph": {
                 "command": python_path,
                 "args": ["-m", "context_store"],
-                "env": {
-                    "STORAGE_BACKEND": "postgres",
-                    "POSTGRES_HOST": "localhost",
-                    "POSTGRES_PORT": "5432",
-                    "POSTGRES_DB": "context_store",
-                    "POSTGRES_USER": "context_store",
-                    "POSTGRES_PASSWORD": "<your-postgres-password>",
-                    "GRAPH_ENABLED": "true",
-                    "NEO4J_URI": "bolt://localhost:7687",
-                    "NEO4J_USER": "neo4j",
-                    "NEO4J_PASSWORD": "<your-neo4j-password>",
-                    "CACHE_BACKEND": "redis",
-                    "REDIS_URL": "redis://localhost:6379",
-                    "EMBEDDING_PROVIDER": "openai",
-                    "OPENAI_API_KEY": "<your-openai-api-key>",
-                    "DECAY_HALF_LIFE_DAYS": "30",
-                    "SIMILARITY_THRESHOLD": "0.70",
-                    "DEDUP_THRESHOLD": "0.90",
-                },
+                "env": env,
             }
         }
     }
@@ -109,6 +137,18 @@ def main() -> None:
         help="出力形式 (デフォルト: generic)",
     )
     parser.add_argument(
+        "--embedding",
+        choices=["openai", "local-model", "litellm", "custom-api"],
+        default="openai",
+        help="埋め込みプロバイダー (デフォルト: openai)",
+    )
+    parser.add_argument(
+        "--graph",
+        type=str_to_bool,
+        default=True,
+        help="グラフ機能を有効にするか (デフォルト: true)",
+    )
+    parser.add_argument(
         "--python",
         default=None,
         help="使用する Python インタープリタのパス (デフォルト: 自動検出)",
@@ -122,11 +162,12 @@ def main() -> None:
     args = parser.parse_args()
 
     python_path = args.python or find_python()
+    graph_enabled = args.graph
 
     if args.backend == "postgres":
-        config = generate_postgres_config(python_path)
+        config = generate_postgres_config(python_path, args.embedding, graph_enabled)
     else:
-        config = generate_sqlite_config(python_path)
+        config = generate_sqlite_config(python_path, args.embedding, graph_enabled)
 
     if args.output == "cursor":
         config = generate_cursor_config(config)

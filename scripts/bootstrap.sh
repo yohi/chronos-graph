@@ -7,12 +7,59 @@ if [ ! -f "pyproject.toml" ]; then
     exit 2
 fi
 
+# Default options
+BACKEND="sqlite"
+EMBEDDING_PROVIDER="openai"
+SKIP_TESTS=false
+MCP_OUTPUT="generic"
+GRAPH_ENABLED=true
+
+# Parse arguments
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --backend)
+            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --backend requires a value (sqlite|postgres)"; exit 1; fi
+            BACKEND="$2"; shift ;;
+        --embedding)
+            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --embedding requires a value (openai|litellm|local|custom)"; exit 1; fi
+            EMBEDDING_PROVIDER="$2"; shift ;;
+        --skip-tests) SKIP_TESTS=true ;;
+        --mcp-output)
+            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --mcp-output requires a value (claude|cursor|generic)"; exit 1; fi
+            MCP_OUTPUT="$2"; shift ;;
+        --graph)
+            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --graph requires a value (true|false)"; exit 1; fi
+            GRAPH_ENABLED="$2"; shift ;;
+        -h|--help)
+            echo "Usage: $0 [options]"
+            echo "Options:"
+            echo "  --backend [sqlite|postgres]      Set storage backend (default: sqlite)"
+            echo "  --embedding [openai|litellm|local|custom] Set embedding provider (default: openai)"
+            echo "  --skip-tests                      Skip running unit tests"
+            echo "  --mcp-output [claude|cursor|generic] Set MCP configuration output format (default: generic)"
+            echo "  --graph [true|false]             Enable/disable graph features (default: true)"
+            echo "  -h, --help                        Show this help message"
+            exit 0
+            ;;
+        *) echo "Unknown parameter passed: $1"; exit 1 ;;
+    esac
+    shift
+done
+
 # Colors for output
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Detect OS for portable sed -i
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    SED_INPLACE=(sed -i '')
+else
+    SED_INPLACE=(sed -i)
+fi
+
 echo -e "${BLUE}Starting ChronosGraph bootstrap process...${NC}"
+echo -e "${BLUE}Backend: ${BACKEND}, Embedding: ${EMBEDDING_PROVIDER}, Skip Tests: ${SKIP_TESTS}, MCP Output: ${MCP_OUTPUT}, Graph: ${GRAPH_ENABLED}${NC}"
 
 # 1. Dependency Resolution
 if command -v uv &> /dev/null; then
@@ -24,29 +71,62 @@ else
 fi
 
 # 2. Environment Configuration
+case $EMBEDDING_PROVIDER in
+    local) EMBEDDING_PROVIDER="local-model" ;;
+    custom) EMBEDDING_PROVIDER="custom-api" ;;
+esac
+
 if [ ! -f .env ]; then
     echo -e "${GREEN}Creating .env from .env.example...${NC}"
     cp .env.example .env
-    echo -e "${BLUE}NOTE: Please edit .env to add your API keys (e.g., OPENAI_API_KEY).${NC}"
-else
-    echo -e "${BLUE}.env already exists, skipping copy.${NC}"
 fi
 
+# Update .env variables regardless of file creation
+for VAR in "STORAGE_BACKEND" "EMBEDDING_PROVIDER" "GRAPH_ENABLED"; do
+    case $VAR in
+        STORAGE_BACKEND) VAL=$BACKEND ;;
+        EMBEDDING_PROVIDER) VAL=$EMBEDDING_PROVIDER ;;
+        GRAPH_ENABLED) VAL=$GRAPH_ENABLED ;;
+    esac
+    
+    if grep -q "^$VAR=" .env; then
+        "${SED_INPLACE[@]}" "s/^$VAR=.*/$VAR=$VAL/" .env
+    else
+        echo "$VAR=$VAL" >> .env
+    fi
+done
+
+echo -e "${BLUE}NOTE: Please edit .env to add your API keys (e.g., OPENAI_API_KEY).${NC}"
+
 # 3. Verification
-echo -e "${BLUE}Running unit tests to verify installation...${NC}"
-if command -v uv &> /dev/null; then
-    uv run pytest tests/unit/ -v
+if [ "$SKIP_TESTS" = "false" ]; then
+    echo -e "${BLUE}Running unit tests to verify installation...${NC}"
+    if command -v uv &> /dev/null; then
+        uv run pytest tests/unit/ -v
+    else
+        python -m pytest tests/unit/ -v
+    fi
 else
-    python -m pytest tests/unit/ -v
+    echo -e "${BLUE}Skipping unit tests as requested.${NC}"
 fi
 
 # 4. MCP Configuration Generation
-echo -e "${BLUE}Generating MCP configuration...${NC}"
+echo -e "${BLUE}Generating MCP configuration for ${MCP_OUTPUT}...${NC}"
 TMP_CONFIG=$(mktemp)
 trap 'rm -f "$TMP_CONFIG"' EXIT
 
+GEN_CONFIG_ARGS=("scripts/generate_config.py" "--backend" "$BACKEND" "--embedding" "$EMBEDDING_PROVIDER" "--graph" "$GRAPH_ENABLED" "--output" "$MCP_OUTPUT")
+
+if command -v uv &> /dev/null; then
+    GEN_CONFIG_CMD=(uv run python "${GEN_CONFIG_ARGS[@]}")
+else
+    GEN_CONFIG_CMD=(python "${GEN_CONFIG_ARGS[@]}")
+fi
+
+[[ "${VERBOSE:-false}" == "true" ]] && echo -e "Debug: Executing ${GEN_CONFIG_CMD[*]}"
+
 # Generate config and check for success + non-empty file in one step
-if (if command -v uv &> /dev/null; then uv run python scripts/generate_config.py; else python scripts/generate_config.py; fi) > "$TMP_CONFIG" && [ -s "$TMP_CONFIG" ]; then
+if "${GEN_CONFIG_CMD[@]}" > "$TMP_CONFIG" && [ -s "$TMP_CONFIG" ]; then
     mv "$TMP_CONFIG" mcp_config.json
     echo -e "${GREEN}mcp_config.json generated successfully.${NC}"
 else

@@ -4,13 +4,29 @@ from typing import Literal
 from urllib.parse import quote
 
 from pydantic import Field, SecretStr, model_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
-    model_config = {"env_prefix": "", "env_file": ".env", "extra": "ignore"}
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        env_file=".env",
+        extra="ignore",
+    )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # .env を OS 環境変数よりも優先する
+        return init_settings, dotenv_settings, env_settings, file_secret_settings
 
     # --- Storage Backend ---
     storage_backend: Literal["sqlite", "postgres"] = "sqlite"

@@ -759,6 +759,11 @@ class SQLiteStorageAdapter:
         self, query: str, top_k: int, project: str | None = None
     ) -> list[ScoredMemory]:
         """Full-text search using FTS5."""
+        # FTS5 クエリのサニタイズ。特殊文字による構文エラーを防ぐ。
+        # 簡易的な実装として、ダブルクォートで囲み、内部のダブルクォートをエスケープする。
+        # これによりフレーズ検索として扱われ、"?" などの特殊文字が安全に処理される。
+        fts_query = f'"{query.replace('"', '""')}"'
+
         async with self._db() as conn:
             try:
                 if project is not None:
@@ -773,7 +778,7 @@ class SQLiteStorageAdapter:
                         ORDER BY score DESC
                         LIMIT ?
                     """
-                    params_kw: tuple[Any, ...] = (query, project, top_k)
+                    params_kw: tuple[Any, ...] = (fts_query, project, top_k)
                 else:
                     sql = """
                         SELECT m.*, me.embedding, (-bm25(memories_fts)) AS score
@@ -785,7 +790,7 @@ class SQLiteStorageAdapter:
                         ORDER BY score DESC
                         LIMIT ?
                     """
-                    params_kw = (query, top_k)
+                    params_kw = (fts_query, top_k)
 
                 async with conn.execute(sql, params_kw) as cursor:
                     rows = await cursor.fetchall()

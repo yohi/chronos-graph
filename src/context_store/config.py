@@ -25,8 +25,8 @@ class Settings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        # OS 環境変数を .env よりも優先する(標準的な動作に戻す)
-        return init_settings, env_settings, dotenv_settings, file_secret_settings
+        # .env ファイルを OS 環境変数よりも優先する
+        return init_settings, dotenv_settings, env_settings, file_secret_settings
 
     # --- Storage Backend ---
     storage_backend: Literal["sqlite", "postgres"] = "sqlite"

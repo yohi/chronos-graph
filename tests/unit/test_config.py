@@ -215,6 +215,7 @@ def test_settings_priority_env_over_dotenv(tmp_path, monkeypatch):
 
     # 2. 同じキーの環境変数を設定 (monkeypatch を使用してクリーンアップを確実にする)
     monkeypatch.setenv("STORAGE_BACKEND", "postgres")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "dummy")
 
     # 3. Settings を継承した一時クラスを作成し、env_file を明示的に指定
     class TestSettings(Settings):

@@ -203,3 +203,30 @@ def test_embedding_dimension_must_be_positive(default_settings):
         make_settings(embedding_dimension=0)
     with pytest.raises(ValidationError):
         make_settings(embedding_dimension=-1)
+
+
+def test_settings_priority_dotenv_over_env(tmp_path, monkeypatch):
+    """.env ファイルが OS 環境変数よりも優先されることを検証する。"""
+    from pydantic_settings import SettingsConfigDict
+
+    # 1. 一時的な .env ファイルを作成 (sqlite を設定)
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text("STORAGE_BACKEND=sqlite\n")
+
+    # 2. 同じキーの環境変数を設定 (postgres を設定)
+    monkeypatch.setenv("STORAGE_BACKEND", "postgres")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "dummy")
+
+    # 3. Settings を継承した一時クラスを作成し、env_file を明示的に指定
+    class TestSettings(Settings):
+        model_config = SettingsConfigDict(
+            env_file=str(dotenv_path),
+            extra="ignore",
+        )
+
+    # 4. 初期化 (.env が優先されるはず)
+    # デフォルトの検証エラーを避けるため、必要なフィールドを指定
+    settings = TestSettings(openai_api_key="sk-test")
+
+    # 5. .env が優先されていることをアサート (sqlite であるはず)
+    assert settings.storage_backend == "sqlite"

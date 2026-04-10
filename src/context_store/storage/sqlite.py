@@ -781,6 +781,7 @@ class SQLiteStorageAdapter:
                             WHERE m.archived_at IS NULL
                               AND m.content LIKE '%%'
                               AND m.project = ?
+                            ORDER BY m.created_at DESC, m.id DESC
                             LIMIT ?
                         """
                         params_kw: tuple[Any, ...] = (project, top_k)
@@ -791,6 +792,7 @@ class SQLiteStorageAdapter:
                             LEFT JOIN memory_embeddings me ON me.memory_id = m.id
                             WHERE m.archived_at IS NULL
                               AND m.content LIKE '%%'
+                            ORDER BY m.created_at DESC, m.id DESC
                             LIMIT ?
                         """
                         params_kw = (top_k,)

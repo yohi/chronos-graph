@@ -1,7 +1,7 @@
 # Chronos Graph Dashboard - Web UI 設計書
 
 > **作成日**: 2026-04-10
-> **更新日**: 2026-04-10 (CQRS / SRP / YAGNI / TDD / Read-Only 再定義レビュー対応 + asyncio.Queue バックプレッシャ仕様修正 + Docker bind/Neo4j Phase 整合性修正 + StorageAdapter DRY/YAGNI 修正 + TDD完全性/DB未初期化フェイルファスト/ログバースト耐性注記 + SQLite IN句チャンク分割注記/統計クエリキャッシュ方針 + SPAフォールバック/WS再接続/API Base URL方針 + rev.10: create_storage ファクトリ新規追加 / SQLite read-only URI モード対応 / Settings フィールド追加方針明記)
+> **更新日**: 2026-04-10 (CQRS / SRP / YAGNI / TDD / Read-Only 再定義レビュー対応 + asyncio.Queue バックプレッシャ仕様修正 + Docker bind/Neo4j Phase 整合性修正 + StorageAdapter DRY/YAGNI 修正 + TDD完全性/DB未初期化フェイルファスト/ログバースト耐性注記 + SQLite IN句チャンク分割注記/統計クエリキャッシュ方針 + SPAフォールバック/WS再接続/API Base URL方針 + rev.10: create_storage は既存 (storage/factory.py) に read_only パラメータ追加 / SQLite read-only URI モード対応 / Settings フィールド追加方針明記)
 > **ブランチ**: `feat/dashboard`
 > **ステータス**: Approved (rev. 10)
 
@@ -229,8 +229,8 @@ src/context_store/dashboard/
 |----------|----------|
 | `pyproject.toml` | `[project.optional-dependencies.dashboard]` 追加、`chronos-dashboard` エントリポイント追加 |
 | `src/context_store/storage/protocols.py` | `GraphAdapter` に `list_edges_for_memories(memory_ids)` と `count_edges()` を追加。`StorageAdapter` は既存メソッド (`get_memory`, `list_by_filter`, `count_by_filter`, `list_projects`) をそのまま利用し、**新規メソッドは追加しない** |
-| `src/context_store/storage/__init__.py` (or ルートの `__init__.py`) | **新規 (rev.10)**: `create_storage(settings, *, read_only: bool = False) -> tuple[StorageAdapter, GraphAdapter \| None, CacheAdapter]` ファクトリを追加。既存 `create_orchestrator()` 内部のストレージ/グラフ/キャッシュ初期化ロジックをこの関数に抽出・共通化 (DRY)。`create_orchestrator()` は内部で `create_storage()` を呼び出す形にリファクタリングし、既存テストが Green のまま維持されることを確認する |
-| `src/context_store/orchestrator.py` | `create_orchestrator()` を `create_storage()` 利用にリファクタリング (DRY 共通化のみ、外部 API・振る舞いは不変)。Dashboard 専用メソッドは追加しない (SRP / YAGNI) |
+| `src/context_store/storage/factory.py` | **rev.10 変更 (修正)**: `create_storage()` は既に存在し `(StorageAdapter, GraphAdapter \| None, CacheAdapter)` タプルを返している。`read_only: bool = False` キーワードパラメータを追加し、`True` の場合は各アダプタの初期化時に read-only モード (SQLite URI `file:...?mode=ro`, Neo4j `default_access_mode=READ_ACCESS`) を指示する。既存 `create_orchestrator()` は `create_storage(settings)` (write モード) で呼び出し続けるため影響なし |
+| `src/context_store/orchestrator.py` | **変更なし** (`create_storage(settings)` を既に利用している。Dashboard 専用メソッドも追加しない / SRP / YAGNI) |
 | `src/context_store/storage/sqlite.py` | **rev.10 追記**: Read-Only URI モード (`file:{path}?mode=ro`) での接続をサポート。`create_storage(read_only=True)` 経由で Dashboard から呼ばれた場合のみ有効化する。既存の通常モード接続 (MCP サーバー経路) は一切変更しない。`get_memory`, `list_by_filter` 等の既存メソッドシグネチャは変更なし |
 | `src/context_store/storage/postgres.py` | 変更なし (Phase 1 では Dashboard の read-only 接続は SQLite 優先。Postgres バックエンドでの read-only 対応は Phase 6 で検討) |
 | `src/context_store/storage/sqlite_graph.py` | `GraphAdapter` の `list_edges_for_memories`, `count_edges` を実装。**rev.10 追記**: sqlite.py と同様に Read-Only URI モード対応を追加 |
@@ -535,8 +535,8 @@ Phase 2 (FE Scaffold) ──┼── Phase 4 (WS/Logs)        ──┼── P
 **目標**: FastAPI サーバーが起動し、REST エンドポイントからコアデータを返却できる状態
 
 1. `src/context_store/dashboard/` パッケージ構造を作成 (`services.py` 含む)
-2. **失敗するリファクタリングテストの作成 (rev.10 追加)**: `create_storage(settings, *, read_only: bool = False)` ファクトリの期待動作を定義 — (a) 通常モードで `StorageAdapter` / `GraphAdapter` / `CacheAdapter` のタプルを返すこと、(b) `read_only=True` で SQLite URI が `file:...?mode=ro` に切り替わること、(c) `read_only=True` で Neo4j セッションが READ アクセスモードになること、(d) 既存 `create_orchestrator()` の外部振る舞いが不変であること (退行テスト)
-3. **`create_storage()` ファクトリを実装 (rev.10 追加)**: 既存 `create_orchestrator()` 内部のストレージ/グラフ/キャッシュ初期化ロジックを抽出し、新ファクトリに移動。`create_orchestrator()` を内部で `create_storage()` を呼ぶ形にリファクタ。全既存テストが Green のままであることを確認する
+2. **失敗するテストの作成 (rev.10 追加)**: `create_storage()` への `read_only` パラメータ追加の期待動作を定義 — (a) デフォルト (`read_only=False`) では既存振る舞いが不変であること、(b) `read_only=True` で SQLite URI が `file:...?mode=ro` に切り替わり書き込みクエリが `OperationalError` を出すこと、(c) `read_only=True` で Neo4j セッションが `READ_ACCESS` になること
+3. **`create_storage()` に `read_only` 追加 (rev.10 追加)**: `storage/factory.py` にキーワード引数を追加し、`SQLiteStorageAdapter.create()` / `SQLiteGraphAdapter` / `Neo4jGraphAdapter.create()` に伝播。全既存テストが Green のままであることを確認する
 4. **`Settings` 拡張 (rev.10 追加)**: `config.py` に `graph_backend`, `log_level`, `dashboard_port`, `dashboard_allowed_hosts` を追加し、`embedding_model` 派生プロパティを実装。失敗するテスト (env var / デフォルト値 / `/api/system/config` ホワイトリストに含まれること) を先に書いてから実装
 5. **失敗するユニットテストの作成**: `GraphAdapter` プロトコルの新規メソッド (`list_edges_for_memories`, `count_edges`) に対する期待動作を定義
 6. **`GraphAdapter` プロトコル + `sqlite_graph.py` / `neo4j.py` に実装** (テスト Green 化)。`neo4j.py` の `list_edges_for_memories()` も `count_edges()` も **Phase 1 で完全実装** し、統合テストが全バックエンドで Green になることを確認する。TDD プロセスの完全性を担保するため、`NotImplementedError` による先送りは行わない
@@ -653,8 +653,8 @@ Phase 2 (FE Scaffold) ──┼── Phase 4 (WS/Logs)        ──┼── P
 
 | ファイル | 役割 | 変更の有無 |
 |----------|------|-----------|
-| `src/context_store/orchestrator.py` | Orchestrator + `create_orchestrator` ファクトリ | **rev.10 変更**: `create_orchestrator()` を新ファクトリ `create_storage()` 利用にリファクタ (DRY 共通化のみ、外部 API・振る舞いは不変)。Dashboard 用メソッドは追加しない (SRP / YAGNI) |
-| `src/context_store/storage/__init__.py` (or ルート `__init__.py`) | ストレージファクトリ | **rev.10 新規**: `create_storage(settings, *, read_only: bool = False) -> (StorageAdapter, GraphAdapter \| None, CacheAdapter)` を追加 |
+| `src/context_store/orchestrator.py` | Orchestrator + `create_orchestrator` ファクトリ | **変更なし** (既に `create_storage(settings)` を利用中。Dashboard 用メソッドは追加しない / SRP / YAGNI) |
+| `src/context_store/storage/factory.py` | ストレージファクトリ (既存) | **rev.10 変更**: `create_storage()` に `read_only: bool = False` パラメータを追加。既存呼び出し側 (orchestrator) は変更不要 |
 | `src/context_store/storage/protocols.py` | StorageAdapter / GraphAdapter プロトコル | `StorageAdapter` は**変更なし** (既存の `get_memory`, `list_by_filter`, `count_by_filter`, `list_projects` で充足)。`GraphAdapter` に `list_edges_for_memories`, `count_edges` 追加 |
 | `src/context_store/storage/sqlite.py` | SQLiteStorageAdapter | **rev.10 変更**: Read-Only URI モード (`file:{path}?mode=ro`) 対応を追加。既存の `get_memory`, `list_by_filter` シグネチャは変更なし |
 | `src/context_store/storage/postgres.py` | PostgresStorageAdapter | **変更なし** (Phase 1 Dashboard は SQLite 優先、Postgres read-only は Phase 6) |

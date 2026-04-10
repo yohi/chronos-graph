@@ -758,34 +758,74 @@ class SQLiteStorageAdapter:
     async def keyword_search(
         self, query: str, top_k: int, project: str | None = None
     ) -> list[ScoredMemory]:
-        """Full-text search using FTS5."""
+        """Full-text search using FTS5.
+
+        FTS5 サニタイズ方針:
+        - クエリをホワイトスペースでトークン分割し、各トークンを個別にダブルクォートで囲む
+        - これにより FTS5 特殊文字 (`*`, `AND`, `OR`, `NOT`, `NEAR`, `?`) が
+          トークン内でエスケープされつつ、トークン間は暗黙 AND として扱われる
+        - マルチワードクエリ `"machine learning"` は各ワードがドキュメント内の任意の位置に
+          存在すればマッチする(フレーズ一致ではない)
+        """
+        tokens = query.split()
+
         async with self._db() as conn:
             try:
-                if project is not None:
-                    sql = """
-                        SELECT m.*, me.embedding, (-bm25(memories_fts)) AS score
-                        FROM memories_fts f
-                        JOIN memories m ON m.rowid = f.rowid
-                        LEFT JOIN memory_embeddings me ON me.memory_id = m.id
-                        WHERE memories_fts MATCH ?
-                          AND m.archived_at IS NULL
-                          AND m.project = ?
-                        ORDER BY score DESC
-                        LIMIT ?
-                    """
-                    params_kw: tuple[Any, ...] = (query, project, top_k)
+                # 空クエリ / 空白のみは「すべてマッチ」として扱う (Postgres との互換性)
+                if not tokens:
+                    if project is not None:
+                        sql = """
+                            SELECT m.*, me.embedding, 1.0 AS score
+                            FROM memories m
+                            LEFT JOIN memory_embeddings me ON me.memory_id = m.id
+                            WHERE m.archived_at IS NULL
+                              AND m.content LIKE '%%'
+                              AND m.project = ?
+                            ORDER BY m.created_at DESC, m.id DESC
+                            LIMIT ?
+                        """
+                        params_kw: tuple[Any, ...] = (project, top_k)
+                    else:
+                        sql = """
+                            SELECT m.*, me.embedding, 1.0 AS score
+                            FROM memories m
+                            LEFT JOIN memory_embeddings me ON me.memory_id = m.id
+                            WHERE m.archived_at IS NULL
+                              AND m.content LIKE '%%'
+                            ORDER BY m.created_at DESC, m.id DESC
+                            LIMIT ?
+                        """
+                        params_kw = (top_k,)
                 else:
-                    sql = """
-                        SELECT m.*, me.embedding, (-bm25(memories_fts)) AS score
-                        FROM memories_fts f
-                        JOIN memories m ON m.rowid = f.rowid
-                        LEFT JOIN memory_embeddings me ON me.memory_id = m.id
-                        WHERE memories_fts MATCH ?
-                          AND m.archived_at IS NULL
-                        ORDER BY score DESC
-                        LIMIT ?
-                    """
-                    params_kw = (query, top_k)
+                    # 各トークンを個別にクォートし、内部のダブルクォートをエスケープ
+                    fts_query = " ".join(
+                        f'"{t.replace(chr(34), chr(34) + chr(34))}"' for t in tokens
+                    )
+                    if project is not None:
+                        sql = """
+                            SELECT m.*, me.embedding, (-bm25(memories_fts)) AS score
+                            FROM memories_fts f
+                            JOIN memories m ON m.rowid = f.rowid
+                            LEFT JOIN memory_embeddings me ON me.memory_id = m.id
+                            WHERE memories_fts MATCH ?
+                              AND m.archived_at IS NULL
+                              AND m.project = ?
+                            ORDER BY score DESC
+                            LIMIT ?
+                        """
+                        params_kw = (fts_query, project, top_k)
+                    else:
+                        sql = """
+                            SELECT m.*, me.embedding, (-bm25(memories_fts)) AS score
+                            FROM memories_fts f
+                            JOIN memories m ON m.rowid = f.rowid
+                            LEFT JOIN memory_embeddings me ON me.memory_id = m.id
+                            WHERE memories_fts MATCH ?
+                              AND m.archived_at IS NULL
+                            ORDER BY score DESC
+                            LIMIT ?
+                        """
+                        params_kw = (fts_query, top_k)
 
                 async with conn.execute(sql, params_kw) as cursor:
                     rows = await cursor.fetchall()

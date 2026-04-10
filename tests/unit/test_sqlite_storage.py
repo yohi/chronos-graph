@@ -492,7 +492,7 @@ class TestKeywordSearch:
         assert all(r.memory.archived_at is None for r in results)
 
     async def test_keyword_search_matches_non_adjacent_words(self, adapter):
-        """マルチワードクエリが非隣接でもマッチすること（暗黙 AND）。"""
+        """マルチワードクエリが非隣接でもマッチすること (暗黙 AND)。"""
         memory = _make_memory(
             content="Python is a great programming language for tutorial purposes"
         )
@@ -503,21 +503,25 @@ class TestKeywordSearch:
         assert len(results) >= 1
         assert any(r.memory.content == memory.content for r in results)
 
-    async def test_keyword_search_empty_query_returns_empty(self, adapter):
-        """空クエリは空リストを返すこと。"""
+    async def test_keyword_search_empty_query_returns_all(self, adapter):
+        """空クエリはすべてのドキュメントにマッチすること（Postgres 互換）。"""
         memory = _make_memory(content="some content here")
         await adapter.save_memory(memory)
 
         results = await adapter.keyword_search("", top_k=5)
-        assert results == []
+        assert len(results) == 1
+        assert results[0].memory.content == "some content here"
+        assert results[0].score == 1.0
 
-    async def test_keyword_search_whitespace_only_query_returns_empty(self, adapter):
-        """空白のみクエリは空リストを返すこと。"""
+    async def test_keyword_search_whitespace_only_query_returns_all(self, adapter):
+        """空白のみクエリはすべてのドキュメントにマッチすること（Postgres 互換）。"""
         memory = _make_memory(content="some content here")
         await adapter.save_memory(memory)
 
         results = await adapter.keyword_search("   ", top_k=5)
-        assert results == []
+        assert len(results) == 1
+        assert results[0].memory.content == "some content here"
+        assert results[0].score == 1.0
 
     async def test_keyword_search_special_characters_do_not_error(self, adapter):
         """FTS5 特殊文字を含むクエリがエラーにならないこと。"""

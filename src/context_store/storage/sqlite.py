@@ -771,7 +771,7 @@ class SQLiteStorageAdapter:
 
         async with self._db() as conn:
             try:
-                # 空クエリ / 空白のみは「すべてマッチ」として扱う（Postgres との互換性）
+                # 空クエリ / 空白のみは「すべてマッチ」として扱う (Postgres との互換性)
                 if not tokens:
                     if project is not None:
                         sql = """
@@ -796,7 +796,9 @@ class SQLiteStorageAdapter:
                         params_kw = (top_k,)
                 else:
                     # 各トークンを個別にクォートし、内部のダブルクォートをエスケープ
-                    fts_query = " ".join(f'"{t.replace(chr(34), chr(34) + chr(34))}"' for t in tokens)
+                    fts_query = " ".join(
+                        f'"{t.replace(chr(34), chr(34) + chr(34))}"' for t in tokens
+                    )
                     if project is not None:
                         sql = """
                             SELECT m.*, me.embedding, (-bm25(memories_fts)) AS score

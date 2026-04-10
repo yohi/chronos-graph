@@ -504,7 +504,7 @@ class TestKeywordSearch:
         assert any(r.memory.content == memory.content for r in results)
 
     async def test_keyword_search_empty_query_returns_all(self, adapter):
-        """空クエリはすべてのドキュメントにマッチすること（Postgres 互換）。"""
+        """空クエリはすべてのドキュメントにマッチすること (Postgres 互換)。"""
         memory = _make_memory(content="some content here")
         await adapter.save_memory(memory)
 
@@ -514,7 +514,7 @@ class TestKeywordSearch:
         assert results[0].score == 1.0
 
     async def test_keyword_search_whitespace_only_query_returns_all(self, adapter):
-        """空白のみクエリはすべてのドキュメントにマッチすること（Postgres 互換）。"""
+        """空白のみクエリはすべてのドキュメントにマッチすること (Postgres 互換)。"""
         memory = _make_memory(content="some content here")
         await adapter.save_memory(memory)
 

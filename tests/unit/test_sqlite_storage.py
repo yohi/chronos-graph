@@ -491,6 +491,42 @@ class TestKeywordSearch:
         results = await adapter.keyword_search("archived keyword search test", top_k=10)
         assert all(r.memory.archived_at is None for r in results)
 
+    async def test_keyword_search_matches_non_adjacent_words(self, adapter):
+        """マルチワードクエリが非隣接でもマッチすること（暗黙 AND）。"""
+        memory = _make_memory(content="Python is a great programming language for tutorial purposes")
+        await adapter.save_memory(memory)
+
+        # "Python" と "tutorial" がドキュメント内で隣接していなくてもマッチすべき
+        results = await adapter.keyword_search("Python tutorial", top_k=5)
+        assert len(results) >= 1
+        assert any(r.memory.content == memory.content for r in results)
+
+    async def test_keyword_search_empty_query_returns_empty(self, adapter):
+        """空クエリは空リストを返すこと。"""
+        memory = _make_memory(content="some content here")
+        await adapter.save_memory(memory)
+
+        results = await adapter.keyword_search("", top_k=5)
+        assert results == []
+
+    async def test_keyword_search_whitespace_only_query_returns_empty(self, adapter):
+        """空白のみクエリは空リストを返すこと。"""
+        memory = _make_memory(content="some content here")
+        await adapter.save_memory(memory)
+
+        results = await adapter.keyword_search("   ", top_k=5)
+        assert results == []
+
+    async def test_keyword_search_special_characters_do_not_error(self, adapter):
+        """FTS5 特殊文字を含むクエリがエラーにならないこと。"""
+        memory = _make_memory(content="error code E001 occurred in module?")
+        await adapter.save_memory(memory)
+
+        # FTS5 演算子 (*, AND, OR, NOT, NEAR, ?) がエラーにならないこと
+        for special_query in ["module?", "E001*", "error AND code", '"quoted"']:
+            results = await adapter.keyword_search(special_query, top_k=5)
+            assert isinstance(results, list)
+
 
 # ---------------------------------------------------------------------------
 # ListByFilter Tests

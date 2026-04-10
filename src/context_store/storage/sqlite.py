@@ -758,11 +758,22 @@ class SQLiteStorageAdapter:
     async def keyword_search(
         self, query: str, top_k: int, project: str | None = None
     ) -> list[ScoredMemory]:
-        """Full-text search using FTS5."""
-        # FTS5 クエリのサニタイズ。特殊文字による構文エラーを防ぐ。
-        # 簡易的な実装として、ダブルクォートで囲み、内部のダブルクォートをエスケープする。
-        # これによりフレーズ検索として扱われ、"?" などの特殊文字が安全に処理される。
-        fts_query = f'"{query.replace('"', '""')}"'
+        """Full-text search using FTS5.
+
+        FTS5 サニタイズ方針:
+        - クエリをホワイトスペースでトークン分割し、各トークンを個別にダブルクォートで囲む
+        - これにより FTS5 特殊文字 (``*``, ``AND``, ``OR``, ``NOT``, ``NEAR``, ``?``) が
+          トークン内でエスケープされつつ、トークン間は暗黙 AND として扱われる
+        - マルチワードクエリ ``"machine learning"`` は各ワードがドキュメント内の任意の位置に
+          存在すればマッチする（フレーズ一致ではない）
+        """
+        # 空クエリ / 空白のみは早期リターン
+        tokens = query.split()
+        if not tokens:
+            return []
+
+        # 各トークンを個別にクォートし、内部のダブルクォートをエスケープ
+        fts_query = " ".join(f'"{t.replace(chr(34), chr(34) + chr(34))}"' for t in tokens)
 
         async with self._db() as conn:
             try:

@@ -493,7 +493,9 @@ class TestKeywordSearch:
 
     async def test_keyword_search_matches_non_adjacent_words(self, adapter):
         """マルチワードクエリが非隣接でもマッチすること（暗黙 AND）。"""
-        memory = _make_memory(content="Python is a great programming language for tutorial purposes")
+        memory = _make_memory(
+            content="Python is a great programming language for tutorial purposes"
+        )
         await adapter.save_memory(memory)
 
         # "Python" と "tutorial" がドキュメント内で隣接していなくてもマッチすべき

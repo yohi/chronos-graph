@@ -130,8 +130,18 @@ class SQLiteCacheCoherenceChecker:
 
 async def create_storage(
     settings: "Settings",
+    *,
+    read_only: bool = False,
 ) -> tuple["StorageAdapter", "GraphAdapter | None", "CacheAdapter"]:
     """Create storage, graph, and cache adapters from *settings*.
+
+    Args:
+        settings: Application settings.
+        read_only: If True, open SQLite with ``mode=ro`` URI (e.g., for Dashboards).
+            Note: Neo4j (PostgreSQL backend) read-only mode is not yet supported.
+            The cache coherence checker for SQLite + In-Memory is DISABLED in
+            read-only mode by default to support read-only file system mounts.
+            To enable it in read-only mode, set `settings.force_cache_coherence_in_read_only`.
 
     Returns:
         (StorageAdapter, GraphAdapter | None, CacheAdapter)
@@ -140,12 +150,17 @@ async def create_storage(
     graph_adp = None
     cache_adp = None
     try:
-        storage = await _create_storage_adapter(settings)
-        graph_adp = await _create_graph_adapter(settings)
+        storage = await _create_storage_adapter(settings, read_only=read_only)
+        graph_adp = await _create_graph_adapter(settings, read_only=read_only)
         cache_adp = await _create_cache_adapter(settings)
 
         # Start cache coherence checker for SQLite + InMemory combination
-        if settings.storage_backend == "sqlite" and settings.cache_backend == "inmemory":
+        # Default: only start in write mode (to avoid RO mount issues)
+        if (
+            (not read_only or settings.force_cache_coherence_in_read_only)
+            and settings.storage_backend == "sqlite"
+            and settings.cache_backend == "inmemory"
+        ):
             import os
 
             from context_store.storage.inmemory import InMemoryCacheAdapter
@@ -182,22 +197,30 @@ async def create_storage(
         raise
 
 
-async def _create_storage_adapter(settings: "Settings") -> "StorageAdapter":
+async def _create_storage_adapter(
+    settings: "Settings", *, read_only: bool = False
+) -> "StorageAdapter":
     """Instantiate the appropriate StorageAdapter."""
     if settings.storage_backend == "sqlite":
         from context_store.storage.sqlite import SQLiteStorageAdapter
 
-        return await SQLiteStorageAdapter.create(settings)
+        return await SQLiteStorageAdapter.create(settings, read_only=read_only)
 
     if settings.storage_backend == "postgres":
         from context_store.storage.postgres import PostgresStorageAdapter
 
+        if read_only:
+            raise NotImplementedError(
+                "read_only mode for postgres backend is not yet supported (Phase 6)"
+            )
         return await PostgresStorageAdapter.create(settings)
 
     raise ValueError(f"Unsupported storage_backend: {settings.storage_backend!r}")
 
 
-async def _create_graph_adapter(settings: "Settings") -> "GraphAdapter | None":
+async def _create_graph_adapter(
+    settings: "Settings", *, read_only: bool = False
+) -> "GraphAdapter | None":
     """Instantiate the appropriate GraphAdapter, or None if disabled."""
     if not settings.graph_enabled:
         return None
@@ -208,7 +231,7 @@ async def _create_graph_adapter(settings: "Settings") -> "GraphAdapter | None":
         from context_store.storage.sqlite_graph import SQLiteGraphAdapter
 
         db_path = os.path.expanduser(settings.sqlite_db_path)
-        adp = SQLiteGraphAdapter(db_path=db_path, settings=settings)
+        adp = SQLiteGraphAdapter(db_path=db_path, settings=settings, read_only=read_only)
         await adp.initialize()
         return adp
 
@@ -225,6 +248,8 @@ async def _create_graph_adapter(settings: "Settings") -> "GraphAdapter | None":
                 "Neo4j uri, user, and password must be provided "
                 "when graph is enabled with postgres backend."
             )
+        if read_only:
+            raise NotImplementedError("read_only mode for neo4j backend is not yet supported")
         return await Neo4jGraphAdapter.create(
             uri=settings.neo4j_uri,
             user=settings.neo4j_user,

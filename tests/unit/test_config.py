@@ -254,6 +254,7 @@ def test_settings_has_dashboard_fields_with_defaults(monkeypatch):
     [
         ("sqlite", "true", "sqlite"),
         ("postgres", "true", "neo4j"),
+        ("postgres", "false", "disabled"),
         ("sqlite", "false", "disabled"),
     ],
 )
@@ -287,6 +288,12 @@ def test_settings_embedding_model_derivation(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     s = Settings(_env_file=None, openai_api_key="sk-test")
     assert s.embedding_model == "openai/text-embedding-3-small"
+
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "litellm")
+    monkeypatch.setenv("LITELLM_API_BASE", "http://localhost:4000")
+    monkeypatch.setenv("LITELLM_MODEL", "openai/text-embedding-3-large")
+    s = Settings(_env_file=None, openai_api_key="sk-test")
+    assert s.embedding_model == "openai/text-embedding-3-large"
 
 
 def test_settings_dashboard_allowed_hosts_from_env(monkeypatch):

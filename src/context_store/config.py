@@ -7,7 +7,7 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 
-class Settings(BaseSettings):
+class Settings(BaseSettings):  # type: ignore
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
@@ -108,14 +108,16 @@ class Settings(BaseSettings):
         description="TrustedHostMiddleware allowed hosts (comma-separated string or list)",
     )
 
-    @field_validator("dashboard_allowed_hosts", mode="before")
+    @field_validator("dashboard_allowed_hosts", mode="before")  # type: ignore
     @classmethod
     def _parse_dashboard_allowed_hosts(cls, v: Any) -> list[str]:
         if isinstance(v, str):
             return [h.strip() for h in v.split(",") if h.strip()]
         if isinstance(v, list):
             return [str(h).strip() for h in v if str(h).strip()]
-        return v
+        if v is None:
+            return ["localhost", "127.0.0.1"]
+        return []
 
     # --- URL Fetch (SSRF 対策) ---
     url_fetch_concurrency: int = Field(default=3, ge=1)
@@ -137,7 +139,7 @@ class Settings(BaseSettings):
             f"@{self.postgres_host}:{self.postgres_port}/{encoded_db}"
         )
 
-    @model_validator(mode="after")
+    @model_validator(mode="after")  # type: ignore
     def validate_credentials(self) -> "Settings":
         postgres_password = self.postgres_password.get_secret_value()
         neo4j_password = self.neo4j_password.get_secret_value()

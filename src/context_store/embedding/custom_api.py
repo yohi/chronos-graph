@@ -104,7 +104,8 @@ class CustomAPIEmbeddingProvider:
                 if not isinstance(embedding, Iterable) or isinstance(embedding, (str, bytes)):
                     raise ValueError(
                         'Each item in response["embeddings"] must be an iterable with length '
-                        f'self._dimension={self._dimension}; invalid response["embeddings"][{index}] '
+                        f"self._dimension={self._dimension}; "
+                        f'invalid response["embeddings"][{index}] '
                         f"for len(chunk)={len(chunk)}"
                     )
                 vector = list(embedding)
@@ -118,7 +119,8 @@ class CustomAPIEmbeddingProvider:
                 if len(vector) != self._dimension:
                     raise ValueError(
                         'Each vector in response["embeddings"] must match '
-                        f'self._dimension={self._dimension}; got len(response["embeddings"][{index}])='
+                        f"self._dimension={self._dimension}; "
+                        f'got len(response["embeddings"][{index}])='
                         f"{len(vector)} for len(chunk)={len(chunk)}"
                     )
                 embeddings[index] = vector

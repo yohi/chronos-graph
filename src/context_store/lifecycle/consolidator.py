@@ -100,7 +100,8 @@ class Consolidator:
                     await heartbeat_fn()
 
                 memory_id = str(memory.id)
-                # すでに統合対象になっている場合、またはシミュレート済みセットに含まれる場合はスキップ
+                # すでに統合対象になっている場合、または
+                # シミュレート済みセットに含まれる場合はスキップ
                 if memory_id in archived_in_this_run:
                     continue
                 if simulated_archived_ids is not None and memory_id in simulated_archived_ids:

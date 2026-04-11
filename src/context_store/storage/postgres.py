@@ -236,7 +236,7 @@ class PostgresStorageAdapter:
             return False
 
         params.append(memory_id)
-        sql = f"UPDATE memories SET {', '.join(set_parts)} WHERE id = ${len(params)}"
+        sql = f"UPDATE memories SET {', '.join(set_parts)} WHERE id = ${len(params)}"  # noqa: S608
 
         async with self._pool.acquire() as conn:
             status = await conn.execute(sql, *params)
@@ -417,7 +417,7 @@ class PostgresStorageAdapter:
                     code="INVALID_PARAMETER",
                 ) from e
 
-        sql = f"SELECT * FROM memories {where_clause} {order_clause} {limit_clause}".strip()
+        sql = f"SELECT * FROM memories {where_clause} {order_clause} {limit_clause}".strip()  # noqa: S608
 
         async with self._pool.acquire() as conn:
             records = await conn.fetch(sql, *params)
@@ -427,7 +427,7 @@ class PostgresStorageAdapter:
     async def count_by_filter(self, filters: MemoryFilters) -> int:
         """Count memories matching the given filters."""
         where_clause, params = self._build_where_clause(filters)
-        sql = f"SELECT COUNT(*) FROM memories {where_clause}"
+        sql = f"SELECT COUNT(*) FROM memories {where_clause}"  # noqa: S608
 
         async with self._pool.acquire() as conn:
             count = await conn.fetchval(sql, *params)

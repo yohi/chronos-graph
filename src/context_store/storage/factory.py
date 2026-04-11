@@ -138,10 +138,10 @@ async def create_storage(
     Args:
         settings: Application settings.
         read_only: If True, open SQLite with ``mode=ro`` URI (e.g., for Dashboards).
-            Note: Neo4j (PostgreSQL backend) read-only mode is not yet implemented.
-            The cache coherence checker for SQLite + In-Memory remains active in
-            read-only mode unless explicitly opted-out via
-            `settings.skip_cache_coherence_in_read_only`.
+            Note: Neo4j (PostgreSQL backend) read-only mode is not yet supported.
+            The cache coherence checker for SQLite + In-Memory is DISABLED in
+            read-only mode by default to support read-only file system mounts.
+            To enable it in read-only mode, set `settings.force_cache_coherence_in_read_only`.
 
     Returns:
         (StorageAdapter, GraphAdapter | None, CacheAdapter)
@@ -155,9 +155,9 @@ async def create_storage(
         cache_adp = await _create_cache_adapter(settings)
 
         # Start cache coherence checker for SQLite + InMemory combination
-        # Skip if opt-out and in read_only mode (Dashboard does not mutate data)
+        # Default: only start in write mode (to avoid RO mount issues)
         if (
-            not (read_only and settings.skip_cache_coherence_in_read_only)
+            (not read_only or settings.force_cache_coherence_in_read_only)
             and settings.storage_backend == "sqlite"
             and settings.cache_backend == "inmemory"
         ):
@@ -249,7 +249,7 @@ async def _create_graph_adapter(
                 "when graph is enabled with postgres backend."
             )
         if read_only:
-            raise NotImplementedError("read_only mode for neo4j backend is added in PR 4")
+            raise NotImplementedError("read_only mode for neo4j backend is not yet supported")
         return await Neo4jGraphAdapter.create(
             uri=settings.neo4j_uri,
             user=settings.neo4j_user,

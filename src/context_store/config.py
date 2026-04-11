@@ -118,9 +118,9 @@ class Settings(BaseSettings):
     wal_checkpoint_mode_passive: str = "PASSIVE"
     wal_checkpoint_mode_truncate: str = "TRUNCATE"
     cache_coherence_poll_interval_seconds: float = Field(default=5.0, gt=0.0)
-    skip_cache_coherence_in_read_only: bool = Field(
+    force_cache_coherence_in_read_only: bool = Field(
         default=False,
-        description="Skip cache coherence checker in read-only mode",
+        description="Force cache coherence checker in read-only mode (may fail on RO mounts)",
     )
 
     # --- Logging ---

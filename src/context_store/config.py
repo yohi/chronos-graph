@@ -93,6 +93,21 @@ class Settings(BaseSettings):
     wal_checkpoint_mode_truncate: str = "TRUNCATE"
     cache_coherence_poll_interval_seconds: float = Field(default=5.0, gt=0.0)
 
+    # --- Logging ---
+    log_level: str = Field(default="INFO", description="Root log level (DEBUG/INFO/WARNING/ERROR)")
+
+    # --- Dashboard (rev.10) ---
+    dashboard_port: int = Field(default=8000, description="FastAPI dashboard bind port")
+    dashboard_allowed_hosts: str = Field(
+        default="localhost,127.0.0.1",
+        description="Comma-separated TrustedHostMiddleware allowed hosts for dashboard",
+    )
+
+    @property
+    def dashboard_allowed_hosts_list(self) -> list[str]:
+        """Runtime プロパティ: dashboard_allowed_hosts をパースしたリスト。"""
+        return [h.strip() for h in self.dashboard_allowed_hosts.split(",") if h.strip()]
+
     # --- URL Fetch (SSRF 対策) ---
     url_fetch_concurrency: int = Field(default=3, ge=1)
     allow_private_urls: bool = False
@@ -149,3 +164,27 @@ class Settings(BaseSettings):
                 "CUSTOM_API_ENDPOINT は embedding_provider=custom-api の場合に必須です。"
             )
         return self
+
+    @property
+    def graph_backend(self) -> str:
+        """Derived: 'sqlite' | 'neo4j' | 'disabled'."""
+        if not self.graph_enabled:
+            return "disabled"
+        if self.storage_backend == "sqlite":
+            return "sqlite"
+        if self.storage_backend == "postgres":
+            return "neo4j"
+        return "disabled"
+
+    @property
+    def embedding_model(self) -> str:
+        """Derived: 現在の embedding_provider に応じたモデル名。"""
+        if self.embedding_provider == "openai":
+            return "openai/text-embedding-3-small"
+        if self.embedding_provider == "local-model":
+            return self.local_model_name
+        if self.embedding_provider == "litellm":
+            return self.litellm_model
+        if self.embedding_provider == "custom-api":
+            return self.custom_api_endpoint
+        return "unknown"

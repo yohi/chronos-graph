@@ -230,3 +230,62 @@ def test_settings_priority_dotenv_over_env(tmp_path, monkeypatch):
 
     # 5. .env が優先されていることをアサート (sqlite であるはず)
     assert settings.storage_backend == "sqlite"
+
+
+def test_settings_has_dashboard_fields_with_defaults(monkeypatch):
+    """rev.10: Dashboard 用フィールドのデフォルト値を確認。"""
+    monkeypatch.delenv("DASHBOARD_PORT", raising=False)
+    monkeypatch.delenv("DASHBOARD_ALLOWED_HOSTS", raising=False)
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
+    monkeypatch.delenv("GRAPH_BACKEND", raising=False)
+
+    s = Settings(_env_file=None, openai_api_key="sk-test")
+
+    assert s.log_level == "INFO"
+    assert s.dashboard_port == 8000
+    assert s.dashboard_allowed_hosts_list == ["localhost", "127.0.0.1"]
+    assert s.graph_backend in ("sqlite", "neo4j", "disabled")
+
+
+def test_settings_graph_backend_derivation(monkeypatch):
+    """graph_backend は storage_backend + graph_enabled から自動導出される。"""
+    # Clear env vars first
+    monkeypatch.delenv("STORAGE_BACKEND", raising=False)
+    monkeypatch.delenv("GRAPH_ENABLED", raising=False)
+
+    monkeypatch.setenv("STORAGE_BACKEND", "sqlite")
+    monkeypatch.setenv("GRAPH_ENABLED", "true")
+    s = Settings(_env_file=None, openai_api_key="sk-test")
+    assert s.graph_backend == "sqlite"
+
+    monkeypatch.setenv("STORAGE_BACKEND", "postgres")
+    monkeypatch.setenv("GRAPH_ENABLED", "true")
+    s = Settings(
+        _env_file=None, openai_api_key="sk-test", postgres_password="test", neo4j_password="test"
+    )
+    assert s.graph_backend == "neo4j"
+
+    monkeypatch.setenv("STORAGE_BACKEND", "sqlite")
+    monkeypatch.setenv("GRAPH_ENABLED", "false")
+    s = Settings(_env_file=None, openai_api_key="sk-test")
+    assert s.graph_backend == "disabled"
+
+
+def test_settings_embedding_model_derivation(monkeypatch):
+    """embedding_model は embedding_provider に応じて適切なフィールドから解決される。"""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "local-model")
+    monkeypatch.setenv("LOCAL_MODEL_NAME", "intfloat/multilingual-e5-base")
+    s = Settings(_env_file=None, openai_api_key="sk-test")
+    assert s.embedding_model == "intfloat/multilingual-e5-base"
+
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    s = Settings(_env_file=None, openai_api_key="sk-test")
+    assert s.embedding_model == "openai/text-embedding-3-small"
+
+
+def test_settings_dashboard_allowed_hosts_from_env(monkeypatch):
+    """DASHBOARD_ALLOWED_HOSTS はカンマ区切りで解釈される。"""
+    monkeypatch.setenv("DASHBOARD_ALLOWED_HOSTS", "localhost,127.0.0.1,example.internal")
+    s = Settings(_env_file=None, openai_api_key="sk-test")
+    assert s.dashboard_allowed_hosts_list == ["localhost", "127.0.0.1", "example.internal"]

@@ -22,7 +22,6 @@ from context_store.orchestrator import Orchestrator, create_orchestrator
 from context_store.retrieval.pipeline import RetrievalResponse
 from tests.conftest import make_mock_embedding_provider
 
-
 # ---------------------------------------------------------------------------
 # 共通フィクスチャ
 # ---------------------------------------------------------------------------

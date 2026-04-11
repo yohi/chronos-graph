@@ -67,9 +67,12 @@ class ChronosServer:
         async with self._init_lock:
             if not self._initialized:
                 await self._do_initialize()
+
+                if self._orchestrator is None:
+                    raise RuntimeError("Orchestrator not initialized")
+
                 if self._url_semaphore is None:
                     # 指摘に基づき、Orchestrator が提供する公開プロパティを再利用する
-                    assert self._orchestrator is not None
                     self._url_semaphore = asyncio.Semaphore(
                         self._orchestrator.url_fetch_concurrency
                     )
@@ -77,8 +80,8 @@ class ChronosServer:
                         "現在のURLフェッチ制限はプロセススコープです。"
                         "マルチプロセス実行時は制限を超過する可能性があります。"
                     )
+
                 # ライフサイクルマネージャーを開始
-                assert self._orchestrator is not None
                 try:
                     await self._orchestrator.start_lifecycle()
                     self._initialized = True
@@ -131,7 +134,8 @@ class ChronosServer:
             保存結果の JSON 文字列。
         """
         await self._ensure_initialized()
-        assert self._orchestrator is not None
+        if self._orchestrator is None:
+            raise RuntimeError("Orchestrator not initialized")
 
         from context_store.models.memory import SourceType
 
@@ -180,8 +184,10 @@ class ChronosServer:
             保存結果の JSON 文字列。
         """
         await self._ensure_initialized()
-        assert self._orchestrator is not None
-        assert self._url_semaphore is not None
+        if self._orchestrator is None:
+            raise RuntimeError("Orchestrator not initialized")
+        if self._url_semaphore is None:
+            raise RuntimeError("URL semaphore not initialized")
 
         effective_tags: list[str] = tags if tags is not None else []
         metadata: dict[str, Any] = {"tags": effective_tags}
@@ -214,7 +220,8 @@ class ChronosServer:
             検索結果の JSON 文字列。
         """
         await self._ensure_initialized()
-        assert self._orchestrator is not None
+        if self._orchestrator is None:
+            raise RuntimeError("Orchestrator not initialized")
 
         result = await self._orchestrator.search(
             query,
@@ -244,7 +251,8 @@ class ChronosServer:
             グラフ検索結果の JSON 文字列。
         """
         await self._ensure_initialized()
-        assert self._orchestrator is not None
+        if self._orchestrator is None:
+            raise RuntimeError("Orchestrator not initialized")
 
         result = await self._orchestrator.search_graph(
             query,
@@ -264,7 +272,8 @@ class ChronosServer:
             削除結果の JSON 文字列。
         """
         await self._ensure_initialized()
-        assert self._orchestrator is not None
+        if self._orchestrator is None:
+            raise RuntimeError("Orchestrator not initialized")
 
         deleted = await self._orchestrator.delete(memory_id)
         return json.dumps({"deleted": deleted, "memory_id": memory_id})
@@ -284,7 +293,8 @@ class ChronosServer:
             削除結果の JSON 文字列。
         """
         await self._ensure_initialized()
-        assert self._orchestrator is not None
+        if self._orchestrator is None:
+            raise RuntimeError("Orchestrator not initialized")
 
         count = await self._orchestrator.prune(
             older_than_days=older_than_days,
@@ -308,7 +318,8 @@ class ChronosServer:
             統計情報の JSON 文字列。
         """
         await self._ensure_initialized()
-        assert self._orchestrator is not None
+        if self._orchestrator is None:
+            raise RuntimeError("Orchestrator not initialized")
 
         result = await self._orchestrator.stats(project=project)
         return json.dumps(result, default=str)
@@ -316,7 +327,8 @@ class ChronosServer:
     async def memory_list_projects(self) -> str:
         """プロジェクト一覧を返す。"""
         await self._ensure_initialized()
-        assert self._orchestrator is not None
+        if self._orchestrator is None:
+            raise RuntimeError("Orchestrator not initialized")
 
         projects = await self._orchestrator.list_projects()
         return json.dumps({"projects": projects})

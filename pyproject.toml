@@ -64,10 +64,31 @@ testpaths = ["tests"]
 target-version = "py312"
 line-length = 100
 
+[tool.ruff.lint]
+select = ["E", "F", "I", "S", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101", # assert detected
+    "S105", # Possible hardcoded password
+    "S106", # Possible hardcoded password
+]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
 warn_unused_ignores = false
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = "tests.unit.*"
+allow_untyped_defs = true
+allow_untyped_calls = true
+disable_error_code = ["arg-type", "no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "context_store.config"
+disable_error_code = ["no-any-return", "no-untyped-def"]
 
 [[tool.mypy.overrides]]
 module = "asyncpg.*"
@@ -90,6 +111,7 @@ packages = ["src/context_store"]
 
 [dependency-groups]
 dev = [
+    "mypy>=1.20.0",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
 ]

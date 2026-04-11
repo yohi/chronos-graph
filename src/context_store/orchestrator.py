@@ -16,12 +16,12 @@ from context_store.storage.protocols import MemoryFilters
 
 if TYPE_CHECKING:
     from context_store.config import Settings
+    from context_store.embedding.protocols import EmbeddingProvider
     from context_store.extensions.protocols import ActionLogger, PolicyHook, RewardSignal
     from context_store.ingestion.pipeline import IngestionPipeline, IngestionResult
     from context_store.lifecycle.manager import LifecycleManager
     from context_store.retrieval.pipeline import RetrievalPipeline, RetrievalResponse
     from context_store.storage.protocols import CacheAdapter, GraphAdapter, StorageAdapter
-    from context_store.embedding.protocols import EmbeddingProvider
 
 logger = logging.getLogger(__name__)
 
@@ -102,8 +102,8 @@ class Orchestrator:
 
         if stored_dim != current_dim:
             raise ConfigurationError(
-                f"ベクトル次元の不一致が検出されました: "
-                f"ストレージ内の次元={stored_dim}, 現在の embedding provider の次元={current_dim}。\n"
+                f"ベクトル次元の不一致が検出されました: ストレージ内の次元={stored_dim}, "
+                f"現在の embedding provider の次元={current_dim}。\n"
                 "このまま起動すると既存のベクトルデータと互換性がなくなります。\n\n"
                 "リカバリ手順:\n"
                 "  1. 別環境として開始する場合:\n"

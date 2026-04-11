@@ -77,14 +77,17 @@ class LocalModelEmbeddingProvider:
         """埋め込みベクトルの次元数を返す。
 
         コンストラクタで指定されているか、既にロード済みの場合はその値を返す。
-        それ以外の場合はモデルをロードして正確な次元数を取得する(モデルのロードは embed 呼び出しまで遅延される)。
+        それ以外の場合はモデルをロードして正確な次元数を取得する。
+        アクセス時にモデルが同期的にロードされる可能性があるため、呼び出し側はロードコストを考慮する必要がある。
+        (モデルのロードは embed() 呼び出し時にも、未ロードであれば実行される)。
         """
         if self._dimension is not None:
             return self._dimension
 
         # モデルをロードして次元数を確定させる
         self._get_model()
-        assert self._dimension is not None
+        if self._dimension is None:
+            raise RuntimeError("Dimension must be set after loading model")
         return self._dimension
 
     async def embed(self, text: str) -> list[float]:

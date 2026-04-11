@@ -75,7 +75,7 @@ async def test_create_storage_read_only_blocks_writes(seeded_sqlite):
             source_type="manual",
             project="ro-proj",
         )
-        with pytest.raises((sqlite3.OperationalError, Exception)) as exc_info:
+        with pytest.raises(sqlite3.OperationalError) as exc_info:
             await storage.save_memory(mem)
         assert "readonly" in str(exc_info.value).lower() or "read" in str(exc_info.value).lower()
     finally:

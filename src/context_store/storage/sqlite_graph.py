@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import urllib.parse
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, AsyncGenerator
 
@@ -112,8 +113,10 @@ class SQLiteGraphAdapter:
                 "Ensure sqlite_db_path is provided in Settings."
             )
         if self._read_only:
-            async with aiosqlite.connect(f"file:{self._db_path}?mode=ro", uri=True) as conn:
+            encoded_path = urllib.parse.quote(self._db_path, safe="/:")
+            async with aiosqlite.connect(f"file:{encoded_path}?mode=ro", uri=True) as conn:
                 conn.row_factory = aiosqlite.Row
+                await conn.execute("PRAGMA busy_timeout=5000")
                 yield conn
         else:
             async with aiosqlite.connect(self._db_path) as conn:

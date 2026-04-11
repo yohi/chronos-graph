@@ -137,8 +137,9 @@ async def create_storage(
 
     Args:
         settings: Application settings.
-        read_only: If True, open SQLite with ``mode=ro`` URI and Neo4j with READ_ACCESS.
-            Cache coherence checker is skipped (Dashboard does not mutate data).
+        read_only: If True, open SQLite with ``mode=ro`` URI.
+            (Neo4j read-only is not yet implemented).
+            Cache coherence checker remains active if applicable, to track external mutations.
 
     Returns:
         (StorageAdapter, GraphAdapter | None, CacheAdapter)

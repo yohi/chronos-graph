@@ -249,28 +249,31 @@ def test_settings_has_dashboard_fields_with_defaults(monkeypatch):
     assert s.graph_backend == "disabled"
 
 
-def test_settings_graph_backend_derivation(monkeypatch):
+@pytest.mark.parametrize(
+    ("storage_backend", "graph_enabled", "expected"),
+    [
+        ("sqlite", "true", "sqlite"),
+        ("postgres", "true", "neo4j"),
+        ("sqlite", "false", "disabled"),
+    ],
+)
+def test_settings_graph_backend_derivation(monkeypatch, storage_backend, graph_enabled, expected):
     """graph_backend は storage_backend + graph_enabled から自動導出される。"""
     # Clear env vars first
     monkeypatch.delenv("STORAGE_BACKEND", raising=False)
     monkeypatch.delenv("GRAPH_ENABLED", raising=False)
 
-    monkeypatch.setenv("STORAGE_BACKEND", "sqlite")
-    monkeypatch.setenv("GRAPH_ENABLED", "true")
-    s = Settings(_env_file=None, openai_api_key="sk-test")
-    assert s.graph_backend == "sqlite"
+    monkeypatch.setenv("STORAGE_BACKEND", storage_backend)
+    monkeypatch.setenv("GRAPH_ENABLED", graph_enabled)
 
-    monkeypatch.setenv("STORAGE_BACKEND", "postgres")
-    monkeypatch.setenv("GRAPH_ENABLED", "true")
+    # 全てのケースで必要な認証情報を与えることでバリデーションエラーを回避
     s = Settings(
-        _env_file=None, openai_api_key="sk-test", postgres_password="test", neo4j_password="test"
+        _env_file=None,
+        openai_api_key="sk-test",
+        postgres_password="test",
+        neo4j_password="test",
     )
-    assert s.graph_backend == "neo4j"
-
-    monkeypatch.setenv("STORAGE_BACKEND", "sqlite")
-    monkeypatch.setenv("GRAPH_ENABLED", "false")
-    s = Settings(_env_file=None, openai_api_key="sk-test")
-    assert s.graph_backend == "disabled"
+    assert s.graph_backend == expected
 
 
 def test_settings_embedding_model_derivation(monkeypatch):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, assert_never
 from urllib.parse import quote
 
 from pydantic import Field, SecretStr, computed_field, field_validator, model_validator
@@ -111,13 +111,19 @@ class Settings(BaseSettings):
     @field_validator("dashboard_allowed_hosts", mode="before")
     @classmethod
     def _parse_dashboard_allowed_hosts(cls, v: Any) -> list[str]:
-        if isinstance(v, str):
-            return [h.strip() for h in v.split(",") if h.strip()]
-        if isinstance(v, list):
-            return [str(h).strip() for h in v if str(h).strip()]
+        default_hosts = ["localhost", "127.0.0.1"]
         if v is None:
-            return ["localhost", "127.0.0.1"]
-        raise ValueError(f"dashboard_allowed_hosts must be a string or list, not {type(v)}")
+            return default_hosts
+
+        hosts: list[str] = []
+        if isinstance(v, str):
+            hosts = [h.strip() for h in v.split(",") if h.strip()]
+        elif isinstance(v, list):
+            hosts = [str(h).strip() for h in v if str(h).strip()]
+        else:
+            raise ValueError(f"dashboard_allowed_hosts must be a string or list, not {type(v)}")
+
+        return hosts if hosts else default_hosts
 
     # --- URL Fetch (SSRF 対策) ---
     url_fetch_concurrency: int = Field(default=3, ge=1)
@@ -202,4 +208,4 @@ class Settings(BaseSettings):
             return self.litellm_model
         if self.embedding_provider == "custom-api":
             return self.custom_api_model_name
-        return "unknown"
+        assert_never(self.embedding_provider)

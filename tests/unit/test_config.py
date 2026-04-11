@@ -343,3 +343,25 @@ def test_custom_api_embedding_model_derivation(default_settings):
         custom_api_endpoint="http://example.com/v1/embeddings",
     )
     assert s.embedding_model == "custom-model"
+
+
+def test_dashboard_allowed_hosts_fallback(monkeypatch):
+    """DASHBOARD_ALLOWED_HOSTS が空や空白のみの場合、デフォルト値にフォールバックする。"""
+    # 1. 空文字列
+    monkeypatch.setenv("DASHBOARD_ALLOWED_HOSTS", "")
+    s1 = Settings(_env_file=None, openai_api_key="sk-test")
+    assert s1.dashboard_allowed_hosts == ["localhost", "127.0.0.1"]
+
+    # 2. 空白のみ
+    monkeypatch.setenv("DASHBOARD_ALLOWED_HOSTS", "   ,  ")
+    s2 = Settings(_env_file=None, openai_api_key="sk-test")
+    assert s2.dashboard_allowed_hosts == ["localhost", "127.0.0.1"]
+
+    # 3. None (デフォルトの挙動)
+    monkeypatch.delenv("DASHBOARD_ALLOWED_HOSTS", raising=False)
+    s3 = Settings(_env_file=None, openai_api_key="sk-test")
+    assert s3.dashboard_allowed_hosts == ["localhost", "127.0.0.1"]
+
+    # 4. 空リスト
+    s4 = Settings(_env_file=None, openai_api_key="sk-test", dashboard_allowed_hosts=[])
+    assert s4.dashboard_allowed_hosts == ["localhost", "127.0.0.1"]

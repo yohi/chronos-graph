@@ -146,10 +146,7 @@ class Settings(BaseSettings):
         )
 
     @model_validator(mode="after")
-    def validate_credentials(self) -> "Settings":
-        postgres_password = self.postgres_password.get_secret_value()
-        neo4j_password = self.neo4j_password.get_secret_value()
-        openai_api_key = self.openai_api_key.get_secret_value()
+    def _strip_and_set_defaults(self) -> "Settings":
         self.local_model_name = self.local_model_name.strip()
         self.litellm_api_base = self.litellm_api_base.strip()
         self.litellm_model = self.litellm_model.strip()
@@ -158,35 +155,47 @@ class Settings(BaseSettings):
 
         if self.embedding_provider == "custom-api" and not self.custom_api_model_name:
             self.custom_api_model_name = "custom-model"
+        return self
 
-        if self.storage_backend == "postgres" and not postgres_password.strip():
-            raise ValueError("POSTGRES_PASSWORD は storage_backend=postgres の場合に必須です。")
-        if self.storage_backend == "postgres" and self.graph_enabled and not neo4j_password.strip():
-            raise ValueError(
-                "NEO4J_PASSWORD は storage_backend=postgres かつ graph_enabled=true の場合に必須です。"
-            )
+    @model_validator(mode="after")
+    def _validate_storage_config(self) -> "Settings":
+        if self.storage_backend == "postgres":
+            if not self.postgres_password.get_secret_value().strip():
+                raise ValueError("POSTGRES_PASSWORD は storage_backend=postgres の場合に必須です。")
+            if self.graph_enabled and not self.neo4j_password.get_secret_value().strip():
+                raise ValueError(
+                    "NEO4J_PASSWORD は storage_backend=postgres かつ "
+                    "graph_enabled=true の場合に必須です。"
+                )
+        return self
 
-        # 以下は、明示的に provider が指定され、かつ api_key が空の場合にのみエラーとする
-        if self.embedding_provider == "openai" and not openai_api_key.strip():
-            raise ValueError("OPENAI_API_KEY は embedding_provider=openai の場合に必須です。")
-        if self.embedding_provider == "local-model" and not self.local_model_name:
-            raise ValueError(
-                "LOCAL_MODEL_NAME は embedding_provider=local-model の場合に必須です。"
-            )
-        if self.embedding_provider == "litellm":
+    @model_validator(mode="after")
+    def _validate_embedding_config(self) -> "Settings":
+        # 明示的に provider が指定され、かつ api_key が空の場合にのみエラーとする
+        if self.embedding_provider == "openai":
+            if not self.openai_api_key.get_secret_value().strip():
+                raise ValueError("OPENAI_API_KEY は embedding_provider=openai の場合に必須です。")
+        elif self.embedding_provider == "local-model":
+            if not self.local_model_name:
+                raise ValueError(
+                    "LOCAL_MODEL_NAME は embedding_provider=local-model の場合に必須です。"
+                )
+        elif self.embedding_provider == "litellm":
             if not self.litellm_api_base:
                 raise ValueError(
                     "LITELLM_API_BASE は embedding_provider=litellm の場合に必須です。"
                 )
             if not self.litellm_model:
                 raise ValueError("LITELLM_MODEL は embedding_provider=litellm の場合に必須です。")
-        if self.embedding_provider == "custom-api" and not self.custom_api_endpoint:
-            raise ValueError(
-                "CUSTOM_API_ENDPOINT は embedding_provider=custom-api の場合に必須です。"
-            )
+        elif self.embedding_provider == "custom-api":
+            if not self.custom_api_endpoint:
+                raise ValueError(
+                    "CUSTOM_API_ENDPOINT は embedding_provider=custom-api の場合に必須です。"
+                )
         return self
 
     @computed_field
+    @property
     def graph_backend(self) -> str:
         """Derived: 'sqlite' | 'neo4j' | 'disabled'."""
         if not self.graph_enabled:

@@ -40,6 +40,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.graph = graph
     app.state.cache = cache
     app.state.service = DashboardService(storage=storage, graph=graph)
+
+    from context_store.dashboard.log_collector import get_log_handler
+
+    get_log_handler()
+
     try:
         yield
     finally:
@@ -90,6 +95,7 @@ def create_app(
 
     from context_store.dashboard.routes import (
         graph,
+        logs,
         memories,
         stats,
         system,
@@ -99,6 +105,7 @@ def create_app(
     app.include_router(memories.router, prefix="/api/memories", tags=["memories"])
     app.include_router(system.router, prefix="/api/system", tags=["system"])
     app.include_router(graph.router, prefix="/api/graph", tags=["graph"])
+    app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
 
     return app
 

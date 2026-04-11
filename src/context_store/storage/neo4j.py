@@ -197,3 +197,15 @@ class Neo4jGraphAdapter:
     async def dispose(self) -> None:
         """Close the driver."""
         await self._driver.close()
+
+    # ------------------------------------------------------------------
+    # Dashboard graph queries (PR 3-4)
+    # ------------------------------------------------------------------
+
+    async def list_edges_for_memories(self, memory_ids: list[str]) -> list[Edge]:
+        """Implemented in PR 4."""
+        raise NotImplementedError("Implemented in PR 4")
+
+    async def count_edges(self) -> int:
+        """Implemented in PR 4."""
+        raise NotImplementedError("Implemented in PR 4")

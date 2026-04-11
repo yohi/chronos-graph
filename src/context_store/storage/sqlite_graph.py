@@ -485,3 +485,52 @@ class SQLiteGraphAdapter:
                 (memory_id,),
             )
             await conn.commit()
+
+    # ------------------------------------------------------------------
+    # Dashboard graph queries (PR 3)
+    # ------------------------------------------------------------------
+
+    async def list_edges_for_memories(self, memory_ids: list[str]) -> list[Edge]:
+        """Return all edges where BOTH endpoints are in ``memory_ids``."""
+        if not memory_ids:
+            return []
+
+        # SQLite parameter limit (999) への対策: 500 件ずつチャンク分割
+        CHUNK_SIZE = 500
+        all_edges: list[Edge] = []
+        seen: set[tuple[str, str, str]] = set()
+
+        async with self._connect() as conn:
+            conn.row_factory = aiosqlite.Row
+            for i in range(0, len(memory_ids), CHUNK_SIZE):
+                chunk = memory_ids[i : i + CHUNK_SIZE]
+                placeholders = ",".join("?" * len(chunk))
+                query = f"""
+                    SELECT from_id, to_id, edge_type, props
+                    FROM memory_edges
+                    WHERE from_id IN ({placeholders}) AND to_id IN ({placeholders})
+                """
+                async with conn.execute(query, [*chunk, *chunk]) as cursor:
+                    rows = await cursor.fetchall()
+
+                for row in rows:
+                    key = (row["from_id"], row["to_id"], row["edge_type"])
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    all_edges.append(
+                        Edge(
+                            from_id=row["from_id"],
+                            to_id=row["to_id"],
+                            edge_type=row["edge_type"],
+                            properties=json.loads(row["props"]) if row["props"] else {},
+                        )
+                    )
+        return all_edges
+
+    async def count_edges(self) -> int:
+        """Return the total number of edges in the graph."""
+        async with self._connect() as conn:
+            async with conn.execute("SELECT COUNT(*) FROM memory_edges") as cursor:
+                row = await cursor.fetchone()
+                return int(row[0]) if row else 0

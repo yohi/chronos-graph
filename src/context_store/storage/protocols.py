@@ -178,6 +178,14 @@ class GraphAdapter(Protocol):
         """
         ...
 
+    async def list_all_edges(self) -> list[Edge]:
+        """Return all edges in the graph.
+
+        Returns:
+            List of all edges present in the graph storage.
+        """
+        ...
+
     async def count_edges(self) -> int:
         """Return the total number of edges in the graph."""
         ...

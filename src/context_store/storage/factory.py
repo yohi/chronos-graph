@@ -163,12 +163,15 @@ async def create_storage(
             from context_store.storage.inmemory import InMemoryCacheAdapter
 
             db_path = os.path.expanduser(settings.sqlite_db_path)
-            checker = SQLiteCacheCoherenceChecker(
-                db_path=db_path,
-                cache=cache_adp,
-                poll_interval=settings.cache_coherence_poll_interval_seconds,
-            )
-            checker.start()
+            # Only start if the database file exists (fail-fast principle)
+            if os.path.exists(db_path):
+                checker = SQLiteCacheCoherenceChecker(
+                    db_path=db_path,
+                    cache=cache_adp,  # type: ignore
+                    poll_interval=settings.cache_coherence_poll_interval_seconds,
+                )
+                checker.start()
+
             if isinstance(cache_adp, InMemoryCacheAdapter):
                 cache_adp.set_coherence_checker(checker)
 
@@ -245,6 +248,8 @@ async def _create_graph_adapter(
                 "Neo4j uri, user, and password must be provided "
                 "when graph is enabled with postgres backend."
             )
+        if read_only:
+            raise NotImplementedError("read_only mode for neo4j backend is not yet supported")
         return await Neo4jGraphAdapter.create(
             uri=settings.neo4j_uri,
             user=settings.neo4j_user,

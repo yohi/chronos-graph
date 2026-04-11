@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import urllib.parse
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, AsyncGenerator
 
@@ -112,8 +113,10 @@ class SQLiteGraphAdapter:
                 "Ensure sqlite_db_path is provided in Settings."
             )
         if self._read_only:
-            async with aiosqlite.connect(f"file:{self._db_path}?mode=ro", uri=True) as conn:
+            encoded_path = urllib.parse.quote(self._db_path, safe="/:")
+            async with aiosqlite.connect(f"file:{encoded_path}?mode=ro", uri=True) as conn:
                 conn.row_factory = aiosqlite.Row
+                await conn.execute("PRAGMA busy_timeout=5000")
                 yield conn
         else:
             async with aiosqlite.connect(self._db_path) as conn:
@@ -512,11 +515,12 @@ class SQLiteGraphAdapter:
             for i in range(0, len(memory_ids), CHUNK_SIZE):
                 chunk = memory_ids[i : i + CHUNK_SIZE]
                 placeholders = ",".join("?" * len(chunk))
-                query = f"""
+                sql_template = """
                     SELECT from_id, to_id, edge_type, props
                     FROM memory_edges
-                    WHERE from_id IN ({placeholders}) AND to_id IN ({placeholders})
+                    WHERE from_id IN (__PLACEHOLDERS__) AND to_id IN (__PLACEHOLDERS__)
                 """
+                query = sql_template.replace("__PLACEHOLDERS__", placeholders)
                 async with conn.execute(query, [*chunk, *chunk]) as cursor:
                     rows = await cursor.fetchall()
 

@@ -7,6 +7,7 @@ import json
 import math
 import os
 import struct
+import urllib.parse
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
@@ -252,8 +253,15 @@ class SQLiteStorageAdapter:
     async def _connect(self) -> AsyncGenerator[aiosqlite.Connection, None]:
         """Open a raw aiosqlite connection with required PRAGMAs."""
         if self._read_only:
-            async with aiosqlite.connect(f"file:{self._db_path}?mode=ro", uri=True) as conn:
+            encoded_path = urllib.parse.quote(self._db_path, safe="/:")
+            async with aiosqlite.connect(f"file:{encoded_path}?mode=ro", uri=True) as conn:
                 conn.row_factory = aiosqlite.Row
+                await conn.execute("PRAGMA busy_timeout=5000")
+                # Load sqlite-vec extension
+                if _sqlite_vec is not None:
+                    await conn.enable_load_extension(True)
+                    await conn.load_extension(_sqlite_vec.loadable_path())
+                    await conn.enable_load_extension(False)
                 yield conn
         else:
             async with aiosqlite.connect(self._db_path) as conn:

@@ -137,9 +137,11 @@ async def create_storage(
 
     Args:
         settings: Application settings.
-        read_only: If True, open SQLite with ``mode=ro`` URI.
-            (Neo4j read-only is not yet implemented).
-            Cache coherence checker remains active if applicable, to track external mutations.
+        read_only: If True, open SQLite with ``mode=ro`` URI (e.g., for Dashboards).
+            Note: Neo4j (PostgreSQL backend) read-only mode is not yet implemented.
+            The cache coherence checker for SQLite + In-Memory remains active in
+            read-only mode unless explicitly opted-out via
+            `settings.skip_cache_coherence_in_read_only`.
 
     Returns:
         (StorageAdapter, GraphAdapter | None, CacheAdapter)
@@ -153,9 +155,9 @@ async def create_storage(
         cache_adp = await _create_cache_adapter(settings)
 
         # Start cache coherence checker for SQLite + InMemory combination
-        # Skip for read_only mode (Dashboard does not mutate data)
+        # Skip if opt-out and in read_only mode (Dashboard does not mutate data)
         if (
-            not read_only
+            not (read_only and settings.skip_cache_coherence_in_read_only)
             and settings.storage_backend == "sqlite"
             and settings.cache_backend == "inmemory"
         ):

@@ -64,10 +64,18 @@ async def test_create_storage_read_only_can_read(seeded_sqlite):
 
 @pytest.mark.asyncio
 async def test_create_storage_read_only_blocks_writes(seeded_sqlite):
-    """read_only=True should cause write operations to fail at SQLite level."""
+    """read_only=True should cause write/delete/update operations to fail at SQLite level."""
     settings = seeded_sqlite
     storage, graph, cache = await create_storage(settings, read_only=True)
     try:
+        # Get existing memory ID from seeded data
+        from context_store.storage.protocols import MemoryFilters
+
+        memories = await storage.list_by_filter(MemoryFilters(limit=1))
+        assert len(memories) == 1
+        existing_id = str(memories[0].id)
+
+        # Test Save (New ID)
         mem = Memory(
             id=str(uuid.uuid4()),
             content="must not be written",
@@ -78,6 +86,17 @@ async def test_create_storage_read_only_blocks_writes(seeded_sqlite):
         with pytest.raises(sqlite3.OperationalError) as exc_info:
             await storage.save_memory(mem)
         assert "readonly" in str(exc_info.value).lower() or "read" in str(exc_info.value).lower()
+
+        # Test Update (Existing ID)
+        with pytest.raises(sqlite3.OperationalError) as exc_info:
+            await storage.update_memory(existing_id, {"content": "updated"})
+        assert "readonly" in str(exc_info.value).lower() or "read" in str(exc_info.value).lower()
+
+        # Test Delete (Existing ID)
+        with pytest.raises(sqlite3.OperationalError) as exc_info:
+            await storage.delete_memory(existing_id)
+        assert "readonly" in str(exc_info.value).lower() or "read" in str(exc_info.value).lower()
+
     finally:
         await storage.dispose()
         if graph:

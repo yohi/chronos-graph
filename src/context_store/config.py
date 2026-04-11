@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 from urllib.parse import quote
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 
@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     dashboard_port: int = Field(
         default=8000, ge=1, le=65535, description="FastAPI dashboard bind port"
     )
-    dashboard_allowed_hosts: Any = Field(
+    dashboard_allowed_hosts: str | list[str] = Field(
         default_factory=lambda: ["localhost", "127.0.0.1"],
         description="TrustedHostMiddleware allowed hosts (comma-separated string or list)",
     )
@@ -117,7 +117,7 @@ class Settings(BaseSettings):
             return [str(h).strip() for h in v if str(h).strip()]
         if v is None:
             return ["localhost", "127.0.0.1"]
-        return []
+        raise ValueError(f"dashboard_allowed_hosts must be a string or list, not {type(v)}")
 
     # --- URL Fetch (SSRF 対策) ---
     url_fetch_concurrency: int = Field(default=3, ge=1)
@@ -150,6 +150,9 @@ class Settings(BaseSettings):
         self.custom_api_endpoint = self.custom_api_endpoint.strip()
         self.custom_api_model_name = self.custom_api_model_name.strip()
 
+        if self.embedding_provider == "custom-api" and not self.custom_api_model_name:
+            self.custom_api_model_name = "custom-model"
+
         if self.storage_backend == "postgres" and not postgres_password.strip():
             raise ValueError("POSTGRES_PASSWORD は storage_backend=postgres の場合に必須です。")
         if self.storage_backend == "postgres" and self.graph_enabled and not neo4j_password.strip():
@@ -177,7 +180,7 @@ class Settings(BaseSettings):
             )
         return self
 
-    @property
+    @computed_field
     def graph_backend(self) -> str:
         """Derived: 'sqlite' | 'neo4j' | 'disabled'."""
         if not self.graph_enabled:
@@ -188,7 +191,7 @@ class Settings(BaseSettings):
             return "neo4j"
         return "disabled"
 
-    @property
+    @computed_field
     def embedding_model(self) -> str:
         """Derived: 現在の embedding_provider に応じたモデル名。"""
         if self.embedding_provider == "openai":

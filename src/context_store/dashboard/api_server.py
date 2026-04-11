@@ -89,6 +89,7 @@ def create_app(
         app.router.lifespan_context = noop_lifespan
 
     from context_store.dashboard.routes import (
+        graph,
         memories,
         stats,
         system,
@@ -97,6 +98,7 @@ def create_app(
     app.include_router(stats.router, prefix="/api/stats", tags=["stats"])
     app.include_router(memories.router, prefix="/api/memories", tags=["memories"])
     app.include_router(system.router, prefix="/api/system", tags=["system"])
+    app.include_router(graph.router, prefix="/api/graph", tags=["graph"])
 
     return app
 

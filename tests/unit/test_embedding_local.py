@@ -116,7 +116,9 @@ class TestLocalModelEmbeddingProvider:
             assert provider._model_name == "cl-nagoya/ruri-v3-310m"
 
     def test_dimension_property_no_blocking_load(self) -> None:
-        """dimension をコンストラクタで指定した場合、dimension プロパティを呼び出してもモデルロードが発生しないことを確認。"""
+        """dimension をコンストラクタで指定した場合、
+        dimension プロパティを呼び出してもモデルロードが発生しないことを確認。
+        """
         from context_store.embedding.local_model import LocalModelEmbeddingProvider
 
         with patch("context_store.embedding.local_model.SentenceTransformer") as mock_cls:
@@ -125,7 +127,8 @@ class TestLocalModelEmbeddingProvider:
             # dimension プロパティを呼び出しても SentenceTransformer は呼ばれないはず
             assert provider.dimension == 512
             mock_cls.assert_not_called()
-            # 内部状態を確認(実装修正前は _get_model が呼ばれるため、mock_cls が呼ばれ、_model がセットされる)
+            # 内部状態を確認
+            # (実装修正前は _get_model が呼ばれるため、mock_cls が呼ばれ、_model がセットされる)
             assert provider._model is None
 
     def test_invalid_dimension(self) -> None:

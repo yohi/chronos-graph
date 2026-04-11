@@ -222,7 +222,8 @@ async def _create_graph_adapter(settings: "Settings") -> "GraphAdapter | None":
             or not settings.neo4j_password.get_secret_value().strip()
         ):
             raise ValueError(
-                "Neo4j uri, user, and password must be provided when graph is enabled with postgres backend."
+                "Neo4j uri, user, and password must be provided "
+                "when graph is enabled with postgres backend."
             )
         return await Neo4jGraphAdapter.create(
             uri=settings.neo4j_uri,

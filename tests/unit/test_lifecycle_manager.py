@@ -745,7 +745,8 @@ class TestSQLiteLifecycleStateStore:
                     )
                 """)
                 await conn.execute(
-                    "INSERT OR REPLACE INTO lifecycle_state (id, cleanup_lock_owner, cleanup_lock_touched_at, updated_at) "
+                    "INSERT OR REPLACE INTO lifecycle_state "
+                    "(id, cleanup_lock_owner, cleanup_lock_touched_at, updated_at) "
                     "VALUES (1, 'old_token', ?, ?)",
                     (old_time, old_time),
                 )

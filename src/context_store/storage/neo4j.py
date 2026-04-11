@@ -38,7 +38,6 @@ class Neo4jGraphAdapter:
     async def create(cls, uri: str, user: str, password: str | SecretStr) -> "Neo4jGraphAdapter":
         """Create a new adapter by connecting to Neo4j."""
         import neo4j
-
         from pydantic import SecretStr
 
         actual_password = (

@@ -10,7 +10,6 @@ import pytest
 from context_store.extensions.noop import NoOpActionLogger, NoOpPolicyHook, NoOpRewardSignal
 from context_store.models.memory import SourceType
 from context_store.models.search import SearchStrategy
-
 from tests.unit.conftest import make_settings
 
 # graph=None を明示的に渡すためのセンチネル
@@ -57,8 +56,8 @@ def _make_mock_embedding(dimension: int = 1536) -> MagicMock:
 
 def _make_mock_ingestion_pipeline() -> MagicMock:
     """IngestionPipeline モックを生成する。"""
-    from context_store.ingestion.pipeline import IngestionResult
     from context_store.ingestion.deduplicator import DeduplicationAction
+    from context_store.ingestion.pipeline import IngestionResult
 
     pipeline = AsyncMock()
     pipeline.ingest = AsyncMock(
@@ -333,7 +332,9 @@ class TestSearchOperation:
 
     @pytest.mark.asyncio
     async def test_adjusted_strategy_is_computed_from_policy_hook(self):
-        """PolicyHook.adjust_strategy() が返した戦略が RetrievalPipeline.search() に渡されること。"""
+        """PolicyHook.adjust_strategy() が返した戦略が
+        RetrievalPipeline.search() に渡されること。
+        """
         custom_strategy = SearchStrategy(vector_weight=0.8, keyword_weight=0.1, graph_weight=0.1)
         policy_hook = AsyncMock()
         policy_hook.adjust_strategy = AsyncMock(return_value=custom_strategy)

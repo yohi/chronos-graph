@@ -360,7 +360,8 @@ class SQLiteLifecycleStateStore:
             query = """
                 UPDATE lifecycle_state
                 SET save_count = ?, last_cleanup_at = ?, last_cleanup_cursor_at = ?,
-                    last_cleanup_id = ?, cleanup_lock_owner = ?, cleanup_lock_touched_at = ?, updated_at = ?
+                    last_cleanup_id = ?, cleanup_lock_owner = ?,
+                    cleanup_lock_touched_at = ?, updated_at = ?
                 WHERE id = 1
             """
             params = [
@@ -428,9 +429,13 @@ class SQLiteLifecycleStateStore:
             now = datetime.now(timezone.utc)
 
             # 1. 通常の取得試行（ロックされていない場合のみ取得）
+            sql_update = (
+                "UPDATE lifecycle_state "
+                "SET cleanup_lock_owner = ?, cleanup_lock_touched_at = ?, updated_at = ? "
+                "WHERE id = 1 AND cleanup_lock_owner IS NULL"
+            )
             cursor = await conn.execute(
-                "UPDATE lifecycle_state SET cleanup_lock_owner = ?, cleanup_lock_touched_at = ?, updated_at = ? "
-                "WHERE id = 1 AND cleanup_lock_owner IS NULL",
+                sql_update,
                 (token, now.isoformat(), now.isoformat()),
             )
             await conn.commit()
@@ -440,7 +445,8 @@ class SQLiteLifecycleStateStore:
             # 2. 取得失敗時、スタルロックのチェックと強制解放を試行
             conn.row_factory = aiosqlite.Row
             cursor = await conn.execute(
-                "SELECT cleanup_lock_owner, cleanup_lock_touched_at FROM lifecycle_state WHERE id = 1"
+                "SELECT cleanup_lock_owner, cleanup_lock_touched_at "
+                "FROM lifecycle_state WHERE id = 1"
             )
             row = await cursor.fetchone()
             if row is None or row["cleanup_lock_owner"] is None:
@@ -448,8 +454,9 @@ class SQLiteLifecycleStateStore:
 
             touched_at_str = row["cleanup_lock_touched_at"]
             if touched_at_str is None:
-                # touched_at が NULL の場合は、古いスキーマからの移行直後などの可能性があるため
-                # updated_at を代替として使用することを検討するが、ここではシンプルに強制解放対象とする
+                # touched_at が NULL の場合は、古いスキーマからの移行直後などの
+                # 可能性があるため updated_at を代替として使用することを検討するが、
+                # ここではシンプルに強制解放対象とする
                 elapsed = float(self._stale_lock_timeout_seconds + 1)
             else:
                 touched_at = datetime.fromisoformat(touched_at_str).replace(tzinfo=timezone.utc)
@@ -462,9 +469,14 @@ class SQLiteLifecycleStateStore:
                     elapsed,
                 )
                 # CAS (Compare-And-Swap) 方式で安全に上書き取得
+                sql_takeover = (
+                    "UPDATE lifecycle_state "
+                    "SET cleanup_lock_owner = ?, cleanup_lock_touched_at = ?, updated_at = ? "
+                    "WHERE id = 1 AND cleanup_lock_owner = ? "
+                    "AND (cleanup_lock_touched_at = ? OR cleanup_lock_touched_at IS NULL)"
+                )
                 cursor = await conn.execute(
-                    "UPDATE lifecycle_state SET cleanup_lock_owner = ?, cleanup_lock_touched_at = ?, updated_at = ? "
-                    "WHERE id = 1 AND cleanup_lock_owner = ? AND (cleanup_lock_touched_at = ? OR cleanup_lock_touched_at IS NULL)",
+                    sql_takeover,
                     (
                         token,
                         now.isoformat(),
@@ -486,9 +498,13 @@ class SQLiteLifecycleStateStore:
         async with aiosqlite.connect(self._db_path) as conn:
             await self._ensure_tables(conn)
             now = datetime.now(timezone.utc)
+            sql_release = (
+                "UPDATE lifecycle_state "
+                "SET cleanup_lock_owner = NULL, cleanup_lock_touched_at = NULL, updated_at = ? "
+                "WHERE id = 1 AND cleanup_lock_owner = ?"
+            )
             await conn.execute(
-                "UPDATE lifecycle_state SET cleanup_lock_owner = NULL, cleanup_lock_touched_at = NULL, updated_at = ? "
-                "WHERE id = 1 AND cleanup_lock_owner = ?",
+                sql_release,
                 (now.isoformat(), token),
             )
             await conn.commit()
@@ -500,8 +516,12 @@ class SQLiteLifecycleStateStore:
         async with aiosqlite.connect(self._db_path) as conn:
             await self._ensure_tables(conn)
             now = datetime.now(timezone.utc)
+            sql_hb = (
+                "UPDATE lifecycle_state SET cleanup_lock_touched_at = ? "
+                "WHERE id = 1 AND cleanup_lock_owner = ?"
+            )
             await conn.execute(
-                "UPDATE lifecycle_state SET cleanup_lock_touched_at = ? WHERE id = 1 AND cleanup_lock_owner = ?",
+                sql_hb,
                 (now.isoformat(), token),
             )
             await conn.commit()
@@ -513,11 +533,13 @@ class SQLiteLifecycleStateStore:
         async with aiosqlite.connect(self._db_path) as conn:
             await self._ensure_tables(conn)
             conn.row_factory = aiosqlite.Row
-            cursor = await conn.execute(
-                "SELECT wal_failure_count, wal_last_failure_ts, wal_last_checkpoint_result, "
-                "wal_last_observed_size_bytes, wal_consecutive_passive_failures, wal_failure_window "
+            sql_load = (
+                "SELECT wal_failure_count, wal_last_failure_ts, "
+                "wal_last_checkpoint_result, wal_last_observed_size_bytes, "
+                "wal_consecutive_passive_failures, wal_failure_window "
                 "FROM lifecycle_wal_state WHERE id = 1"
             )
+            cursor = await conn.execute(sql_load)
             row = await cursor.fetchone()
 
         if row is None:
@@ -811,7 +833,8 @@ class LifecycleManager:
 
         Returns:
             (should_schedule_followup, total_items_count)
-            should_schedule_followup: 未処理の保存が残っており、次回のクリーンアップを即座にスケジュールすべきか。
+            should_schedule_followup: 未処理の保存が残っており、
+                次回のクリーンアップを即座にスケジュールすべきか。
             total_items_count: 削除またはアーカイブされたアイテムの総数。
         """
         if now is None:
@@ -933,7 +956,8 @@ class LifecycleManager:
             if not saved:
                 raise LockLostError("Final state save failed: lock lost")
 
-            # 未処理の保存がまだ残っているか、Consolidator に次ページがある場合は、フォローアップを要求
+            # 未処理の保存がまだ残っているか、Consolidator に次ページがある場合は、
+            # フォローアップを要求
             if remaining_count >= self._save_count_threshold or consolidator_result.has_more:
                 logger.info(
                     "Follow-up cleanup requested (remaining=%d, has_more=%s).",
@@ -987,7 +1011,8 @@ class LifecycleManager:
 
     async def _run_wal_checkpoint(self) -> None:
         """WAL チェックポイントを実行し、必要に応じて TRUNCATE を試みる。"""
-        assert self._wal_checkpoint_fn is not None
+        if self._wal_checkpoint_fn is None:
+            raise RuntimeError("WAL checkpoint function is not configured")
 
         wal_state = await self._state_store.load_wal_state()
         now = datetime.now(timezone.utc)

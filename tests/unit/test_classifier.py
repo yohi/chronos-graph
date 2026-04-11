@@ -68,7 +68,8 @@ def test_classifier_episodic_timestamp() -> None:
 def test_classifier_semantic_definition() -> None:
     """「JWTとはJSON Web Tokenの略で...」→ SEMANTIC。"""
     raw = _make_raw(
-        "JWTとはJSON Web Tokenの略で、認証情報をJSONオブジェクトとして安全に送受信するための仕様です。"
+        "JWTとはJSON Web Tokenの略で、認証情報をJSONオブジェクトとして"
+        "安全に送受信するための仕様です。"
     )
     classifier = Classifier()
     result = classifier.classify(raw)

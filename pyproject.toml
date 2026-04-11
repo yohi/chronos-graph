@@ -29,6 +29,11 @@ embedding-local = [
     "sentence-transformers>=3.0.0",
     "numpy>=1.26.0",
 ]
+dashboard = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "websockets>=12.0",
+]
 embedding-openai = [
     "openai>=1.0.0",
 ]
@@ -49,6 +54,7 @@ all = [
 
 [project.scripts]
 context-store = "context_store.__main__:main"
+chronos-dashboard = "context_store.dashboard.api_server:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

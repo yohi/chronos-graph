@@ -113,8 +113,7 @@ class CustomAPIEmbeddingProvider:
                     if isinstance(value, bool) or not isinstance(value, (int, float)):
                         raise ValueError(
                             'Each value in response["embeddings"] must be an int or float; '
-                            f"invalid response["
-                            f'embeddings"][{index}][{element_index}]={value!r} '
+                            f'invalid response["embeddings"][{index}][{element_index}]={value!r} '
                             f"for self._dimension={self._dimension}"
                         )
                 if len(vector) != self._dimension:

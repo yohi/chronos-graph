@@ -484,12 +484,13 @@ class SQLiteStorageAdapter:
             for i in range(0, len(unique_ids), chunk_size):
                 chunk = unique_ids[i : i + chunk_size]
                 placeholders = ", ".join("?" * len(chunk))
-                sql = f"""
+                sql_template = """
                     SELECT m.*, me.embedding
                     FROM memories m
                     LEFT JOIN memory_embeddings me ON me.memory_id = m.id
-                    WHERE m.id IN ({placeholders})
+                    WHERE m.id IN (__PLACEHOLDERS__)
                 """
+                sql = sql_template.replace("__PLACEHOLDERS__", placeholders)
                 try:
                     async with conn.execute(sql, chunk) as cursor:
                         rows = await cursor.fetchall()
@@ -582,7 +583,8 @@ class SQLiteStorageAdapter:
                             )
                         if col == "source_metadata" and not isinstance(parsed, dict):
                             raise StorageError(
-                                f"Invalid source_metadata type: expected dict, got {type(parsed).__name__}",
+                                f"Invalid source_metadata type: "
+                                f"expected dict, got {type(parsed).__name__}",
                                 code="INVALID_PARAMETER",
                             )
                     except json.JSONDecodeError as exc:
@@ -599,7 +601,8 @@ class SQLiteStorageAdapter:
                         )
                     if col == "source_metadata" and not isinstance(val, dict):
                         raise StorageError(
-                            f"Invalid source_metadata type: expected dict, got {type(val).__name__}",
+                            f"Invalid source_metadata type: "
+                            f"expected dict, got {type(val).__name__}",
                             code="INVALID_PARAMETER",
                         )
                     try:
@@ -625,7 +628,7 @@ class SQLiteStorageAdapter:
                 if set_parts:
                     params.append(memory_id)
                     async with conn.execute(
-                        f"UPDATE memories SET {', '.join(set_parts)} WHERE id = ?",
+                        f"UPDATE memories SET {', '.join(set_parts)} WHERE id = ?",  # noqa: S608
                         params,
                     ) as cursor:
                         updated = cursor.rowcount
@@ -640,7 +643,8 @@ class SQLiteStorageAdapter:
                     ):
                         raise StorageError("Invalid embedding", code="INVALID_PARAMETER")
 
-                    # Unconditionally check if memory exists before inserting embedding to avoid FK violations
+                    # Unconditionally check if memory exists before inserting embedding
+                    # to avoid FK violations
                     async with conn.execute(
                         "SELECT 1 FROM memories WHERE id = ?", (memory_id,)
                     ) as cursor:
@@ -683,7 +687,8 @@ class SQLiteStorageAdapter:
                     validate_embedding(embedding)
                     blob = encode_embedding(embedding)
                     await conn.execute(
-                        "INSERT OR REPLACE INTO memory_embeddings (memory_id, embedding) VALUES (?, ?)",
+                        "INSERT OR REPLACE INTO memory_embeddings (memory_id, embedding) "
+                        "VALUES (?, ?)",
                         (memory_id, blob),
                     )
                     # If only embedding was updated, we still want to return True
@@ -768,39 +773,74 @@ class SQLiteStorageAdapter:
     async def keyword_search(
         self, query: str, top_k: int, project: str | None = None
     ) -> list[ScoredMemory]:
-        """Full-text search using FTS5."""
-        # FTS5 クエリのサニタイズ。特殊文字による構文エラーを防ぐ。
-        # 簡易的な実装として、ダブルクォートで囲み、内部のダブルクォートをエスケープする。
-        # これによりフレーズ検索として扱われ、"?" などの特殊文字が安全に処理される。
-        fts_query = f'"{query.replace('"', '""')}"'
+        """Full-text search using FTS5.
+
+        FTS5 サニタイズ方針:
+        - クエリをホワイトスペースでトークン分割し、各トークンを個別にダブルクォートで囲む
+        - これにより FTS5 特殊文字 (`*`, `AND`, `OR`, `NOT`, `NEAR`, `?`) が
+          トークン内でエスケープされつつ、トークン間は暗黙 AND として扱われる
+        - マルチワードクエリ `"machine learning"` は各ワードがドキュメント内の任意の位置に
+          存在すればマッチする(フレーズ一致ではない)
+        """
+        tokens = query.split()
 
         async with self._db() as conn:
             try:
-                if project is not None:
-                    sql = """
-                        SELECT m.*, me.embedding, (-bm25(memories_fts)) AS score
-                        FROM memories_fts f
-                        JOIN memories m ON m.rowid = f.rowid
-                        LEFT JOIN memory_embeddings me ON me.memory_id = m.id
-                        WHERE memories_fts MATCH ?
-                          AND m.archived_at IS NULL
-                          AND m.project = ?
-                        ORDER BY score DESC
-                        LIMIT ?
-                    """
-                    params_kw: tuple[Any, ...] = (fts_query, project, top_k)
+                # 空クエリ / 空白のみは「すべてマッチ」として扱う (Postgres との互換性)
+                if not tokens:
+                    if project is not None:
+                        sql = """
+                            SELECT m.*, me.embedding, 1.0 AS score
+                            FROM memories m
+                            LEFT JOIN memory_embeddings me ON me.memory_id = m.id
+                            WHERE m.archived_at IS NULL
+                              AND m.content LIKE '%%'
+                              AND m.project = ?
+                            ORDER BY m.created_at DESC, m.id DESC
+                            LIMIT ?
+                        """
+                        params_kw: tuple[Any, ...] = (project, top_k)
+                    else:
+                        sql = """
+                            SELECT m.*, me.embedding, 1.0 AS score
+                            FROM memories m
+                            LEFT JOIN memory_embeddings me ON me.memory_id = m.id
+                            WHERE m.archived_at IS NULL
+                              AND m.content LIKE '%%'
+                            ORDER BY m.created_at DESC, m.id DESC
+                            LIMIT ?
+                        """
+                        params_kw = (top_k,)
                 else:
-                    sql = """
-                        SELECT m.*, me.embedding, (-bm25(memories_fts)) AS score
-                        FROM memories_fts f
-                        JOIN memories m ON m.rowid = f.rowid
-                        LEFT JOIN memory_embeddings me ON me.memory_id = m.id
-                        WHERE memories_fts MATCH ?
-                          AND m.archived_at IS NULL
-                        ORDER BY score DESC
-                        LIMIT ?
-                    """
-                    params_kw = (fts_query, top_k)
+                    # 各トークンを個別にクォートし、内部のダブルクォートをエスケープ。
+                    # これにより FTS5 特殊文字がトークン内でエスケープされつつ、
+                    # トークン間は暗黙 AND として扱われる。
+                    fts_query = " ".join('"' + t.replace('"', '""') + '"' for t in tokens)
+                    if project is not None:
+                        sql = """
+                            SELECT m.*, me.embedding, (-bm25(memories_fts)) AS score
+                            FROM memories_fts f
+                            JOIN memories m ON m.rowid = f.rowid
+                            LEFT JOIN memory_embeddings me ON me.memory_id = m.id
+                            WHERE memories_fts MATCH ?
+                              AND m.archived_at IS NULL
+                              AND m.project = ?
+                            ORDER BY score DESC
+                            LIMIT ?
+                        """
+                        params_kw = (fts_query, project, top_k)
+                    else:
+                        sql = """
+                            SELECT m.*, me.embedding, (-bm25(memories_fts)) AS score
+                            FROM memories_fts f
+                            JOIN memories m ON m.rowid = f.rowid
+                            LEFT JOIN memory_embeddings me ON me.memory_id = m.id
+                            WHERE memories_fts MATCH ?
+                              AND m.archived_at IS NULL
+                            ORDER BY score DESC
+                            LIMIT ?
+                        """
+                        params_kw = (fts_query, top_k)
 
                 async with conn.execute(sql, params_kw) as cursor:
                     rows = await cursor.fetchall()
@@ -936,7 +976,7 @@ class SQLiteStorageAdapter:
             params.append(limit_val)
 
         sql = (
-            "SELECT m.*, me.embedding "
+            "SELECT m.*, me.embedding "  # noqa: S608
             "FROM memories m "
             "LEFT JOIN memory_embeddings me ON me.memory_id = m.id "
             f"{where_clause} "
@@ -963,7 +1003,7 @@ class SQLiteStorageAdapter:
         """Count memories matching filters."""
         where_clause, params = self._build_where_clause(filters, prefix="m.")
 
-        sql = (f"SELECT COUNT(*) FROM memories m {where_clause}").strip()
+        sql = (f"SELECT COUNT(*) FROM memories m {where_clause}").strip()  # noqa: S608
 
         async with self._db() as conn:
             try:

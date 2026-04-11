@@ -242,7 +242,8 @@ async def _create_graph_adapter(
             or not settings.neo4j_password.get_secret_value().strip()
         ):
             raise ValueError(
-                "Neo4j uri, user, and password must be provided when graph is enabled with postgres backend."
+                "Neo4j uri, user, and password must be provided "
+                "when graph is enabled with postgres backend."
             )
         if read_only:
             raise NotImplementedError("read_only mode for neo4j backend is added in PR 4")

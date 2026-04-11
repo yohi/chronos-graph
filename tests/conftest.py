@@ -28,7 +28,7 @@ def make_mock_embedding_provider(dim: int = 16) -> EmbeddingProvider:
             # テキストのハッシュに基づいた決定論的なベクトルを返す（hash() ではなく hashlib を使用）
             h = hashlib.sha256(text.encode("utf-8")).digest()
             seed = int.from_bytes(h[:4], "little") % (2**31)
-            rng = random.Random(seed)
+            rng = random.Random(seed)  # noqa: S311
             return [rng.uniform(-1, 1) for _ in range(dim)]
 
         async def embed_batch(self, texts: list[str]) -> list[list[float]]:

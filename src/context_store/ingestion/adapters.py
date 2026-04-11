@@ -297,7 +297,8 @@ class URLAdapter:
             addr = ipaddress.ip_address(hostname)
             if not self.settings.allow_private_urls and self._is_restricted_ip(str(addr)):
                 raise ValueError(
-                    f"Blocked: IP literal address '{hostname}' is private/loopback/restricted (SSRF prevention)"
+                    f"Blocked: IP literal address '{hostname}' is "
+                    "private/loopback/restricted (SSRF prevention)"
                 )
             return [str(addr)]
         except ValueError as e:
@@ -319,7 +320,8 @@ class URLAdapter:
 
             if not self.settings.allow_private_urls and self._is_restricted_ip(ip_str):
                 raise ValueError(
-                    f"Blocked: DNS resolved '{hostname}' to restricted IP '{ip_str}' (SSRF prevention)"
+                    f"Blocked: DNS resolved '{hostname}' to restricted IP '{ip_str}' "
+                    "(SSRF prevention)"
                 )
             resolved_ips.append(ip_str)
 
@@ -454,7 +456,8 @@ class URLAdapter:
             if status_code in (301, 302, 303, 307, 308):
                 if redirect_count >= self.settings.url_max_redirects:
                     raise ValueError(
-                        f"Too many redirects: exceeded url_max_redirects={self.settings.url_max_redirects}"
+                        "Too many redirects: exceeded "
+                        f"url_max_redirects={self.settings.url_max_redirects}"
                     )
                 location = headers.get("location", "")
                 if not location:

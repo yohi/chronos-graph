@@ -501,34 +501,55 @@ class SQLiteGraphAdapter:
     # ------------------------------------------------------------------
 
     async def list_edges_for_memories(self, memory_ids: list[str]) -> list[Edge]:
-        """Return all edges where BOTH endpoints are in ``memory_ids``."""
+        """Return all edges where BOTH endpoints are in ``memory_ids``.
+
+        For large input lists that exceed SQLite's parameter limit (999),
+        implementations MUST chunk the query internally (rev.10 §3.5).
+        """
         if not memory_ids:
             return []
 
-        # SQLite parameter limit (999) への対策: 500 件ずつチャンク分割
-        CHUNK_SIZE = 500
+        ids_set = set(memory_ids)
+        unique_ids = list(ids_set)
+        # SQLite parameter limit (999) への対策
+        CHUNK_SIZE = 900
         all_edges: list[Edge] = []
-        seen: set[tuple[str, str, str]] = set()
 
         async with self._connect() as conn:
             conn.row_factory = aiosqlite.Row
-            for i in range(0, len(memory_ids), CHUNK_SIZE):
-                chunk = memory_ids[i : i + CHUNK_SIZE]
+            for i in range(0, len(unique_ids), CHUNK_SIZE):
+                chunk = unique_ids[i : i + CHUNK_SIZE]
                 placeholders = ",".join("?" * len(chunk))
                 sql_template = """
                     SELECT from_id, to_id, edge_type, props
                     FROM memory_edges
-                    WHERE from_id IN (__PLACEHOLDERS__) AND to_id IN (__PLACEHOLDERS__)
+                    WHERE from_id IN (__PLACEHOLDERS__)
                 """
                 query = sql_template.replace("__PLACEHOLDERS__", placeholders)
-                async with conn.execute(query, [*chunk, *chunk]) as cursor:
+                async with conn.execute(query, chunk) as cursor:
                     rows = await cursor.fetchall()
 
                 for row in rows:
-                    key = (row["from_id"], row["to_id"], row["edge_type"])
-                    if key in seen:
-                        continue
-                    seen.add(key)
+                    if row["to_id"] in ids_set:
+                        all_edges.append(
+                            Edge(
+                                from_id=row["from_id"],
+                                to_id=row["to_id"],
+                                edge_type=row["edge_type"],
+                                properties=json.loads(row["props"]) if row["props"] else {},
+                            )
+                        )
+        return all_edges
+
+    async def list_all_edges(self) -> list[Edge]:
+        """Return all edges in the graph."""
+        all_edges: list[Edge] = []
+        async with self._connect() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                "SELECT from_id, to_id, edge_type, props FROM memory_edges"
+            ) as cursor:
+                async for row in cursor:
                     all_edges.append(
                         Edge(
                             from_id=row["from_id"],

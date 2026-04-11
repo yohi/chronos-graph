@@ -154,10 +154,11 @@ async def create_storage(
         graph_adp = await _create_graph_adapter(settings, read_only=read_only)
         cache_adp = await _create_cache_adapter(settings)
 
-        # Start cache coherence checker for SQLite + InMemory combination
-        # Default: only start in write mode (to avoid RO mount issues)
+        # Start cache coherence checker for SQLite + InMemory combination.
+        # Default: start even in read_only mode to keep Dashboard cache fresh,
+        # unless explicitly disabled via settings (e.g. for strict RO mounts).
         if (
-            (not read_only or settings.force_cache_coherence_in_read_only)
+            (not read_only or not getattr(settings, "disable_cache_coherence_in_read_only", False))
             and settings.storage_backend == "sqlite"
             and settings.cache_backend == "inmemory"
         ):

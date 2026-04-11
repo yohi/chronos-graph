@@ -27,15 +27,19 @@ class Neo4jGraphAdapter:
     function without graph capabilities.
     """
 
-    def __init__(self, driver: Any) -> None:
-        self._driver = driver
-
     # ------------------------------------------------------------------
     # Factory
     # ------------------------------------------------------------------
 
     @classmethod
-    async def create(cls, uri: str, user: str, password: str | SecretStr) -> "Neo4jGraphAdapter":
+    async def create(
+        cls,
+        uri: str,
+        user: str,
+        password: str | SecretStr,
+        *,
+        read_only: bool = False,
+    ) -> "Neo4jGraphAdapter":
         """Create a new adapter by connecting to Neo4j."""
         import neo4j
 
@@ -45,7 +49,11 @@ class Neo4jGraphAdapter:
             password.get_secret_value() if isinstance(password, SecretStr) else password
         )
         driver = neo4j.AsyncGraphDatabase.driver(uri, auth=(user, actual_password))
-        return cls(driver)
+        return cls(driver, read_only=read_only)
+
+    def __init__(self, driver: Any, *, read_only: bool = False) -> None:
+        self._driver = driver
+        self._read_only = read_only
 
     # ------------------------------------------------------------------
     # GraphAdapter Protocol
@@ -198,14 +206,51 @@ class Neo4jGraphAdapter:
         """Close the driver."""
         await self._driver.close()
 
+    def _session(self) -> Any:
+        """READ session if read_only else WRITE session."""
+        import neo4j
+
+        access_mode = neo4j.READ_ACCESS if self._read_only else neo4j.WRITE_ACCESS
+        return self._driver.session(default_access_mode=access_mode)
+
     # ------------------------------------------------------------------
     # Dashboard graph queries (PR 3-4)
     # ------------------------------------------------------------------
 
     async def list_edges_for_memories(self, memory_ids: list[str]) -> list[Edge]:
-        """Implemented in PR 4."""
-        raise NotImplementedError("Implemented in PR 4")
+        """Return all edges where BOTH endpoints are in ``memory_ids``."""
+        if not memory_ids:
+            return []
+        query = """
+        MATCH (a:Memory)-[r]->(b:Memory)
+        WHERE a.id IN $ids AND b.id IN $ids
+        RETURN a.id AS from_id, b.id AS to_id, type(r) AS edge_type, properties(r) AS properties
+        """
+        try:
+            async with self._session() as session:
+                result = await session.run(query, ids=memory_ids)
+                records = [record async for record in result]
+            return [
+                Edge(
+                    from_id=r["from_id"],
+                    to_id=r["to_id"],
+                    edge_type=r["edge_type"],
+                    properties=dict(r["properties"]),
+                )
+                for r in records
+            ]
+        except Exception as exc:
+            logger.warning("Neo4j list_edges_for_memories failed (degraded): %s", exc)
+            return []
 
     async def count_edges(self) -> int:
-        """Implemented in PR 4."""
-        raise NotImplementedError("Implemented in PR 4")
+        """Return the total number of edges in the graph."""
+        query = "MATCH ()-[r]->() RETURN count(r) AS cnt"
+        try:
+            async with self._session() as session:
+                result = await session.run(query)
+                record = await result.single()
+            return int(record["cnt"]) if record else 0
+        except Exception as exc:
+            logger.warning("Neo4j count_edges failed (degraded): %s", exc)
+            return 0

@@ -244,12 +244,11 @@ async def _create_graph_adapter(
             raise ValueError(
                 "Neo4j uri, user, and password must be provided when graph is enabled with postgres backend."
             )
-        if read_only:
-            raise NotImplementedError("read_only mode for neo4j backend is added in PR 4")
         return await Neo4jGraphAdapter.create(
             uri=settings.neo4j_uri,
             user=settings.neo4j_user,
             password=settings.neo4j_password,
+            read_only=read_only,
         )
 
     raise ValueError(f"Unsupported storage_backend for graph: {settings.storage_backend!r}")

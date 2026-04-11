@@ -19,14 +19,14 @@ def default_settings(monkeypatch):
     }
 
 
-def test_default_settings(monkeypatch):
+def test_default_settings(monkeypatch, default_settings):
     # 直接インスタンス化して、真のデフォルト値を検証する
     # monkeypatch を使用して、テスト実行時のみ環境変数をクリアする
     for field_name in Settings.model_fields.keys():
         monkeypatch.delenv(field_name.upper(), raising=False)
 
     # _env_file=None を指定して、.env ファイルの読み込みも回避する
-    settings = Settings(_env_file=None, openai_api_key="sk-test")
+    settings = Settings(_env_file=None, openai_api_key=default_settings["openai_api_key"])
     assert settings.postgres_port == 5432
     assert settings.embedding_provider == "openai"
     assert settings.decay_half_life_days == 30
@@ -230,21 +230,21 @@ def test_settings_priority_dotenv_over_env(tmp_path, monkeypatch, default_settin
     # デフォルトの検証エラーを避けるため、必要な認証情報のみを指定
     # 注: default_settings は引数にリストするだけで、すべての環境変数をクリアする効果がある
     settings = TestSettings(
-        openai_api_key="sk-test",
-        postgres_password="test",
-        neo4j_password="test",
+        openai_api_key=default_settings["openai_api_key"],
+        postgres_password=default_settings["postgres_password"],
+        neo4j_password=default_settings["neo4j_password"],
     )
 
     # 5. .env が優先されていることをアサート (sqlite であるはず)
     assert settings.storage_backend == "sqlite"
 
 
-def test_settings_has_dashboard_fields_with_defaults(monkeypatch):
+def test_settings_has_dashboard_fields_with_defaults(monkeypatch, default_settings):
     """rev.10: Dashboard 用フィールドのデフォルト値を確認。"""
     for field_name in Settings.model_fields.keys():
         monkeypatch.delenv(field_name.upper(), raising=False)
 
-    s = Settings(_env_file=None, openai_api_key="sk-test")
+    s = Settings(_env_file=None, openai_api_key=default_settings["openai_api_key"])
 
     assert s.log_level == "INFO"
     assert s.dashboard_port == 8000
@@ -292,10 +292,10 @@ def test_settings_embedding_model_derivation(monkeypatch, default_settings):
     assert s.embedding_model == "intfloat/multilingual-e5-base"
 
     monkeypatch.setenv("EMBEDDING_PROVIDER", "openai")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENAI_API_KEY", default_settings["openai_api_key"])
     s = Settings(_env_file=None, **default_settings)
     s.embedding_provider = "openai"  # type: ignore[assignment]
-    s.openai_api_key = SecretStr("sk-test")
+    s.openai_api_key = SecretStr(default_settings["openai_api_key"])
     assert s.embedding_model == "openai/text-embedding-3-small"
 
     monkeypatch.setenv("EMBEDDING_PROVIDER", "litellm")

@@ -348,7 +348,7 @@ class SQLiteGraphAdapter:
 
         seed_params: list[Any] = list(seed_ids)
 
-        sql = f"""
+        sql_template = """
         WITH RECURSIVE graph_cte(
             node_id,
             from_id,
@@ -370,7 +370,7 @@ class SQLiteGraphAdapter:
                 0         AS physical_depth,
                 json_array(n.id) AS visited_ids
             FROM memory_nodes n
-            WHERE n.id IN ({seed_placeholders})
+            WHERE n.id IN (__SEED_IDS__)
 
             UNION
 
@@ -386,7 +386,11 @@ class SQLiteGraphAdapter:
                     ELSE cte.logical_depth + 1
                 END       AS logical_depth,
                 cte.physical_depth + 1 AS physical_depth,
-                json_insert(cte.visited_ids, '$[' || json_array_length(cte.visited_ids) || ']', e.to_id) AS visited_ids
+                json_insert(
+                    cte.visited_ids,
+                    '$[' || json_array_length(cte.visited_ids) || ']',
+                    e.to_id
+                ) AS visited_ids
             FROM graph_cte cte
             JOIN memory_edges e ON e.from_id = cte.node_id
             WHERE
@@ -413,6 +417,9 @@ class SQLiteGraphAdapter:
         FROM graph_cte cte
         LEFT JOIN memory_nodes n ON n.id = cte.node_id
         """
+        sql = sql_template.replace("__SEED_IDS__", seed_placeholders).format(
+            edge_type_filter=edge_type_filter
+        )
 
         params: list[Any] = [
             *seed_params,

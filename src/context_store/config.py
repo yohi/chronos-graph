@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal, assert_never
 from urllib.parse import quote
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 
@@ -26,6 +26,31 @@ class Settings(BaseSettings):
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         # .env ファイルを OS 環境変数よりも優先する
+
+        # pydantic-settings 2.x の EnvSettingsSource は list 型フィールドを
+        # JSON パースしようとするが、失敗時に SettingsError を投げるため、
+        # これを回避して生の文字列をバリデータに渡すようにラップする。
+        import json
+
+        from pydantic_settings import DotEnvSettingsSource, EnvSettingsSource
+
+        def patch_source(source: PydanticBaseSettingsSource) -> None:
+            if not isinstance(source, (EnvSettingsSource, DotEnvSettingsSource)):
+                return
+
+            original_decode = source.decode_complex_value
+
+            def robust_decode(field_name: str, field: Any, value: Any) -> Any:
+                try:
+                    return original_decode(field_name, field, value)
+                except (ValueError, TypeError, json.JSONDecodeError):
+                    return value
+
+            source.decode_complex_value = robust_decode  # type: ignore[method-assign]
+
+        patch_source(env_settings)
+        patch_source(dotenv_settings)
+
         return init_settings, dotenv_settings, env_settings, file_secret_settings
 
     # --- Storage Backend ---
@@ -59,6 +84,7 @@ class Settings(BaseSettings):
     litellm_model: str = "openai/text-embedding-3-small"
     embedding_dimension: int = Field(default=1536, ge=1)
     custom_api_endpoint: str = ""
+    custom_api_model_name: str = "custom-model"
 
     # --- Lifecycle ---
     decay_half_life_days: int = Field(default=30, ge=1)
@@ -93,6 +119,37 @@ class Settings(BaseSettings):
     wal_checkpoint_mode_truncate: str = "TRUNCATE"
     cache_coherence_poll_interval_seconds: float = Field(default=5.0, gt=0.0)
 
+    # --- Logging ---
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
+        default="INFO", description="Root log level"
+    )
+
+    # --- Dashboard (rev.10) ---
+    dashboard_port: int = Field(
+        default=8000, ge=1, le=65535, description="FastAPI dashboard bind port"
+    )
+    dashboard_allowed_hosts: list[str] = Field(
+        default_factory=lambda: ["localhost", "127.0.0.1"],
+        description="TrustedHostMiddleware allowed hosts (comma-separated string or list)",
+    )
+
+    @field_validator("dashboard_allowed_hosts", mode="before")
+    @classmethod
+    def _parse_dashboard_allowed_hosts(cls, v: Any) -> list[str]:
+        default_hosts = ["localhost", "127.0.0.1"]
+        if v is None:
+            return default_hosts
+
+        hosts: list[str] = []
+        if isinstance(v, str):
+            hosts = [h.strip() for h in v.split(",") if h.strip()]
+        elif isinstance(v, list):
+            hosts = [str(h).strip() for h in v if str(h).strip()]
+        else:
+            raise ValueError(f"dashboard_allowed_hosts must be a string or list, not {type(v)}")
+
+        return hosts if hosts else default_hosts
+
     # --- URL Fetch (SSRF 対策) ---
     url_fetch_concurrency: int = Field(default=3, ge=1)
     allow_private_urls: bool = False
@@ -114,38 +171,76 @@ class Settings(BaseSettings):
         )
 
     @model_validator(mode="after")
-    def validate_credentials(self) -> "Settings":
-        postgres_password = self.postgres_password.get_secret_value()
-        neo4j_password = self.neo4j_password.get_secret_value()
-        openai_api_key = self.openai_api_key.get_secret_value()
+    def _strip_and_set_defaults(self) -> "Settings":
         self.local_model_name = self.local_model_name.strip()
         self.litellm_api_base = self.litellm_api_base.strip()
         self.litellm_model = self.litellm_model.strip()
         self.custom_api_endpoint = self.custom_api_endpoint.strip()
+        self.custom_api_model_name = self.custom_api_model_name.strip()
 
-        if self.storage_backend == "postgres" and not postgres_password.strip():
-            raise ValueError("POSTGRES_PASSWORD は storage_backend=postgres の場合に必須です。")
-        if self.storage_backend == "postgres" and self.graph_enabled and not neo4j_password.strip():
-            raise ValueError(
-                "NEO4J_PASSWORD は storage_backend=postgres かつ graph_enabled=true の場合に必須です。"
-            )
+        if self.embedding_provider == "custom-api" and not self.custom_api_model_name:
+            self.custom_api_model_name = "custom-model"
+        return self
 
-        # 以下は、明示的に provider が指定され、かつ api_key が空の場合にのみエラーとする
-        if self.embedding_provider == "openai" and not openai_api_key.strip():
-            raise ValueError("OPENAI_API_KEY は embedding_provider=openai の場合に必須です。")
-        if self.embedding_provider == "local-model" and not self.local_model_name:
-            raise ValueError(
-                "LOCAL_MODEL_NAME は embedding_provider=local-model の場合に必須です。"
-            )
-        if self.embedding_provider == "litellm":
+    @model_validator(mode="after")
+    def _validate_storage_config(self) -> "Settings":
+        if self.storage_backend == "postgres":
+            if not self.postgres_password.get_secret_value().strip():
+                raise ValueError("POSTGRES_PASSWORD は storage_backend=postgres の場合に必須です。")
+            if self.graph_enabled and not self.neo4j_password.get_secret_value().strip():
+                raise ValueError(
+                    "NEO4J_PASSWORD は storage_backend=postgres かつ "
+                    "graph_enabled=true の場合に必須です。"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_embedding_config(self) -> "Settings":
+        # 明示的に provider が指定され、かつ api_key が空の場合にのみエラーとする
+        if self.embedding_provider == "openai":
+            if not self.openai_api_key.get_secret_value().strip():
+                raise ValueError("OPENAI_API_KEY は embedding_provider=openai の場合に必須です。")
+        elif self.embedding_provider == "local-model":
+            if not self.local_model_name:
+                raise ValueError(
+                    "LOCAL_MODEL_NAME は embedding_provider=local-model の場合に必須です。"
+                )
+        elif self.embedding_provider == "litellm":
             if not self.litellm_api_base:
                 raise ValueError(
                     "LITELLM_API_BASE は embedding_provider=litellm の場合に必須です。"
                 )
             if not self.litellm_model:
                 raise ValueError("LITELLM_MODEL は embedding_provider=litellm の場合に必須です。")
-        if self.embedding_provider == "custom-api" and not self.custom_api_endpoint:
-            raise ValueError(
-                "CUSTOM_API_ENDPOINT は embedding_provider=custom-api の場合に必須です。"
-            )
+        elif self.embedding_provider == "custom-api":
+            if not self.custom_api_endpoint:
+                raise ValueError(
+                    "CUSTOM_API_ENDPOINT は embedding_provider=custom-api の場合に必須です。"
+                )
         return self
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def graph_backend(self) -> str:
+        """Derived: 'sqlite' | 'neo4j' | 'disabled'."""
+        if not self.graph_enabled:
+            return "disabled"
+        if self.storage_backend == "sqlite":
+            return "sqlite"
+        if self.storage_backend == "postgres":
+            return "neo4j"
+        return "disabled"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def embedding_model(self) -> str:
+        """Derived: 現在の embedding_provider に応じたモデル名。"""
+        if self.embedding_provider == "openai":
+            return "openai/text-embedding-3-small"
+        if self.embedding_provider == "local-model":
+            return self.local_model_name
+        if self.embedding_provider == "litellm":
+            return self.litellm_model
+        if self.embedding_provider == "custom-api":
+            return self.custom_api_model_name
+        assert_never(self.embedding_provider)

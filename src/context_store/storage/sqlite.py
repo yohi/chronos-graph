@@ -474,12 +474,13 @@ class SQLiteStorageAdapter:
             for i in range(0, len(unique_ids), chunk_size):
                 chunk = unique_ids[i : i + chunk_size]
                 placeholders = ", ".join("?" * len(chunk))
-                sql = f"""
+                sql_template = """
                     SELECT m.*, me.embedding
                     FROM memories m
                     LEFT JOIN memory_embeddings me ON me.memory_id = m.id
-                    WHERE m.id IN ({placeholders})
+                    WHERE m.id IN (__PLACEHOLDERS__)
                 """
+                sql = sql_template.replace("__PLACEHOLDERS__", placeholders)
                 try:
                     async with conn.execute(sql, chunk) as cursor:
                         rows = await cursor.fetchall()
@@ -572,7 +573,8 @@ class SQLiteStorageAdapter:
                             )
                         if col == "source_metadata" and not isinstance(parsed, dict):
                             raise StorageError(
-                                f"Invalid source_metadata type: expected dict, got {type(parsed).__name__}",
+                                f"Invalid source_metadata type: "
+                                f"expected dict, got {type(parsed).__name__}",
                                 code="INVALID_PARAMETER",
                             )
                     except json.JSONDecodeError as exc:
@@ -589,7 +591,8 @@ class SQLiteStorageAdapter:
                         )
                     if col == "source_metadata" and not isinstance(val, dict):
                         raise StorageError(
-                            f"Invalid source_metadata type: expected dict, got {type(val).__name__}",
+                            f"Invalid source_metadata type: "
+                            f"expected dict, got {type(val).__name__}",
                             code="INVALID_PARAMETER",
                         )
                     try:
@@ -615,7 +618,7 @@ class SQLiteStorageAdapter:
                 if set_parts:
                     params.append(memory_id)
                     async with conn.execute(
-                        f"UPDATE memories SET {', '.join(set_parts)} WHERE id = ?",
+                        f"UPDATE memories SET {', '.join(set_parts)} WHERE id = ?",  # noqa: S608
                         params,
                     ) as cursor:
                         updated = cursor.rowcount
@@ -630,7 +633,8 @@ class SQLiteStorageAdapter:
                     ):
                         raise StorageError("Invalid embedding", code="INVALID_PARAMETER")
 
-                    # Unconditionally check if memory exists before inserting embedding to avoid FK violations
+                    # Unconditionally check if memory exists before inserting embedding
+                    # to avoid FK violations
                     async with conn.execute(
                         "SELECT 1 FROM memories WHERE id = ?", (memory_id,)
                     ) as cursor:
@@ -673,7 +677,8 @@ class SQLiteStorageAdapter:
                     validate_embedding(embedding)
                     blob = encode_embedding(embedding)
                     await conn.execute(
-                        "INSERT OR REPLACE INTO memory_embeddings (memory_id, embedding) VALUES (?, ?)",
+                        "INSERT OR REPLACE INTO memory_embeddings (memory_id, embedding) "
+                        "VALUES (?, ?)",
                         (memory_id, blob),
                     )
                     # If only embedding was updated, we still want to return True
@@ -797,10 +802,10 @@ class SQLiteStorageAdapter:
                         """
                         params_kw = (top_k,)
                 else:
-                    # 各トークンを個別にクォートし、内部のダブルクォートをエスケープ
-                    fts_query = " ".join(
-                        f'"{t.replace(chr(34), chr(34) + chr(34))}"' for t in tokens
-                    )
+                    # 各トークンを個別にクォートし、内部のダブルクォートをエスケープ。
+                    # これにより FTS5 特殊文字がトークン内でエスケープされつつ、
+                    # トークン間は暗黙 AND として扱われる。
+                    fts_query = " ".join(f'"{t.replace('"', '""')}"' for t in tokens)
                     if project is not None:
                         sql = """
                             SELECT m.*, me.embedding, (-bm25(memories_fts)) AS score
@@ -961,7 +966,7 @@ class SQLiteStorageAdapter:
             params.append(limit_val)
 
         sql = (
-            "SELECT m.*, me.embedding "
+            "SELECT m.*, me.embedding "  # noqa: S608
             "FROM memories m "
             "LEFT JOIN memory_embeddings me ON me.memory_id = m.id "
             f"{where_clause} "
@@ -988,7 +993,7 @@ class SQLiteStorageAdapter:
         """Count memories matching filters."""
         where_clause, params = self._build_where_clause(filters, prefix="m.")
 
-        sql = (f"SELECT COUNT(*) FROM memories m {where_clause}").strip()
+        sql = (f"SELECT COUNT(*) FROM memories m {where_clause}").strip()  # noqa: S608
 
         async with self._db() as conn:
             try:

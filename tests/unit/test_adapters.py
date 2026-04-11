@@ -213,7 +213,7 @@ async def test_url_adapter_rejects_unspecified_0000() -> None:
     adapter = URLAdapter(settings=settings)
 
     with patch("socket.getaddrinfo") as mock_dns:
-        mock_dns.return_value = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("0.0.0.0", 80))]
+        mock_dns.return_value = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("0.0.0.0", 80))]  # noqa: S104
         with pytest.raises(ValueError, match="[Uu]nspecified|[Bb]locked|[Ss]SRF|[Rr]estricted"):
             await adapter.adapt("http://example.com/")
 
@@ -391,7 +391,7 @@ async def test_url_adapter_validates_ip_check_function() -> None:
     assert adapter._is_restricted_ip("172.16.0.1") is True
     assert adapter._is_restricted_ip("192.168.1.1") is True
     assert adapter._is_restricted_ip("169.254.169.254") is True
-    assert adapter._is_restricted_ip("0.0.0.0") is True
+    assert adapter._is_restricted_ip("0.0.0.0") is True  # noqa: S104
     assert adapter._is_restricted_ip("::1") is True
     assert adapter._is_restricted_ip("fe80::1") is True
     assert adapter._is_restricted_ip("ff02::1") is True

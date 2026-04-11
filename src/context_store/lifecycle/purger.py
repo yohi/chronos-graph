@@ -113,7 +113,8 @@ class Purger:
                 if heartbeat_fn and checked_count % 10 == 0:
                     await heartbeat_fn()
 
-                # MemoryFilters(archived=True) で取得済みだが、ストレージ実装の保証に依存しないよう防御チェック
+                # MemoryFilters(archived=True) で取得済みだが、
+                # ストレージ実装の保証に依存しないよう防御チェック
                 if memory.archived_at is None:
                     continue
                 if memory.archived_at < expiry_threshold:

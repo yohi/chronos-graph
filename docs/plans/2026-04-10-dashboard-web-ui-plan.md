@@ -1537,7 +1537,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         logger.error(
             "Dashboard requires an existing database. Please start the MCP server "
-            "(context-store) at least once to initialize the database. Error: %s",
+            "(context_store) at least once to initialize the database. Error: %s",
             exc,
         )
         raise SystemExit(1) from exc

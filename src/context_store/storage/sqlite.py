@@ -798,9 +798,8 @@ class SQLiteStorageAdapter:
                         params_kw = (top_k,)
                 else:
                     # 各トークンを個別にクォートし、内部のダブルクォートをエスケープ
-                    fts_query = " ".join(
-                        f'"{t.replace(chr(34), chr(34) + chr(34))}"' for t in tokens
-                    )
+                    # これにより FTS5 特殊文字がトークン内でエスケープされつつ、トークン間は暗黙 AND として扱われる
+                    fts_query = " ".join(f'"{t.replace('"', '""')}"' for t in tokens)
                     if project is not None:
                         sql = """
                             SELECT m.*, me.embedding, (-bm25(memories_fts)) AS score

@@ -194,7 +194,7 @@ class Settings(BaseSettings):
                 )
         return self
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def graph_backend(self) -> str:
         """Derived: 'sqlite' | 'neo4j' | 'disabled'."""
@@ -206,7 +206,8 @@ class Settings(BaseSettings):
             return "neo4j"
         return "disabled"
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
+    @property
     def embedding_model(self) -> str:
         """Derived: 現在の embedding_provider に応じたモデル名。"""
         if self.embedding_provider == "openai":

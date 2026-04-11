@@ -504,14 +504,14 @@ class SQLiteGraphAdapter:
         """Return all edges where BOTH endpoints are in ``memory_ids``.
 
         For large input lists that exceed SQLite's parameter limit (999),
-        implementations MUST chunk the query internally (rev.10 §3.5).
+        this implementation chunks by ``from_id`` and filters ``to_id`` in Python.
         """
         if not memory_ids:
             return []
 
         ids_set = set(memory_ids)
         unique_ids = list(ids_set)
-        # SQLite parameter limit (999) への対策
+        # SQLite variable limit is 999. Use 900 for safety.
         CHUNK_SIZE = 900
         all_edges: list[Edge] = []
 
@@ -519,13 +519,13 @@ class SQLiteGraphAdapter:
             conn.row_factory = aiosqlite.Row
             for i in range(0, len(unique_ids), CHUNK_SIZE):
                 chunk = unique_ids[i : i + CHUNK_SIZE]
-                placeholders = ",".join("?" * len(chunk))
-                sql_template = """
+                placeholders = ",".join(["?"] * len(chunk))
+                # Safe: placeholders string is entirely internally generated "?" repetitions.
+                query = f"""
                     SELECT from_id, to_id, edge_type, props
                     FROM memory_edges
-                    WHERE from_id IN (__PLACEHOLDERS__)
-                """
-                query = sql_template.replace("__PLACEHOLDERS__", placeholders)
+                    WHERE from_id IN ({placeholders})
+                """  # noqa: S608
                 async with conn.execute(query, chunk) as cursor:
                     rows = await cursor.fetchall()
 

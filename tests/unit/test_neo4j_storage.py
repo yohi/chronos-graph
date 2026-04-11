@@ -356,6 +356,15 @@ class TestDashboardQueries:
         assert edges[0].edge_type == "LINK"
         assert edges[0].properties == {"w": 1}
 
+    async def test_list_edges_for_memories_empty(self, adapter_and_session):
+        adp, session = adapter_and_session
+        session.run = AsyncMock()
+
+        # Should return empty list immediately and not call session.run
+        edges = await adp.list_edges_for_memories([])
+        assert edges == []
+        session.run.assert_not_called()
+
     async def test_list_edges_for_memories_failure(self, adapter_and_session):
         adp, session = adapter_and_session
         session.run = AsyncMock(side_effect=Exception("Neo4j error"))
@@ -363,6 +372,7 @@ class TestDashboardQueries:
         # Should return empty list and not raise
         edges = await adp.list_edges_for_memories(["a", "b"])
         assert edges == []
+        session.run.assert_awaited()
 
     async def test_list_all_edges_basic(self, adapter_and_session):
         adp, session = adapter_and_session

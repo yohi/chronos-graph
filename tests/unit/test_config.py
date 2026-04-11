@@ -289,3 +289,49 @@ def test_settings_dashboard_allowed_hosts_from_env(monkeypatch):
     monkeypatch.setenv("DASHBOARD_ALLOWED_HOSTS", "localhost,127.0.0.1,example.internal")
     s = Settings(_env_file=None, openai_api_key="sk-test")
     assert s.dashboard_allowed_hosts_list == ["localhost", "127.0.0.1", "example.internal"]
+
+
+def test_log_level_validation(default_settings):
+    from pydantic import ValidationError
+
+    # 有効なログレベル
+    for level in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
+        s = make_settings(log_level=level)
+        assert s.log_level == level
+
+    # 無効なログレベル
+    with pytest.raises(ValidationError):
+        make_settings(log_level="VERBOSE")
+    with pytest.raises(ValidationError):
+        make_settings(log_level="warn")
+
+
+def test_dashboard_port_validation(default_settings):
+    from pydantic import ValidationError
+
+    # 有効なポート
+    s = make_settings(dashboard_port=1)
+    assert s.dashboard_port == 1
+    s = make_settings(dashboard_port=65535)
+    assert s.dashboard_port == 65535
+
+    # 範囲外のポート
+    with pytest.raises(ValidationError):
+        make_settings(dashboard_port=0)
+    with pytest.raises(ValidationError):
+        make_settings(dashboard_port=65536)
+
+
+def test_custom_api_embedding_model_derivation(default_settings):
+    s = make_settings(
+        embedding_provider="custom-api",
+        custom_api_endpoint="http://example.com/v1/embeddings",
+        custom_api_model_name="my-custom-model",
+    )
+    assert s.embedding_model == "my-custom-model"
+    # デフォルト値
+    s = make_settings(
+        embedding_provider="custom-api",
+        custom_api_endpoint="http://example.com/v1/embeddings",
+    )
+    assert s.embedding_model == "custom-model"

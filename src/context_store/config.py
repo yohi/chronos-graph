@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     litellm_model: str = "openai/text-embedding-3-small"
     embedding_dimension: int = Field(default=1536, ge=1)
     custom_api_endpoint: str = ""
+    custom_api_model_name: str = "custom-model"
 
     # --- Lifecycle ---
     decay_half_life_days: int = Field(default=30, ge=1)
@@ -94,10 +95,14 @@ class Settings(BaseSettings):
     cache_coherence_poll_interval_seconds: float = Field(default=5.0, gt=0.0)
 
     # --- Logging ---
-    log_level: str = Field(default="INFO", description="Root log level (DEBUG/INFO/WARNING/ERROR)")
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
+        default="INFO", description="Root log level"
+    )
 
     # --- Dashboard (rev.10) ---
-    dashboard_port: int = Field(default=8000, description="FastAPI dashboard bind port")
+    dashboard_port: int = Field(
+        default=8000, ge=1, le=65535, description="FastAPI dashboard bind port"
+    )
     dashboard_allowed_hosts: str = Field(
         default="localhost,127.0.0.1",
         description="Comma-separated TrustedHostMiddleware allowed hosts for dashboard",
@@ -137,6 +142,7 @@ class Settings(BaseSettings):
         self.litellm_api_base = self.litellm_api_base.strip()
         self.litellm_model = self.litellm_model.strip()
         self.custom_api_endpoint = self.custom_api_endpoint.strip()
+        self.custom_api_model_name = self.custom_api_model_name.strip()
 
         if self.storage_backend == "postgres" and not postgres_password.strip():
             raise ValueError("POSTGRES_PASSWORD は storage_backend=postgres の場合に必須です。")
@@ -186,5 +192,5 @@ class Settings(BaseSettings):
         if self.embedding_provider == "litellm":
             return self.litellm_model
         if self.embedding_provider == "custom-api":
-            return self.custom_api_endpoint
+            return self.custom_api_model_name
         return "unknown"

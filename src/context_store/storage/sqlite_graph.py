@@ -531,12 +531,18 @@ class SQLiteGraphAdapter:
 
                 for row in rows:
                     if row["to_id"] in ids_set:
+                        # Safe JSON decode for properties
+                        try:
+                            props = json.loads(row["props"]) if row["props"] else {}
+                        except (json.JSONDecodeError, TypeError, ValueError):
+                            props = {}
+
                         all_edges.append(
                             Edge(
                                 from_id=row["from_id"],
                                 to_id=row["to_id"],
                                 edge_type=row["edge_type"],
-                                properties=json.loads(row["props"]) if row["props"] else {},
+                                properties=props,
                             )
                         )
         return all_edges
@@ -550,12 +556,18 @@ class SQLiteGraphAdapter:
                 "SELECT from_id, to_id, edge_type, props FROM memory_edges"
             ) as cursor:
                 async for row in cursor:
+                    # Safe JSON decode for properties
+                    try:
+                        props = json.loads(row["props"]) if row["props"] else {}
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        props = {}
+
                     all_edges.append(
                         Edge(
                             from_id=row["from_id"],
                             to_id=row["to_id"],
                             edge_type=row["edge_type"],
-                            properties=json.loads(row["props"]) if row["props"] else {},
+                            properties=props,
                         )
                     )
         return all_edges

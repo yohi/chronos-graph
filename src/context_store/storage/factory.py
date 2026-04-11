@@ -155,10 +155,10 @@ async def create_storage(
         cache_adp = await _create_cache_adapter(settings)
 
         # Start cache coherence checker for SQLite + InMemory combination.
-        # Default: start even in read_only mode to keep Dashboard cache fresh,
-        # unless explicitly disabled via settings (e.g. for strict RO mounts).
+        # Default: start only in write mode (to avoid RO mount issues),
+        # but allow forcing it in read_only mode via settings.
         if (
-            (not read_only or not getattr(settings, "disable_cache_coherence_in_read_only", False))
+            (not read_only or settings.force_cache_coherence_in_read_only)
             and settings.storage_backend == "sqlite"
             and settings.cache_backend == "inmemory"
         ):

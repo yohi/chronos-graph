@@ -398,7 +398,7 @@ class TestDashboardQueries:
         assert ("c", "d") not in edge_pairs
 
     async def test_list_edges_for_memories_chunking(self, adapter: SQLiteGraphAdapter) -> None:
-        """大量のメモリID（900件超え）を指定しても正常に動作する (chunking)."""
+        """大量のメモリID(900件超え)を指定しても正常に動作する (chunking)."""
         # Create 1001 nodes: n0...n1000
         ids = [f"n{i}" for i in range(1001)]
         async with adapter._connect() as conn:

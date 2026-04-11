@@ -318,3 +318,103 @@ class TestDispose:
         await adp.dispose()
 
         adp._driver.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Dashboard graph queries
+# ---------------------------------------------------------------------------
+
+
+class TestDashboardQueries:
+    async def test_list_edges_for_memories_basic(self, adapter_and_session):
+        adp, session = adapter_and_session
+
+        record = MagicMock()
+        record.__getitem__ = MagicMock(
+            side_effect=lambda k: {
+                "from_id": "a",
+                "to_id": "b",
+                "edge_type": "LINK",
+                "props": {"w": 1},
+            }[k]
+        )
+
+        class _AsyncResult:
+            def __aiter__(self):
+                async def _gen():
+                    yield record
+
+                return _gen()
+
+        session.run = AsyncMock(return_value=_AsyncResult())
+
+        edges = await adp.list_edges_for_memories(["a", "b"])
+
+        assert len(edges) == 1
+        assert edges[0].from_id == "a"
+        assert edges[0].to_id == "b"
+        assert edges[0].edge_type == "LINK"
+        assert edges[0].properties == {"w": 1}
+
+    async def test_list_edges_for_memories_failure(self, adapter_and_session):
+        adp, session = adapter_and_session
+        session.run = AsyncMock(side_effect=Exception("Neo4j error"))
+
+        # Should return empty list and not raise
+        edges = await adp.list_edges_for_memories(["a", "b"])
+        assert edges == []
+
+    async def test_list_all_edges_basic(self, adapter_and_session):
+        adp, session = adapter_and_session
+
+        record = MagicMock()
+        record.__getitem__ = MagicMock(
+            side_effect=lambda k: {
+                "from_id": "x",
+                "to_id": "y",
+                "edge_type": "ANY",
+                "props": {},
+            }[k]
+        )
+
+        class _AsyncResult:
+            def __aiter__(self):
+                async def _gen():
+                    yield record
+
+                return _gen()
+
+        session.run = AsyncMock(return_value=_AsyncResult())
+
+        edges = await adp.list_all_edges()
+
+        assert len(edges) == 1
+        assert edges[0].from_id == "x"
+        assert edges[0].to_id == "y"
+
+    async def test_list_all_edges_failure(self, adapter_and_session):
+        adp, session = adapter_and_session
+        session.run = AsyncMock(side_effect=Exception("Neo4j error"))
+
+        edges = await adp.list_all_edges()
+        assert edges == []
+
+    async def test_count_edges_basic(self, adapter_and_session):
+        adp, session = adapter_and_session
+
+        record = MagicMock()
+        record.__getitem__ = MagicMock(side_effect=lambda k: {"count": 42}[k])
+        result_mock = AsyncMock()
+        result_mock.single = AsyncMock(return_value=record)
+        session.run = AsyncMock(return_value=result_mock)
+
+        count = await adp.count_edges()
+
+        assert count == 42
+
+    async def test_count_edges_failure(self, adapter_and_session):
+        adp, session = adapter_and_session
+        session.run = AsyncMock(side_effect=Exception("Neo4j error"))
+
+        count = await adp.count_edges()
+        assert count == 0

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import quote
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 
@@ -103,15 +103,19 @@ class Settings(BaseSettings):
     dashboard_port: int = Field(
         default=8000, ge=1, le=65535, description="FastAPI dashboard bind port"
     )
-    dashboard_allowed_hosts: str = Field(
-        default="localhost,127.0.0.1",
-        description="Comma-separated TrustedHostMiddleware allowed hosts for dashboard",
+    dashboard_allowed_hosts: Any = Field(
+        default_factory=lambda: ["localhost", "127.0.0.1"],
+        description="TrustedHostMiddleware allowed hosts (comma-separated string or list)",
     )
 
-    @property
-    def dashboard_allowed_hosts_list(self) -> list[str]:
-        """Runtime プロパティ: dashboard_allowed_hosts をパースしたリスト。"""
-        return [h.strip() for h in self.dashboard_allowed_hosts.split(",") if h.strip()]
+    @field_validator("dashboard_allowed_hosts", mode="before")
+    @classmethod
+    def _parse_dashboard_allowed_hosts(cls, v: Any) -> list[str]:
+        if isinstance(v, str):
+            return [h.strip() for h in v.split(",") if h.strip()]
+        if isinstance(v, list):
+            return [str(h).strip() for h in v if str(h).strip()]
+        return v
 
     # --- URL Fetch (SSRF 対策) ---
     url_fetch_concurrency: int = Field(default=3, ge=1)

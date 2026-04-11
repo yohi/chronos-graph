@@ -237,14 +237,16 @@ def test_settings_has_dashboard_fields_with_defaults(monkeypatch):
     monkeypatch.delenv("DASHBOARD_PORT", raising=False)
     monkeypatch.delenv("DASHBOARD_ALLOWED_HOSTS", raising=False)
     monkeypatch.delenv("LOG_LEVEL", raising=False)
-    monkeypatch.delenv("GRAPH_BACKEND", raising=False)
+    monkeypatch.delenv("GRAPH_ENABLED", raising=False)
+    monkeypatch.delenv("STORAGE_BACKEND", raising=False)
 
     s = Settings(_env_file=None, openai_api_key="sk-test")
 
     assert s.log_level == "INFO"
     assert s.dashboard_port == 8000
-    assert s.dashboard_allowed_hosts_list == ["localhost", "127.0.0.1"]
-    assert s.graph_backend in ("sqlite", "neo4j", "disabled")
+    assert isinstance(s.dashboard_allowed_hosts, list)
+    assert s.dashboard_allowed_hosts == ["localhost", "127.0.0.1"]
+    assert s.graph_backend == "disabled"
 
 
 def test_settings_graph_backend_derivation(monkeypatch):
@@ -286,9 +288,15 @@ def test_settings_embedding_model_derivation(monkeypatch):
 
 def test_settings_dashboard_allowed_hosts_from_env(monkeypatch):
     """DASHBOARD_ALLOWED_HOSTS はカンマ区切りで解釈される。"""
+    # 1. シンプルなケース
     monkeypatch.setenv("DASHBOARD_ALLOWED_HOSTS", "localhost,127.0.0.1,example.internal")
     s = Settings(_env_file=None, openai_api_key="sk-test")
-    assert s.dashboard_allowed_hosts_list == ["localhost", "127.0.0.1", "example.internal"]
+    assert s.dashboard_allowed_hosts == ["localhost", "127.0.0.1", "example.internal"]
+
+    # 2. 空白・空要素が含まれるケース (指摘事項に基づく検証)
+    monkeypatch.setenv("DASHBOARD_ALLOWED_HOSTS", " localhost, ,127.0.0.1 , ")
+    s2 = Settings(_env_file=None, openai_api_key="sk-test")
+    assert s2.dashboard_allowed_hosts == ["localhost", "127.0.0.1"]
 
 
 def test_log_level_validation(default_settings):

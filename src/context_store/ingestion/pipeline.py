@@ -389,12 +389,14 @@ class IngestionPipeline:
                             )
                         else:
                             logger.error(
-                                "ロールバック失敗: update_memory が False を返しました (supersedes_memory=%s)",
+                                "ロールバック失敗: update_memory が False を返しました "
+                                "(supersedes_memory=%s)",
                                 supersedes_memory.id,
                             )
                     except Exception as e:
                         logger.error(
-                            "ロールバック失敗: アーカイブ解除中に例外が発生しました (supersedes_memory=%s): %s",
+                            "ロールバック失敗: アーカイブ解除中に例外が発生しました "
+                            "(supersedes_memory=%s): %s",
                             supersedes_memory.id,
                             e,
                         )

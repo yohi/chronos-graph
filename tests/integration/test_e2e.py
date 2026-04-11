@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import AsyncGenerator, TYPE_CHECKING
 from pathlib import Path
+from typing import TYPE_CHECKING, AsyncGenerator
 from unittest.mock import patch
 
 import pytest
@@ -289,8 +289,8 @@ class TestMCPServerE2E:
     @pytest.fixture
     async def server_with_mock(self, tmp_db_path: str) -> AsyncGenerator[ChronosServer, None]:
         """ChronosServerとモックプロバイダーを設定する。"""
-        from context_store.server import ChronosServer
         from context_store.orchestrator import create_orchestrator
+        from context_store.server import ChronosServer
 
         server = ChronosServer()
         mock_provider = make_mock_embedding_provider(dim=16)

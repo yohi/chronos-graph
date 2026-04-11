@@ -52,7 +52,8 @@ class ResultFusion:
         if abs(weights_sum - 1.0) > 1e-6:
             # 1.0 でない場合は正規化する
             logger.warning(
-                "Weights (rrf=%.2f, time_decay=%.2f, importance=%.2f) sum to %.2f, normalizing to 1.0",
+                "Weights (rrf=%.2f, time_decay=%.2f, importance=%.2f) "
+                "sum to %.2f, normalizing to 1.0",
                 rrf_weight,
                 time_decay_weight,
                 importance_weight,

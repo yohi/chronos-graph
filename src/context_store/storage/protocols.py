@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
-from context_store.models.graph import GraphResult
+from context_store.models.graph import Edge, GraphResult
 from context_store.models.memory import Memory, ScoredMemory
 
 
@@ -162,6 +162,32 @@ class GraphAdapter(Protocol):
 
     async def delete_node(self, memory_id: str) -> None:
         """Delete a node and all its incident edges."""
+        ...
+
+    async def list_edges_for_memories(self, memory_ids: list[str]) -> list[Edge]:
+        """Return all edges where BOTH endpoints are in ``memory_ids``.
+
+        For large input lists that exceed SQLite's parameter limit (999),
+        implementations MUST chunk the query internally (rev.10 §3.5).
+
+        Args:
+            memory_ids: Memory IDs to filter edges by. Empty list returns ``[]``.
+
+        Returns:
+            List of edges whose ``from_id`` AND ``to_id`` are both in ``memory_ids``.
+        """
+        ...
+
+    async def list_all_edges(self) -> list[Edge]:
+        """Return all edges in the graph.
+
+        Returns:
+            List of all edges present in the graph storage.
+        """
+        ...
+
+    async def count_edges(self) -> int:
+        """Return the total number of edges in the graph."""
         ...
 
     async def dispose(self) -> None:

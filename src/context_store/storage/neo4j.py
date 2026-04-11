@@ -196,3 +196,69 @@ class Neo4jGraphAdapter:
     async def dispose(self) -> None:
         """Close the driver."""
         await self._driver.close()
+
+    # ------------------------------------------------------------------
+    # Dashboard graph queries (PR 3-4)
+    # ------------------------------------------------------------------
+
+    async def list_edges_for_memories(self, memory_ids: list[str]) -> list[Edge]:
+        """Return all edges where BOTH endpoints are in ``memory_ids``."""
+        if not memory_ids:
+            return []
+
+        cypher = """
+            MATCH (a:Memory)-[r]->(b:Memory)
+            WHERE a.id IN $memory_ids AND b.id IN $memory_ids
+            RETURN a.id AS from_id, b.id AS to_id, type(r) AS edge_type, r AS props
+        """
+        edges: list[Edge] = []
+        try:
+            async with self._driver.session() as session:
+                result = await session.run(cypher, memory_ids=memory_ids)
+                async for record in result:
+                    edges.append(
+                        Edge(
+                            from_id=record["from_id"],
+                            to_id=record["to_id"],
+                            edge_type=record["edge_type"],
+                            properties=dict(record["props"]),
+                        )
+                    )
+        except Exception as exc:
+            logger.warning("Neo4j list_edges_for_memories failed (degraded): %s", exc)
+        return edges
+
+    async def list_all_edges(self) -> list[Edge]:
+        """Return all edges in the graph."""
+        cypher = """
+            MATCH (a:Memory)-[r]->(b:Memory)
+            RETURN a.id AS from_id, b.id AS to_id, type(r) AS edge_type, r AS props
+        """
+        edges: list[Edge] = []
+        try:
+            async with self._driver.session() as session:
+                result = await session.run(cypher)
+                async for record in result:
+                    edges.append(
+                        Edge(
+                            from_id=record["from_id"],
+                            to_id=record["to_id"],
+                            edge_type=record["edge_type"],
+                            properties=dict(record["props"]),
+                        )
+                    )
+        except Exception as exc:
+            logger.warning("Neo4j list_all_edges failed (degraded): %s", exc)
+        return edges
+
+    async def count_edges(self) -> int:
+        """Return the total number of edges in the graph."""
+        cypher = "MATCH ()-[r]->() RETURN count(r) AS count"
+        try:
+            async with self._driver.session() as session:
+                result = await session.run(cypher)
+                record = await result.single()
+                return int(record["count"]) if record else 0
+        except Exception as exc:
+            logger.warning("Neo4j count_edges failed (degraded): %s", exc)
+            return 0

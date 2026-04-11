@@ -154,24 +154,24 @@ async def create_storage(
         graph_adp = await _create_graph_adapter(settings, read_only=read_only)
         cache_adp = await _create_cache_adapter(settings)
 
-        # Start cache coherence checker for SQLite + InMemory combination
-        # Default: only start in write mode (to avoid RO mount issues)
-        if (
-            (not read_only or settings.force_cache_coherence_in_read_only)
-            and settings.storage_backend == "sqlite"
-            and settings.cache_backend == "inmemory"
-        ):
+        # Start cache coherence checker for SQLite + InMemory combination.
+        # In read_only mode (e.g., Dashboard), we still need to invalidate
+        # the process-local cache when the main writer process updates the DB.
+        if settings.storage_backend == "sqlite" and settings.cache_backend == "inmemory":
             import os
 
             from context_store.storage.inmemory import InMemoryCacheAdapter
 
             db_path = os.path.expanduser(settings.sqlite_db_path)
-            checker = SQLiteCacheCoherenceChecker(
-                db_path=db_path,
-                cache=cache_adp,
-                poll_interval=settings.cache_coherence_poll_interval_seconds,
-            )
-            checker.start()
+            # Only start if the database file exists (fail-fast principle)
+            if os.path.exists(db_path):
+                checker = SQLiteCacheCoherenceChecker(
+                    db_path=db_path,
+                    cache=cache_adp,  # type: ignore
+                    poll_interval=settings.cache_coherence_poll_interval_seconds,
+                )
+                checker.start()
+
             if isinstance(cache_adp, InMemoryCacheAdapter):
                 cache_adp.set_coherence_checker(checker)
 

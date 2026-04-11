@@ -495,3 +495,86 @@ class SQLiteGraphAdapter:
                 (memory_id,),
             )
             await conn.commit()
+
+    # ------------------------------------------------------------------
+    # Dashboard graph queries (PR 3)
+    # ------------------------------------------------------------------
+
+    async def list_edges_for_memories(self, memory_ids: list[str]) -> list[Edge]:
+        """Return all edges where BOTH endpoints are in ``memory_ids``.
+
+        For large input lists that exceed SQLite's parameter limit (999),
+        this implementation chunks by ``from_id`` and filters ``to_id`` in Python.
+        """
+        if not memory_ids:
+            return []
+
+        ids_set = set(memory_ids)
+        unique_ids = list(ids_set)
+        # SQLite variable limit is 999. Use 900 for safety.
+        CHUNK_SIZE = 900
+        all_edges: list[Edge] = []
+
+        async with self._connect() as conn:
+            conn.row_factory = aiosqlite.Row
+            for i in range(0, len(unique_ids), CHUNK_SIZE):
+                chunk = unique_ids[i : i + CHUNK_SIZE]
+                placeholders = ",".join(["?"] * len(chunk))
+                # Safe: placeholders string is entirely internally generated "?" repetitions.
+                query = f"""
+                    SELECT from_id, to_id, edge_type, props
+                    FROM memory_edges
+                    WHERE from_id IN ({placeholders})
+                """  # noqa: S608
+                async with conn.execute(query, chunk) as cursor:
+                    rows = await cursor.fetchall()
+
+                for row in rows:
+                    if row["to_id"] in ids_set:
+                        # Safe JSON decode for properties
+                        try:
+                            props = json.loads(row["props"]) if row["props"] else {}
+                        except (json.JSONDecodeError, TypeError, ValueError):
+                            props = {}
+
+                        all_edges.append(
+                            Edge(
+                                from_id=row["from_id"],
+                                to_id=row["to_id"],
+                                edge_type=row["edge_type"],
+                                properties=props,
+                            )
+                        )
+        return all_edges
+
+    async def list_all_edges(self) -> list[Edge]:
+        """Return all edges in the graph."""
+        all_edges: list[Edge] = []
+        async with self._connect() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                "SELECT from_id, to_id, edge_type, props FROM memory_edges"
+            ) as cursor:
+                async for row in cursor:
+                    # Safe JSON decode for properties
+                    try:
+                        props = json.loads(row["props"]) if row["props"] else {}
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        props = {}
+
+                    all_edges.append(
+                        Edge(
+                            from_id=row["from_id"],
+                            to_id=row["to_id"],
+                            edge_type=row["edge_type"],
+                            properties=props,
+                        )
+                    )
+        return all_edges
+
+    async def count_edges(self) -> int:
+        """Return the total number of edges in the graph."""
+        async with self._connect() as conn:
+            async with conn.execute("SELECT COUNT(*) FROM memory_edges") as cursor:
+                row = await cursor.fetchone()
+                return int(row[0]) if row else 0

@@ -26,6 +26,31 @@ class Settings(BaseSettings):
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         # .env ファイルを OS 環境変数よりも優先する
+
+        # pydantic-settings 2.x の EnvSettingsSource は list 型フィールドを
+        # JSON パースしようとするが、失敗時に SettingsError を投げるため、
+        # これを回避して生の文字列をバリデータに渡すようにラップする。
+        import json
+
+        from pydantic_settings import DotEnvSettingsSource, EnvSettingsSource
+
+        def patch_source(source: PydanticBaseSettingsSource) -> None:
+            if not isinstance(source, (EnvSettingsSource, DotEnvSettingsSource)):
+                return
+
+            original_decode = source.decode_complex_value
+
+            def robust_decode(field_name: str, field: Any, value: Any) -> Any:
+                try:
+                    return original_decode(field_name, field, value)
+                except (ValueError, TypeError, json.JSONDecodeError):
+                    return value
+
+            source.decode_complex_value = robust_decode  # type: ignore[method-assign]
+
+        patch_source(env_settings)
+        patch_source(dotenv_settings)
+
         return init_settings, dotenv_settings, env_settings, file_secret_settings
 
     # --- Storage Backend ---
@@ -103,7 +128,7 @@ class Settings(BaseSettings):
     dashboard_port: int = Field(
         default=8000, ge=1, le=65535, description="FastAPI dashboard bind port"
     )
-    dashboard_allowed_hosts: str | list[str] = Field(
+    dashboard_allowed_hosts: list[str] = Field(
         default_factory=lambda: ["localhost", "127.0.0.1"],
         description="TrustedHostMiddleware allowed hosts (comma-separated string or list)",
     )

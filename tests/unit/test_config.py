@@ -234,11 +234,8 @@ def test_settings_priority_dotenv_over_env(tmp_path, monkeypatch):
 
 def test_settings_has_dashboard_fields_with_defaults(monkeypatch):
     """rev.10: Dashboard 用フィールドのデフォルト値を確認。"""
-    monkeypatch.delenv("DASHBOARD_PORT", raising=False)
-    monkeypatch.delenv("DASHBOARD_ALLOWED_HOSTS", raising=False)
-    monkeypatch.delenv("LOG_LEVEL", raising=False)
-    monkeypatch.delenv("GRAPH_ENABLED", raising=False)
-    monkeypatch.delenv("STORAGE_BACKEND", raising=False)
+    for field_name in Settings.model_fields.keys():
+        monkeypatch.delenv(field_name.upper(), raising=False)
 
     s = Settings(_env_file=None, openai_api_key="sk-test")
 

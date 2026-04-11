@@ -1,4 +1,19 @@
 services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      - STORAGE_BACKEND=sqlite
+      - GRAPH_BACKEND=sqlite
+      - DB_PATH=/data/context_store.db
+    profiles:
+      - dashboard
+
   app:
     build:
       context: .

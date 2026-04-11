@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, AsyncIterator
 
@@ -12,11 +13,15 @@ if TYPE_CHECKING:
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from context_store.dashboard.services import DashboardService
 from context_store.storage.factory import create_storage
 
 logger = logging.getLogger(__name__)
+
+FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"
 
 
 @asynccontextmanager
@@ -106,6 +111,13 @@ def create_app(
     app.include_router(system.router, prefix="/api/system", tags=["system"])
     app.include_router(graph.router, prefix="/api/graph", tags=["graph"])
     app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
+
+    if FRONTEND_DIST.exists():
+        app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST / "assets")), name="assets")
+
+        @app.get("/{path:path}")
+        async def serve_spa(path: str) -> FileResponse:
+            return FileResponse(str(FRONTEND_DIST / "index.html"))
 
     return app
 

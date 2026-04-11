@@ -33,6 +33,7 @@ dashboard = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "websockets>=12.0",
+    "python-multipart>=0.0.9",
 ]
 embedding-openai = [
     "openai>=1.0.0",

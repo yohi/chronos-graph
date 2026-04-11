@@ -205,9 +205,10 @@ def _row_to_memory(row: dict[str, Any], embedding: list[float] | None = None) ->
 class SQLiteStorageAdapter:
     """StorageAdapter backed by SQLite with sqlite-vec vector search and FTS5."""
 
-    def __init__(self, db_path: str, settings: Settings) -> None:
+    def __init__(self, db_path: str, settings: Settings, *, read_only: bool = False) -> None:
         self._db_path = db_path
         self._settings = settings
+        self._read_only = read_only
         self._disposed = False
 
         # Back-pressure control
@@ -225,18 +226,22 @@ class SQLiteStorageAdapter:
     # ------------------------------------------------------------------
 
     @classmethod
-    async def create(cls, settings: Settings) -> "SQLiteStorageAdapter":
+    async def create(cls, settings: Settings, *, read_only: bool = False) -> "SQLiteStorageAdapter":
         """Create and initialise the adapter (runs schema migration)."""
         db_path = os.path.expanduser(settings.sqlite_db_path)
-        os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True)
-        adapter = cls(db_path, settings)
-        lock = StaleAwareFileLock(
-            f"{db_path}.lock",
-            timeout=settings.sqlite_acquire_timeout,
-            stale_timeout_seconds=settings.stale_lock_timeout_seconds,
-        )
-        with lock:
-            await adapter._migrate()
+        if not read_only:
+            os.makedirs(
+                os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True
+            )
+        adapter = cls(db_path, settings, read_only=read_only)
+        if not read_only:
+            lock = StaleAwareFileLock(
+                f"{db_path}.lock",
+                timeout=settings.sqlite_acquire_timeout,
+                stale_timeout_seconds=settings.stale_lock_timeout_seconds,
+            )
+            with lock:
+                await adapter._migrate()
         return adapter
 
     # ------------------------------------------------------------------
@@ -246,19 +251,24 @@ class SQLiteStorageAdapter:
     @asynccontextmanager
     async def _connect(self) -> AsyncGenerator[aiosqlite.Connection, None]:
         """Open a raw aiosqlite connection with required PRAGMAs."""
-        async with aiosqlite.connect(self._db_path) as conn:
-            conn.row_factory = aiosqlite.Row
-            # Apply required PRAGMAs
-            await conn.execute("PRAGMA journal_mode=WAL")
-            await conn.execute("PRAGMA busy_timeout=5000")
-            await conn.execute("PRAGMA foreign_keys=ON")
-            await conn.execute("PRAGMA synchronous=NORMAL")
-            # Load sqlite-vec extension
-            if _sqlite_vec is not None:
-                await conn.enable_load_extension(True)
-                await conn.load_extension(_sqlite_vec.loadable_path())
-                await conn.enable_load_extension(False)
-            yield conn
+        if self._read_only:
+            async with aiosqlite.connect(f"file:{self._db_path}?mode=ro", uri=True) as conn:
+                conn.row_factory = aiosqlite.Row
+                yield conn
+        else:
+            async with aiosqlite.connect(self._db_path) as conn:
+                conn.row_factory = aiosqlite.Row
+                # Apply required PRAGMAs
+                await conn.execute("PRAGMA journal_mode=WAL")
+                await conn.execute("PRAGMA busy_timeout=5000")
+                await conn.execute("PRAGMA foreign_keys=ON")
+                await conn.execute("PRAGMA synchronous=NORMAL")
+                # Load sqlite-vec extension
+                if _sqlite_vec is not None:
+                    await conn.enable_load_extension(True)
+                    await conn.load_extension(_sqlite_vec.loadable_path())
+                    await conn.enable_load_extension(False)
+                yield conn
 
     # ------------------------------------------------------------------
     # Back-pressure semaphore context manager

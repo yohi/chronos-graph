@@ -75,9 +75,10 @@ class SQLiteGraphAdapter:
     this adapter applies them again on each connection for safety.
     """
 
-    def __init__(self, db_path: str, settings: "Settings") -> None:
+    def __init__(self, db_path: str, settings: "Settings", *, read_only: bool = False) -> None:
         self._db_path = db_path
         self._settings = settings
+        self._read_only = read_only
         self._disposed = False
         self._max_logical_depth: int = settings.graph_max_logical_depth
         self._max_physical_hops: int = settings.graph_max_physical_hops
@@ -89,6 +90,9 @@ class SQLiteGraphAdapter:
 
     async def initialize(self) -> None:
         """Create tables if they do not exist."""
+        if self._read_only:
+            # Skip schema creation for read-only mode
+            return
         async with self._connect() as conn:
             await conn.execute(_DDL_NODES)
             await conn.execute(_DDL_EDGES)
@@ -107,13 +111,18 @@ class SQLiteGraphAdapter:
                 "SQLite DB path is not set (received None or empty). "
                 "Ensure sqlite_db_path is provided in Settings."
             )
-        async with aiosqlite.connect(self._db_path) as conn:
-            conn.row_factory = aiosqlite.Row
-            await conn.execute("PRAGMA journal_mode=WAL")
-            await conn.execute("PRAGMA busy_timeout=5000")
-            await conn.execute("PRAGMA foreign_keys=ON")
-            await conn.execute("PRAGMA synchronous=NORMAL")
-            yield conn
+        if self._read_only:
+            async with aiosqlite.connect(f"file:{self._db_path}?mode=ro", uri=True) as conn:
+                conn.row_factory = aiosqlite.Row
+                yield conn
+        else:
+            async with aiosqlite.connect(self._db_path) as conn:
+                conn.row_factory = aiosqlite.Row
+                await conn.execute("PRAGMA journal_mode=WAL")
+                await conn.execute("PRAGMA busy_timeout=5000")
+                await conn.execute("PRAGMA foreign_keys=ON")
+                await conn.execute("PRAGMA synchronous=NORMAL")
+                yield conn
 
     async def dispose(self) -> None:
         """Release resources (idempotent)."""

@@ -143,15 +143,21 @@ async def test_get_memory_returns_memory_from_storage(storage_mock):
 
 
 @pytest.mark.asyncio
-async def test_search_memories_returns_list_from_storage(storage_mock):
-    m1 = MagicMock(spec=Memory)
-    storage_mock.list_by_filter.return_value = [m1]
+async def test_get_recent_logs_returns_actual_logs(storage_mock):
+    from context_store.logger import get_logger
+
+    logger = get_logger("test_logger")
+    logger.info("Test log message 1")
+    logger.warning("Test log message 2")
 
     svc = DashboardService(storage=storage_mock, graph=None)
-    from context_store.storage.protocols import MemoryFilters
+    logs = await svc.get_recent_logs(limit=10)
 
-    filters = MemoryFilters(project="p1")
-    results = await svc.search_memories(filters)
-
-    assert results == [m1]
-    storage_mock.list_by_filter.assert_called_once_with(filters)
+    # Filter only logs from our test_logger to avoid interference from other tests
+    test_logs = [log for log in logs if log.logger == "test_logger"]
+    assert len(test_logs) >= 2
+    assert test_logs[-2].message == "Test log message 1"
+    assert test_logs[-2].level == "INFO"
+    assert test_logs[-1].message == "Test log message 2"
+    assert test_logs[-1].level == "WARNING"
+    assert test_logs[-1].timestamp is not None

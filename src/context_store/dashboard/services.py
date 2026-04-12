@@ -143,6 +143,16 @@ class DashboardService:
         return await self._storage.list_by_filter(filters)
 
     async def get_recent_logs(self, limit: int = 100) -> list[LogEntry]:
-        """Get recent system logs (stub)."""
-        # TODO: Implement real log reading if required
-        return []
+        """Get recent system logs from the in-memory circular buffer."""
+        from context_store.logger import get_recent_logs
+
+        logs = get_recent_logs(limit=limit)
+        return [
+            LogEntry(
+                timestamp=log["timestamp"],
+                level=log["level"],
+                logger=log["logger"],
+                message=log["message"],
+            )
+            for log in logs
+        ]

@@ -161,15 +161,11 @@ async def create_storage(
 
         try:
             storage = await _create_storage_adapter(settings, read_only=read_only)
-        except NotImplementedError as exc:
-            if read_only:
-                logger.warning("Storage adapter not available in read-only mode: %s", exc)
-                # For Phase 6 compatibility, we allow Dashboard to run without
-                # a storage adapter if read_only=True and backend is postgres.
-                # We need a dummy or a way to proceed.
-                # Since the return type requires StorageAdapter, we may need to reconsider.
-            else:
-                raise
+        except NotImplementedError:
+            # Re-raise to ensure the caller (e.g., Orchestrator) gets the error
+            # if they attempt to use an unsupported read-only backend.
+            # (Phase 6 implementation will address this)
+            raise
 
         # Start cache coherence checker for SQLite + InMemory combination
         checker = None
@@ -193,19 +189,7 @@ async def create_storage(
             if checker is not None and isinstance(cache_adp, InMemoryCacheAdapter):
                 cache_adp.set_coherence_checker(checker)
 
-        # Final safety check: if storage is still None, we might have skipped it
-        # due to NotImplementedError
-        if storage is None:
-            # If we reach here without storage, and it wasn't a caught NotImplementedError,
-            # we should have raised already.
-            # If it WAS caught, we need a fallback or to raise if it's strictly required.
-            if read_only:
-                # Provide a no-op or just raise if the caller can't handle None
-                # But the signature says StorageAdapter (not optional)
-                # Let's re-read _create_storage_adapter.
-                pass
-
-        return storage, graph_adp, cache_adp  # type: ignore
+        return storage, graph_adp, cache_adp
     except Exception:
         # 各リソースの dispose() を個別に try/except で囲むことで、
         # 途中で例外が発生しても全リソースの解放を試みる。

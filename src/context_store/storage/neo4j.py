@@ -239,7 +239,8 @@ class Neo4jGraphAdapter:
     async def list_edges_for_memories(self, memory_ids: list[str]) -> list[Edge]:
         """Return all edges where BOTH endpoints are in ``memory_ids``.
 
-        This implementation filters both endpoints in the database for efficiency.
+        This implementation chunks the input IDs by ``from_id``
+        and filters ``to_id`` in Python.
         """
         if not memory_ids:
             return []
@@ -255,7 +256,7 @@ class Neo4jGraphAdapter:
 
         query = """
         MATCH (a:Memory)-[r]->(b:Memory)
-        WHERE a.id IN $chunk AND b.id IN $full_set
+        WHERE a.id IN $chunk
         RETURN a.id AS from_id, b.id AS to_id, type(r) AS edge_type, properties(r) AS properties
         """
 
@@ -263,16 +264,18 @@ class Neo4jGraphAdapter:
             async with self._session(access_mode=neo4j.READ_ACCESS) as session:
                 for i in range(0, len(unique_ids), CHUNK_SIZE):
                     chunk = unique_ids[i : i + CHUNK_SIZE]
-                    result = await session.run(query, chunk=chunk, full_set=unique_ids)
+                    result = await session.run(query, chunk=chunk)
                     async for record in result:
-                        all_edges.append(
-                            Edge(
-                                from_id=record["from_id"],
-                                to_id=record["to_id"],
-                                edge_type=record["edge_type"],
-                                properties=dict(record["properties"]),
+                        # Filter to_id in Python to avoid passing huge lists as parameters
+                        if record["to_id"] in ids_set:
+                            all_edges.append(
+                                Edge(
+                                    from_id=record["from_id"],
+                                    to_id=record["to_id"],
+                                    edge_type=record["edge_type"],
+                                    properties=dict(record["properties"]),
+                                )
                             )
-                        )
             return all_edges
         except Exception as exc:
             logger.warning("Neo4j list_edges_for_memories failed: %s", exc)

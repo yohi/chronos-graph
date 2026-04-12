@@ -27,15 +27,19 @@ class Neo4jGraphAdapter:
     function without graph capabilities.
     """
 
-    def __init__(self, driver: Any) -> None:
-        self._driver = driver
-
     # ------------------------------------------------------------------
     # Factory
     # ------------------------------------------------------------------
 
     @classmethod
-    async def create(cls, uri: str, user: str, password: str | SecretStr) -> "Neo4jGraphAdapter":
+    async def create(
+        cls,
+        uri: str,
+        user: str,
+        password: str | SecretStr,
+        *,
+        read_only: bool = False,
+    ) -> "Neo4jGraphAdapter":
         """Create a new adapter by connecting to Neo4j."""
         import neo4j
         from pydantic import SecretStr
@@ -44,7 +48,11 @@ class Neo4jGraphAdapter:
             password.get_secret_value() if isinstance(password, SecretStr) else password
         )
         driver = neo4j.AsyncGraphDatabase.driver(uri, auth=(user, actual_password))
-        return cls(driver)
+        return cls(driver, read_only=read_only)
+
+    def __init__(self, driver: Any, *, read_only: bool = False) -> None:
+        self._driver = driver
+        self._read_only = read_only
 
     # ------------------------------------------------------------------
     # GraphAdapter Protocol
@@ -52,13 +60,19 @@ class Neo4jGraphAdapter:
 
     async def create_node(self, memory_id: str, metadata: dict[str, Any]) -> None:
         """Create or upsert a graph node for the given memory ID."""
+        if self._read_only:
+            logger.debug("Neo4j create_node skipped (read_only)")
+            return
+
+        import neo4j
+
         cypher = """
             MERGE (m:Memory {id: $id})
             ON CREATE SET m += $props
             ON MATCH  SET m += $props
         """
         try:
-            async with self._driver.session() as session:
+            async with self._session(access_mode=neo4j.WRITE_ACCESS) as session:
                 await session.run(cypher, id=memory_id, props=metadata)
         except Exception as exc:
             logger.warning("Neo4j create_node failed (degraded): %s", exc)
@@ -67,6 +81,12 @@ class Neo4jGraphAdapter:
         self, from_id: str, to_id: str, edge_type: str, props: dict[str, Any]
     ) -> None:
         """Create a directed edge between two nodes."""
+        if self._read_only:
+            logger.debug("Neo4j create_edge skipped (read_only)")
+            return
+
+        import neo4j
+
         if not _is_valid_edge_type(edge_type):
             logger.warning("Neo4j create_edge skipped invalid edge_type: %s", edge_type)
             return
@@ -78,15 +98,21 @@ class Neo4jGraphAdapter:
             ON MATCH  SET r += $props
         """
         try:
-            async with self._driver.session() as session:
+            async with self._session(access_mode=neo4j.WRITE_ACCESS) as session:
                 await session.run(cypher, from_id=from_id, to_id=to_id, props=props)
         except Exception as exc:
             logger.warning("Neo4j create_edge failed (degraded): %s", exc)
 
     async def create_edges_batch(self, edges: list[dict[str, Any]]) -> None:
         """Create multiple edges in a single UNWIND operation."""
+        if self._read_only:
+            logger.debug("Neo4j create_edges_batch skipped (read_only)")
+            return
+
         if not edges:
             return
+
+        import neo4j
 
         # Build per-type batches to avoid dynamic relationship type in UNWIND
         # (Neo4j does not support parameterised rel types without APOC)
@@ -102,7 +128,7 @@ class Neo4jGraphAdapter:
             return
 
         try:
-            async with self._driver.session() as session:
+            async with self._session(access_mode=neo4j.WRITE_ACCESS) as session:
                 for edge_type, batch in batches.items():
                     cypher = f"""
                         UNWIND $edges AS e
@@ -144,7 +170,9 @@ class Neo4jGraphAdapter:
             RETURN nodes, rels
         """
         try:
-            async with self._driver.session() as session:
+            import neo4j
+
+            async with self._session(access_mode=neo4j.READ_ACCESS) as session:
                 result = await session.run(cypher, seed_ids=seed_ids)
                 nodes: list[dict[str, Any]] = []
                 edges: list[Edge] = []
@@ -186,9 +214,15 @@ class Neo4jGraphAdapter:
 
     async def delete_node(self, memory_id: str) -> None:
         """Delete a node and all its incident edges."""
+        if self._read_only:
+            logger.debug("Neo4j delete_node skipped (read_only)")
+            return
+
+        import neo4j
+
         cypher = "MATCH (m:Memory {id: $id}) DETACH DELETE m"
         try:
-            async with self._driver.session() as session:
+            async with self._session(access_mode=neo4j.WRITE_ACCESS) as session:
                 await session.run(cypher, id=memory_id)
         except Exception as exc:
             logger.warning("Neo4j delete_node failed (degraded): %s", exc)
@@ -197,46 +231,75 @@ class Neo4jGraphAdapter:
         """Close the driver."""
         await self._driver.close()
 
+    def _session(self, access_mode: str | None = None) -> Any:
+        """Create a session with the given access mode, or fallback to instance default."""
+        import neo4j
+
+        if access_mode is None:
+            access_mode = neo4j.READ_ACCESS if self._read_only else neo4j.WRITE_ACCESS
+
+        return self._driver.session(default_access_mode=access_mode)
+
     # ------------------------------------------------------------------
     # Dashboard graph queries (PR 3-4)
     # ------------------------------------------------------------------
 
     async def list_edges_for_memories(self, memory_ids: list[str]) -> list[Edge]:
-        """Return all edges where BOTH endpoints are in ``memory_ids``."""
+        """Return all edges where BOTH endpoints are in ``memory_ids``.
+
+        This implementation chunks the input IDs by ``from_id`` for efficiency
+        and filters ``to_id`` in Python to avoid O(n^2) queries or large parameter sets.
+        """
         if not memory_ids:
             return []
 
-        cypher = """
-            MATCH (a:Memory)-[r]->(b:Memory)
-            WHERE a.id IN $memory_ids AND b.id IN $memory_ids
-            RETURN a.id AS from_id, b.id AS to_id, type(r) AS edge_type, r AS props
+        import neo4j
+
+        ids_set = set(memory_ids)
+        unique_ids = list(ids_set)
+        # Neo4j has no hard parameter limit like SQLite (999),
+        # but chunking ensures stability with very large memory_ids sets.
+        CHUNK_SIZE = 1000
+        all_edges: list[Edge] = []
+
+        query = """
+        MATCH (a:Memory)-[r]->(b:Memory)
+        WHERE a.id IN $from_chunk
+        RETURN a.id AS from_id, b.id AS to_id, type(r) AS edge_type, properties(r) AS properties
         """
-        edges: list[Edge] = []
+
         try:
-            async with self._driver.session() as session:
-                result = await session.run(cypher, memory_ids=memory_ids)
-                async for record in result:
-                    edges.append(
-                        Edge(
-                            from_id=record["from_id"],
-                            to_id=record["to_id"],
-                            edge_type=record["edge_type"],
-                            properties=dict(record["props"]),
-                        )
-                    )
+            async with self._session(access_mode=neo4j.READ_ACCESS) as session:
+                for i in range(0, len(unique_ids), CHUNK_SIZE):
+                    from_chunk = unique_ids[i : i + CHUNK_SIZE]
+                    result = await session.run(query, from_chunk=from_chunk)
+                    async for record in result:
+                        # Filter to_id in Python to avoid large parameter transfer or O(n^2) queries
+                        if record["to_id"] in ids_set:
+                            all_edges.append(
+                                Edge(
+                                    from_id=record["from_id"],
+                                    to_id=record["to_id"],
+                                    edge_type=record["edge_type"],
+                                    properties=dict(record["properties"]),
+                                )
+                            )
+            return all_edges
         except Exception as exc:
-            logger.warning("Neo4j list_edges_for_memories failed (degraded): %s", exc)
-        return edges
+            logger.warning("Neo4j list_edges_for_memories failed: %s", exc)
+            return []
 
     async def list_all_edges(self) -> list[Edge]:
         """Return all edges in the graph."""
+        import neo4j
+
         cypher = """
             MATCH (a:Memory)-[r]->(b:Memory)
-            RETURN a.id AS from_id, b.id AS to_id, type(r) AS edge_type, r AS props
+            RETURN a.id AS from_id, b.id AS to_id, type(r) AS edge_type, properties(r) AS properties
         """
         edges: list[Edge] = []
         try:
-            async with self._driver.session() as session:
+            async with self._session(access_mode=neo4j.READ_ACCESS) as session:
                 result = await session.run(cypher)
                 async for record in result:
                     edges.append(
@@ -244,7 +307,7 @@ class Neo4jGraphAdapter:
                             from_id=record["from_id"],
                             to_id=record["to_id"],
                             edge_type=record["edge_type"],
-                            properties=dict(record["props"]),
+                            properties=dict(record["properties"]),
                         )
                     )
         except Exception as exc:
@@ -253,12 +316,14 @@ class Neo4jGraphAdapter:
 
     async def count_edges(self) -> int:
         """Return the total number of edges in the graph."""
-        cypher = "MATCH ()-[r]->() RETURN count(r) AS count"
+        import neo4j
+
+        query = "MATCH ()-[r]->() RETURN count(r) AS cnt"
         try:
-            async with self._driver.session() as session:
-                result = await session.run(cypher)
+            async with self._session(access_mode=neo4j.READ_ACCESS) as session:
+                result = await session.run(query)
                 record = await result.single()
-                return int(record["count"]) if record else 0
+            return int(record["cnt"]) if record else 0
         except Exception as exc:
             logger.warning("Neo4j count_edges failed (degraded): %s", exc)
             return 0

@@ -247,15 +247,16 @@ class Neo4jGraphAdapter:
     async def list_edges_for_memories(self, memory_ids: list[str]) -> list[Edge]:
         """Return all edges where BOTH endpoints are in ``memory_ids``.
 
-        This implementation filters both endpoints in the database using nested
-        chunking to avoid large parameter sizes and excessive client-side filtering.
+        This implementation chunks the input IDs by ``from_id`` for efficiency
+        and filters ``to_id`` in Python to avoid O(n^2) queries or large parameter sets.
         """
         if not memory_ids:
             return []
 
         import neo4j
 
-        unique_ids = list(set(memory_ids))
+        ids_set = set(memory_ids)
+        unique_ids = list(ids_set)
         # Neo4j has no hard parameter limit like SQLite (999),
         # but chunking ensures stability with very large memory_ids sets.
         CHUNK_SIZE = 1000
@@ -263,7 +264,7 @@ class Neo4jGraphAdapter:
 
         query = """
         MATCH (a:Memory)-[r]->(b:Memory)
-        WHERE a.id IN $from_chunk AND b.id IN $to_chunk
+        WHERE a.id IN $from_chunk
         RETURN a.id AS from_id, b.id AS to_id, type(r) AS edge_type, properties(r) AS properties
         """
 
@@ -271,10 +272,10 @@ class Neo4jGraphAdapter:
             async with self._session(access_mode=neo4j.READ_ACCESS) as session:
                 for i in range(0, len(unique_ids), CHUNK_SIZE):
                     from_chunk = unique_ids[i : i + CHUNK_SIZE]
-                    for j in range(0, len(unique_ids), CHUNK_SIZE):
-                        to_chunk = unique_ids[j : j + CHUNK_SIZE]
-                        result = await session.run(query, from_chunk=from_chunk, to_chunk=to_chunk)
-                        async for record in result:
+                    result = await session.run(query, from_chunk=from_chunk)
+                    async for record in result:
+                        # Filter to_id in Python to avoid large parameter transfer or O(n^2) queries
+                        if record["to_id"] in ids_set:
                             all_edges.append(
                                 Edge(
                                     from_id=record["from_id"],

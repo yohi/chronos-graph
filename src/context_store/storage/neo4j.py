@@ -264,7 +264,7 @@ class Neo4jGraphAdapter:
         """Return all edges in the graph."""
         cypher = """
             MATCH (a:Memory)-[r]->(b:Memory)
-            RETURN a.id AS from_id, b.id AS to_id, type(r) AS edge_type, r AS props
+            RETURN a.id AS from_id, b.id AS to_id, type(r) AS edge_type, properties(r) AS properties
         """
         edges: list[Edge] = []
         try:
@@ -276,7 +276,7 @@ class Neo4jGraphAdapter:
                             from_id=record["from_id"],
                             to_id=record["to_id"],
                             edge_type=record["edge_type"],
-                            properties=dict(record["props"]),
+                            properties=dict(record["properties"]),
                         )
                     )
         except Exception as exc:

@@ -384,7 +384,7 @@ class TestDashboardQueries:
                 "from_id": "x",
                 "to_id": "y",
                 "edge_type": "ANY",
-                "props": {},
+                "properties": {},
             }[k]
         )
 

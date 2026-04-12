@@ -11,7 +11,7 @@ router = APIRouter()
 
 
 @router.get("/{memory_id}")
-async def get_memory(memory_id: str, request: Request):
+async def get_memory(memory_id: str, request: Request) -> dict[str, str | float | int | None]:
     """Get a single memory by ID."""
     storage = request.app.state.storage
     memory = await storage.get_memory(memory_id)
@@ -29,7 +29,7 @@ async def get_memory(memory_id: str, request: Request):
 
 
 @router.delete("/{memory_id}")
-async def delete_memory(memory_id: str, request: Request):
+async def delete_memory(memory_id: str, request: Request) -> dict[str, str]:
     """Delete a single memory by ID."""
     service = request.app.state.service
     success = await service.delete_memory(memory_id)
@@ -39,7 +39,9 @@ async def delete_memory(memory_id: str, request: Request):
 
 
 @router.post("/search")
-async def search_memories(search_req: MemorySearchRequest, request: Request):
+async def search_memories(
+    search_req: MemorySearchRequest, request: Request
+) -> list[dict[str, str | float | int | None]]:
     """Search memories by filters."""
     service = request.app.state.service
     filters = MemoryFilters(

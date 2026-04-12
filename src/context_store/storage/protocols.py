@@ -29,8 +29,10 @@ class MemoryFilters:
     archived: bool | None = None
     tags: list[str] = field(default_factory=list)
     limit: int | None = None
+    offset: int | None = None
     order_by: str | None = None
     session_id: str | None = None
+    min_importance: float | None = None
     created_after: datetime | None = None
     archived_after: datetime | None = None
     id_after: str | None = None

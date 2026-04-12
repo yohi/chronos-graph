@@ -4,14 +4,18 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query, Request
 
+from context_store.dashboard.schemas import LogEntry
+
 router = APIRouter()
 
 
-@router.get("/")
+@router.get("/", response_model=list[LogEntry])
 async def get_logs(
     request: Request,
     limit: int = Query(100),
-):
+) -> list[LogEntry]:
     """Get recent system logs."""
-    service = request.app.state.service
+    from context_store.dashboard.services import DashboardService
+
+    service: DashboardService = request.app.state.service
     return await service.get_recent_logs(limit=limit)

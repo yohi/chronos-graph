@@ -7,9 +7,11 @@ from context_store.dashboard.schemas import (
     DashboardStats,
     GraphElementsDTO,
     GraphLayoutResponse,
+    LogEntry,
     ProjectStats,
 )
 from context_store.models.graph import GraphResult
+from context_store.models.memory import Memory
 from context_store.storage.protocols import (
     GraphAdapter,
     MemoryFilters,
@@ -133,11 +135,11 @@ class DashboardService:
         # Read-Only なら例外を出すべきだが、Dashboard API としての設計要件を確認
         return await self._storage.delete_memory(memory_id)
 
-    async def search_memories(self, filters: MemoryFilters) -> list:
+    async def search_memories(self, filters: MemoryFilters) -> list[Memory]:
         """Search memories by filters."""
         return await self._storage.list_by_filter(filters)
 
-    async def get_recent_logs(self, limit: int = 100) -> list:
+    async def get_recent_logs(self, limit: int = 100) -> list[LogEntry]:
         """Get recent system logs (stub)."""
         # TODO: Implement real log reading if required
         return []

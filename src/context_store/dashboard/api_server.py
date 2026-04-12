@@ -103,7 +103,7 @@ def create_app(
     return app
 
 
-def main():
+def main() -> None:
     """Main entry point."""
     import uvicorn
 

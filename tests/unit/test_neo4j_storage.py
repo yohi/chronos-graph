@@ -38,6 +38,7 @@ def adapter_and_session():
     driver, session = _make_driver_mock()
     adapter = Neo4jGraphAdapter.__new__(Neo4jGraphAdapter)
     adapter._driver = driver
+    adapter._read_only = False
     return adapter, session
 
 
@@ -335,7 +336,7 @@ class TestDashboardQueries:
                 "from_id": "a",
                 "to_id": "b",
                 "edge_type": "LINK",
-                "props": {"w": 1},
+                "properties": {"w": 1},
             }[k]
         )
 
@@ -413,7 +414,7 @@ class TestDashboardQueries:
         adp, session = adapter_and_session
 
         record = MagicMock()
-        record.__getitem__ = MagicMock(side_effect=lambda k: {"count": 42}[k])
+        record.__getitem__ = MagicMock(side_effect=lambda k: {"cnt": 42}[k])
         result_mock = AsyncMock()
         result_mock.single = AsyncMock(return_value=record)
         session.run = AsyncMock(return_value=result_mock)

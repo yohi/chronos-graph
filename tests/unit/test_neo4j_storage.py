@@ -322,6 +322,65 @@ class TestDispose:
 
 
 # ---------------------------------------------------------------------------
+# read_only mode
+# ---------------------------------------------------------------------------
+
+
+class TestReadOnlyMode:
+    async def test_uses_read_access_mode(self, adapter_and_session):
+        import neo4j
+
+        adp, _session = adapter_and_session
+        adp._read_only = True
+
+        # traverse は読み取り操作なので session が作られるはず
+        # session mock をリセットして、再度の呼び出しを追跡
+        adp._driver.session = MagicMock(return_value=adp._driver.session.return_value)
+        await adp.traverse(["seed"], [], depth=1)
+
+        # 呼び出し時の引数を確認
+        adp._driver.session.assert_called_with(default_access_mode=neo4j.READ_ACCESS)
+
+    async def test_skips_create_node(self, adapter_and_session):
+        adp, session = adapter_and_session
+        adp._read_only = True
+        session.run = AsyncMock()
+
+        await adp.create_node("n1", {})
+
+        session.run.assert_not_called()
+
+    async def test_skips_create_edge(self, adapter_and_session):
+        adp, session = adapter_and_session
+        adp._read_only = True
+        session.run = AsyncMock()
+
+        await adp.create_edge("a", "b", "TYPE", {})
+
+        session.run.assert_not_called()
+
+    async def test_skips_create_edges_batch(self, adapter_and_session):
+        adp, session = adapter_and_session
+        adp._read_only = True
+        session.run = AsyncMock()
+
+        await adp.create_edges_batch(
+            [{"from_id": "a", "to_id": "b", "edge_type": "T", "props": {}}]
+        )
+
+        session.run.assert_not_called()
+
+    async def test_skips_delete_node(self, adapter_and_session):
+        adp, session = adapter_and_session
+        adp._read_only = True
+        session.run = AsyncMock()
+
+        await adp.delete_node("n1")
+
+        session.run.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Dashboard graph queries
 # ---------------------------------------------------------------------------
 

@@ -60,13 +60,17 @@ class Neo4jGraphAdapter:
 
     async def create_node(self, memory_id: str, metadata: dict[str, Any]) -> None:
         """Create or upsert a graph node for the given memory ID."""
+        if self._read_only:
+            logger.debug("Neo4j create_node skipped (read_only)")
+            return
+
         cypher = """
             MERGE (m:Memory {id: $id})
             ON CREATE SET m += $props
             ON MATCH  SET m += $props
         """
         try:
-            async with self._driver.session() as session:
+            async with self._session() as session:
                 await session.run(cypher, id=memory_id, props=metadata)
         except Exception as exc:
             logger.warning("Neo4j create_node failed (degraded): %s", exc)
@@ -75,6 +79,10 @@ class Neo4jGraphAdapter:
         self, from_id: str, to_id: str, edge_type: str, props: dict[str, Any]
     ) -> None:
         """Create a directed edge between two nodes."""
+        if self._read_only:
+            logger.debug("Neo4j create_edge skipped (read_only)")
+            return
+
         if not _is_valid_edge_type(edge_type):
             logger.warning("Neo4j create_edge skipped invalid edge_type: %s", edge_type)
             return
@@ -86,13 +94,17 @@ class Neo4jGraphAdapter:
             ON MATCH  SET r += $props
         """
         try:
-            async with self._driver.session() as session:
+            async with self._session() as session:
                 await session.run(cypher, from_id=from_id, to_id=to_id, props=props)
         except Exception as exc:
             logger.warning("Neo4j create_edge failed (degraded): %s", exc)
 
     async def create_edges_batch(self, edges: list[dict[str, Any]]) -> None:
         """Create multiple edges in a single UNWIND operation."""
+        if self._read_only:
+            logger.debug("Neo4j create_edges_batch skipped (read_only)")
+            return
+
         if not edges:
             return
 
@@ -110,7 +122,7 @@ class Neo4jGraphAdapter:
             return
 
         try:
-            async with self._driver.session() as session:
+            async with self._session() as session:
                 for edge_type, batch in batches.items():
                     cypher = f"""
                         UNWIND $edges AS e
@@ -152,7 +164,7 @@ class Neo4jGraphAdapter:
             RETURN nodes, rels
         """
         try:
-            async with self._driver.session() as session:
+            async with self._session() as session:
                 result = await session.run(cypher, seed_ids=seed_ids)
                 nodes: list[dict[str, Any]] = []
                 edges: list[Edge] = []
@@ -194,9 +206,13 @@ class Neo4jGraphAdapter:
 
     async def delete_node(self, memory_id: str) -> None:
         """Delete a node and all its incident edges."""
+        if self._read_only:
+            logger.debug("Neo4j delete_node skipped (read_only)")
+            return
+
         cypher = "MATCH (m:Memory {id: $id}) DETACH DELETE m"
         try:
-            async with self._driver.session() as session:
+            async with self._session() as session:
                 await session.run(cypher, id=memory_id)
         except Exception as exc:
             logger.warning("Neo4j delete_node failed (degraded): %s", exc)

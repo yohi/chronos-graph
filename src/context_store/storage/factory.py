@@ -153,6 +153,7 @@ async def create_storage(
 
         # Start cache coherence checker for SQLite + InMemory combination
         # Skip for read_only mode (Dashboard does not mutate data)
+        checker = None
         if (
             not read_only
             and settings.storage_backend == "sqlite"
@@ -172,7 +173,7 @@ async def create_storage(
                 )
                 checker.start()
 
-            if isinstance(cache_adp, InMemoryCacheAdapter):
+            if checker is not None and isinstance(cache_adp, InMemoryCacheAdapter):
                 cache_adp.set_coherence_checker(checker)
 
         return storage, graph_adp, cache_adp

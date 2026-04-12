@@ -34,7 +34,13 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from context_store.config import Settings
-    from context_store.storage.protocols import CacheAdapter, GraphAdapter, StorageAdapter
+    from context_store.models.memory import Memory, ScoredMemory
+    from context_store.storage.protocols import (
+        CacheAdapter,
+        GraphAdapter,
+        MemoryFilters,
+        StorageAdapter,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +48,77 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Cache Coherence Checker (SQLite + InMemory only)
 # ---------------------------------------------------------------------------
+
+
+class ReadOnlyNoOpStorageAdapter:
+    """A minimal StorageAdapter that returns safe defaults (None/empty).
+
+    Used as a fallback when a specific backend does not yet support
+    read_only mode (e.g., PostgreSQL in Phase 6), allowing the Dashboard
+    to still run with Graph and Cache capabilities.
+
+    NOTE: Read operations in this adapter raise NotImplementedError to signal
+    that the primary storage backend is not yet accessible in read-only mode.
+    """
+
+    async def save_memory(self, memory: "Memory") -> str:
+        raise NotImplementedError("ReadOnlyNoOpStorageAdapter does not support writes")
+
+    async def get_memory(self, memory_id: str) -> "Memory | None":
+        raise NotImplementedError("ReadOnlyNoOpStorageAdapter: get_memory not implemented")
+
+    async def get_memories_batch(self, memory_ids: list[str]) -> list["Memory"]:
+        raise NotImplementedError(
+            "ReadOnlyNoOpStorageAdapter: get_memories_batch not implemented (Phase 6)"
+        )
+
+    async def delete_memory(self, memory_id: str) -> bool:
+        raise NotImplementedError("ReadOnlyNoOpStorageAdapter does not support writes")
+
+    async def update_memory(self, memory_id: str, updates: dict[str, Any]) -> bool:
+        raise NotImplementedError("ReadOnlyNoOpStorageAdapter does not support writes")
+
+    async def vector_search(
+        self, embedding: list[float], top_k: int, project: str | None = None
+    ) -> list["ScoredMemory"]:
+        raise NotImplementedError(
+            "ReadOnlyNoOpStorageAdapter: vector_search not implemented (Phase 6)"
+        )
+
+    async def keyword_search(
+        self, query: str, top_k: int, project: str | None = None
+    ) -> list["ScoredMemory"]:
+        raise NotImplementedError(
+            "ReadOnlyNoOpStorageAdapter: keyword_search not implemented (Phase 6)"
+        )
+
+    async def list_by_filter(self, filters: "MemoryFilters") -> list["Memory"]:
+        raise NotImplementedError(
+            "ReadOnlyNoOpStorageAdapter: list_by_filter not implemented (Phase 6)"
+        )
+
+    async def count_by_filter(self, filters: "MemoryFilters") -> int:
+        raise NotImplementedError(
+            "ReadOnlyNoOpStorageAdapter: count_by_filter not implemented (Phase 6)"
+        )
+
+    async def list_projects(self) -> list[str]:
+        raise NotImplementedError(
+            "ReadOnlyNoOpStorageAdapter: list_projects not implemented (Phase 6)"
+        )
+
+    async def increment_memory_access_count(self, memory_id: str) -> bool:
+        raise NotImplementedError(
+            "ReadOnlyNoOpStorageAdapter: increment_memory_access_count not implemented"
+        )
+
+    async def get_vector_dimension(self) -> int | None:
+        raise NotImplementedError(
+            "ReadOnlyNoOpStorageAdapter: get_vector_dimension not implemented (Phase 6)"
+        )
+
+    async def dispose(self) -> None:
+        pass
 
 
 class SQLiteCacheCoherenceChecker:
@@ -57,10 +134,13 @@ class SQLiteCacheCoherenceChecker:
         db_path: str,
         cache: "CacheAdapter",
         poll_interval: float,
+        *,
+        read_only: bool = False,
     ) -> None:
         self._db_path = db_path
         self._cache = cache
         self._poll_interval = poll_interval
+        self._read_only = read_only
         self._last_seen: str | None = None
         self._task: asyncio.Task[Any] | None = None
 
@@ -84,18 +164,19 @@ class SQLiteCacheCoherenceChecker:
         try:
             import aiosqlite  # type: ignore[import-not-found]
 
-            # Ensure the table exists
-            async with aiosqlite.connect(self._db_path) as conn:
-                await conn.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS system_metadata (
-                        key        TEXT PRIMARY KEY,
-                        value      TEXT NOT NULL,
-                        updated_at TEXT NOT NULL
+            # Ensure the table exists (only in write mode)
+            if not self._read_only:
+                async with aiosqlite.connect(self._db_path) as conn:
+                    await conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS system_metadata (
+                            key        TEXT PRIMARY KEY,
+                            value      TEXT NOT NULL,
+                            updated_at TEXT NOT NULL
+                        )
+                        """
                     )
-                    """
-                )
-                await conn.commit()
+                    await conn.commit()
 
             while True:
                 await asyncio.sleep(self._poll_interval)
@@ -118,6 +199,9 @@ class SQLiteCacheCoherenceChecker:
                                 updated_at,
                             )
                 except Exception as exc:
+                    # In read_only mode, table might not exist yet if no write happened
+                    if self._read_only and "no such table: system_metadata" in str(exc):
+                        continue
                     logger.warning("SQLiteCacheCoherenceChecker poll failed: %s", exc)
         except asyncio.CancelledError:
             pass
@@ -138,7 +222,7 @@ async def create_storage(
     Args:
         settings: Application settings.
         read_only: If True, open SQLite with ``mode=ro`` URI and Neo4j with READ_ACCESS.
-            Cache coherence checker is skipped (Dashboard does not mutate data).
+            Cache coherence checker runs even in read_only mode to observe updates.
 
     Returns:
         (StorageAdapter, GraphAdapter | None, CacheAdapter)
@@ -147,32 +231,45 @@ async def create_storage(
     graph_adp = None
     cache_adp = None
     try:
-        storage = await _create_storage_adapter(settings, read_only=read_only)
+        # Create graph and cache first to allow read-only dashboard with Neo4j
+        # even if Postgres read-only storage is not yet implemented.
         graph_adp = await _create_graph_adapter(settings, read_only=read_only)
         cache_adp = await _create_cache_adapter(settings)
 
+        try:
+            storage = await _create_storage_adapter(settings, read_only=read_only)
+        except NotImplementedError as exc:
+            # Re-raise unless we are in read-only mode (Dashboard needs to start)
+            if read_only:
+                logger.warning(
+                    "Storage adapter not available in read-only mode: %s. "
+                    "Returning ReadOnlyNoOpStorageAdapter for limited dashboard functionality.",
+                    exc,
+                )
+                storage = ReadOnlyNoOpStorageAdapter()  # type: ignore
+            else:
+                raise
+
         # Start cache coherence checker for SQLite + InMemory combination
-        # Skip for read_only mode (Dashboard does not mutate data)
-        if (
-            not read_only
-            and settings.storage_backend == "sqlite"
-            and settings.cache_backend == "inmemory"
-        ):
+        checker = None
+        if settings.storage_backend == "sqlite" and settings.cache_backend == "inmemory":
             import os
 
             from context_store.storage.inmemory import InMemoryCacheAdapter
 
             db_path = os.path.expanduser(settings.sqlite_db_path)
             # Only start if the database file exists (fail-fast principle)
+            # In read_only mode, we still start it if the file exists.
             if os.path.exists(db_path):
                 checker = SQLiteCacheCoherenceChecker(
                     db_path=db_path,
                     cache=cache_adp,  # type: ignore
                     poll_interval=settings.cache_coherence_poll_interval_seconds,
+                    read_only=read_only,
                 )
                 checker.start()
 
-            if isinstance(cache_adp, InMemoryCacheAdapter):
+            if checker is not None and isinstance(cache_adp, InMemoryCacheAdapter):
                 cache_adp.set_coherence_checker(checker)
 
         return storage, graph_adp, cache_adp
@@ -248,8 +345,6 @@ async def _create_graph_adapter(
                 "Neo4j uri, user, and password must be provided "
                 "when graph is enabled with postgres backend."
             )
-        if read_only:
-            raise NotImplementedError("read_only mode for neo4j backend is not yet supported")
         return await Neo4jGraphAdapter.create(
             uri=settings.neo4j_uri,
             user=settings.neo4j_user,

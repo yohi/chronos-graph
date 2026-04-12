@@ -373,3 +373,91 @@ class TestTimeout:
         assert result.traversal_depth == 0
 
         await adp.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Tests: Dashboard graph queries
+# ---------------------------------------------------------------------------
+
+
+class TestDashboardQueries:
+    async def test_list_edges_for_memories_basic(self, adapter: SQLiteGraphAdapter) -> None:
+        """指定したメモリID間のエッジが取得される."""
+        for nid in ["a", "b", "c", "d"]:
+            await adapter.create_node(nid, {})
+        await adapter.create_edge("a", "b", "REF", {})
+        await adapter.create_edge("b", "c", "REF", {})
+        await adapter.create_edge("c", "d", "REF", {})
+
+        # a, b, c の間のエッジのみ取得 (a->b, b->c)
+        edges = await adapter.list_edges_for_memories(["a", "b", "c"])
+        assert len(edges) == 2
+        edge_pairs = {(e.from_id, e.to_id) for e in edges}
+        assert ("a", "b") in edge_pairs
+        assert ("b", "c") in edge_pairs
+        assert ("c", "d") not in edge_pairs
+
+    async def test_list_edges_for_memories_chunking_boundaries(
+        self, adapter: SQLiteGraphAdapter
+    ) -> None:
+        """CHUNK_SIZE(900) の境界値 (900, 901) で正しく動作する."""
+        # 1. Test exactly 900 nodes (1 full chunk)
+        # Create 900 nodes and 899 edges: n0->n1, ..., n898->n899
+        ids_900 = [f"n900_{i}" for i in range(900)]
+        async with adapter._connect() as conn:
+            await conn.executemany(
+                "INSERT INTO memory_nodes (id, metadata) VALUES (?, '{}')",
+                [(nid,) for nid in ids_900],
+            )
+            await conn.commit()
+
+        edges_900 = [
+            {"from_id": ids_900[i], "to_id": ids_900[i + 1], "edge_type": "LINK", "props": {}}
+            for i in range(899)
+        ]
+        await adapter.create_edges_batch(edges_900)
+
+        # Retrieve edges for all 900 IDs
+        res_900 = await adapter.list_edges_for_memories(ids_900)
+        assert len(res_900) == 899
+
+        # 2. Test exactly 901 nodes (1 full chunk + 1 small chunk)
+        # Create 901 nodes and 900 edges: m0->m1, ..., m899->m900
+        ids_901 = [f"m901_{i}" for i in range(901)]
+        async with adapter._connect() as conn:
+            await conn.executemany(
+                "INSERT INTO memory_nodes (id, metadata) VALUES (?, '{}')",
+                [(nid,) for nid in ids_901],
+            )
+            await conn.commit()
+
+        edges_901 = [
+            {"from_id": ids_901[i], "to_id": ids_901[i + 1], "edge_type": "LINK", "props": {}}
+            for i in range(900)
+        ]
+        await adapter.create_edges_batch(edges_901)
+
+        # Retrieve edges for all 901 IDs
+        res_901 = await adapter.list_edges_for_memories(ids_901)
+        assert len(res_901) == 900
+
+    async def test_list_all_edges(self, adapter: SQLiteGraphAdapter) -> None:
+        """全エッジが取得される."""
+        await adapter.create_node("n1", {})
+        await adapter.create_node("n2", {})
+        await adapter.create_edge("n1", "n2", "TYPE_A", {"p": 1})
+        await adapter.create_edge("n2", "n1", "TYPE_B", {"p": 2})
+
+        edges = await adapter.list_all_edges()
+        assert len(edges) == 2
+        types = {e.edge_type for e in edges}
+        assert "TYPE_A" in types
+        assert "TYPE_B" in types
+
+    async def test_count_edges(self, adapter: SQLiteGraphAdapter) -> None:
+        """エッジ総数が返される."""
+        assert await adapter.count_edges() == 0
+        await adapter.create_node("n1", {})
+        await adapter.create_node("n2", {})
+        await adapter.create_edge("n1", "n2", "REL", {})
+        assert await adapter.count_edges() == 1

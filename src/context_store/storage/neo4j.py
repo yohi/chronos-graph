@@ -242,6 +242,29 @@ class Neo4jGraphAdapter:
             logger.warning("Neo4j list_edges_for_memories failed (degraded): %s", exc)
             return []
 
+    async def list_all_edges(self) -> list[Edge]:
+        """Return all edges in the graph."""
+        cypher = """
+            MATCH (a:Memory)-[r]->(b:Memory)
+            RETURN a.id AS from_id, b.id AS to_id, type(r) AS edge_type, r AS props
+        """
+        edges: list[Edge] = []
+        try:
+            async with self._session() as session:
+                result = await session.run(cypher)
+                async for record in result:
+                    edges.append(
+                        Edge(
+                            from_id=record["from_id"],
+                            to_id=record["to_id"],
+                            edge_type=record["edge_type"],
+                            properties=dict(record["props"]),
+                        )
+                    )
+        except Exception as exc:
+            logger.warning("Neo4j list_all_edges failed (degraded): %s", exc)
+        return edges
+
     async def count_edges(self) -> int:
         """Return the total number of edges in the graph."""
         query = "MATCH ()-[r]->() RETURN count(r) AS cnt"

@@ -35,3 +35,5 @@ jobs:
 
       - name: Run unit tests
         run: uv run pytest tests/unit -v --cov=src/context_store --cov-report=term-missing
+        env:
+          OPENAI_API_KEY: sk-dummy-key-for-ci-validation

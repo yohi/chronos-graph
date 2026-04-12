@@ -510,7 +510,7 @@ class SQLiteGraphAdapter:
             return []
 
         ids_set = set(memory_ids)
-        unique_ids = list(ids_set)
+        unique_ids = sorted(list(ids_set))
         # SQLite variable limit is 999. Use 900 for safety.
         CHUNK_SIZE = 900
         all_edges: list[Edge] = []
@@ -519,8 +519,9 @@ class SQLiteGraphAdapter:
             conn.row_factory = aiosqlite.Row
             for i in range(0, len(unique_ids), CHUNK_SIZE):
                 chunk = unique_ids[i : i + CHUNK_SIZE]
+                # Safe: placeholders string is entirely internally generated
+                # "?" repetitions based on chunk size.
                 placeholders = ",".join(["?"] * len(chunk))
-                # Safe: placeholders string is entirely internally generated "?" repetitions.
                 query = f"""
                     SELECT from_id, to_id, edge_type, props
                     FROM memory_edges
@@ -530,6 +531,7 @@ class SQLiteGraphAdapter:
                     rows = await cursor.fetchall()
 
                 for row in rows:
+                    # Filter to_id in Python to ensure it's also in the input set.
                     if row["to_id"] in ids_set:
                         # Safe JSON decode for properties
                         try:

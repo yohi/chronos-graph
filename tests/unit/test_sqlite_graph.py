@@ -441,6 +441,31 @@ class TestDashboardQueries:
         res_901 = await adapter.list_edges_for_memories(ids_901)
         assert len(res_901) == 900
 
+    async def test_list_edges_for_memories_cross_chunk(self, adapter: SQLiteGraphAdapter) -> None:
+        """チャンクを跨ぐエッジが取得されることを検証する."""
+        # 1000個のノードを作成 (CHUNK_SIZE=900 を想定)
+        ids = [f"node_{i}" for i in range(1000)]
+        async with adapter._connect() as conn:
+            await conn.executemany(
+                "INSERT INTO memory_nodes (id, metadata) VALUES (?, '{}')",
+                [(nid,) for nid in ids],
+            )
+            await conn.commit()
+
+        # 第1チャンク(0-899)のノードから、第2チャンク(900-999)のノードへのエッジを作成
+        # 例: node_1 -> node_950
+        await adapter.create_edge("node_1", "node_950", "CROSS", {"p": 1})
+        # 逆方向も: node_950 -> node_2
+        await adapter.create_edge("node_950", "node_2", "CROSS", {"p": 2})
+
+        # 全てのIDを指定して取得
+        edges = await adapter.list_edges_for_memories(ids)
+
+        edge_pairs = {(e.from_id, e.to_id) for e in edges}
+        assert ("node_1", "node_950") in edge_pairs
+        assert ("node_950", "node_2") in edge_pairs
+        assert len(edges) == 2
+
     async def test_list_all_edges(self, adapter: SQLiteGraphAdapter) -> None:
         """全エッジが取得される."""
         await adapter.create_node("n1", {})

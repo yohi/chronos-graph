@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, AsyncIterator
-
-if TYPE_CHECKING:
-    from context_store.config import Settings
+from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
+from context_store.config import Settings
 from context_store.dashboard.services import DashboardService
 from context_store.storage.factory import create_storage
 
@@ -72,7 +70,7 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    allowed_hosts = settings.dashboard_allowed_hosts_list
+    allowed_hosts = settings.dashboard_allowed_hosts
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=allowed_hosts,
@@ -89,6 +87,8 @@ def create_app(
         app.router.lifespan_context = noop_lifespan
 
     from context_store.dashboard.routes import (
+        graph,
+        logs,
         memories,
         stats,
         system,
@@ -96,6 +96,8 @@ def create_app(
 
     app.include_router(stats.router, prefix="/api/stats", tags=["stats"])
     app.include_router(memories.router, prefix="/api/memories", tags=["memories"])
+    app.include_router(graph.router, prefix="/api/graph", tags=["graph"])
+    app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
     app.include_router(system.router, prefix="/api/system", tags=["system"])
 
     return app
@@ -109,7 +111,7 @@ def main():
     app = create_app()
     uvicorn.run(
         app,
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=settings.dashboard_port,
         log_level=settings.log_level.lower(),
     )

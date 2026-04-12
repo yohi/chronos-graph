@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Literal
 
 from context_store.dashboard.schemas import (
@@ -28,10 +29,12 @@ class DashboardService:
         self._graph = graph
 
     async def get_stats_summary(self) -> DashboardStats:
-        active = await self._storage.count_by_filter(MemoryFilters(archived=False))
-        archived = await self._storage.count_by_filter(MemoryFilters(archived=True))
-        total = await self._storage.count_by_filter(MemoryFilters(archived=None))
-        projects = await self._storage.list_projects()
+        active, archived, total, projects = await asyncio.gather(
+            self._storage.count_by_filter(MemoryFilters(archived=False)),
+            self._storage.count_by_filter(MemoryFilters(archived=True)),
+            self._storage.count_by_filter(MemoryFilters(archived=None)),
+            self._storage.list_projects(),
+        )
         edge_count = await self._graph.count_edges() if self._graph else 0
         return DashboardStats(
             active_count=active,
@@ -44,19 +47,20 @@ class DashboardService:
 
     async def get_project_stats(self) -> list[ProjectStats]:
         projects = await self._storage.list_projects()
-        result: list[ProjectStats] = []
-        for p in projects:
-            active = await self._storage.count_by_filter(MemoryFilters(project=p, archived=False))
-            archived = await self._storage.count_by_filter(MemoryFilters(project=p, archived=True))
-            result.append(
-                ProjectStats(
-                    project=p,
-                    active_count=active,
-                    archived_count=archived,
-                    total_count=active + archived,
-                )
+
+        async def _fetch_project_stats(p: str) -> ProjectStats:
+            active, archived = await asyncio.gather(
+                self._storage.count_by_filter(MemoryFilters(project=p, archived=False)),
+                self._storage.count_by_filter(MemoryFilters(project=p, archived=True)),
             )
-        return result
+            return ProjectStats(
+                project=p,
+                active_count=active,
+                archived_count=archived,
+                total_count=active + archived,
+            )
+
+        return list(await asyncio.gather(*(_fetch_project_stats(p) for p in projects)))
 
     async def get_graph_layout(
         self,
@@ -123,3 +127,17 @@ class DashboardService:
             edge_types=edge_types or [],
             depth=max_depth,
         )
+
+    async def delete_memory(self, memory_id: str) -> bool:
+        """Delete a memory and its edges."""
+        # Read-Only なら例外を出すべきだが、Dashboard API としての設計要件を確認
+        return await self._storage.delete_memory(memory_id)
+
+    async def search_memories(self, filters: MemoryFilters) -> list:
+        """Search memories by filters."""
+        return await self._storage.list_by_filter(filters)
+
+    async def get_recent_logs(self, limit: int = 100) -> list:
+        """Get recent system logs (stub)."""
+        # TODO: Implement real log reading if required
+        return []

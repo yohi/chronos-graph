@@ -73,3 +73,17 @@ class LogEntry(DashboardBaseModel):
     level: str
     logger: str
     message: str
+
+
+class MemorySearchRequest(DashboardBaseModel):
+    project: str | None = None
+    memory_type: str | None = None
+    archived: bool | None = None
+    min_importance: float | None = None
+    limit: int = 100
+    offset: int = 0
+
+
+class GraphTraverseRequest(DashboardBaseModel):
+    max_depth: int = 2
+    edge_types: list[str] | None = None

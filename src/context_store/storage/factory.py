@@ -56,16 +56,21 @@ class ReadOnlyNoOpStorageAdapter:
     Used as a fallback when a specific backend does not yet support
     read_only mode (e.g., PostgreSQL in Phase 6), allowing the Dashboard
     to still run with Graph and Cache capabilities.
+
+    NOTE: Read operations in this adapter raise NotImplementedError to signal
+    that the primary storage backend is not yet accessible in read-only mode.
     """
 
     async def save_memory(self, memory: "Memory") -> str:
         raise NotImplementedError("ReadOnlyNoOpStorageAdapter does not support writes")
 
     async def get_memory(self, memory_id: str) -> "Memory | None":
-        return None
+        raise NotImplementedError("ReadOnlyNoOpStorageAdapter: get_memory not implemented")
 
     async def get_memories_batch(self, memory_ids: list[str]) -> list["Memory"]:
-        return []
+        raise NotImplementedError(
+            "ReadOnlyNoOpStorageAdapter: get_memories_batch not implemented (Phase 6)"
+        )
 
     async def delete_memory(self, memory_id: str) -> bool:
         raise NotImplementedError("ReadOnlyNoOpStorageAdapter does not support writes")
@@ -76,27 +81,41 @@ class ReadOnlyNoOpStorageAdapter:
     async def vector_search(
         self, embedding: list[float], top_k: int, project: str | None = None
     ) -> list["ScoredMemory"]:
-        return []
+        raise NotImplementedError(
+            "ReadOnlyNoOpStorageAdapter: vector_search not implemented (Phase 6)"
+        )
 
     async def keyword_search(
         self, query: str, top_k: int, project: str | None = None
     ) -> list["ScoredMemory"]:
-        return []
+        raise NotImplementedError(
+            "ReadOnlyNoOpStorageAdapter: keyword_search not implemented (Phase 6)"
+        )
 
     async def list_by_filter(self, filters: "MemoryFilters") -> list["Memory"]:
-        return []
+        raise NotImplementedError(
+            "ReadOnlyNoOpStorageAdapter: list_by_filter not implemented (Phase 6)"
+        )
 
     async def count_by_filter(self, filters: "MemoryFilters") -> int:
-        return 0
+        raise NotImplementedError(
+            "ReadOnlyNoOpStorageAdapter: count_by_filter not implemented (Phase 6)"
+        )
 
     async def list_projects(self) -> list[str]:
-        return []
+        raise NotImplementedError(
+            "ReadOnlyNoOpStorageAdapter: list_projects not implemented (Phase 6)"
+        )
 
     async def increment_memory_access_count(self, memory_id: str) -> bool:
-        return False
+        raise NotImplementedError(
+            "ReadOnlyNoOpStorageAdapter: increment_memory_access_count not implemented"
+        )
 
     async def get_vector_dimension(self) -> int | None:
-        return None
+        raise NotImplementedError(
+            "ReadOnlyNoOpStorageAdapter: get_vector_dimension not implemented (Phase 6)"
+        )
 
     async def dispose(self) -> None:
         pass

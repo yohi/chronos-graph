@@ -164,7 +164,9 @@ class Neo4jGraphAdapter:
             RETURN nodes, rels
         """
         try:
-            async with self._session() as session:
+            import neo4j
+
+            async with self._session(access_mode=neo4j.READ_ACCESS) as session:
                 result = await session.run(cypher, seed_ids=seed_ids)
                 nodes: list[dict[str, Any]] = []
                 edges: list[Edge] = []
@@ -221,11 +223,13 @@ class Neo4jGraphAdapter:
         """Close the driver."""
         await self._driver.close()
 
-    def _session(self) -> Any:
-        """READ session if read_only else WRITE session."""
+    def _session(self, access_mode: str | None = None) -> Any:
+        """Create a session with the given access mode, or fallback to instance default."""
         import neo4j
 
-        access_mode = neo4j.READ_ACCESS if self._read_only else neo4j.WRITE_ACCESS
+        if access_mode is None:
+            access_mode = neo4j.READ_ACCESS if self._read_only else neo4j.WRITE_ACCESS
+
         return self._driver.session(default_access_mode=access_mode)
 
     # ------------------------------------------------------------------
@@ -235,12 +239,12 @@ class Neo4jGraphAdapter:
     async def list_edges_for_memories(self, memory_ids: list[str]) -> list[Edge]:
         """Return all edges where BOTH endpoints are in ``memory_ids``.
 
-        For safety and consistency with the GraphAdapter protocol,
-        this implementation chunks the input IDs by ``from_id``
-        and filters ``to_id`` in Python.
+        This implementation filters both endpoints in the database for efficiency.
         """
         if not memory_ids:
             return []
+
+        import neo4j
 
         ids_set = set(memory_ids)
         unique_ids = list(ids_set)
@@ -251,26 +255,24 @@ class Neo4jGraphAdapter:
 
         query = """
         MATCH (a:Memory)-[r]->(b:Memory)
-        WHERE a.id IN $chunk
+        WHERE a.id IN $chunk AND b.id IN $full_set
         RETURN a.id AS from_id, b.id AS to_id, type(r) AS edge_type, properties(r) AS properties
         """
 
         try:
-            async with self._session() as session:
+            async with self._session(access_mode=neo4j.READ_ACCESS) as session:
                 for i in range(0, len(unique_ids), CHUNK_SIZE):
                     chunk = unique_ids[i : i + CHUNK_SIZE]
-                    result = await session.run(query, chunk=chunk)
+                    result = await session.run(query, chunk=chunk, full_set=unique_ids)
                     async for record in result:
-                        # Filter to_id in Python to avoid passing huge lists as parameters
-                        if record["to_id"] in ids_set:
-                            all_edges.append(
-                                Edge(
-                                    from_id=record["from_id"],
-                                    to_id=record["to_id"],
-                                    edge_type=record["edge_type"],
-                                    properties=dict(record["properties"]),
-                                )
+                        all_edges.append(
+                            Edge(
+                                from_id=record["from_id"],
+                                to_id=record["to_id"],
+                                edge_type=record["edge_type"],
+                                properties=dict(record["properties"]),
                             )
+                        )
             return all_edges
         except Exception as exc:
             logger.warning("Neo4j list_edges_for_memories failed: %s", exc)
@@ -278,13 +280,15 @@ class Neo4jGraphAdapter:
 
     async def list_all_edges(self) -> list[Edge]:
         """Return all edges in the graph."""
+        import neo4j
+
         cypher = """
             MATCH (a:Memory)-[r]->(b:Memory)
             RETURN a.id AS from_id, b.id AS to_id, type(r) AS edge_type, properties(r) AS properties
         """
         edges: list[Edge] = []
         try:
-            async with self._session() as session:
+            async with self._session(access_mode=neo4j.READ_ACCESS) as session:
                 result = await session.run(cypher)
                 async for record in result:
                     edges.append(
@@ -301,9 +305,11 @@ class Neo4jGraphAdapter:
 
     async def count_edges(self) -> int:
         """Return the total number of edges in the graph."""
+        import neo4j
+
         query = "MATCH ()-[r]->() RETURN count(r) AS cnt"
         try:
-            async with self._session() as session:
+            async with self._session(access_mode=neo4j.READ_ACCESS) as session:
                 result = await session.run(query)
                 record = await result.single()
             return int(record["cnt"]) if record else 0

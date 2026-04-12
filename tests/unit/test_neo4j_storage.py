@@ -38,6 +38,7 @@ def adapter_and_session():
     driver, session = _make_driver_mock()
     adapter = Neo4jGraphAdapter.__new__(Neo4jGraphAdapter)
     adapter._driver = driver
+    adapter._read_only = False
     return adapter, session
 
 
@@ -321,6 +322,65 @@ class TestDispose:
 
 
 # ---------------------------------------------------------------------------
+# read_only mode
+# ---------------------------------------------------------------------------
+
+
+class TestReadOnlyMode:
+    async def test_uses_read_access_mode(self, adapter_and_session):
+        import neo4j
+
+        adp, _session = adapter_and_session
+        adp._read_only = True
+
+        # traverse は読み取り操作なので session が作られるはず
+        # session mock をリセットして、再度の呼び出しを追跡
+        adp._driver.session = MagicMock(return_value=adp._driver.session.return_value)
+        await adp.traverse(["seed"], [], depth=1)
+
+        # 呼び出し時の引数を確認
+        adp._driver.session.assert_called_with(default_access_mode=neo4j.READ_ACCESS)
+
+    async def test_skips_create_node(self, adapter_and_session):
+        adp, session = adapter_and_session
+        adp._read_only = True
+        session.run = AsyncMock()
+
+        await adp.create_node("n1", {})
+
+        session.run.assert_not_called()
+
+    async def test_skips_create_edge(self, adapter_and_session):
+        adp, session = adapter_and_session
+        adp._read_only = True
+        session.run = AsyncMock()
+
+        await adp.create_edge("a", "b", "TYPE", {})
+
+        session.run.assert_not_called()
+
+    async def test_skips_create_edges_batch(self, adapter_and_session):
+        adp, session = adapter_and_session
+        adp._read_only = True
+        session.run = AsyncMock()
+
+        await adp.create_edges_batch(
+            [{"from_id": "a", "to_id": "b", "edge_type": "T", "props": {}}]
+        )
+
+        session.run.assert_not_called()
+
+    async def test_skips_delete_node(self, adapter_and_session):
+        adp, session = adapter_and_session
+        adp._read_only = True
+        session.run = AsyncMock()
+
+        await adp.delete_node("n1")
+
+        session.run.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Dashboard graph queries
 # ---------------------------------------------------------------------------
 
@@ -335,7 +395,7 @@ class TestDashboardQueries:
                 "from_id": "a",
                 "to_id": "b",
                 "edge_type": "LINK",
-                "props": {"w": 1},
+                "properties": {"w": 1},
             }[k]
         )
 
@@ -383,7 +443,7 @@ class TestDashboardQueries:
                 "from_id": "x",
                 "to_id": "y",
                 "edge_type": "ANY",
-                "props": {},
+                "properties": {},
             }[k]
         )
 
@@ -413,7 +473,7 @@ class TestDashboardQueries:
         adp, session = adapter_and_session
 
         record = MagicMock()
-        record.__getitem__ = MagicMock(side_effect=lambda k: {"count": 42}[k])
+        record.__getitem__ = MagicMock(side_effect=lambda k: {"cnt": 42}[k])
         result_mock = AsyncMock()
         result_mock.single = AsyncMock(return_value=record)
         session.run = AsyncMock(return_value=result_mock)

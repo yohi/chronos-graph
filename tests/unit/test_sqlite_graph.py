@@ -442,8 +442,8 @@ class TestDashboardQueries:
         assert len(res_901) == 900
 
     async def test_list_edges_for_memories_cross_chunk(self, adapter: SQLiteGraphAdapter) -> None:
-        """チャンクを跨ぐエッジが取得されることを検証する."""
-        # 1000個のノードを作成 (CHUNK_SIZE=900 を想定)
+        """Verify that edges crossing chunk boundaries are correctly retrieved."""
+        # Create 1000 nodes (assuming CHUNK_SIZE=900)
         ids = [f"node_{i}" for i in range(1000)]
         async with adapter._connect() as conn:
             await conn.executemany(
@@ -452,10 +452,10 @@ class TestDashboardQueries:
             )
             await conn.commit()
 
-        # 第1チャンク(0-899)のノードから、第2チャンク(900-999)のノードへのエッジを作成
-        # 例: node_1 -> node_950
+        # Create edges from nodes in chunk 1 (0-899) to nodes in chunk 2 (900-999)
+        # e.g., node_1 -> node_950
         await adapter.create_edge("node_1", "node_950", "CROSS", {"p": 1})
-        # 逆方向も: node_950 -> node_2
+        # Reverse: node_950 -> node_2
         await adapter.create_edge("node_950", "node_2", "CROSS", {"p": 2})
 
         # 全てのIDを指定して取得

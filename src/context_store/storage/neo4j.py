@@ -217,29 +217,47 @@ class Neo4jGraphAdapter:
     # ------------------------------------------------------------------
 
     async def list_edges_for_memories(self, memory_ids: list[str]) -> list[Edge]:
-        """Return all edges where BOTH endpoints are in ``memory_ids``."""
+        """Return all edges where BOTH endpoints are in ``memory_ids``.
+
+        For safety and consistency with the GraphAdapter protocol,
+        this implementation chunks the input IDs by ``from_id``
+        and filters ``to_id`` in Python.
+        """
         if not memory_ids:
             return []
+
+        ids_set = set(memory_ids)
+        unique_ids = list(ids_set)
+        # Neo4j has no hard parameter limit like SQLite (999),
+        # but chunking ensures stability with very large memory_ids sets.
+        CHUNK_SIZE = 1000
+        all_edges: list[Edge] = []
+
         query = """
         MATCH (a:Memory)-[r]->(b:Memory)
-        WHERE a.id IN $ids AND b.id IN $ids
+        WHERE a.id IN $chunk
         RETURN a.id AS from_id, b.id AS to_id, type(r) AS edge_type, properties(r) AS properties
         """
+
         try:
             async with self._session() as session:
-                result = await session.run(query, ids=memory_ids)
-                records = [record async for record in result]
-            return [
-                Edge(
-                    from_id=r["from_id"],
-                    to_id=r["to_id"],
-                    edge_type=r["edge_type"],
-                    properties=dict(r["properties"]),
-                )
-                for r in records
-            ]
+                for i in range(0, len(unique_ids), CHUNK_SIZE):
+                    chunk = unique_ids[i : i + CHUNK_SIZE]
+                    result = await session.run(query, chunk=chunk)
+                    async for record in result:
+                        # Filter to_id in Python to avoid passing huge lists as parameters
+                        if record["to_id"] in ids_set:
+                            all_edges.append(
+                                Edge(
+                                    from_id=record["from_id"],
+                                    to_id=record["to_id"],
+                                    edge_type=record["edge_type"],
+                                    properties=dict(record["properties"]),
+                                )
+                            )
+            return all_edges
         except Exception as exc:
-            logger.warning("Neo4j list_edges_for_memories failed (degraded): %s", exc)
+            logger.warning("Neo4j list_edges_for_memories failed: %s", exc)
             return []
 
     async def list_all_edges(self) -> list[Edge]:

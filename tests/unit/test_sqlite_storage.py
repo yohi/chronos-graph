@@ -620,6 +620,17 @@ class TestListByFilter:
         assert str(tagged.id) in ids
         assert str(untagged.id) not in ids
 
+    async def test_list_by_min_importance(self, adapter):
+        high = _make_memory(content="high importance", importance_score=0.9)
+        low = _make_memory(content="low importance", importance_score=0.1)
+        await adapter.save_memory(high)
+        await adapter.save_memory(low)
+
+        results = await adapter.list_by_filter(MemoryFilters(min_importance=0.5))
+        ids = [str(r.id) for r in results]
+        assert str(high.id) in ids
+        assert str(low.id) not in ids
+
     async def test_list_by_tags_does_not_corrupt_values_containing_column_names(self, adapter):
         tagged = _make_memory(content="tagged", tags=["archived_at"])
         other = _make_memory(content="other", tags=["different"])

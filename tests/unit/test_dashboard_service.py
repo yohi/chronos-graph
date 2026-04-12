@@ -38,6 +38,13 @@ async def test_get_stats_summary_aggregates_counts(storage_mock, graph_mock):
     assert stats.project_count == 2
     assert stats.projects == ["p1", "p2"]
 
+    # Verify calls
+
+    calls = storage_mock.count_by_filter.call_args_list
+    assert calls[0].args[0].archived is None  # active
+    assert calls[1].args[0].archived is True  # archived
+    assert calls[2].args[0].archived is False  # total
+
 
 @pytest.mark.asyncio
 async def test_get_stats_summary_graph_none(storage_mock):
@@ -90,6 +97,12 @@ async def test_get_graph_layout_returns_cytoscape_format(storage_mock, graph_moc
     first_node = resp.elements.nodes[0]
     assert "data" in first_node
 
+    # Verify filters
+
+    storage_mock.list_by_filter.assert_called_once()
+    filters = storage_mock.list_by_filter.call_args.args[0]
+    assert filters.archived is None  # Active only
+
 
 @pytest.mark.asyncio
 async def test_traverse_graph_raises_without_graph_backend(storage_mock):
@@ -100,10 +113,45 @@ async def test_traverse_graph_raises_without_graph_backend(storage_mock):
 
 @pytest.mark.asyncio
 async def test_get_project_stats(storage_mock, graph_mock):
-    storage_mock.list_projects.return_value = ["p1", "p2"]
-    storage_mock.count_by_filter.side_effect = [10, 2, 12, 5, 1, 6]
+    storage_mock.list_projects.return_value = ["p1"]
+    storage_mock.count_by_filter.side_effect = [10, 2, 12]
     svc = DashboardService(storage=storage_mock, graph=graph_mock)
     stats = await svc.get_project_stats()
-    assert len(stats) == 2
+    assert len(stats) == 1
     assert stats[0].project == "p1"
     assert stats[0].active_count == 10
+    assert stats[0].archived_count == 2
+    assert stats[0].total_count == 12
+
+    calls = storage_mock.count_by_filter.call_args_list
+    assert calls[0].args[0].archived is None  # active
+    assert calls[1].args[0].archived is True  # archived
+    assert calls[2].args[0].archived is False  # total
+
+
+@pytest.mark.asyncio
+async def test_get_memory_returns_memory_from_storage(storage_mock):
+    m1 = MagicMock(spec=Memory)
+    m1.id = UUID("550e84c0-5ec0-4b1a-b3e1-123456789abc")
+    storage_mock.get_memory.return_value = m1
+
+    svc = DashboardService(storage=storage_mock, graph=None)
+    memory = await svc.get_memory(str(m1.id))
+
+    assert memory == m1
+    storage_mock.get_memory.assert_called_once_with(str(m1.id))
+
+
+@pytest.mark.asyncio
+async def test_search_memories_returns_list_from_storage(storage_mock):
+    m1 = MagicMock(spec=Memory)
+    storage_mock.list_by_filter.return_value = [m1]
+
+    svc = DashboardService(storage=storage_mock, graph=None)
+    from context_store.storage.protocols import MemoryFilters
+
+    filters = MemoryFilters(project="p1")
+    results = await svc.search_memories(filters)
+
+    assert results == [m1]
+    storage_mock.list_by_filter.assert_called_once_with(filters)

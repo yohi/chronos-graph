@@ -906,6 +906,10 @@ class SQLiteStorageAdapter:
                 f"THEN json_extract({prefix}source_metadata, '$.session_id') END = ?"
             )
 
+        if filters.min_importance is not None:
+            params.append(filters.min_importance)
+            conditions.append(f"{prefix}importance_score >= ?")
+
         if filters.created_after is not None:
             created_after_utc = filters.created_after.astimezone(timezone.utc).isoformat()
             if filters.id_after is not None:

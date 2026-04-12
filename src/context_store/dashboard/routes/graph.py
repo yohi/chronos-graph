@@ -6,7 +6,13 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Query, Request
 
-from context_store.dashboard.schemas import GraphLayoutResponse, GraphTraverseRequest
+from context_store.dashboard.schemas import (
+    GraphLayoutResponse,
+    GraphTraverseRequest,
+    GraphTraverseResponse,
+    TraverseEdge,
+    TraverseNode,
+)
 
 router = APIRouter()
 
@@ -29,12 +35,12 @@ async def get_graph_layout(
     )
 
 
-@router.post("/{seed_id}/traverse")
+@router.post("/{seed_id}/traverse", response_model=GraphTraverseResponse)
 async def traverse_graph(
     seed_id: str,
     traverse_req: GraphTraverseRequest,
     request: Request,
-) -> dict[str, list[dict[str, str]]]:
+) -> GraphTraverseResponse:
     """Perform graph traversal from a seed memory."""
     from context_store.dashboard.services import DashboardService
 
@@ -45,26 +51,26 @@ async def traverse_graph(
         edge_types=traverse_req.edge_types,
     )
 
-    nodes: list[dict[str, str]] = []
+    nodes: list[TraverseNode] = []
     for node_data in result.nodes:
         # Cast to Any for flexible dictionary access in typed context
         nd: Any = node_data
         nodes.append(
-            {
-                "id": str(nd.get("id", "")),
-                "content": str(nd.get("content", "")),
-                "memoryType": str(nd.get("memoryType", nd.get("memory_type", ""))),
-            }
+            TraverseNode(
+                id=str(nd.get("id", "")),
+                content=str(nd.get("content", "")),
+                memory_type=str(nd.get("memoryType", nd.get("memory_type", ""))),
+            )
         )
 
-    return {
-        "nodes": nodes,
-        "edges": [
-            {
-                "fromId": str(e.from_id),
-                "toId": str(e.to_id),
-                "edgeType": e.edge_type,
-            }
+    return GraphTraverseResponse(
+        nodes=nodes,
+        edges=[
+            TraverseEdge(
+                from_id=str(e.from_id),
+                to_id=str(e.to_id),
+                edge_type=e.edge_type,
+            )
             for e in result.edges
         ],
-    }
+    )

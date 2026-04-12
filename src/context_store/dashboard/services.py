@@ -32,9 +32,9 @@ class DashboardService:
 
     async def get_stats_summary(self) -> DashboardStats:
         active, archived, total, projects = await asyncio.gather(
-            self._storage.count_by_filter(MemoryFilters(archived=False)),
-            self._storage.count_by_filter(MemoryFilters(archived=True)),
             self._storage.count_by_filter(MemoryFilters(archived=None)),
+            self._storage.count_by_filter(MemoryFilters(archived=True)),
+            self._storage.count_by_filter(MemoryFilters(archived=False)),
             self._storage.list_projects(),
         )
         edge_count = await self._graph.count_edges() if self._graph else 0
@@ -51,15 +51,16 @@ class DashboardService:
         projects = await self._storage.list_projects()
 
         async def _fetch_project_stats(p: str) -> ProjectStats:
-            active, archived = await asyncio.gather(
-                self._storage.count_by_filter(MemoryFilters(project=p, archived=False)),
+            active, archived, total = await asyncio.gather(
+                self._storage.count_by_filter(MemoryFilters(project=p, archived=None)),
                 self._storage.count_by_filter(MemoryFilters(project=p, archived=True)),
+                self._storage.count_by_filter(MemoryFilters(project=p, archived=False)),
             )
             return ProjectStats(
                 project=p,
                 active_count=active,
                 archived_count=archived,
-                total_count=active + archived,
+                total_count=total,
             )
 
         return list(await asyncio.gather(*(_fetch_project_stats(p) for p in projects)))
@@ -72,11 +73,11 @@ class DashboardService:
         order_by: Literal["importance", "recency"] = "importance",
     ) -> GraphLayoutResponse:
         sort_column = "importance_score" if order_by == "importance" else "created_at"
-        total = await self._storage.count_by_filter(MemoryFilters(project=project, archived=False))
+        total = await self._storage.count_by_filter(MemoryFilters(project=project, archived=None))
         memories = await self._storage.list_by_filter(
             MemoryFilters(
                 project=project,
-                archived=False,
+                archived=None,
                 limit=limit,
                 order_by=sort_column,
             )
@@ -130,10 +131,9 @@ class DashboardService:
             depth=max_depth,
         )
 
-    async def delete_memory(self, memory_id: str) -> bool:
-        """Delete a memory and its edges."""
-        # Read-Only なら例外を出すべきだが、Dashboard API としての設計要件を確認
-        return await self._storage.delete_memory(memory_id)
+    async def get_memory(self, memory_id: str) -> Memory | None:
+        """Get a memory by ID."""
+        return await self._storage.get_memory(memory_id)
 
     async def search_memories(self, filters: MemoryFilters) -> list[Memory]:
         """Search memories by filters."""

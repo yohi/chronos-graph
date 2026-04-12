@@ -64,13 +64,15 @@ class Neo4jGraphAdapter:
             logger.debug("Neo4j create_node skipped (read_only)")
             return
 
+        import neo4j
+
         cypher = """
             MERGE (m:Memory {id: $id})
             ON CREATE SET m += $props
             ON MATCH  SET m += $props
         """
         try:
-            async with self._session() as session:
+            async with self._session(access_mode=neo4j.WRITE_ACCESS) as session:
                 await session.run(cypher, id=memory_id, props=metadata)
         except Exception as exc:
             logger.warning("Neo4j create_node failed (degraded): %s", exc)
@@ -83,6 +85,8 @@ class Neo4jGraphAdapter:
             logger.debug("Neo4j create_edge skipped (read_only)")
             return
 
+        import neo4j
+
         if not _is_valid_edge_type(edge_type):
             logger.warning("Neo4j create_edge skipped invalid edge_type: %s", edge_type)
             return
@@ -94,7 +98,7 @@ class Neo4jGraphAdapter:
             ON MATCH  SET r += $props
         """
         try:
-            async with self._session() as session:
+            async with self._session(access_mode=neo4j.WRITE_ACCESS) as session:
                 await session.run(cypher, from_id=from_id, to_id=to_id, props=props)
         except Exception as exc:
             logger.warning("Neo4j create_edge failed (degraded): %s", exc)
@@ -107,6 +111,8 @@ class Neo4jGraphAdapter:
 
         if not edges:
             return
+
+        import neo4j
 
         # Build per-type batches to avoid dynamic relationship type in UNWIND
         # (Neo4j does not support parameterised rel types without APOC)
@@ -122,7 +128,7 @@ class Neo4jGraphAdapter:
             return
 
         try:
-            async with self._session() as session:
+            async with self._session(access_mode=neo4j.WRITE_ACCESS) as session:
                 for edge_type, batch in batches.items():
                     cypher = f"""
                         UNWIND $edges AS e
@@ -212,9 +218,11 @@ class Neo4jGraphAdapter:
             logger.debug("Neo4j delete_node skipped (read_only)")
             return
 
+        import neo4j
+
         cypher = "MATCH (m:Memory {id: $id}) DETACH DELETE m"
         try:
-            async with self._session() as session:
+            async with self._session(access_mode=neo4j.WRITE_ACCESS) as session:
                 await session.run(cypher, id=memory_id)
         except Exception as exc:
             logger.warning("Neo4j delete_node failed (degraded): %s", exc)

@@ -34,7 +34,13 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from context_store.config import Settings
-    from context_store.storage.protocols import CacheAdapter, GraphAdapter, StorageAdapter
+    from context_store.models.memory import Memory, ScoredMemory
+    from context_store.storage.protocols import (
+        CacheAdapter,
+        GraphAdapter,
+        MemoryFilters,
+        StorageAdapter,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +48,58 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Cache Coherence Checker (SQLite + InMemory only)
 # ---------------------------------------------------------------------------
+
+
+class ReadOnlyNoOpStorageAdapter:
+    """A minimal StorageAdapter that returns safe defaults (None/empty).
+
+    Used as a fallback when a specific backend does not yet support
+    read_only mode (e.g., PostgreSQL in Phase 6), allowing the Dashboard
+    to still run with Graph and Cache capabilities.
+    """
+
+    async def save_memory(self, memory: "Memory") -> str:
+        raise NotImplementedError("ReadOnlyNoOpStorageAdapter does not support writes")
+
+    async def get_memory(self, memory_id: str) -> "Memory | None":
+        return None
+
+    async def get_memories_batch(self, memory_ids: list[str]) -> list["Memory"]:
+        return []
+
+    async def delete_memory(self, memory_id: str) -> bool:
+        raise NotImplementedError("ReadOnlyNoOpStorageAdapter does not support writes")
+
+    async def update_memory(self, memory_id: str, updates: dict[str, Any]) -> bool:
+        raise NotImplementedError("ReadOnlyNoOpStorageAdapter does not support writes")
+
+    async def vector_search(
+        self, embedding: list[float], top_k: int, project: str | None = None
+    ) -> list["ScoredMemory"]:
+        return []
+
+    async def keyword_search(
+        self, query: str, top_k: int, project: str | None = None
+    ) -> list["ScoredMemory"]:
+        return []
+
+    async def list_by_filter(self, filters: "MemoryFilters") -> list["Memory"]:
+        return []
+
+    async def count_by_filter(self, filters: "MemoryFilters") -> int:
+        return 0
+
+    async def list_projects(self) -> list[str]:
+        return []
+
+    async def increment_memory_access_count(self, memory_id: str) -> bool:
+        return False
+
+    async def get_vector_dimension(self) -> int | None:
+        return None
+
+    async def dispose(self) -> None:
+        pass
 
 
 class SQLiteCacheCoherenceChecker:
@@ -161,11 +219,17 @@ async def create_storage(
 
         try:
             storage = await _create_storage_adapter(settings, read_only=read_only)
-        except NotImplementedError:
-            # Re-raise to ensure the caller (e.g., Orchestrator) gets the error
-            # if they attempt to use an unsupported read-only backend.
-            # (Phase 6 implementation will address this)
-            raise
+        except NotImplementedError as exc:
+            # Re-raise unless we are in read-only mode (Dashboard needs to start)
+            if read_only:
+                logger.warning(
+                    "Storage adapter not available in read-only mode: %s. "
+                    "Returning ReadOnlyNoOpStorageAdapter for limited dashboard functionality.",
+                    exc,
+                )
+                storage = ReadOnlyNoOpStorageAdapter()  # type: ignore
+            else:
+                raise
 
         # Start cache coherence checker for SQLite + InMemory combination
         checker = None

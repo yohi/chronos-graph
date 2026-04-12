@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from context_store.dashboard.schemas import (
     GraphLayoutResponse,
@@ -21,7 +21,7 @@ router = APIRouter()
 async def get_graph_layout(
     request: Request,
     project: str | None = Query(None),
-    limit: int = Query(500),
+    limit: int = Query(500, ge=1, le=2000),
     order_by: Literal["importance", "recency"] = Query("importance"),
 ) -> GraphLayoutResponse:
     """Get graph layout elements for visualization."""
@@ -45,11 +45,14 @@ async def traverse_graph(
     from context_store.dashboard.services import DashboardService
 
     service: DashboardService = request.app.state.service
-    result = await service.traverse_graph(
-        seed_id=seed_id,
-        max_depth=traverse_req.max_depth,
-        edge_types=traverse_req.edge_types,
-    )
+    try:
+        result = await service.traverse_graph(
+            seed_id=seed_id,
+            max_depth=traverse_req.max_depth,
+            edge_types=traverse_req.edge_types,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     nodes: list[TraverseNode] = []
     for node_data in result.nodes:

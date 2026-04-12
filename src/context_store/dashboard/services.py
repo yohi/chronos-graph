@@ -49,19 +49,22 @@ class DashboardService:
 
     async def get_project_stats(self) -> list[ProjectStats]:
         projects = await self._storage.list_projects()
+        # Limit concurrency to prevent STORAGE_BUSY (rev.10 §3.5)
+        semaphore = asyncio.Semaphore(5)
 
         async def _fetch_project_stats(p: str) -> ProjectStats:
-            active, archived, total = await asyncio.gather(
-                self._storage.count_by_filter(MemoryFilters(project=p, archived=None)),
-                self._storage.count_by_filter(MemoryFilters(project=p, archived=True)),
-                self._storage.count_by_filter(MemoryFilters(project=p, archived=False)),
-            )
-            return ProjectStats(
-                project=p,
-                active_count=active,
-                archived_count=archived,
-                total_count=total,
-            )
+            async with semaphore:
+                active, archived, total = await asyncio.gather(
+                    self._storage.count_by_filter(MemoryFilters(project=p, archived=None)),
+                    self._storage.count_by_filter(MemoryFilters(project=p, archived=True)),
+                    self._storage.count_by_filter(MemoryFilters(project=p, archived=False)),
+                )
+                return ProjectStats(
+                    project=p,
+                    active_count=active,
+                    archived_count=archived,
+                    total_count=total,
+                )
 
         return list(await asyncio.gather(*(_fetch_project_stats(p) for p in projects)))
 
@@ -87,7 +90,7 @@ class DashboardService:
         nodes = [
             {
                 "data": {
-                    "id": m.id,
+                    "id": str(m.id),
                     "label": (m.content or "")[:80],
                     "memoryType": m.memory_type,
                     "importance": m.importance_score,

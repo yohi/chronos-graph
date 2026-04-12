@@ -346,6 +346,10 @@ class PostgresStorageAdapter:
             params.append(filters.session_id)
             conditions.append(f"source_metadata->>'session_id' = ${len(params)}")
 
+        if filters.min_importance is not None:
+            params.append(filters.min_importance)
+            conditions.append(f"importance_score >= ${len(params)}")
+
         if filters.created_after is not None:
             if filters.id_after is not None:
                 params.append(filters.created_after)
@@ -417,7 +421,29 @@ class PostgresStorageAdapter:
                     code="INVALID_PARAMETER",
                 ) from e
 
-        sql = f"SELECT * FROM memories {where_clause} {order_clause} {limit_clause}".strip()  # noqa: S608
+        # Parameterize OFFSET
+        offset_clause = ""
+        offset_val = getattr(filters, "offset", None)
+        if offset_val is not None:
+            try:
+                offset_int = int(offset_val)
+                if offset_int < 0:
+                    raise StorageError(
+                        message=f"Invalid offset value: {offset_int}",
+                        code="INVALID_PARAMETER",
+                    )
+                params.append(offset_int)
+                offset_clause = f"OFFSET ${len(params)}"
+            except (ValueError, TypeError) as e:
+                raise StorageError(
+                    message=f"Invalid offset type: {type(offset_val)}",
+                    code="INVALID_PARAMETER",
+                ) from e
+
+        sql = (
+            f"SELECT * FROM memories {where_clause} {order_clause} "  # noqa: S608
+            f"{limit_clause} {offset_clause}"
+        ).strip()
 
         async with self._pool.acquire() as conn:
             records = await conn.fetch(sql, *params)

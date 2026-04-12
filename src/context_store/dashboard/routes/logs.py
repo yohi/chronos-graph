@@ -12,7 +12,7 @@ router = APIRouter()
 @router.get("/", response_model=list[LogEntry])
 async def get_logs(
     request: Request,
-    limit: int = Query(100),
+    limit: int = Query(100, ge=1, le=1000),
 ) -> list[LogEntry]:
     """Get recent system logs."""
     from context_store.dashboard.services import DashboardService

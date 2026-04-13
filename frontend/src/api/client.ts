@@ -58,10 +58,11 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const base = getBaseUrl()
-  
-  // Basic security: reject paths with '.' or '..' segments to prevent directory traversal.
+/**
+ * Validates the request path for security.
+ */
+function getValidatedPath(path: string): string {
+  // Reject paths with '.' or '..' segments to prevent directory traversal.
   const segments = path.split(/[/\\]/)
   if (segments.some((s) => s === '.' || s === '..')) {
     throw new Error('Security Error: Invalid path segments "." or ".."')
@@ -69,17 +70,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   const cleanPath = path.replace(/^\/+/, '')
   
-  if (base === '/api') {
-    // Construct URL from trusted parts to satisfy security scanners.
-    const url = new URL(`/api/${cleanPath}`, window.location.origin)
-    const safeUrl = url.pathname + url.search
+  // Strict regex to ensure the path only contains safe characters.
+  // This helps static analysis tools confirm the string is not a malicious URL.
+  if (!/^[a-zA-Z0-9_/.-]*$/.test(cleanPath)) {
+    throw new Error('Security Error: Invalid characters in path')
+  }
 
-    // eslint-disable-next-line no-restricted-globals
-    const res = await fetch(safeUrl, { // NOSONAR
-      ...init,
-      headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
-    })
-    return handleResponse<T>(res)
+  return cleanPath
+}
+
+/**
+ * Constructs a safe URL object for fetch.
+ */
+function buildSafeUrl(base: string, cleanPath: string): URL {
+  if (base === '/api') {
+    return new URL(`/api/${cleanPath}`, window.location.origin)
   }
   
   const parsedBase = new URL(base, window.location.origin)
@@ -92,16 +97,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!isSameOrigin && !isLocalhost) {
     throw new Error('Security Error: Invalid API URL origin')
   }
-  
-  // Re-construct the final request URL from validated parts (origin + pathname + search).
-  // This explicitly prevents any credentials or arbitrary paths from being injected.
-  const requestUrl = new URL(finalUrl.pathname + finalUrl.search, finalUrl.origin).toString()
 
-  // eslint-disable-next-line no-restricted-globals
-  const res = await fetch(requestUrl, { // NOSONAR
+  // Final sanitization: build a fresh URL from only origin, pathname and search.
+  return new URL(finalUrl.pathname + finalUrl.search, finalUrl.origin)
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const cleanPath = getValidatedPath(path)
+  const safeUrl = buildSafeUrl(getBaseUrl(), cleanPath)
+
+  // Use the URL object directly in fetch. 
+  // The 'safeUrl' has been constructed from validated parts.
+  const res = await fetch(safeUrl, { // NOSONAR
     ...init,
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
   })
+  
   return handleResponse<T>(res)
 }
 

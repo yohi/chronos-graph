@@ -49,6 +49,26 @@ const applyFilter = (
   })
 }
 
+/**
+ * Deduplicates and merges log entries based on their content, preserving order (newest last).
+ */
+const mergeAndDedupe = (prev: LogEntry[], incoming: LogEntry[]): LogEntry[] => {
+  const combined = [...prev, ...incoming]
+  const seen = new Set<string>()
+  const result: LogEntry[] = []
+
+  // Iterate backwards to keep the latest instance of a duplicate
+  for (let i = combined.length - 1; i >= 0; i--) {
+    const e = combined[i]
+    const key = `${e.timestamp}|${e.logger}|${e.message}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      result.unshift(e)
+    }
+  }
+  return result
+}
+
 export const useLogStore = create<LogState>((set, get) => ({
   entries: [],
   filteredEntries: [],
@@ -67,12 +87,16 @@ export const useLogStore = create<LogState>((set, get) => ({
       // Guard: only apply if this is still the latest request
       if (get().lastFetchId !== fetchId) return
 
-      const entries = res.entries.slice(-MAX_ENTRIES)
-      set((state) => ({
-        entries,
-        filteredEntries: applyFilter(entries, state.filter),
-        loading: false,
-      }))
+      set((state) => {
+        // Merge and deduplicate to avoid overwriting entries added by appendLog during await
+        const merged = mergeAndDedupe(state.entries, res.entries)
+        const entries = merged.slice(-MAX_ENTRIES)
+        return {
+          entries,
+          filteredEntries: applyFilter(entries, state.filter),
+          loading: false,
+        }
+      })
     } catch (err) {
       if (get().lastFetchId !== fetchId) return
       set({ error: String(err), loading: false })

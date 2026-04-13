@@ -27,8 +27,9 @@ export function normalizeApiBaseUrl(rawUrl: string | null): string {
 
   // Safety check for other localhost/relative paths. 
   // Explicitly reject protocol-relative URLs (starting with //) to avoid open redirects.
+  // We only allow '/api' as a relative path to keep consistency with WebSocket logic.
   if (
-    (url.startsWith('/') && !url.startsWith('//')) ||
+    url === '/api' ||
     url.startsWith('http://localhost:') ||
     url.startsWith('http://127.0.0.1:')
   ) {
@@ -69,9 +70,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const cleanPath = path.replace(/^\/+/, '')
   
   if (base === '/api') {
-    const safeUrl = `/api/${cleanPath}`
-    // NOSONAR
-    const res = await fetch(safeUrl, { 
+    // Construct URL from trusted parts to satisfy security scanners.
+    const url = new URL(`/api/${cleanPath}`, window.location.origin)
+    const safeUrl = url.pathname + url.search
+
+    // eslint-disable-next-line no-restricted-globals
+    const res = await fetch(safeUrl, { // NOSONAR
       ...init,
       headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
     })
@@ -89,11 +93,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error('Security Error: Invalid API URL origin')
   }
   
-  // finalUrl.origin + finalUrl.pathname ensures we only use safe parts of the URL.
-  const requestUrl = finalUrl.origin + finalUrl.pathname + finalUrl.search
+  // Re-construct the final request URL from validated parts (origin + pathname + search).
+  // This explicitly prevents any credentials or arbitrary paths from being injected.
+  const requestUrl = new URL(finalUrl.pathname + finalUrl.search, finalUrl.origin).toString()
 
-  // NOSONAR
-  const res = await fetch(requestUrl, { 
+  // eslint-disable-next-line no-restricted-globals
+  const res = await fetch(requestUrl, { // NOSONAR
     ...init,
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
   })

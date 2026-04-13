@@ -96,7 +96,10 @@ class WebSocketManager:
         accessed via the loop.
         """
         if self._loop and self._loop.is_running():
-            self._loop.call_soon_threadsafe(self.put, payload)
+            try:
+                self._loop.call_soon_threadsafe(self.put, payload)
+            except RuntimeError:
+                logger.debug("WebSocket loop closed, dropping message")
         else:
             logger.debug("WebSocket loop not running, dropping message")
 

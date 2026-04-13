@@ -25,8 +25,13 @@ export function normalizeApiBaseUrl(rawUrl: string | null): string {
   if (url === 'http://localhost:8000/api') return 'http://localhost:8000/api'
   if (url === 'http://127.0.0.1:8000/api') return 'http://127.0.0.1:8000/api'
 
-  // Safety check for other localhost/relative paths
-  if (url.startsWith('/') || url.startsWith('http://localhost:') || url.startsWith('http://127.0.0.1:')) {
+  // Safety check for other localhost/relative paths. 
+  // Explicitly reject protocol-relative URLs (starting with //) to avoid open redirects.
+  if (
+    (url.startsWith('/') && !url.startsWith('//')) ||
+    url.startsWith('http://localhost:') ||
+    url.startsWith('http://127.0.0.1:')
+  ) {
     return url
   }
 
@@ -54,6 +59,13 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const base = getBaseUrl()
+  
+  // Basic security: reject paths with '.' or '..' segments to prevent directory traversal.
+  const segments = path.split(/[/\\]/)
+  if (segments.some((s) => s === '.' || s === '..')) {
+    throw new Error('Security Error: Invalid path segments "." or ".."')
+  }
+
   const cleanPath = path.replace(/^\/+/, '')
   
   if (base === '/api') {
@@ -77,6 +89,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error('Security Error: Invalid API URL origin')
   }
   
+  // finalUrl.origin + finalUrl.pathname ensures we only use safe parts of the URL.
   const requestUrl = finalUrl.origin + finalUrl.pathname + finalUrl.search
 
   // NOSONAR

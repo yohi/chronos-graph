@@ -7,9 +7,11 @@ describe('useLogStore', () => {
     // Reset the store state before each test
     useLogStore.setState({
       entries: [],
+      filteredEntries: [],
       filter: { level: 'ALL', text: '' },
       loading: false,
       error: null,
+      lastFetchId: 0,
     })
   })
 
@@ -53,7 +55,7 @@ describe('useLogStore', () => {
 
     store.setLevelFilter('ERROR')
     
-    const filtered = useLogStore.getState().getFilteredEntries()
+    const filtered = useLogStore.getState().filteredEntries
     expect(filtered).toHaveLength(2)
     expect(filtered[0].message).toBe('Error log')
     expect(filtered[1].message).toBe('Another error')
@@ -67,13 +69,13 @@ describe('useLogStore', () => {
 
     // Filter by message
     store.setTextFilter('time')
-    let filtered = useLogStore.getState().getFilteredEntries()
+    let filtered = useLogStore.getState().filteredEntries
     expect(filtered).toHaveLength(1)
     expect(filtered[0].message).toBe('Timeout occurred')
 
     // Filter by logger
     store.setTextFilter('NET')
-    filtered = useLogStore.getState().getFilteredEntries()
+    filtered = useLogStore.getState().filteredEntries
     expect(filtered).toHaveLength(1)
     expect(filtered[0].logger).toBe('network')
   })
@@ -87,7 +89,7 @@ describe('useLogStore', () => {
     store.setLevelFilter('ERROR')
     store.setTextFilter('database')
     
-    const filtered = useLogStore.getState().getFilteredEntries()
+    const filtered = useLogStore.getState().filteredEntries
     expect(filtered).toHaveLength(1)
     expect(filtered[0].message).toBe('Database connection failed')
   })

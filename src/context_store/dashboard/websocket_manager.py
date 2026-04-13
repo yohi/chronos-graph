@@ -43,15 +43,15 @@ class WebSocketManager:
                 self.disconnect(ws)
                 try:
                     await ws.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("WS close error during timeout handling: %s", exc)
             except Exception as exc:
                 logger.warning("WS send error: %s, disconnecting", exc)
                 self.disconnect(ws)
                 try:
                     await ws.close()
-                except Exception:
-                    pass
+                except Exception as exc_close:
+                    logger.debug("WS close error during exception handling: %s", exc_close)
 
         await asyncio.gather(
             *(safe_send(ws) for ws in list(self._conns)),

@@ -40,8 +40,8 @@ export const useStatsStore = create<StatsState>((set) => ({
   fetchProjects: async () => {
     set((state) => ({ pendingRequests: state.pendingRequests + 1, loading: true, error: null }))
     try {
-      const res = await statsApi.getProjects()
-      set({ projects: res.projects })
+      const projects = await statsApi.getProjects()
+      set({ projects })
     } catch (err) {
       set({ error: String(err) })
     } finally {

@@ -20,7 +20,9 @@ interface LogState {
   appendLog: (entry: LogEntry) => void
   setLevelFilter: (level: LogLevel | 'ALL') => void
   setTextFilter: (text: string) => void
-  filteredEntries: () => LogEntry[]
+  // Note: instead of returning a new array every time, components can subscribe to this.
+  // We compute it inside the store actions to maintain stable reference when state changes.
+  getFilteredEntries: () => LogEntry[]
 }
 
 const MAX_ENTRIES = 500
@@ -54,8 +56,10 @@ export const useLogStore = create<LogState>((set, get) => ({
   setTextFilter: (text) =>
     set((state) => ({ filter: { ...state.filter, text } })),
 
-  filteredEntries: () => {
+  getFilteredEntries: () => {
     const { entries, filter } = get()
+    if (filter.level === 'ALL' && !filter.text) return entries
+
     return entries.filter((e) => {
       const levelOk = filter.level === 'ALL' || e.level === filter.level
       const textOk =

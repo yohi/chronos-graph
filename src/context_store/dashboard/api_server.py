@@ -116,7 +116,7 @@ def main() -> None:
     app = create_app()
     uvicorn.run(
         app,
-        host="0.0.0.0",
+        host=settings.dashboard_host,
         port=settings.dashboard_port,
         log_level=settings.log_level.lower(),
     )

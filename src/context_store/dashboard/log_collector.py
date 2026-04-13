@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections import deque
 from datetime import datetime, timezone
-import threading
 
 from context_store.dashboard.schemas import LogEntry
 

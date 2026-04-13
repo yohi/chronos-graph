@@ -35,7 +35,8 @@ export const useLogStore = create<LogState>((set, get) => ({
     set({ loading: true, error: null })
     try {
       const res = await logsApi.getRecent(limit)
-      set({ entries: res.entries, loading: false })
+      // Enforce ring-buffer invariant on full refresh
+      set({ entries: res.entries.slice(-MAX_ENTRIES), loading: false })
     } catch (err) {
       set({ error: String(err), loading: false })
     }

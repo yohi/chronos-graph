@@ -78,6 +78,7 @@ select = ["E", "F", "I", "S", "B"]
 python_version = "3.12"
 strict = true
 warn_unused_ignores = false
+warn_unused_configs = false
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
@@ -104,6 +105,14 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "sqlite_vec.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "fastapi.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "starlette.*"
 ignore_missing_imports = true
 
 [tool.hatch.build.targets.wheel]

@@ -14,12 +14,16 @@ logger = logging.getLogger(__name__)
 class WebSocketManager:
     """Manages WebSocket connections with broadcast support."""
 
-    def __init__(self, maxsize: int = 100) -> None:
+    def __init__(self, channel: str, maxsize: int = 100) -> None:
+        self.channel = channel
         self._conns: set[WebSocket] = set()
         self._queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=maxsize)
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     async def connect(self, ws: WebSocket) -> None:
         """Register a new WebSocket connection."""
+        if self._loop is None:
+            self._loop = asyncio.get_running_loop()
         await ws.accept()
         self._conns.add(ws)
 
@@ -27,13 +31,13 @@ class WebSocketManager:
         """Remove a WebSocket connection."""
         self._conns.discard(ws)
 
-    async def broadcast(self, channel: str, payload: dict[str, Any]) -> None:
+    async def broadcast(self, payload: dict[str, Any]) -> None:
         """Broadcast a message to all connected clients."""
         if not self._conns:
             return
 
         # Embed channel into payload
-        payload_with_channel = {**payload, "channel": channel}
+        payload_with_channel = {**payload, "channel": self.channel}
 
         async def safe_send(ws: WebSocket) -> None:
             try:
@@ -60,10 +64,11 @@ class WebSocketManager:
 
     async def start_consumer(self) -> None:
         """Start consuming messages from the queue and broadcasting."""
+        self._loop = asyncio.get_running_loop()
         while True:
             try:
                 msg = await self._queue.get()
-                await self.broadcast("logs", msg)
+                await self.broadcast(msg)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -82,6 +87,14 @@ class WebSocketManager:
             except asyncio.QueueEmpty:
                 return False
 
+    def put_threadsafe(self, payload: dict[str, Any]) -> None:
+        """Thread-safe way to put a message into the queue."""
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self.put, payload)
+        else:
+            # Fallback if loop is not yet set or running (though unlikely in prod)
+            self.put(payload)
+
 
 _wss: dict[str, WebSocketManager] = {}
 
@@ -89,5 +102,5 @@ _wss: dict[str, WebSocketManager] = {}
 def get_ws_manager(channel: str = "logs") -> WebSocketManager:
     """Get or create a WebSocket manager for a channel."""
     if channel not in _wss:
-        _wss[channel] = WebSocketManager()
+        _wss[channel] = WebSocketManager(channel=channel)
     return _wss[channel]

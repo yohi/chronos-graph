@@ -34,7 +34,7 @@ class LogCollectorHandler(logging.Handler):
             # --- WebSocket Streaming ---
             from context_store.dashboard.websocket_manager import get_ws_manager
 
-            get_ws_manager("logs").put(entry.model_dump())
+            get_ws_manager("logs").put_threadsafe(entry.model_dump())
         except Exception:
             self.handleError(record)
 

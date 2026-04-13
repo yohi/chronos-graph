@@ -1,19 +1,24 @@
 from __future__ import annotations
 
-from typing import Literal
+import asyncio
+from typing import Any, Literal
 
 from context_store.dashboard.schemas import (
     DashboardStats,
     GraphElementsDTO,
     GraphLayoutResponse,
+    LogEntry,
     ProjectStats,
 )
 from context_store.models.graph import GraphResult
+from context_store.models.memory import Memory
 from context_store.storage.protocols import (
     GraphAdapter,
     MemoryFilters,
     StorageAdapter,
 )
+
+MAX_CONCURRENT_DASHBOARD_TASKS = 5
 
 
 class DashboardService:
@@ -28,10 +33,12 @@ class DashboardService:
         self._graph = graph
 
     async def get_stats_summary(self) -> DashboardStats:
-        active = await self._storage.count_by_filter(MemoryFilters(archived=False))
-        archived = await self._storage.count_by_filter(MemoryFilters(archived=True))
-        total = await self._storage.count_by_filter(MemoryFilters(archived=None))
-        projects = await self._storage.list_projects()
+        active, archived, total, projects = await asyncio.gather(
+            self._storage.count_by_filter(MemoryFilters(archived=None)),
+            self._storage.count_by_filter(MemoryFilters(archived=True)),
+            self._storage.count_by_filter(MemoryFilters(archived=False)),
+            self._storage.list_projects(),
+        )
         edge_count = await self._graph.count_edges() if self._graph else 0
         return DashboardStats(
             active_count=active,
@@ -44,19 +51,24 @@ class DashboardService:
 
     async def get_project_stats(self) -> list[ProjectStats]:
         projects = await self._storage.list_projects()
-        result: list[ProjectStats] = []
-        for p in projects:
-            active = await self._storage.count_by_filter(MemoryFilters(project=p, archived=False))
-            archived = await self._storage.count_by_filter(MemoryFilters(project=p, archived=True))
-            result.append(
-                ProjectStats(
+        # Limit concurrency to prevent STORAGE_BUSY (rev.10 §3.5)
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_DASHBOARD_TASKS)
+
+        async def _fetch_project_stats(p: str) -> ProjectStats:
+            async with semaphore:
+                active, archived, total = await asyncio.gather(
+                    self._storage.count_by_filter(MemoryFilters(project=p, archived=None)),
+                    self._storage.count_by_filter(MemoryFilters(project=p, archived=True)),
+                    self._storage.count_by_filter(MemoryFilters(project=p, archived=False)),
+                )
+                return ProjectStats(
                     project=p,
                     active_count=active,
                     archived_count=archived,
-                    total_count=active + archived,
+                    total_count=total,
                 )
-            )
-        return result
+
+        return list(await asyncio.gather(*(_fetch_project_stats(p) for p in projects)))
 
     async def get_graph_layout(
         self,
@@ -66,48 +78,51 @@ class DashboardService:
         order_by: Literal["importance", "recency"] = "importance",
     ) -> GraphLayoutResponse:
         sort_column = "importance_score" if order_by == "importance" else "created_at"
-        total = await self._storage.count_by_filter(MemoryFilters(project=project, archived=False))
+        total = await self._storage.count_by_filter(MemoryFilters(project=project, archived=None))
         memories = await self._storage.list_by_filter(
             MemoryFilters(
                 project=project,
-                archived=False,
+                archived=None,
                 limit=limit,
                 order_by=sort_column,
             )
         )
         memory_ids = [str(m.id) for m in memories]
         edges = await self._graph.list_edges_for_memories(memory_ids) if self._graph else []
-        nodes = [
-            {
-                "data": {
-                    "id": m.id,
-                    "label": (m.content or "")[:80],
-                    "memoryType": m.memory_type,
-                    "importance": m.importance_score,
-                    "project": m.project,
-                    "accessCount": m.access_count,
-                    "createdAt": m.created_at.isoformat() if m.created_at else "",
-                }
-            }
-            for m in memories
-        ]
-        edge_elements = [
-            {
-                "data": {
-                    "id": f"{e.from_id}-{e.to_id}-{e.edge_type}",
-                    "source": e.from_id,
-                    "target": e.to_id,
-                    "edgeType": e.edge_type,
-                }
-            }
-            for e in edges
-        ]
+        nodes = [self._map_node(m) for m in memories]
+        edge_elements = [self._map_edge(e) for e in edges]
+
         return GraphLayoutResponse(
             elements=GraphElementsDTO(nodes=nodes, edges=edge_elements),
             total_nodes=total,
             returned_nodes=len(memories),
             total_edges=len(edges),
         )
+
+    def _map_node(self, m: Memory) -> dict[str, Any]:
+        """Convert a Memory to a Cytoscape node data dictionary."""
+        return {
+            "data": {
+                "id": str(m.id),
+                "label": (m.content or "")[:80],
+                "memoryType": m.memory_type,
+                "importance": m.importance_score,
+                "project": m.project,
+                "accessCount": m.access_count,
+                "createdAt": m.created_at.isoformat() if m.created_at else "",
+            }
+        }
+
+    def _map_edge(self, e: Any) -> dict[str, Any]:
+        """Convert an Edge to a Cytoscape edge data dictionary."""
+        return {
+            "data": {
+                "id": f"{e.from_id}-{e.to_id}-{e.edge_type}",
+                "source": e.from_id,
+                "target": e.to_id,
+                "edgeType": e.edge_type,
+            }
+        }
 
     async def traverse_graph(
         self,
@@ -123,3 +138,26 @@ class DashboardService:
             edge_types=edge_types or [],
             depth=max_depth,
         )
+
+    async def get_memory(self, memory_id: str) -> Memory | None:
+        """Get a memory by ID."""
+        return await self._storage.get_memory(memory_id)
+
+    async def search_memories(self, filters: MemoryFilters) -> list[Memory]:
+        """Search memories by filters."""
+        return await self._storage.list_by_filter(filters)
+
+    async def get_recent_logs(self, limit: int = 100) -> list[LogEntry]:
+        """Get recent system logs from the in-memory circular buffer."""
+        from context_store.logger import get_recent_logs
+
+        logs = get_recent_logs(limit=limit)
+        return [
+            LogEntry(
+                timestamp=log["timestamp"],
+                level=log["level"],
+                logger=log["logger"],
+                message=log["message"],
+            )
+            for log in logs
+        ]

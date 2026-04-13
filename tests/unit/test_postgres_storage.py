@@ -446,6 +446,24 @@ class TestListByFilter:
         sql: str = call_args[0][0]
         assert "tags" in sql
 
+    async def test_min_importance_and_offset_applied(self, adapter):
+        """Verify min_importance and offset logic in PostgreSQL query building."""
+        adp, conn = adapter
+        conn.fetch = AsyncMock(return_value=[])
+
+        filters = MemoryFilters(min_importance=0.7, offset=10, limit=5)
+        await adp.list_by_filter(filters)
+
+        call_args = conn.fetch.call_args
+        sql: str = call_args[0][0]
+        args = call_args[0][1:]
+
+        assert "importance_score >= $1" in sql
+        assert "OFFSET $3" in sql or "OFFSET $2" in sql
+        assert 0.7 in args
+        assert 10 in args
+        assert 5 in args
+
 
 class TestGetMemoriesValidation:
     @pytest.mark.asyncio

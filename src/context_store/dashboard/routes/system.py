@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request
 
-from context_store.dashboard.schemas import SystemConfigResponse
 from context_store.config import Settings
+from context_store.dashboard.schemas import SystemConfigResponse
 
 router = APIRouter()
 

@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+from typing import Any, Literal
+
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from context_store.dashboard.schemas import GraphLayoutResponse
+from context_store.dashboard.schemas import (
+    GraphLayoutResponse,
+    GraphTraverseRequest,
+    GraphTraverseResponse,
+    TraverseEdge,
+    TraverseNode,
+)
 
 router = APIRouter()
 
@@ -12,16 +20,14 @@ router = APIRouter()
 @router.get("/layout", response_model=GraphLayoutResponse)
 async def get_graph_layout(
     request: Request,
-    project: str | None = Query(None, description="Filter by project"),
-    limit: int = Query(500, ge=1, le=1000, description="Max nodes to return"),
-    order_by: str = Query("importance", description="Sort by importance or recency"),
+    project: str | None = Query(None),
+    limit: int = Query(500, ge=1, le=2000),
+    order_by: Literal["importance", "recency"] = Query("importance"),
 ) -> GraphLayoutResponse:
-    """Get Cytoscape-formatted graph layout."""
-    service = request.app.state.service
+    """Get graph layout elements for visualization."""
+    from context_store.dashboard.services import DashboardService
 
-    if order_by not in ("importance", "recency"):
-        order_by = "importance"
-
+    service: DashboardService = request.app.state.service
     return await service.get_graph_layout(
         project=project,
         limit=limit,
@@ -29,46 +35,45 @@ async def get_graph_layout(
     )
 
 
-@router.get("/traverse/{seed_id}")
+@router.post("/{seed_id}/traverse", response_model=GraphTraverseResponse)
 async def traverse_graph(
     seed_id: str,
+    traverse_req: GraphTraverseRequest,
     request: Request,
-    max_depth: int = Query(2, ge=1, le=10, description="Max traversal depth"),
-    edge_types: str | None = Query(None, description="Comma-separated edge types"),
-):
-    """Traverse graph from a seed node."""
-    service = request.app.state.service
-    graph = request.app.state.graph
+) -> GraphTraverseResponse:
+    """Perform graph traversal from a seed memory."""
+    from context_store.dashboard.services import DashboardService
 
-    if graph is None:
-        raise HTTPException(status_code=503, detail="graph backend not configured")
-
-    edge_type_list = None
-    if edge_types:
-        edge_type_list = [e.strip() for e in edge_types.split(",") if e.strip()]
-
+    service: DashboardService = request.app.state.service
     try:
         result = await service.traverse_graph(
-            seed_id,
-            max_depth=max_depth,
-            edge_types=edge_type_list,
+            seed_id=seed_id,
+            max_depth=traverse_req.max_depth,
+            edge_types=traverse_req.edge_types,
         )
-        return {
-            "nodes": result.nodes,
-            "edges": [
-                {
-                    "fromId": e.from_id,
-                    "toId": e.to_id,
-                    "edgeType": e.edge_type,
-                    "properties": e.properties,
-                }
-                for e in result.edges
-            ],
-            "traversalDepth": result.traversal_depth,
-            "partial": result.partial,
-            "timeout": result.timeout,
-        }
     except RuntimeError as exc:
-        if "graph backend not configured" in str(exc):
-            raise HTTPException(status_code=503, detail="graph backend not configured")
-        raise
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    nodes: list[TraverseNode] = []
+    for node_data in result.nodes:
+        # Cast to Any for flexible dictionary access in typed context
+        nd: Any = node_data
+        nodes.append(
+            TraverseNode(
+                id=str(nd.get("id", "")),
+                content=str(nd.get("content", "")),
+                memory_type=str(nd.get("memoryType", nd.get("memory_type", ""))),
+            )
+        )
+
+    return GraphTraverseResponse(
+        nodes=nodes,
+        edges=[
+            TraverseEdge(
+                from_id=str(e.from_id),
+                to_id=str(e.to_id),
+                edge_type=e.edge_type,
+            )
+            for e in result.edges
+        ],
+    )

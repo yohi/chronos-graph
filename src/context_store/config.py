@@ -136,6 +136,10 @@ class Settings(BaseSettings):
         default_factory=lambda: ["localhost", "127.0.0.1"],
         description="TrustedHostMiddleware allowed hosts (comma-separated string or list)",
     )
+    dashboard_cors_origins: list[str] = Field(
+        default_factory=lambda: ["http://localhost:5173"],
+        description="CORSMiddleware allowed origins (comma-separated string or list)",
+    )
 
     @field_validator("dashboard_allowed_hosts", mode="before")
     @classmethod
@@ -153,6 +157,23 @@ class Settings(BaseSettings):
             raise ValueError(f"dashboard_allowed_hosts must be a string or list, not {type(v)}")
 
         return hosts if hosts else default_hosts
+
+    @field_validator("dashboard_cors_origins", mode="before")
+    @classmethod
+    def _parse_dashboard_cors_origins(cls, v: Any) -> list[str]:
+        default_origins = ["http://localhost:5173"]
+        if v is None:
+            return default_origins
+
+        origins: list[str] = []
+        if isinstance(v, str):
+            origins = [o.strip() for o in v.split(",") if o.strip()]
+        elif isinstance(v, list):
+            origins = [str(o).strip() for o in v if str(o).strip()]
+        else:
+            raise ValueError(f"dashboard_cors_origins must be a string or list, not {type(v)}")
+
+        return origins if origins else default_origins
 
     # --- URL Fetch (SSRF 対策) ---
     url_fetch_concurrency: int = Field(default=3, ge=1)

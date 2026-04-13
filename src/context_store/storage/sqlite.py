@@ -906,6 +906,10 @@ class SQLiteStorageAdapter:
                 f"THEN json_extract({prefix}source_metadata, '$.session_id') END = ?"
             )
 
+        if filters.min_importance is not None:
+            params.append(filters.min_importance)
+            conditions.append(f"{prefix}importance_score >= ?")
+
         if filters.created_after is not None:
             created_after_utc = filters.created_after.astimezone(timezone.utc).isoformat()
             if filters.id_after is not None:
@@ -970,7 +974,7 @@ class SQLiteStorageAdapter:
                 order_clause = f"ORDER BY {', '.join(order_parts)}"
 
         # ------------------------------------------------------------------
-        # LIMIT validation (integer check)
+        # LIMIT and OFFSET validation
         # ------------------------------------------------------------------
         limit_clause = ""
         if filters.limit is not None:
@@ -983,13 +987,28 @@ class SQLiteStorageAdapter:
             limit_clause = "LIMIT ?"
             params.append(limit_val)
 
+        offset_clause = ""
+        if filters.offset is not None:
+            offset_val = filters.offset
+            if not isinstance(offset_val, int) or offset_val < 0:
+                raise StorageError(
+                    message="Offset must be a non-negative integer",
+                    code="INVALID_PARAMETER",
+                )
+            if filters.limit is None:
+                # SQLite requires LIMIT when using OFFSET
+                limit_clause = "LIMIT -1"
+            offset_clause = "OFFSET ?"
+            params.append(offset_val)
+
         sql = (
             "SELECT m.*, me.embedding "  # noqa: S608
             "FROM memories m "
             "LEFT JOIN memory_embeddings me ON me.memory_id = m.id "
             f"{where_clause} "
             f"{order_clause} "
-            f"{limit_clause}"
+            f"{limit_clause} "
+            f"{offset_clause}"
         ).strip()
 
         async with self._db() as conn:

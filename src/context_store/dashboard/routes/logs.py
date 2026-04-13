@@ -21,6 +21,18 @@ async def get_recent_logs(
     return handler.get_recent(limit=limit)
 
 
+@router.get("/", response_model=list[LogEntry])
+async def get_logs(
+    request: Request,
+    limit: int = Query(100, ge=1, le=1000),
+) -> list[LogEntry]:
+    """Get recent system logs."""
+    from context_store.dashboard.services import DashboardService
+
+    service: DashboardService = request.app.state.service
+    return await service.get_recent_logs(limit=limit)
+
+
 @router.websocket("/ws")
 async def ws_logs(ws: WebSocket) -> None:
     """WebSocket endpoint for real-time log streaming."""

@@ -39,6 +39,21 @@ class MemoryNode(DashboardBaseModel):
     created_at: str
 
 
+class MemoryResponse(DashboardBaseModel):
+    id: str
+    content: str
+    memory_type: str
+    importance: float
+    project: str | None
+    access_count: int
+    created_at: str | None
+
+
+class DeleteMemoryResponse(DashboardBaseModel):
+    status: str
+    id: str
+
+
 class MemoryEdge(DashboardBaseModel):
     id: str
     source: str
@@ -47,8 +62,8 @@ class MemoryEdge(DashboardBaseModel):
 
 
 class GraphElementsDTO(DashboardBaseModel):
-    nodes: list[dict[str, Any]]
-    edges: list[dict[str, Any]]
+    nodes: list[dict[str, dict[str, Any]]]
+    edges: list[dict[str, dict[str, Any]]]
 
 
 class GraphLayoutResponse(DashboardBaseModel):
@@ -73,3 +88,34 @@ class LogEntry(DashboardBaseModel):
     level: str
     logger: str
     message: str
+
+
+class MemorySearchRequest(DashboardBaseModel):
+    project: str | None = None
+    memory_type: str | None = None
+    archived: bool | None = None
+    min_importance: float | None = None
+    limit: int = 100
+    offset: int = 0
+
+
+class GraphTraverseRequest(DashboardBaseModel):
+    max_depth: int = 2
+    edge_types: list[str] | None = None
+
+
+class TraverseNode(DashboardBaseModel):
+    id: str
+    content: str
+    memory_type: str
+
+
+class TraverseEdge(DashboardBaseModel):
+    from_id: str
+    to_id: str
+    edge_type: str
+
+
+class GraphTraverseResponse(DashboardBaseModel):
+    nodes: list[TraverseNode]
+    edges: list[TraverseEdge]

@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, AsyncIterator
-
-if TYPE_CHECKING:
-    from context_store.config import Settings
+from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
+from context_store.config import Settings
 from context_store.dashboard.services import DashboardService
 from context_store.storage.factory import create_storage
 
@@ -72,12 +70,12 @@ def create_app(
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173"],
+        allow_origins=settings.dashboard_cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    allowed_hosts = settings.dashboard_allowed_hosts_list
+    allowed_hosts = settings.dashboard_allowed_hosts
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=allowed_hosts,
@@ -110,7 +108,7 @@ def create_app(
     return app
 
 
-def main():
+def main() -> None:
     """Main entry point."""
     import uvicorn
 

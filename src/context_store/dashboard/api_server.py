@@ -127,7 +127,14 @@ def create_app(
 
     # SPA Fallback and Static Files
     frontend_dist = Path(__file__).parent.parent.parent.parent / "frontend" / "dist"
+    index_file = frontend_dist / "index.html"
     assets_dir = frontend_dist / "assets"
+
+    if not index_file.exists():
+        logger.warning(
+            "SPA build not found at %s. The frontend will not be served correctly.",
+            index_file,
+        )
 
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
@@ -137,10 +144,9 @@ def create_app(
         """Serve the SPA for any path not matched by previous routes."""
         from fastapi import HTTPException
 
-        if full_path.startswith("api/"):
+        if full_path == "api" or full_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="API route not found")
 
-        index_file = frontend_dist / "index.html"
         if index_file.exists():
             return FileResponse(str(index_file))
 

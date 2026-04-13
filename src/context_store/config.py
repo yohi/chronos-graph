@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379"
 
     # --- Embedding ---
-    embedding_provider: Literal["openai", "local-model", "litellm", "custom-api"] = "openai"
+    embedding_provider: Literal["openai", "local-model", "litellm", "custom-api"] = "local-model"
     openai_api_key: SecretStr = SecretStr("")
     local_model_name: str = "cl-nagoya/ruri-v3-310m"
     litellm_api_base: str = "http://localhost:4000"

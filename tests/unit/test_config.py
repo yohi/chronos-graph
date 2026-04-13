@@ -28,7 +28,7 @@ def test_default_settings(monkeypatch, default_settings):
     # _env_file=None を指定して、.env ファイルの読み込みも回避する
     settings = Settings(_env_file=None, openai_api_key=default_settings["openai_api_key"])
     assert settings.postgres_port == 5432
-    assert settings.embedding_provider == "openai"
+    assert settings.embedding_provider == "local-model"
     assert settings.decay_half_life_days == 30
     assert settings.archive_threshold == 0.05
     assert settings.similarity_threshold == 0.70

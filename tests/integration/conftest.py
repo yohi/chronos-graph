@@ -12,7 +12,7 @@ import asyncpg
 import pytest
 
 PG_HOST = os.getenv("PG_HOST", "localhost")
-PG_PORT = int(os.getenv("PG_PORT", "5433"))
+PG_PORT = int(os.getenv("PG_PORT", "5435"))
 PG_DB = os.getenv("PG_DB", "context_store")
 PG_USER = os.getenv("PG_USER", "context_store")
 PG_PASSWORD = os.getenv("PG_PASSWORD", "dev_password")

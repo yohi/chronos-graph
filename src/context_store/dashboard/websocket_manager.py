@@ -61,7 +61,7 @@ class WebSocketManager:
             except Exception as exc:
                 logger.warning("WS consumer error: %s", exc)
 
-    async def put(self, payload: dict[str, Any]) -> bool:
+    def put(self, payload: dict[str, Any]) -> bool:
         """Add a message to the queue. Returns False if queue is full."""
         try:
             self._queue.put_nowait(payload)

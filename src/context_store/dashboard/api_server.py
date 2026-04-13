@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import pathlib
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from context_store.config import Settings
 from context_store.dashboard.services import DashboardService
@@ -121,6 +124,25 @@ def create_app(
     app.include_router(system.router, prefix="/api/system", tags=["system"])
     app.include_router(graph.router, prefix="/api/graph", tags=["graph"])
     app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
+
+    # --- SPA static file serving + fallback (design doc §3.5) ---
+    # Resolve frontend/dist relative to this file's package root.
+    _root = pathlib.Path(__file__).parent.parent.parent.parent  # repo root
+    _dist = _root / "frontend" / "dist"
+
+    if _dist.exists():
+        # Mount static assets (JS/CSS/images) at /assets so they are served
+        # before the catch-all route gets a chance to intercept them.
+        _assets = _dist / "assets"
+        if _assets.exists():
+            app.mount("/assets", StaticFiles(directory=str(_assets)), name="assets")
+
+        # Catch-all: every GET request that is NOT /api/* or /ws/* returns
+        # index.html so that React Router can handle client-side navigation.
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def spa_fallback(request: Request, full_path: str) -> FileResponse:  # noqa: ARG001
+            """SPA fallback route — serves index.html for all non-API paths."""
+            return FileResponse(str(_dist / "index.html"))
 
     return app
 

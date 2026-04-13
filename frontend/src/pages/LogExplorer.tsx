@@ -16,8 +16,12 @@ export default function LogExplorer() {
     // 過去のログを取得
     fetch('/api/logs/recent?limit=50')
       .then((res) => res.json())
-      .then((data) => setLogs(data))
-      .catch((err) => console.error('Failed to fetch recent logs:', err))
+      .then((data) => {
+        setLogs(data)
+      })
+      .catch((err) => {
+        console.error('Failed to fetch recent logs:', err)
+      })
 
     // WebSocket 接続
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -28,7 +32,9 @@ export default function LogExplorer() {
       const socket = new WebSocket(wsUrl)
       wsRef.current = socket
 
-      socket.onopen = () => setStatus('connected')
+      socket.onopen = () => {
+        setStatus('connected')
+      }
       socket.onmessage = (event) => {
         const entry: LogEntry = JSON.parse(event.data)
         setLogs((prev) => [entry, ...prev].slice(0, 1000))
@@ -37,7 +43,9 @@ export default function LogExplorer() {
         setStatus('error')
         setTimeout(connect, 3000) // 3秒後に再接続
       }
-      socket.onerror = () => setStatus('error')
+      socket.onerror = () => {
+        setStatus('error')
+      }
     }
 
     connect()

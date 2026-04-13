@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
 interface Config {
-  [key: string]: any
+  [key: string]: unknown
 }
 
 export default function Settings() {

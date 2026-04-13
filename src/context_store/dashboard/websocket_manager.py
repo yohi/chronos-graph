@@ -41,9 +41,17 @@ class WebSocketManager:
             except asyncio.TimeoutError:
                 logger.warning("WS send timeout, disconnecting client")
                 self.disconnect(ws)
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
             except Exception as exc:
                 logger.warning("WS send error: %s, disconnecting", exc)
                 self.disconnect(ws)
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
 
         await asyncio.gather(
             *(safe_send(ws) for ws in list(self._conns)),

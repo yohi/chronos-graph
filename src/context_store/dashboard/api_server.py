@@ -50,6 +50,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         ws_task.cancel()
+        try:
+            await asyncio.wait_for(ws_task, timeout=2.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+
         await storage.dispose()
         if graph:
             await graph.dispose()
@@ -120,7 +125,7 @@ def main() -> None:
     app = create_app()
     uvicorn.run(
         app,
-        host=settings.dashboard_host,  # noqa: B104
+        host=settings.dashboard_host,  # noqa: S104
         port=settings.dashboard_port,
         log_level=settings.log_level.lower(),
     )

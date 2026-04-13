@@ -28,9 +28,10 @@ function getValidatedPath(path: string): string {
   }
 
   const cleanPath = path.replace(/^\/+/, '')
-  // Allow alphanumeric, /, _, ., -, and query/fragment characters: ?, &, =, %, +, #
-  if (!/^[a-zA-Z0-9_/.\-?&=%+#]*$/.test(cleanPath)) {
-    throw new Error('Security Error: Invalid characters in path')
+  // Allow alphanumeric, /, _, ., -, and query characters: ?, &, =, %, +
+  // Fragments (#) are disallowed in API paths.
+  if (!/^[a-zA-Z0-9_/.\-?&=%+]*$/.test(cleanPath)) {
+    throw new Error('Security Error: Invalid characters in path (fragments are not allowed)')
   }
 
   return cleanPath
@@ -49,7 +50,7 @@ async function handleResponse<T>(res: Response): Promise<T> {
   return res.json()
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit & { timeout?: number }): Promise<T> {
   const cleanPath = getValidatedPath(path)
   const storedBase = localStorage.getItem('chronos-api-base-url')
   const base = normalizeApiBaseUrl(storedBase)
@@ -79,13 +80,43 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers['Content-Type'] = 'application/json'
   }
 
-  // Use window.fetch to isolate from local scope and satisfy security scanners
-  const res = await window.fetch(target.href, {
-    ...init,
-    headers,
-  })
+  // Setup AbortController for timeout and signal relay
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), init?.timeout || 30000)
 
-  return handleResponse<T>(res)
+  // Relay external signal if provided
+  const onExternalAbort = () => controller.abort()
+  if (init?.signal) {
+    if (init.signal.aborted) {
+      controller.abort()
+    } else {
+      init.signal.addEventListener('abort', onExternalAbort)
+    }
+  }
+
+  try {
+    // Use window.fetch to isolate from local scope and satisfy security scanners
+    const res = await window.fetch(target.href, {
+      ...init,
+      headers,
+      signal: controller.signal,
+    })
+
+    return await handleResponse<T>(res)
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      if (init?.signal?.aborted) {
+        throw error // Re-throw if it was external cancellation
+      }
+      throw new Error('API Request Timeout')
+    }
+    throw error
+  } finally {
+    clearTimeout(timeoutId)
+    if (init?.signal) {
+      init.signal.removeEventListener('abort', onExternalAbort)
+    }
+  }
 }
 
 export const apiClient = {

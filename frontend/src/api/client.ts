@@ -57,16 +57,32 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const urlObj = new URL(base, window.location.origin)
   verifyOrigin(urlObj)
 
+  // Parse cleanPath to separate pathname and search
+  const [pathPart, ...searchParts] = cleanPath.split('?')
+  const searchPart = searchParts.length > 0 ? '?' + searchParts.join('?') : ''
+
   // Explicitly construct URL to satisfy static analysis
   const target = new URL(window.location.origin)
   target.protocol = urlObj.protocol
   target.host = urlObj.host
-  target.pathname = urlObj.pathname.endsWith('/') ? urlObj.pathname + cleanPath : urlObj.pathname + '/' + cleanPath
   
+  // Ensure base path and relative path are joined correctly
+  const basePath = urlObj.pathname.endsWith('/') ? urlObj.pathname : urlObj.pathname + '/'
+  target.pathname = basePath + pathPart
+  target.search = searchPart
+  
+  const headers = { ...(init?.headers || {}) } as Record<string, string>
+  
+  // Only add default JSON Content-Type if body is present and not already set
+  const hasContentType = Object.keys(headers).some(k => k.toLowerCase() === 'content-type')
+  if (init?.body && !hasContentType) {
+    headers['Content-Type'] = 'application/json'
+  }
+
   // Use window.fetch to isolate from local scope and satisfy security scanners
   const res = await window.fetch(target.href, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+    headers,
   })
 
   return handleResponse<T>(res)

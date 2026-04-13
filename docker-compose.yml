@@ -17,7 +17,7 @@ services:
       dockerfile: Dockerfile
     image: chronos-graph-postgres:latest
     ports:
-      - "5433:5432"
+      - "5435:5432"
     environment:
       POSTGRES_DB: context_store
       POSTGRES_USER: context_store

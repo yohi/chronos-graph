@@ -2,7 +2,7 @@
  * WebSocket connection manager.
  * Used by useWebSocket hook for log streaming (design doc §5.3).
  */
-import { normalizeApiBaseUrl } from './client'
+import { normalizeApiBaseUrl } from '../utils/apiUtils'
 
 const DEFAULT_WS_BASE = '' // relative — browser resolves ws(s):// automatically
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from typing import Any
 
 from fastapi import WebSocket
@@ -101,10 +102,12 @@ class WebSocketManager:
 
 
 _wss: dict[str, WebSocketManager] = {}
+_wss_lock = threading.Lock()
 
 
 def get_ws_manager(channel: str = "logs") -> WebSocketManager:
     """Get or create a WebSocket manager for a channel."""
-    if channel not in _wss:
-        _wss[channel] = WebSocketManager(channel=channel)
+    with _wss_lock:
+        if channel not in _wss:
+            _wss[channel] = WebSocketManager(channel=channel)
     return _wss[channel]

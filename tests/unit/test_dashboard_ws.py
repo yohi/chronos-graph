@@ -74,7 +74,7 @@ async def test_ws_manager_broadcast():
     manager._conns.add(ws2)
     payload = {"message": "test"}
     await manager.broadcast(payload)
-    
+
     # Check that it was called with payload including the channel
     expected_payload = {**payload, "channel": "logs"}
     ws1.send_json.assert_called_once_with(expected_payload)

@@ -17,7 +17,7 @@ export function normalizeApiBaseUrl(rawUrl: string | null): string {
   // Safety check for other localhost/relative paths.
   // Only allow '/api' or localhost variants.
   const isLocalhost = url.startsWith('http://localhost:') || url.startsWith('http://127.0.0.1:')
-  if (url === '/api' || isLocalhost) return url
+  if (isLocalhost) return url
 
   return DEFAULT_BASE_URL
 }

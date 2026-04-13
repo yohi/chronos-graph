@@ -28,7 +28,8 @@ function getValidatedPath(path: string): string {
   }
 
   const cleanPath = path.replace(/^\/+/, '')
-  if (!/^[a-zA-Z0-9_/.-]*$/.test(cleanPath)) {
+  // Allow alphanumeric, /, _, ., -, and query/fragment characters: ?, &, =, %, +, #
+  if (!/^[a-zA-Z0-9_/.\-?&=%+#]*$/.test(cleanPath)) {
     throw new Error('Security Error: Invalid characters in path')
   }
 

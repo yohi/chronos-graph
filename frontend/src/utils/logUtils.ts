@@ -39,8 +39,8 @@ export const mergeAndDedupe = (prev: LogEntry[], incoming: LogEntry[]): LogEntry
     const key = `${e.timestamp}|${e.logger}|${e.message}`
     if (!seen.has(key)) {
       seen.add(key)
-      result.unshift(e)
+      result.push(e)
     }
   }
-  return result
+  return result.reverse()
 }

@@ -83,6 +83,7 @@ class WebSocketManager:
         except asyncio.QueueFull:
             try:
                 self._queue.get_nowait()
+                logger.warning("WS channel '%s' queue full, dropped oldest message", self.channel)
                 self._queue.put_nowait(payload)
                 return True
             except asyncio.QueueEmpty:

@@ -51,30 +51,30 @@ class LogCollectorHandler(logging.Handler):
 
 def get_log_handler() -> LogCollectorHandler:
     """Get or create the log handler.
-    
-    Attaches to both root and context_store loggers to ensure capture even if 
+
+    Attaches to both root and context_store loggers to ensure capture even if
     propagation is disabled for some sub-loggers.
     """
     app_logger = logging.getLogger("context_store")
     root_logger = logging.getLogger()
-    
+
     # Search for existing handler
     handler = None
     for h in root_logger.handlers:
         if isinstance(h, LogCollectorHandler):
             handler = h
             break
-            
+
     if not handler:
         for h in app_logger.handlers:
             if isinstance(h, LogCollectorHandler):
                 handler = h
                 break
-                
+
     if not handler:
         handler = LogCollectorHandler()
         root_logger.addHandler(handler)
         if app_logger != root_logger:
             app_logger.addHandler(handler)
-            
+
     return handler

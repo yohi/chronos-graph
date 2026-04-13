@@ -88,12 +88,16 @@ class WebSocketManager:
                 return False
 
     def put_threadsafe(self, payload: dict[str, Any]) -> None:
-        """Thread-safe way to put a message into the queue."""
+        """Thread-safe way to put a message into the queue.
+
+        If the event loop is not running, the message is dropped to ensure
+        thread safety. asyncio.Queue is not thread-safe and must only be
+        accessed via the loop.
+        """
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self.put, payload)
         else:
-            # Fallback if loop is not yet set or running (though unlikely in prod)
-            self.put(payload)
+            logger.debug("WebSocket loop not running, dropping message")
 
 
 _wss: dict[str, WebSocketManager] = {}

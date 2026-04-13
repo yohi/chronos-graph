@@ -34,13 +34,16 @@ export default function LogExplorer() {
 
         // Validate and add unique IDs if missing
         const validLogs: LogEntry[] = data
-          .filter((entry: any): entry is LogEntry => (
-            entry &&
-            typeof entry.timestamp === 'string' &&
-            typeof entry.message === 'string' &&
-            typeof entry.level === 'string' &&
-            typeof entry.logger === 'string'
-          ))
+          .filter((entry: unknown): entry is LogEntry => {
+            const e = entry as Record<string, unknown>
+            return !!(
+              e &&
+              typeof e.timestamp === 'string' &&
+              typeof e.message === 'string' &&
+              typeof e.level === 'string' &&
+              typeof e.logger === 'string'
+            )
+          })
           .map((entry, idx) => ({
             ...entry,
             id: entry.id || `${entry.timestamp}-${entry.logger}-${idx}`

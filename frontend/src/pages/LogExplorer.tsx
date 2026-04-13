@@ -11,47 +11,80 @@ export default function LogExplorer() {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [status, setStatus] = useState<'connecting' | 'connected' | 'error'>('connecting')
   const wsRef = useRef<WebSocket | null>(null)
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const isMountedRef = useRef(true)
 
   useEffect(() => {
-    // 過去のログを取得
+    isMountedRef.current = true
+
+    // 過去のログを取得 (最新が上に来るようにソート/リバースを確認)
     fetch('/api/logs/recent?limit=50')
       .then((res) => res.json())
-      .then((data) => {
-        setLogs(data)
+      .then((data: LogEntry[]) => {
+        if (!isMountedRef.current) return
+        // 常に最新が先頭になるように並び替える (APIが古い順で返す場合を考慮)
+        const sorted = [...data].sort(
+          (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+        )
+        setLogs(sorted)
       })
       .catch((err) => {
         console.error('Failed to fetch recent logs:', err)
       })
 
-    // WebSocket 接続
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = window.location.host
     const wsUrl = `${protocol}//${host}/api/logs/ws`
-    
+
     const connect = () => {
+      if (!isMountedRef.current) return
+
       const socket = new WebSocket(wsUrl)
       wsRef.current = socket
 
       socket.onopen = () => {
-        setStatus('connected')
+        if (isMountedRef.current) {
+          setStatus('connected')
+        }
       }
+
       socket.onmessage = (event) => {
-        const entry: LogEntry = JSON.parse(event.data)
-        setLogs((prev) => [entry, ...prev].slice(0, 1000))
+        if (!isMountedRef.current) return
+        try {
+          const entry = JSON.parse(event.data)
+          // 簡易バリデーション
+          if (entry && typeof entry.message === 'string' && entry.timestamp) {
+            setLogs((prev) => [entry as LogEntry, ...prev].slice(0, 1000))
+          }
+        } catch (err) {
+          console.warn('Failed to parse WebSocket message:', err)
+        }
       }
+
       socket.onclose = () => {
-        setStatus('error')
-        setTimeout(connect, 3000) // 3秒後に再接続
+        if (isMountedRef.current) {
+          setStatus('error')
+          reconnectTimerRef.current = setTimeout(connect, 3000)
+        }
       }
+
       socket.onerror = () => {
-        setStatus('error')
+        if (isMountedRef.current) {
+          setStatus('error')
+        }
       }
     }
 
     connect()
 
     return () => {
-      wsRef.current?.close()
+      isMountedRef.current = false
+      if (wsRef.current) {
+        wsRef.current.close()
+      }
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current)
+      }
     }
   }, [])
 

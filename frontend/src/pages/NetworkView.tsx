@@ -5,10 +5,29 @@ import coseBilkent from 'cytoscape-cose-bilkent'
 
 cytoscape.use(coseBilkent)
 
+interface GraphNode {
+  data: {
+    id: string
+    label: string
+    memoryType: string
+    importance: number
+    project?: string
+  }
+}
+
+interface GraphEdge {
+  data: {
+    id: string
+    source: string
+    target: string
+    edgeType: string
+  }
+}
+
 interface GraphData {
   elements: {
-    nodes: any[]
-    edges: any[]
+    nodes: GraphNode[]
+    edges: GraphEdge[]
   }
 }
 

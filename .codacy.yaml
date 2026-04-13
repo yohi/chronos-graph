@@ -3,5 +3,3 @@ engines:
   bandit:
     exclude_paths:
       - "tests/**"
-    skipped_tests:
-      - B104

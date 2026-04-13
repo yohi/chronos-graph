@@ -16,8 +16,7 @@ def log_handler():
     return handler
 
 
-@pytest.mark.asyncio
-async def test_log_collector_handler_emit(log_handler):
+def test_log_collector_handler_emit(log_handler):
     """LogCollectorHandler should buffer records."""
     record = logging.LogRecord(
         name="test",
@@ -34,8 +33,7 @@ async def test_log_collector_handler_emit(log_handler):
     assert entries[0].message == "test message"
 
 
-@pytest.mark.asyncio
-async def test_log_collector_ring_buffer(log_handler):
+def test_log_collector_ring_buffer(log_handler):
     """LogCollectorHandler should drop old entries when full."""
     for i in range(15):
         record = logging.LogRecord(

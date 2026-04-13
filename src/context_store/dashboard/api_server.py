@@ -40,12 +40,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.service = DashboardService(storage=storage, graph=graph)
 
     from context_store.dashboard.log_collector import get_log_handler
+    from context_store.dashboard.websocket_manager import get_ws_manager
 
     get_log_handler()
+    ws_task = asyncio.create_task(get_ws_manager("logs").start_consumer())
 
     try:
         yield
     finally:
+        ws_task.cancel()
         await storage.dispose()
         if graph:
             await graph.dispose()
@@ -116,7 +119,7 @@ def main() -> None:
     app = create_app()
     uvicorn.run(
         app,
-        host=settings.dashboard_host,
+        host=settings.dashboard_host,  # noqa: B104
         port=settings.dashboard_port,
         log_level=settings.log_level.lower(),
     )

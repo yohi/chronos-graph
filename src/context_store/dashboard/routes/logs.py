@@ -13,10 +13,12 @@ router = APIRouter()
 
 @router.get("/recent", response_model=list[LogEntry])
 async def get_recent_logs(
-    request: Request,
     limit: int = Query(100, ge=1, le=1000),
 ) -> list[LogEntry]:
-    """Get recent log entries."""
+    """Get recent log entries from the in-memory collector.
+
+    This endpoint returns logs collected since the dashboard started.
+    """
     handler = get_log_handler()
     return handler.get_recent(limit=limit)
 

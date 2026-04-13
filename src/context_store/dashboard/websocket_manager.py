@@ -32,9 +32,12 @@ class WebSocketManager:
         if not self._conns:
             return
 
+        # Embed channel into payload
+        payload_with_channel = {**payload, "channel": channel}
+
         async def safe_send(ws: WebSocket) -> None:
             try:
-                await asyncio.wait_for(ws.send_json(payload), timeout=1.0)
+                await asyncio.wait_for(ws.send_json(payload_with_channel), timeout=1.0)
             except asyncio.TimeoutError:
                 logger.warning("WS send timeout, disconnecting client")
                 self.disconnect(ws)

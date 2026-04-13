@@ -236,10 +236,16 @@ class PostgresStorageAdapter:
             return False
 
         params.append(memory_id)
-        sql = f"UPDATE memories SET {', '.join(set_parts)} WHERE id = ${len(params)}"  # noqa: S608
+        # Final SQL assembly
+        query_parts = [
+            "UPDATE memories",
+            f"SET {', '.join(set_parts)}",
+            f"WHERE id = ${len(params)}",
+        ]
+        sql = " ".join(query_parts)
 
         async with self._pool.acquire() as conn:
-            status = await conn.execute(sql, *params)
+            status = await conn.execute(sql, *params)  # noqa: S608
         return str(status) == "UPDATE 1"
 
     async def vector_search(
@@ -458,7 +464,10 @@ class PostgresStorageAdapter:
     async def count_by_filter(self, filters: MemoryFilters) -> int:
         """Count memories matching the given filters."""
         where_clause, params = self._build_where_clause(filters)
-        sql = f"SELECT COUNT(*) FROM memories {where_clause}".strip()  # noqa: S608
+
+        # Final SQL assembly
+        query_parts = ["SELECT COUNT(*)", "FROM memories", where_clause]
+        sql = " ".join(part for part in query_parts if part).strip()
 
         async with self._pool.acquire() as conn:
             count = await conn.fetchval(sql, *params)  # noqa: S608

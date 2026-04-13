@@ -162,3 +162,27 @@ async def test_get_recent_logs_returns_actual_logs(storage_mock):
     assert test_logs[-1].message == "Test log message 2"
     assert test_logs[-1].level == "WARNING"
     assert test_logs[-1].timestamp is not None
+
+
+@pytest.mark.asyncio
+async def test_get_graph_layout_converts_id_to_str(storage_mock):
+    """Verify that DashboardService.get_graph_layout converts UUID to string for Cytoscape."""
+    storage_mock.count_by_filter.return_value = 1
+
+    m1 = MagicMock(spec=Memory)
+    m1.id = UUID("550e84c0-5ec0-4b1a-b3e1-123456789abc")
+    m1.content = "test content"
+    m1.memory_type = "episodic"
+    m1.importance_score = 0.8
+    m1.project = "p1"
+    m1.access_count = 1
+    m1.created_at = None
+
+    storage_mock.list_by_filter.return_value = [m1]
+
+    svc = DashboardService(storage=storage_mock, graph=None)
+    resp = await svc.get_graph_layout()
+
+    node_id = resp.elements.nodes[0]["data"]["id"]
+    assert isinstance(node_id, str)
+    assert node_id == "550e84c0-5ec0-4b1a-b3e1-123456789abc"

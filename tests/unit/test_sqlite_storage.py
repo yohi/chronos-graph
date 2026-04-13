@@ -631,6 +631,35 @@ class TestListByFilter:
         assert str(high.id) in ids
         assert str(low.id) not in ids
 
+    async def test_list_by_filter_offset(self, adapter):
+        """Verify that offset works in SQLite list_by_filter."""
+        for i in range(3):
+            m = _make_memory(content=f"content {i}", importance_score=0.1 * i)
+            await adapter.save_memory(m)
+
+        filters = MemoryFilters(limit=1, offset=1, order_by="importance_score ASC")
+        results = await adapter.list_by_filter(filters)
+
+        assert len(results) == 1
+        assert results[0].content == "content 1"
+
+    async def test_list_by_filter_min_importance_explicit(self, adapter):
+        """Verify that min_importance filter works explicitly."""
+        m1 = _make_memory(content="low", importance_score=0.1)
+        m2 = _make_memory(content="med", importance_score=0.5)
+        m3 = _make_memory(content="high", importance_score=0.9)
+
+        await adapter.save_memory(m1)
+        await adapter.save_memory(m2)
+        await adapter.save_memory(m3)
+
+        filters = MemoryFilters(min_importance=0.7)
+        results = await adapter.list_by_filter(filters)
+
+        assert len(results) == 1
+        assert results[0].content == "high"
+        assert results[0].importance_score == pytest.approx(0.9)
+
     async def test_list_by_tags_does_not_corrupt_values_containing_column_names(self, adapter):
         tagged = _make_memory(content="tagged", tags=["archived_at"])
         other = _make_memory(content="other", tags=["different"])

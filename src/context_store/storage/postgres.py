@@ -458,7 +458,7 @@ class PostgresStorageAdapter:
     async def count_by_filter(self, filters: MemoryFilters) -> int:
         """Count memories matching the given filters."""
         where_clause, params = self._build_where_clause(filters)
-        sql = f"SELECT COUNT(*) FROM memories {where_clause}".strip()
+        sql = f"SELECT COUNT(*) FROM memories {where_clause}".strip()  # noqa: S608
 
         async with self._pool.acquire() as conn:
             count = await conn.fetchval(sql, *params)  # noqa: S608

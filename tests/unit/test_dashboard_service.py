@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -146,15 +146,16 @@ async def test_get_memory_returns_memory_from_storage(storage_mock):
 async def test_get_recent_logs_returns_actual_logs(storage_mock):
     from context_store.logger import get_logger
 
-    logger = get_logger("test_logger")
+    logger_name = f"test_logger_{uuid4().hex}"
+    logger = get_logger(logger_name)
     logger.info("Test log message 1")
     logger.warning("Test log message 2")
 
     svc = DashboardService(storage=storage_mock, graph=None)
     logs = await svc.get_recent_logs(limit=10)
 
-    # Filter only logs from our test_logger to avoid interference from other tests
-    test_logs = [log for log in logs if log.logger == "test_logger"]
+    # Filter only logs from our unique logger
+    test_logs = [log for log in logs if log.logger == logger_name]
     assert len(test_logs) >= 2
     assert test_logs[-2].message == "Test log message 1"
     assert test_logs[-2].level == "INFO"

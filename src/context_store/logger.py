@@ -26,19 +26,27 @@ def _serialize_context_value(value: Any) -> str:
     return str(value)
 
 
+def _assemble_log_data(
+    record: logging.LogRecord, ctx_filtered: dict[str, Any], formatter: logging.Formatter
+) -> dict[str, Any]:
+    """Helper to assemble a log entry dictionary from a LogRecord and context."""
+    data = {
+        "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+        "level": record.levelname,
+        "logger": record.name,
+        "message": record.getMessage(),
+        **ctx_filtered,
+    }
+    if record.exc_info:
+        data["exception"] = formatter.formatException(record.exc_info)
+    return data
+
+
 class StructuredFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         ctx = _context.get() or {}
         ctx_filtered = {key: value for key, value in ctx.items() if key not in _RESERVED_FIELDS}
-        data = {
-            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
-            "level": record.levelname,
-            "logger": record.name,
-            "message": record.getMessage(),
-            **ctx_filtered,
-        }
-        if record.exc_info:
-            data["exception"] = self.formatException(record.exc_info)
+        data = _assemble_log_data(record, ctx_filtered, self)
         return json.dumps(data, ensure_ascii=False, default=_serialize_context_value)
 
 
@@ -49,15 +57,7 @@ class MemoryHandler(logging.Handler):
         try:
             ctx = _context.get() or {}
             ctx_filtered = {key: value for key, value in ctx.items() if key not in _RESERVED_FIELDS}
-            entry = {
-                "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
-                "level": record.levelname,
-                "logger": record.name,
-                "message": record.getMessage(),
-                **ctx_filtered,
-            }
-            if record.exc_info:
-                entry["exception"] = logging.Formatter().formatException(record.exc_info)
+            entry = _assemble_log_data(record, ctx_filtered, logging.Formatter())
 
             with _buffer_lock:
                 _log_buffer.append(entry)

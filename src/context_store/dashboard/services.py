@@ -18,6 +18,8 @@ from context_store.storage.protocols import (
     StorageAdapter,
 )
 
+MAX_CONCURRENT_DASHBOARD_TASKS = 5
+
 
 class DashboardService:
     """Read-Only アダプタを組み合わせた Dashboard 専用の集約サービス。"""
@@ -50,7 +52,7 @@ class DashboardService:
     async def get_project_stats(self) -> list[ProjectStats]:
         projects = await self._storage.list_projects()
         # Limit concurrency to prevent STORAGE_BUSY (rev.10 §3.5)
-        semaphore = asyncio.Semaphore(5)
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_DASHBOARD_TASKS)
 
         async def _fetch_project_stats(p: str) -> ProjectStats:
             async with semaphore:

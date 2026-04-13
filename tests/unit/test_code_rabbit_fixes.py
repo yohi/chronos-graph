@@ -125,7 +125,7 @@ async def test_sqlite_list_by_filter_offset(sqlite_adapter):
             content=f"content {i}",
             memory_type=MemoryType.EPISODIC,
             source_type=SourceType.MANUAL,
-            importance_score=0.5,
+            importance_score=0.1 * i,  # Distinct scores for deterministic ordering
         )
         await sqlite_adapter.save_memory(m)
 
@@ -179,15 +179,16 @@ async def test_postgres_list_by_filter_min_importance_offset():
     from context_store.storage.postgres import PostgresStorageAdapter
 
     mock_pool = MagicMock()
-    mock_pool.acquire.return_value.__aenter__.return_value = AsyncMock()
+    conn_mock = AsyncMock()
+    conn_mock.fetch.return_value = []  # Ensure stable return value
+    mock_pool.acquire.return_value.__aenter__.return_value = conn_mock
 
     adapter = PostgresStorageAdapter(mock_pool)
     filters = MemoryFilters(min_importance=0.7, offset=10, limit=5)
 
     await adapter.list_by_filter(filters)
 
-    conn = mock_pool.acquire.return_value.__aenter__.return_value
-    args, _ = conn.fetch.call_args
+    args, _ = conn_mock.fetch.call_args
     sql = args[0]
 
     assert "importance_score >= $1" in sql

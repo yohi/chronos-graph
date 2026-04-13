@@ -12,7 +12,13 @@ const DEFAULT_BASE_URL = '/api'
 function getBaseUrl(): string {
   try {
     const stored = localStorage.getItem('chronos-api-base-url')
-    if (stored && stored.trim()) return stored.trim()
+    if (stored && stored.trim()) {
+      const url = stored.trim()
+      // Prevent SSRF: only allow relative paths or local development URLs
+      if (url.startsWith('/') || url.startsWith('http://localhost:') || url.startsWith('http://127.0.0.1:')) {
+        return url
+      }
+    }
   } catch {
     // localStorage unavailable
   }
@@ -31,14 +37,48 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const base = getBaseUrl()
-  const url = `${base}${path}`
-  const res = await fetch(url, {
+  
+  // Construct a safe absolute URL using the URL API
+  // window.location.origin is used as the base for relative URLs
+  const baseUrl = new URL(base, window.location.origin)
+  
+  // Clean path to prevent URL segment replacement or protocol-relative URLs
+  // For example, if path is '/memories', and baseUrl is 'http://localhost/api/',
+  // new URL('/memories', ...) replaces the path with '/memories' instead of '/api/memories'.
+  // By removing the leading slash, it appends properly to the base path.
+  const cleanPath = path.replace(/^\/+/, '')
+  const safeBase = baseUrl.href.endsWith('/') ? baseUrl.href : `${baseUrl.href}/`
+  
+  const finalUrl = new URL(cleanPath, safeBase)
+  
+  // Final validation to ensure the constructed URL points to a trusted origin
+  if (
+    finalUrl.origin !== window.location.origin &&
+    !finalUrl.hostname.includes('localhost') &&
+    !finalUrl.hostname.includes('127.0.0.1')
+  ) {
+    throw new Error('Security Error: Invalid API URL origin')
+  }
+  
+  const res = await fetch(finalUrl.href, {
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
     ...init,
   })
   if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText)
-    throw new ApiError(res.status, text)
+    let errorMessage = res.statusText
+    try {
+      const errorData = await res.json()
+      if (errorData && typeof errorData === 'object') {
+        errorMessage = errorData.detail || errorData.message || errorData.error || JSON.stringify(errorData)
+      }
+    } catch {
+      // Not a JSON response, fallback to status text or text body
+      const text = await res.text().catch(() => '')
+      if (text) {
+        errorMessage = text
+      }
+    }
+    throw new ApiError(res.status, errorMessage)
   }
   return res.json() as Promise<T>
 }

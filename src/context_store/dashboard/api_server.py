@@ -5,11 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from context_store.config import Settings
 from context_store.dashboard.services import DashboardService
@@ -121,6 +124,27 @@ def create_app(
     app.include_router(system.router, prefix="/api/system", tags=["system"])
     app.include_router(graph.router, prefix="/api/graph", tags=["graph"])
     app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
+
+    # SPA Fallback and Static Files
+    frontend_dist = Path(__file__).parent.parent.parent.parent / "frontend" / "dist"
+    assets_dir = frontend_dist / "assets"
+
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str) -> FileResponse:
+        """Serve the SPA for any path not matched by previous routes."""
+        from fastapi import HTTPException
+
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API route not found")
+
+        index_file = frontend_dist / "index.html"
+        if index_file.exists():
+            return FileResponse(str(index_file))
+
+        raise HTTPException(status_code=404, detail="SPA build not found")
 
     return app
 

@@ -15,8 +15,9 @@
 
 ### Task 1.1: Settings バリデーションエラーの修正
 - **Files:** `.env` (または `.env.example`), `src/context_store/config.py`
-- **Step 1:** `EMBEDDING_PROVIDER` の値を `local` から `local-model` に修正する。
+- **Step 1:** `EMBEDDING_PROVIDER` の値をデフォルトの `openai` から `local-model` に修正し、API キー未設定によるバリデーションエラーを解消する。
 - **Step 2:** `pytest tests/unit/test_config.py` でバリデーションが通ることを確認。
+
 
 ### Task 1.2: PostgreSQL 接続エラーの解消
 - **Files:** `docker-compose.yml`, `tests/integration/conftest.py`
@@ -49,9 +50,15 @@
 
 デプロイおよび運用に必要な機能を実装する。
 
+### Task 3.0: フロントエンド・プロダクションビルドの生成
+- **Files:** `frontend/` 配下
+- **Step 1:** `frontend/` ディレクトリにて `npm install` および `npm run build` を実行。
+- **Step 2:** `frontend/dist/` ディレクトリが生成され、`index.html` と `assets/` が含まれていることを確認。
+
 ### Task 3.1: SPA フォールバックと静的配信の実装
 - **Files:** `src/context_store/dashboard/api_server.py`
-- **Step 1:** `StaticFiles` をマウントし、`/api/*` 以外の GET リクエストを `index.html` へ流す catch-all ルートを追加する。
+- **Step 1:** `StaticFiles` を `/assets` にマウントする。
+- **Step 2:** カスタム 404 エラーハンドラまたは catch-all ルートを実装し、`/api/*` 以外のすべての GET リクエストに対して `frontend/dist/index.html` を返すように設定する（クライアントサイド・ルーティングのサポート）。
 
 ### Task 3.2: Docker Compose へのサービス追加
 - **Files:** `docker-compose.yml`

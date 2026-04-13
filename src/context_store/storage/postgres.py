@@ -236,10 +236,16 @@ class PostgresStorageAdapter:
             return False
 
         params.append(memory_id)
-        sql = f"UPDATE memories SET {', '.join(set_parts)} WHERE id = ${len(params)}"  # noqa: S608
+        # Final SQL assembly
+        query_parts = [
+            "UPDATE memories",
+            f"SET {', '.join(set_parts)}",
+            f"WHERE id = ${len(params)}",
+        ]
+        sql = " ".join(query_parts)
 
         async with self._pool.acquire() as conn:
-            status = await conn.execute(sql, *params)
+            status = await conn.execute(sql, *params)  # noqa: S608
         return str(status) == "UPDATE 1"
 
     async def vector_search(
@@ -346,6 +352,10 @@ class PostgresStorageAdapter:
             params.append(filters.session_id)
             conditions.append(f"source_metadata->>'session_id' = ${len(params)}")
 
+        if filters.min_importance is not None:
+            params.append(filters.min_importance)
+            conditions.append(f"importance_score >= ${len(params)}")
+
         if filters.created_after is not None:
             if filters.id_after is not None:
                 params.append(filters.created_after)
@@ -417,20 +427,50 @@ class PostgresStorageAdapter:
                     code="INVALID_PARAMETER",
                 ) from e
 
-        sql = f"SELECT * FROM memories {where_clause} {order_clause} {limit_clause}".strip()  # noqa: S608
+        # Parameterize OFFSET
+        offset_clause = ""
+        offset_val = getattr(filters, "offset", None)
+        if offset_val is not None:
+            try:
+                offset_int = int(offset_val)
+                if offset_int < 0:
+                    raise StorageError(
+                        message=f"Invalid offset value: {offset_int}",
+                        code="INVALID_PARAMETER",
+                    )
+                params.append(offset_int)
+                offset_clause = f"OFFSET ${len(params)}"
+            except (ValueError, TypeError) as e:
+                raise StorageError(
+                    message=f"Invalid offset type: {type(offset_val)}",
+                    code="INVALID_PARAMETER",
+                ) from e
+
+        # Final SQL assembly
+        query_parts = [
+            "SELECT * FROM memories",
+            where_clause,
+            order_clause,
+            limit_clause,
+            offset_clause,
+        ]
+        sql = " ".join(part for part in query_parts if part).strip()
 
         async with self._pool.acquire() as conn:
-            records = await conn.fetch(sql, *params)
+            records = await conn.fetch(sql, *params)  # noqa: S608
 
         return [_record_to_memory(dict(r)) for r in records]
 
     async def count_by_filter(self, filters: MemoryFilters) -> int:
         """Count memories matching the given filters."""
         where_clause, params = self._build_where_clause(filters)
-        sql = f"SELECT COUNT(*) FROM memories {where_clause}"  # noqa: S608
+
+        # Final SQL assembly
+        query_parts = ["SELECT COUNT(*)", "FROM memories", where_clause]
+        sql = " ".join(part for part in query_parts if part).strip()
 
         async with self._pool.acquire() as conn:
-            count = await conn.fetchval(sql, *params)
+            count = await conn.fetchval(sql, *params)  # noqa: S608
             return int(count) if count is not None else 0
 
     async def list_projects(self) -> list[str]:

@@ -60,6 +60,47 @@ services:
       timeout: 5s
       retries: 5
 
+  # Dashboard service (design doc §2.2, §6 Phase 5)
+  # - Binds to 127.0.0.1:8000 to block external access at network layer
+  # - Security is layered: Docker port-forward + TrustedHostMiddleware
+  # - Read-Only CQRS: accesses only existing DB, no writes
+  chronos-dashboard:
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+    user: root
+    working_dir: /workspaces/chronos-graph
+    command:
+      - "bash"
+      - "-c"
+      - |
+        cd /workspaces/chronos-graph
+        uv sync --all-extras --quiet
+        uv run chronos-dashboard
+    ports:
+      # 127.0.0.1 binding blocks access from outside the host (design doc §2.2)
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Override bind address inside container to accept Docker port-forward
+      DASHBOARD_HOST: "0.0.0.0"
+      DASHBOARD_PORT: "8000"
+      # Allow both localhost and Docker gateway for TrustedHostMiddleware
+      DASHBOARD_ALLOWED_HOSTS: "localhost,127.0.0.1"
+    volumes:
+      - .:/workspaces/chronos-graph
+      # Share SQLite DB from host (read-only mount for safety)
+      - ${SQLITE_DB_PATH:-~/.context-store}:/data/context-store:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/system/config || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    profiles:
+      - dashboard
+
 volumes:
   postgres_data:
   neo4j_data:

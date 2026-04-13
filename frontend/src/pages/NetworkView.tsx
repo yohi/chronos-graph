@@ -104,7 +104,7 @@ export default function NetworkView() {
             name: 'cose-bilkent',
             animate: true,
             randomize: true,
-          } as any,
+          } as cytoscape.LayoutOptions,
         })
 
         setLoading(false)

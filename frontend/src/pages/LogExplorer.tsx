@@ -35,9 +35,9 @@ export default function LogExplorer() {
         // Validate and add unique IDs if missing
         const validLogs: LogEntry[] = data
           .filter((entry: unknown): entry is LogEntry => {
+            if (!entry || typeof entry !== 'object') return false
             const e = entry as Record<string, unknown>
-            return !!(
-              e &&
+            return (
               typeof e.timestamp === 'string' &&
               typeof e.message === 'string' &&
               typeof e.level === 'string' &&
@@ -90,7 +90,7 @@ export default function LogExplorer() {
           ) {
             const logEntry: LogEntry = {
               ...entry,
-              id: entry.id || `${entry.timestamp}-${entry.logger}-${Math.random()}`
+              id: entry.id || crypto.randomUUID()
             }
             setLogs((prev) => [logEntry, ...prev].slice(0, 1000))
           } else {

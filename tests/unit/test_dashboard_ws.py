@@ -55,7 +55,7 @@ async def test_ws_manager_connect():
     """WebSocketManager should manage connections."""
     from unittest.mock import AsyncMock
 
-    manager = WebSocketManager()
+    manager = WebSocketManager(channel="logs")
     ws = AsyncMock()
     await manager.connect(ws)
     assert ws in manager._conns
@@ -67,11 +67,15 @@ async def test_ws_manager_broadcast():
     """WebSocketManager should broadcast to connections."""
     from unittest.mock import AsyncMock
 
-    manager = WebSocketManager()
+    manager = WebSocketManager(channel="logs")
     ws1 = AsyncMock()
     ws2 = AsyncMock()
     manager._conns.add(ws1)
     manager._conns.add(ws2)
-    await manager.broadcast("logs", {"message": "test"})
-    ws1.send_json.assert_called_once()
-    ws2.send_json.assert_called_once()
+    payload = {"message": "test"}
+    await manager.broadcast(payload)
+    
+    # Check that it was called with payload including the channel
+    expected_payload = {**payload, "channel": "logs"}
+    ws1.send_json.assert_called_once_with(expected_payload)
+    ws2.send_json.assert_called_once_with(expected_payload)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Literal
+from typing import Any, Literal
 
 from context_store.dashboard.schemas import (
     DashboardStats,
@@ -89,37 +89,40 @@ class DashboardService:
         )
         memory_ids = [str(m.id) for m in memories]
         edges = await self._graph.list_edges_for_memories(memory_ids) if self._graph else []
-        nodes = [
-            {
-                "data": {
-                    "id": str(m.id),
-                    "label": (m.content or "")[:80],
-                    "memoryType": m.memory_type,
-                    "importance": m.importance_score,
-                    "project": m.project,
-                    "accessCount": m.access_count,
-                    "createdAt": m.created_at.isoformat() if m.created_at else "",
-                }
-            }
-            for m in memories
-        ]
-        edge_elements = [
-            {
-                "data": {
-                    "id": f"{e.from_id}-{e.to_id}-{e.edge_type}",
-                    "source": e.from_id,
-                    "target": e.to_id,
-                    "edgeType": e.edge_type,
-                }
-            }
-            for e in edges
-        ]
+        nodes = [self._map_node(m) for m in memories]
+        edge_elements = [self._map_edge(e) for e in edges]
+
         return GraphLayoutResponse(
             elements=GraphElementsDTO(nodes=nodes, edges=edge_elements),
             total_nodes=total,
             returned_nodes=len(memories),
             total_edges=len(edges),
         )
+
+    def _map_node(self, m: Memory) -> dict[str, Any]:
+        """Convert a Memory to a Cytoscape node data dictionary."""
+        return {
+            "data": {
+                "id": str(m.id),
+                "label": (m.content or "")[:80],
+                "memoryType": m.memory_type,
+                "importance": m.importance_score,
+                "project": m.project,
+                "accessCount": m.access_count,
+                "createdAt": m.created_at.isoformat() if m.created_at else "",
+            }
+        }
+
+    def _map_edge(self, e: Any) -> dict[str, Any]:
+        """Convert an Edge to a Cytoscape edge data dictionary."""
+        return {
+            "data": {
+                "id": f"{e.from_id}-{e.to_id}-{e.edge_type}",
+                "source": e.from_id,
+                "target": e.to_id,
+                "edgeType": e.edge_type,
+            }
+        }
 
     async def traverse_graph(
         self,

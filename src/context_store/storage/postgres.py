@@ -440,23 +440,28 @@ class PostgresStorageAdapter:
                     code="INVALID_PARAMETER",
                 ) from e
 
-        sql = (
-            f"SELECT * FROM memories {where_clause} {order_clause} "  # noqa: S608
-            f"{limit_clause} {offset_clause}"
-        ).strip()
+        # Final SQL assembly
+        query_parts = [
+            "SELECT * FROM memories",
+            where_clause,
+            order_clause,
+            limit_clause,
+            offset_clause,
+        ]
+        sql = " ".join(part for part in query_parts if part).strip()
 
         async with self._pool.acquire() as conn:
-            records = await conn.fetch(sql, *params)
+            records = await conn.fetch(sql, *params)  # noqa: S608
 
         return [_record_to_memory(dict(r)) for r in records]
 
     async def count_by_filter(self, filters: MemoryFilters) -> int:
         """Count memories matching the given filters."""
         where_clause, params = self._build_where_clause(filters)
-        sql = f"SELECT COUNT(*) FROM memories {where_clause}"  # noqa: S608
+        sql = f"SELECT COUNT(*) FROM memories {where_clause}".strip()
 
         async with self._pool.acquire() as conn:
-            count = await conn.fetchval(sql, *params)
+            count = await conn.fetchval(sql, *params)  # noqa: S608
             return int(count) if count is not None else 0
 
     async def list_projects(self) -> list[str]:

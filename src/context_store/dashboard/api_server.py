@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
@@ -24,27 +25,48 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     Fails fast if the SQLite database does not exist (rev.10 §2.2).
     """
     settings: Settings = app.state.settings
-    try:
-        storage, graph, cache = await create_storage(settings, read_only=True)
-    except Exception as exc:
-        logger.error(
-            "Dashboard requires an existing database. Please start the MCP server "
-            "(context-store) at least once to initialize the database. Error: %s",
-            exc,
-        )
-        raise SystemExit(1) from exc
+    storage = None
+    graph = None
+    cache = None
+    ws_task = None
 
-    app.state.storage = storage
-    app.state.graph = graph
-    app.state.cache = cache
-    app.state.service = DashboardService(storage=storage, graph=graph)
     try:
+        try:
+            storage, graph, cache = await create_storage(settings, read_only=True)
+        except Exception as exc:
+            logger.error(
+                "Dashboard requires an existing database. Please start the MCP server "
+                "(context-store) at least once to initialize the database. Error: %s",
+                exc,
+            )
+            raise SystemExit(1) from exc
+
+        app.state.storage = storage
+        app.state.graph = graph
+        app.state.cache = cache
+        app.state.service = DashboardService(storage=storage, graph=graph)
+
+        from context_store.dashboard.log_collector import get_log_handler
+        from context_store.dashboard.websocket_manager import get_ws_manager
+
+        get_log_handler()
+        ws_task = asyncio.create_task(get_ws_manager("logs").start_consumer())
+
         yield
     finally:
-        await storage.dispose()
+        if ws_task:
+            ws_task.cancel()
+            try:
+                await asyncio.wait_for(ws_task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+
+        if storage:
+            await storage.dispose()
         if graph:
             await graph.dispose()
-        await cache.dispose()
+        if cache:
+            await cache.dispose()
 
 
 def create_app(
@@ -96,9 +118,9 @@ def create_app(
 
     app.include_router(stats.router, prefix="/api/stats", tags=["stats"])
     app.include_router(memories.router, prefix="/api/memories", tags=["memories"])
+    app.include_router(system.router, prefix="/api/system", tags=["system"])
     app.include_router(graph.router, prefix="/api/graph", tags=["graph"])
     app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
-    app.include_router(system.router, prefix="/api/system", tags=["system"])
 
     return app
 
@@ -111,7 +133,7 @@ def main() -> None:
     app = create_app()
     uvicorn.run(
         app,
-        host="127.0.0.1",
+        host=settings.dashboard_host,  # noqa: S104
         port=settings.dashboard_port,
         log_level=settings.log_level.lower(),
     )

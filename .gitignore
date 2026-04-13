@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 *.pyd
 *.so
+.python-version
 
 # Virtual environments
 .venv/
@@ -22,7 +23,6 @@ wheels/
 .env
 .env.*
 !.env.example
-# Note: .env.example is NOT ignored
 
 # Type checker and linter caches
 .mypy_cache/
@@ -51,6 +51,7 @@ mcp_config.json
 *.swp
 *.swo
 *~
+.claude/settings.local.json
 
 # OS
 .DS_Store
@@ -62,3 +63,10 @@ Thumbs.db
 # Git Worktrees
 .worktrees/
 .claude/worktrees/
+
+# Frontend (Node.js)
+node_modules/
+**/node_modules/
+frontend/dist/
+frontend/.cache/
+.eslintcache

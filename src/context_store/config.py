@@ -129,6 +129,10 @@ class Settings(BaseSettings):
     )
 
     # --- Dashboard (rev.10) ---
+    dashboard_host: str = Field(
+        default="127.0.0.1",
+        description="FastAPI dashboard bind host. Use 0.0.0.0 for Docker/Production.",
+    )
     dashboard_port: int = Field(
         default=8000, ge=1, le=65535, description="FastAPI dashboard bind port"
     )

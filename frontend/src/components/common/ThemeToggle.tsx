@@ -2,7 +2,7 @@ import { useState } from 'react'
 
 export default function ThemeToggle() {
   const [isDark, setIsDark] = useState(() => {
-    return document.documentElement.classList.contains('dark')
+    return localStorage.getItem('theme') === 'dark'
   })
 
   const toggle = () => {

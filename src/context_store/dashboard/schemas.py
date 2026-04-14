@@ -90,6 +90,10 @@ class LogEntry(DashboardBaseModel):
     message: str
 
 
+class LogsRecentResponse(DashboardBaseModel):
+    entries: list[LogEntry]
+
+
 class MemorySearchRequest(DashboardBaseModel):
     project: str | None = None
     memory_type: str | None = None

@@ -85,10 +85,12 @@ async function request<T>(path: string, init?: RequestInit & { timeout?: number 
   const timeoutId = setTimeout(() => controller.abort(), init?.timeout ?? 30000)
 
   // Use AbortSignal.any to combine timeout signal and external signal if available
-  // Polyfill for AbortSignal.any if needed (older browsers/node)
   let signal: AbortSignal
   if (init?.signal && 'any' in AbortSignal) {
-    signal = (AbortSignal as any).any([controller.signal, init.signal])
+    signal = (AbortSignal as typeof AbortSignal & { any: (signals: AbortSignal[]) => AbortSignal }).any([
+      controller.signal,
+      init.signal,
+    ])
   } else if (init?.signal) {
     // Fallback for environments without AbortSignal.any
     init.signal.addEventListener('abort', () => controller.abort(), { once: true })

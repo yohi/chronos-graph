@@ -55,7 +55,7 @@ describe('apiClient timeout and signals', () => {
   it('relays external AbortSignal', async () => {
     const controller = new AbortController()
 
-    vi.mocked(window.fetch).mockImplementation((_url, init: any) => {
+    vi.mocked(window.fetch).mockImplementation((_url, init?: RequestInit) => {
       const signal = init?.signal
       return new Promise((resolve, reject) => {
         if (signal?.aborted) {
@@ -74,7 +74,7 @@ describe('apiClient timeout and signals', () => {
       })
     })
 
-    const promise = apiClient.get('status', { signal: controller.signal } as any)
+    const promise = apiClient.get('status', { signal: controller.signal })
     controller.abort()
 
     await expect(promise).rejects.toHaveProperty('name', 'AbortError')

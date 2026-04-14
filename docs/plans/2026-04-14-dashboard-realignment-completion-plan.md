@@ -81,7 +81,7 @@ git commit -m "chore: build frontend for production" || true
 
 ---
 
-### Task 3: Add Dashboard Service to Docker Compose
+## Task 3: Add Dashboard Service to Docker Compose
 
 **Files:**
 - Modify: `docker-compose.yml`

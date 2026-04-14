@@ -24,7 +24,7 @@ export default defineConfig({
   webServer: {
     command: 'python -m context_store.dashboard.api_server',
     url: 'http://127.0.0.1:8000',
-    reuseExistingServer: false,
+    reuseExistingServer: true,
     cwd: '..',
     stdout: 'pipe',
     stderr: 'pipe',

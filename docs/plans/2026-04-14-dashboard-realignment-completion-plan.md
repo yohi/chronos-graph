@@ -79,8 +79,8 @@ Expected: File exists and has a non-zero size.
 Since `frontend/dist/` is ignored by git, we only need to commit any lockfile updates if there were any.
 
 ```bash
-git add frontend/package-lock.json || true
-git commit -m "chore: build frontend for production" || true
+git add frontend/package-lock.json
+git commit -m "chore: build frontend for production"
 ```
 
 ---
@@ -231,6 +231,14 @@ Run: `cd frontend && npx playwright test e2e/dashboard.spec.ts ; cd ..`
 Expected: PASS
 
 - [ ] **Step 6: Commit**
+
+```bash
+git add frontend/package.json frontend/package-lock.json frontend/playwright.config.ts frontend/e2e/dashboard.spec.ts
+git commit -m "test: add playwright E2E test for dashboard"
+```
+dashboard"
+```
+p 6: Commit**
 
 ```bash
 git add frontend/package.json frontend/package-lock.json frontend/playwright.config.ts frontend/e2e/dashboard.spec.ts

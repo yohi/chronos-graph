@@ -19,7 +19,7 @@ describe('getValidatedPath', () => {
   })
 
   it('rejects fragments (#)', () => {
-    expect(() => getValidatedPath('api/status#fragment')).toThrow('Security Error: Invalid characters in path')
+    expect(() => getValidatedPath('api/status#fragment')).toThrow('Security Error: Invalid characters or fragments in path')
   })
 
   it('rejects percent-encoded directory traversal', () => {
@@ -28,9 +28,14 @@ describe('getValidatedPath', () => {
     expect(() => getValidatedPath('api/%2e%2e/secret')).toThrow('Security Error: Invalid path segments')
   })
 
+  it('rejects percent-encoded fragments and special characters', () => {
+    expect(() => getValidatedPath('api/status%23fragment')).toThrow('Security Error: Invalid characters or fragments in path')
+    expect(() => getValidatedPath('api/status%3Bcommand')).toThrow('Security Error: Invalid characters or fragments in path')
+  })
+
   it('rejects disallowed special characters', () => {
-    expect(() => getValidatedPath('api/status;rm')).toThrow('Security Error: Invalid characters in path')
-    expect(() => getValidatedPath('api/status$SHELL')).toThrow('Security Error: Invalid characters in path')
+    expect(() => getValidatedPath('api/status;rm')).toThrow('Security Error: Invalid characters or fragments in path')
+    expect(() => getValidatedPath('api/status$SHELL')).toThrow('Security Error: Invalid characters or fragments in path')
   })
 })
 

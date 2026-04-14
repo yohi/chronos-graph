@@ -36,14 +36,13 @@ export function getValidatedPath(path: string): string {
     throw new Error('Security Error: Invalid path segments (traversal or relative paths are not allowed)')
   }
 
-  const cleanPath = path.replace(/^\/+/, '')
-  // Allow alphanumeric, /, _, ., -, and query characters: ?, &, =, %, +
-  // Fragments (#) are strictly disallowed in API paths.
-  if (cleanPath.includes('#') || !/^[a-zA-Z0-9_/.\-?&=%+]*$/.test(cleanPath)) {
-    throw new Error('Security Error: Invalid characters in path (fragments and special characters are not allowed)')
+  // Apply character whitelist and fragment checks against the DECODED value
+  // to prevent bypass via percent-encoding.
+  if (decodedPath.includes('#') || !/^[a-zA-Z0-9_/.\-?&=%+]*$/.test(decodedPath)) {
+    throw new Error('Security Error: Invalid characters or fragments in path')
   }
 
-  return cleanPath
+  return path.replace(/^\/+/, '')
 }
 
 async function handleResponse<T>(res: Response): Promise<T> {

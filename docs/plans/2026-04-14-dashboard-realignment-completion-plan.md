@@ -160,6 +160,12 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
+  // Fail the build on CI if you accidentally left test.only in the source code.
+  forbidOnly: !!process.env.CI,
+  // Retry on CI only
+  retries: process.env.CI ? 2 : 0,
+  // Opt out of parallel tests on CI.
+  workers: process.env.CI ? 1 : undefined,
   reporter: 'list',
   use: {
     baseURL: 'http://127.0.0.1:8000',
@@ -171,6 +177,20 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
+  // Run your local dev server before starting the tests
+  webServer: {
+    command: 'python -m context_store.dashboard.api_server',
+    url: 'http://127.0.0.1:8000',
+    reuseExistingServer: false,
+    cwd: '..',
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: {
+      STORAGE_BACKEND: 'sqlite',
+      // Ensure it points to a test DB or an existing one
+      SQLITE_DB_PATH: './tests/integration/test_graph.db'
+    }
+  },
 });
 ```
 
@@ -215,6 +235,4 @@ Expected: PASS
 ```bash
 git add frontend/package.json frontend/package-lock.json frontend/playwright.config.ts frontend/e2e/dashboard.spec.ts
 git commit -m "test: add playwright E2E test for dashboard"
-```
-mmit -m "test: add playwright E2E test for dashboard"
 ```

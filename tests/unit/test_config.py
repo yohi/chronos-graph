@@ -27,8 +27,8 @@ def test_default_settings(monkeypatch, default_settings):
 
     # _env_file=None を指定して、.env ファイルの読み込みも回避する
     settings = Settings(_env_file=None, openai_api_key=default_settings["openai_api_key"])
-    assert settings.postgres_port == 5432
-    assert settings.embedding_provider == "openai"
+    assert settings.postgres_port == 5435
+    assert settings.embedding_provider == "local-model"
     assert settings.decay_half_life_days == 30
     assert settings.archive_threshold == 0.05
     assert settings.similarity_threshold == 0.70
@@ -154,7 +154,7 @@ def test_postgres_dsn_url_encodes_credentials(default_settings):
     )
 
     assert settings.postgres_dsn == (
-        "postgresql://user%2Bname%40example.com:p%40ss%20word%3A%2F@localhost:5432/context%2Fstore%20prod"
+        "postgresql://user%2Bname%40example.com:p%40ss%20word%3A%2F@localhost:5435/context%2Fstore%20prod"
     )
 
 

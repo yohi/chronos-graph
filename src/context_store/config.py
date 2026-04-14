@@ -63,7 +63,7 @@ class Settings(BaseSettings):
 
     # --- PostgreSQL (storage_backend=postgres の場合) ---
     postgres_host: str = "localhost"
-    postgres_port: int = 5432
+    postgres_port: int = 5435
     postgres_db: str = "context_store"
     postgres_user: str = "context_store"
     postgres_password: SecretStr = SecretStr("")
@@ -77,12 +77,12 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379"
 
     # --- Embedding ---
-    embedding_provider: Literal["openai", "local-model", "litellm", "custom-api"] = "openai"
+    embedding_provider: Literal["openai", "local-model", "litellm", "custom-api"] = "local-model"
     openai_api_key: SecretStr = SecretStr("")
     local_model_name: str = "cl-nagoya/ruri-v3-310m"
     litellm_api_base: str = "http://localhost:4000"
     litellm_model: str = "openai/text-embedding-3-small"
-    embedding_dimension: int = Field(default=1536, ge=1)
+    embedding_dimension: int = Field(default=1024, ge=1)
     custom_api_endpoint: str = ""
     custom_api_model_name: str = "custom-model"
 

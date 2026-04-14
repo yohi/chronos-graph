@@ -19,5 +19,5 @@ export const graphApi = {
     const query = qs.toString() ? `?${qs.toString()}` : ''
     return apiClient.get<GraphLayoutResponse>(`/graph/layout${query}`)
   },
-  getMemory: (id: string) => apiClient.get<MemoryDetail>(`/memories/${id}`),
+  getMemory: (id: string) => apiClient.get<MemoryDetail>(`/memories/${encodeURIComponent(id)}`),
 }

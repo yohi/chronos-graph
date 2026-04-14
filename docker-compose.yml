@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: .devcontainer/Dockerfile
-    user: root
+    user: "1000:1000"
     volumes:
       - .:/workspaces/chronos-graph
     working_dir: /workspaces/chronos-graph
@@ -17,7 +17,7 @@ services:
       dockerfile: Dockerfile
     image: chronos-graph-postgres:latest
     ports:
-      - "5433:5432"
+      - "5435:5432"
     environment:
       POSTGRES_DB: context_store
       POSTGRES_USER: context_store
@@ -68,38 +68,32 @@ services:
     build:
       context: .
       dockerfile: .devcontainer/Dockerfile
-    user: root
-    working_dir: /workspaces/chronos-graph
-    command:
-      - "bash"
-      - "-c"
-      - |
-        cd /workspaces/chronos-graph
-        uv sync --all-extras --quiet
-        uv run chronos-dashboard
-    ports:
-      # 127.0.0.1 binding blocks access from outside the host (design doc §2.2)
-      - "127.0.0.1:8000:8000"
-    env_file:
-      - .env
-    environment:
-      # Override bind address inside container to accept Docker port-forward
-      DASHBOARD_HOST: "0.0.0.0"
-      DASHBOARD_PORT: "8000"
-      # Allow both localhost and Docker gateway for TrustedHostMiddleware
-      DASHBOARD_ALLOWED_HOSTS: "localhost,127.0.0.1"
+    user: "1000:1000"
     volumes:
       - .:/workspaces/chronos-graph
-      # Share SQLite DB from host (read-only mount for safety)
-      - ${SQLITE_DB_PATH:-~/.context-store}:/data/context-store:ro
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/system/config || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
-    profiles:
-      - dashboard
+    working_dir: /workspaces/chronos-graph
+    command: ["python", "-m", "context_store.dashboard.api_server"]
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      - STORAGE_BACKEND=postgres
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=context_store
+      - POSTGRES_USER=context_store
+      - POSTGRES_PASSWORD=dev_password
+      - NEO4J_URI=bolt://neo4j:7687
+      - REDIS_URL=redis://redis:6379
+      - CACHE_BACKEND=redis
+      - GRAPH_ENABLED=true
+      - DASHBOARD_HOST=0.0.0.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   postgres_data:

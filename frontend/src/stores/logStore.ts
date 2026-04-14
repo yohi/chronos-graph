@@ -4,64 +4,88 @@
 import { create } from 'zustand'
 import { logsApi } from '../api/logs'
 import type { LogEntry } from '../types/api'
+import { applyFilter, mergeAndDedupe } from '../utils/logUtils'
 
 type LogLevel = LogEntry['level']
 
 interface LogState {
   entries: LogEntry[]
+  filteredEntries: LogEntry[] // Pre-calculated filtered result
   filter: {
     level: LogLevel | 'ALL'
     text: string
   }
   loading: boolean
   error: string | null
+  lastFetchId: number // To prevent out-of-order async responses
   // Actions
   fetchRecent: (limit?: number) => Promise<void>
   appendLog: (entry: LogEntry) => void
   setLevelFilter: (level: LogLevel | 'ALL') => void
   setTextFilter: (text: string) => void
-  filteredEntries: () => LogEntry[]
 }
 
 const MAX_ENTRIES = 500
 
 export const useLogStore = create<LogState>((set, get) => ({
   entries: [],
+  filteredEntries: [],
   filter: { level: 'ALL', text: '' },
   loading: false,
   error: null,
+  lastFetchId: 0,
 
   fetchRecent: async (limit = 100) => {
-    set({ loading: true, error: null })
+    const fetchId = get().lastFetchId + 1
+    set({ loading: true, error: null, lastFetchId: fetchId })
+
     try {
       const res = await logsApi.getRecent(limit)
-      set({ entries: res.entries, loading: false })
+
+      // Guard: only apply if this is still the latest request
+      if (get().lastFetchId !== fetchId) return
+
+      set((state) => {
+        // Merge and deduplicate to avoid overwriting entries added by appendLog during await
+        const merged = mergeAndDedupe(state.entries, res.entries)
+        const entries = merged.slice(-MAX_ENTRIES)
+        return {
+          entries,
+          filteredEntries: applyFilter(entries, state.filter),
+          loading: false,
+        }
+      })
     } catch (err) {
+      if (get().lastFetchId !== fetchId) return
       set({ error: String(err), loading: false })
     }
   },
 
   appendLog: (entry) => {
-    set((state) => ({
-      entries: [...state.entries.slice(-(MAX_ENTRIES - 1)), entry],
-    }))
+    set((state) => {
+      const newEntries = [...state.entries.slice(-(MAX_ENTRIES - 1)), entry]
+      return {
+        entries: newEntries,
+        filteredEntries: applyFilter(newEntries, state.filter),
+      }
+    })
   },
 
   setLevelFilter: (level) =>
-    set((state) => ({ filter: { ...state.filter, level } })),
+    set((state) => {
+      const filter = { ...state.filter, level }
+      return {
+        filter,
+        filteredEntries: applyFilter(state.entries, filter),
+      }
+    }),
 
   setTextFilter: (text) =>
-    set((state) => ({ filter: { ...state.filter, text } })),
-
-  filteredEntries: () => {
-    const { entries, filter } = get()
-    return entries.filter((e) => {
-      const levelOk = filter.level === 'ALL' || e.level === filter.level
-      const textOk =
-        !filter.text ||
-        e.message.toLowerCase().includes(filter.text.toLowerCase()) ||
-        e.logger.toLowerCase().includes(filter.text.toLowerCase())
-      return levelOk && textOk
-    })
-  },
+    set((state) => {
+      const filter = { ...state.filter, text }
+      return {
+        filter,
+        filteredEntries: applyFilter(state.entries, filter),
+      }
+    }),
 }))

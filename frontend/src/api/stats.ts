@@ -6,5 +6,5 @@ import type { DashboardStats, ProjectStats } from '../types/api'
 
 export const statsApi = {
   getSummary: () => apiClient.get<DashboardStats>('/stats/summary'),
-  getProjects: () => apiClient.get<{ projects: ProjectStats[] }>('/stats/projects'),
+  getProjects: () => apiClient.get<ProjectStats[]>('/stats/projects'),
 }

@@ -189,10 +189,10 @@ test('dashboard loads and displays summary', async ({ page }) => {
 });
 ```
 
-- [ ] **Step 4: Verify E2E Test execution (Failing without server)**
+- [ ] **Step 4: Verify E2E Test execution (Passing with webServer)**
 
 Run: `cd frontend && npx playwright test e2e/dashboard.spec.ts ; cd ..`
-Expected: Fails because the server is not running yet.
+Expected: **PASS**. Playwright will automatically start the server using the `webServer` configuration.
 
 - [ ] **Step 5: Run tests against the running server (Pass)**
 
@@ -211,4 +211,6 @@ Expected: PASS
 ```bash
 git add frontend/package.json frontend/package-lock.json frontend/playwright.config.ts frontend/e2e/dashboard.spec.ts
 git commit -m "test: add playwright E2E test for dashboard"
+```
+mmit -m "test: add playwright E2E test for dashboard"
 ```

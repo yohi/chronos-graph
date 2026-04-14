@@ -42,14 +42,28 @@ describe('apiClient timeout and signals', () => {
   })
 
   it('throws "API Request Timeout" on timeout', async () => {
-    // Mock fetch to hang
-    vi.mocked(window.fetch).mockImplementation(() => new Promise(() => {}))
+    vi.useFakeTimers()
     
-    // We use a shorter timeout for testing if possible, but here we'll mock the AbortError
-    vi.mocked(window.fetch).mockRejectedValueOnce(Object.assign(new Error('The user aborted a request.'), { name: 'AbortError' }))
+    // Mock fetch to hang and listen to signal
+    vi.mocked(window.fetch).mockImplementation((_url, init?: RequestInit) => {
+      return new Promise((_, reject) => {
+        if (init?.signal) {
+          init.signal.addEventListener('abort', () => {
+            const err = new Error('The user aborted a request.')
+            err.name = 'AbortError'
+            reject(err)
+          })
+        }
+      })
+    })
 
-    const promise = apiClient.get('status')
+    const promise = apiClient.get('status', { timeout: 100 })
+    
+    // Fast-forward time
+    vi.advanceTimersByTime(150)
+    
     await expect(promise).rejects.toThrow('API Request Timeout')
+    vi.useRealTimers()
   })
 
   it('relays external AbortSignal', async () => {
@@ -75,6 +89,12 @@ describe('apiClient timeout and signals', () => {
     })
 
     const promise = apiClient.get('status', { signal: controller.signal })
+    controller.abort()
+
+    await expect(promise).rejects.toHaveProperty('name', 'AbortError')
+  })
+})
+se = apiClient.get('status', { signal: controller.signal })
     controller.abort()
 
     await expect(promise).rejects.toHaveProperty('name', 'AbortError')

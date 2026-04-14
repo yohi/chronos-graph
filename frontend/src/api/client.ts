@@ -23,7 +23,16 @@ export class ApiError extends Error {
  * Validates the request path for security.
  */
 export function getValidatedPath(path: string): string {
-  if (path.includes('..') || path.includes('./')) {
+  let decodedPath: string
+  try {
+    decodedPath = decodeURIComponent(path)
+  } catch {
+    throw new Error('Security Error: Malformed URI component in path')
+  }
+
+  // Reject segments that indicate traversal or relative references
+  const segments = decodedPath.split(/[/\\]/)
+  if (segments.some(s => s === '..' || s === '.')) {
     throw new Error('Security Error: Invalid path segments (traversal or relative paths are not allowed)')
   }
 

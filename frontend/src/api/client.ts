@@ -22,18 +22,27 @@ export class ApiError extends Error {
 /**
  * Validates the request path for security.
  */
-function getValidatedPath(path: string): string {
-  if (path.includes('..') || path.includes('./')) {
-    throw new Error('Security Error: Invalid path segments')
+export function getValidatedPath(path: string): string {
+  let decodedPath: string
+  try {
+    decodedPath = decodeURIComponent(path)
+  } catch {
+    throw new Error('Security Error: Malformed URI component in path')
   }
 
-  const cleanPath = path.replace(/^\/+/, '')
-  // Allow alphanumeric, /, _, ., -, and query/fragment characters: ?, &, =, %, +, #
-  if (!/^[a-zA-Z0-9_/.\-?&=%+#]*$/.test(cleanPath)) {
-    throw new Error('Security Error: Invalid characters in path')
+  // Reject segments that indicate traversal or relative references
+  const segments = decodedPath.split(/[/\\]/)
+  if (segments.some(s => s === '..' || s === '.')) {
+    throw new Error('Security Error: Invalid path segments (traversal or relative paths are not allowed)')
   }
 
-  return cleanPath
+  // Apply character whitelist and fragment checks against the DECODED value
+  // to prevent bypass via percent-encoding.
+  if (decodedPath.includes('#') || !/^[a-zA-Z0-9_/.\-?&=%+]*$/.test(decodedPath)) {
+    throw new Error('Security Error: Invalid characters or fragments in path')
+  }
+
+  return path.replace(/^\/+/, '')
 }
 
 async function handleResponse<T>(res: Response): Promise<T> {
@@ -49,7 +58,7 @@ async function handleResponse<T>(res: Response): Promise<T> {
   return res.json()
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit & { timeout?: number }): Promise<T> {
   const cleanPath = getValidatedPath(path)
   const storedBase = localStorage.getItem('chronos-api-base-url')
   const base = normalizeApiBaseUrl(storedBase)
@@ -71,25 +80,69 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   target.pathname = basePath + pathPart
   target.search = searchPart
   
-  const headers = { ...(init?.headers || {}) } as Record<string, string>
+  const requestHeaders = new Headers(init?.headers)
   
   // Only add default JSON Content-Type if body is present and not already set
-  const hasContentType = Object.keys(headers).some(k => k.toLowerCase() === 'content-type')
-  if (init?.body && !hasContentType) {
-    headers['Content-Type'] = 'application/json'
+  if (init?.body && !requestHeaders.has('Content-Type')) {
+    requestHeaders.set('Content-Type', 'application/json')
   }
 
-  // Use window.fetch to isolate from local scope and satisfy security scanners
-  const res = await window.fetch(target.href, {
-    ...init,
-    headers,
-  })
+  const headers = Object.fromEntries(requestHeaders.entries())
 
-  return handleResponse<T>(res)
+  // Setup AbortController for timeout
+  let timedOut = false
+  const controller = new AbortController()
+
+  // Handle immediate external abort before starting timeout
+  if (init?.signal?.aborted) {
+    controller.abort()
+  }
+
+  const timeoutId = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, init?.timeout ?? 30000)
+
+  // Use AbortSignal.any to combine timeout signal and external signal if available
+  let signal: AbortSignal
+  if (init?.signal && 'any' in AbortSignal) {
+    signal = (AbortSignal as typeof AbortSignal & { any: (signals: AbortSignal[]) => AbortSignal }).any([
+      controller.signal,
+      init.signal,
+    ])
+  } else if (init?.signal) {
+    // Fallback for environments without AbortSignal.any
+    init.signal.addEventListener('abort', () => controller.abort(), { once: true })
+    signal = controller.signal
+  } else {
+    signal = controller.signal
+  }
+
+  try {
+    // Use window.fetch to isolate from local scope and satisfy security scanners
+    const res = await window.fetch(target.href, {
+      ...init,
+      headers,
+      signal,
+    })
+
+    return await handleResponse<T>(res)
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      if (timedOut) {
+        throw new Error('API Request Timeout')
+      }
+      // Re-throw if it was external cancellation or immediate abort
+      throw error
+    }
+    throw error
+  } finally {
+    clearTimeout(timeoutId)
+  }
 }
 
 export const apiClient = {
-  get: <T>(path: string) => request<T>(path),
-  post: <T>(path: string, body: unknown) =>
-    request<T>(path, { method: 'POST', body: JSON.stringify(body) }),
+  get: <T>(path: string, init?: RequestInit & { timeout?: number }) => request<T>(path, init),
+  post: <T>(path: string, body: unknown, init?: RequestInit & { timeout?: number }) =>
+    request<T>(path, { ...init, method: 'POST', body: JSON.stringify(body) }),
 }

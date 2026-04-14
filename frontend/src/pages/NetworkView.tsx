@@ -12,7 +12,7 @@ export default function NetworkView() {
   const { layoutData, loading, error, fetchLayout, setSelectedNode } = useGraphStore()
 
   useEffect(() => {
-    fetchLayout({ limit: 100 })
+    fetchLayout()
   }, [fetchLayout])
 
   const buildGraph = useCallback(() => {
@@ -107,7 +107,7 @@ export default function NetworkView() {
         <div className="text-sm text-gray-500">
           {layoutData
             ? `Showing ${layoutData.returnedNodes ?? layoutData.elements.nodes.length} / ${layoutData.totalNodes} memories`
-            : 'Showing top 100 memories by importance'}
+            : 'Showing top 500 memories by importance'}
         </div>
       </div>
 

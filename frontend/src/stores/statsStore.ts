@@ -10,6 +10,7 @@ interface StatsState {
   projects: ProjectStats[]
   loading: boolean
   error: string | null
+  pendingRequests: number
   fetchSummary: () => Promise<void>
   fetchProjects: () => Promise<void>
 }
@@ -19,24 +20,35 @@ export const useStatsStore = create<StatsState>((set) => ({
   projects: [],
   loading: false,
   error: null,
+  pendingRequests: 0,
 
   fetchSummary: async () => {
-    set({ loading: true, error: null })
+    set((state) => ({ pendingRequests: state.pendingRequests + 1, loading: true, error: null }))
     try {
       const summary = await statsApi.getSummary()
-      set({ summary, loading: false })
+      set({ summary })
     } catch (err) {
-      set({ error: String(err), loading: false })
+      set({ error: String(err) })
+    } finally {
+      set((state) => {
+        const nextPending = Math.max(0, state.pendingRequests - 1)
+        return { pendingRequests: nextPending, loading: nextPending > 0 }
+      })
     }
   },
 
   fetchProjects: async () => {
-    set({ loading: true, error: null })
+    set((state) => ({ pendingRequests: state.pendingRequests + 1, loading: true, error: null }))
     try {
-      const res = await statsApi.getProjects()
-      set({ projects: res.projects, loading: false })
+      const projects = await statsApi.getProjects()
+      set({ projects })
     } catch (err) {
-      set({ error: String(err), loading: false })
+      set({ error: String(err) })
+    } finally {
+      set((state) => {
+        const nextPending = Math.max(0, state.pendingRequests - 1)
+        return { pendingRequests: nextPending, loading: nextPending > 0 }
+      })
     }
   },
 }))

@@ -17,7 +17,7 @@ interface GraphState {
   clearSelection: () => void
 }
 
-export const useGraphStore = create<GraphState>((set) => ({
+export const useGraphStore = create<GraphState>((set, get) => ({
   layoutData: null,
   selectedNodeId: null,
   selectedNodeDetail: null,
@@ -42,7 +42,10 @@ export const useGraphStore = create<GraphState>((set) => ({
     set({ selectedNodeId: id, selectedNodeDetail: null })
     try {
       const detail = await graphApi.getMemory(id)
-      set({ selectedNodeDetail: detail })
+      // Check if the selected node ID hasn't changed while fetching
+      if (get().selectedNodeId === id) {
+        set({ selectedNodeDetail: detail })
+      }
     } catch {
       // detail is optional — keep selectedNodeId set
     }

@@ -20,7 +20,7 @@ def make_settings(**kwargs: Any) -> Settings:
         "cache_coherence_poll_interval_seconds": 5.0,
         "postgres_host": "localhost",
         "postgres_password": "test",
-        "postgres_port": 5432,
+        "postgres_port": 5435,
         "postgres_user": "postgres",
         "postgres_db": "testdb",
         "redis_url": "redis://localhost:6379",

@@ -6,6 +6,7 @@ import asyncio
 import logging
 import pathlib
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI, Request
@@ -125,24 +126,32 @@ def create_app(
     app.include_router(graph.router, prefix="/api/graph", tags=["graph"])
     app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
 
-    # --- SPA static file serving + fallback (design doc §3.5) ---
-    # Resolve frontend/dist relative to this file's package root.
-    _root = pathlib.Path(__file__).parent.parent.parent.parent  # repo root
-    _dist = _root / "frontend" / "dist"
+    # SPA Fallback and Static Files
+    frontend_dist = Path(__file__).parent.parent.parent.parent / "frontend" / "dist"
+    index_file = frontend_dist / "index.html"
+    assets_dir = frontend_dist / "assets"
 
-    if _dist.exists():
-        # Mount static assets (JS/CSS/images) at /assets so they are served
-        # before the catch-all route gets a chance to intercept them.
-        _assets = _dist / "assets"
-        if _assets.exists():
-            app.mount("/assets", StaticFiles(directory=str(_assets)), name="assets")
+    if not index_file.exists():
+        logger.warning(
+            "SPA build not found at %s. The frontend will not be served correctly.",
+            index_file,
+        )
 
-        # Catch-all: every GET request that is NOT /api/* or /ws/* returns
-        # index.html so that React Router can handle client-side navigation.
-        @app.get("/{full_path:path}", include_in_schema=False)
-        async def spa_fallback(request: Request, full_path: str) -> FileResponse:  # noqa: ARG001
-            """SPA fallback route — serves index.html for all non-API paths."""
-            return FileResponse(str(_dist / "index.html"))
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str) -> FileResponse:
+        """Serve the SPA for any path not matched by previous routes."""
+        from fastapi import HTTPException
+
+        if full_path == "api" or full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API route not found")
+
+        if index_file.exists():
+            return FileResponse(str(index_file))
+
+        raise HTTPException(status_code=404, detail="SPA build not found")
 
     return app
 

@@ -66,12 +66,12 @@ export interface MemoryDetail {
   id: string
   content: string
   memoryType: 'episodic' | 'semantic' | 'procedural'
-  importanceScore: number
+  importance: number
   project?: string
   tags?: string[]
   accessCount: number
   createdAt: string
-  updatedAt: string
+  updatedAt?: string
 }
 
 // --- System Config ---

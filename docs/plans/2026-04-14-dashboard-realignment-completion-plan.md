@@ -131,7 +131,7 @@ git commit -m "feat: add chronos-dashboard service to docker compose"
 
 ---
 
-### Task 4: Introduce Playwright E2E Tests
+## Task 4: Introduce Playwright E2E Tests
 
 **Files:**
 - Create: `frontend/playwright.config.ts`

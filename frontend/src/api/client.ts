@@ -22,16 +22,16 @@ export class ApiError extends Error {
 /**
  * Validates the request path for security.
  */
-function getValidatedPath(path: string): string {
+export function getValidatedPath(path: string): string {
   if (path.includes('..') || path.includes('./')) {
-    throw new Error('Security Error: Invalid path segments')
+    throw new Error('Security Error: Invalid path segments (traversal or relative paths are not allowed)')
   }
 
   const cleanPath = path.replace(/^\/+/, '')
   // Allow alphanumeric, /, _, ., -, and query characters: ?, &, =, %, +
-  // Fragments (#) are disallowed in API paths.
-  if (!/^[a-zA-Z0-9_/.\-?&=%+]*$/.test(cleanPath)) {
-    throw new Error('Security Error: Invalid characters in path (fragments are not allowed)')
+  // Fragments (#) are strictly disallowed in API paths.
+  if (cleanPath.includes('#') || !/^[a-zA-Z0-9_/.\-?&=%+]*$/.test(cleanPath)) {
+    throw new Error('Security Error: Invalid characters in path (fragments and special characters are not allowed)')
   }
 
   return cleanPath
@@ -80,18 +80,21 @@ async function request<T>(path: string, init?: RequestInit & { timeout?: number 
     headers['Content-Type'] = 'application/json'
   }
 
-  // Setup AbortController for timeout and signal relay
+  // Setup AbortController for timeout
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), init?.timeout || 30000)
+  const timeoutId = setTimeout(() => controller.abort(), init?.timeout ?? 30000)
 
-  // Relay external signal if provided
-  const onExternalAbort = () => controller.abort()
-  if (init?.signal) {
-    if (init.signal.aborted) {
-      controller.abort()
-    } else {
-      init.signal.addEventListener('abort', onExternalAbort)
-    }
+  // Use AbortSignal.any to combine timeout signal and external signal if available
+  // Polyfill for AbortSignal.any if needed (older browsers/node)
+  let signal: AbortSignal
+  if (init?.signal && 'any' in AbortSignal) {
+    signal = (AbortSignal as any).any([controller.signal, init.signal])
+  } else if (init?.signal) {
+    // Fallback for environments without AbortSignal.any
+    init.signal.addEventListener('abort', () => controller.abort(), { once: true })
+    signal = controller.signal
+  } else {
+    signal = controller.signal
   }
 
   try {
@@ -99,7 +102,7 @@ async function request<T>(path: string, init?: RequestInit & { timeout?: number 
     const res = await window.fetch(target.href, {
       ...init,
       headers,
-      signal: controller.signal,
+      signal,
     })
 
     return await handleResponse<T>(res)
@@ -113,14 +116,11 @@ async function request<T>(path: string, init?: RequestInit & { timeout?: number 
     throw error
   } finally {
     clearTimeout(timeoutId)
-    if (init?.signal) {
-      init.signal.removeEventListener('abort', onExternalAbort)
-    }
   }
 }
 
 export const apiClient = {
-  get: <T>(path: string) => request<T>(path),
-  post: <T>(path: string, body: unknown) =>
-    request<T>(path, { method: 'POST', body: JSON.stringify(body) }),
+  get: <T>(path: string, init?: RequestInit & { timeout?: number }) => request<T>(path, init),
+  post: <T>(path: string, body: unknown, init?: RequestInit & { timeout?: number }) =>
+    request<T>(path, { ...init, method: 'POST', body: JSON.stringify(body) }),
 }

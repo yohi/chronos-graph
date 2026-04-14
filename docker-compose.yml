@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: .devcontainer/Dockerfile
-    user: root
+    user: "1000:1000"
     volumes:
       - .:/workspaces/chronos-graph
     working_dir: /workspaces/chronos-graph
@@ -64,7 +64,7 @@ services:
     build:
       context: .
       dockerfile: .devcontainer/Dockerfile
-    user: root
+    user: "1000:1000"
     volumes:
       - .:/workspaces/chronos-graph
     working_dir: /workspaces/chronos-graph
@@ -72,10 +72,16 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     environment:
+      - STORAGE_BACKEND=postgres
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
+      - POSTGRES_DB=context_store
+      - POSTGRES_USER=context_store
+      - POSTGRES_PASSWORD=dev_password
       - NEO4J_URI=bolt://neo4j:7687
       - REDIS_URL=redis://redis:6379
+      - CACHE_BACKEND=redis
+      - GRAPH_ENABLED=true
       - DASHBOARD_HOST=0.0.0.0
     depends_on:
       postgres:

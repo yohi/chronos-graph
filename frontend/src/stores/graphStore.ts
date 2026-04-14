@@ -27,7 +27,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   fetchLayout: async (params = {}) => {
     set({ loading: true, error: null })
     try {
-      const layoutData = await graphApi.getLayout({ limit: 100, ...params })
+      const layoutData = await graphApi.getLayout({ limit: 500, ...params })
       set({ layoutData, loading: false })
     } catch (err) {
       set({ error: String(err), loading: false })

@@ -12,9 +12,22 @@ const getLogId = (entry: LogEntry): string => {
   return `${entry.timestamp}|${entry.level}|${entry.logger}|${entry.message}`
 }
 
+type Severity = LogEntry['level'] | 'ALL'
+const SEVERITY_LEVELS: Severity[] = ['ALL', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+
+const LEVEL_COLORS: Record<LogEntry['level'], string> = {
+  DEBUG: 'text-gray-400',
+  INFO: 'text-blue-400',
+  WARNING: 'text-yellow-400',
+  ERROR: 'text-red-400',
+  CRITICAL: 'text-red-500',
+}
+
 export default function LogExplorer() {
   const [logs, setLogs] = useState<DisplayLogEntry[]>([])
   const [status, setStatus] = useState<'connecting' | 'connected' | 'error'>('connecting')
+  const [severityFilter, setSeverityFilter] = useState<Severity>('ALL')
+  const [textFilter, setTextFilter] = useState('')
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isMountedRef = useRef(true)
@@ -26,7 +39,7 @@ export default function LogExplorer() {
     logsApi.getRecent(50)
       .then((data) => {
         if (!isMountedRef.current) return
-        
+
         // Validate and add deterministic IDs for React keys and deduplication
         const fetchedLogs: DisplayLogEntry[] = data.entries
           .map((entry) => ({
@@ -41,7 +54,7 @@ export default function LogExplorer() {
           const uniqueMap = new Map<string, DisplayLogEntry>()
           merged.forEach((item) => uniqueMap.set(item.id, item))
           const unique = Array.from(uniqueMap.values())
-          
+
           // Sort descending (latest first)
           return unique.sort(
             (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
@@ -73,7 +86,7 @@ export default function LogExplorer() {
         if (!isMountedRef.current) return
         try {
           const parsed = JSON.parse(event.data)
-          
+
           // Validation: Perform strict runtime checks (design doc §5.3)
           const isValid = (
             parsed &&
@@ -98,7 +111,7 @@ export default function LogExplorer() {
             setLogs((prev) => {
               // Quick check if already present
               if (prev.some(l => l.id === logEntry.id)) return prev
-              
+
               const merged = [logEntry, ...prev]
               return merged.slice(0, 1000)
             })
@@ -142,6 +155,12 @@ export default function LogExplorer() {
     }
   }, [])
 
+  const filteredLogs = logs.filter((log) => {
+    if (severityFilter !== 'ALL' && log.level !== severityFilter) return false
+    if (textFilter && !log.message.toLowerCase().includes(textFilter.toLowerCase())) return false
+    return true
+  })
+
   return (
     <div className="p-8 h-full flex flex-col">
       <div className="flex items-center justify-between mb-6">
@@ -154,17 +173,43 @@ export default function LogExplorer() {
         </div>
       </div>
 
+      <div className="flex items-center gap-3 mb-4" data-testid="log-filters">
+        <div className="flex items-center gap-1">
+          {SEVERITY_LEVELS.map((level) => (
+            <button
+              key={level}
+              onClick={() => setSeverityFilter(level)}
+              data-testid={`severity-filter-${level.toLowerCase()}`}
+              className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                severityFilter === level
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+              }`}
+            >
+              {level}
+            </button>
+          ))}
+        </div>
+        <input
+          type="text"
+          placeholder="Filter by message..."
+          value={textFilter}
+          onChange={(e) => setTextFilter(e.target.value)}
+          data-testid="log-text-filter"
+          className="flex-1 px-3 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      </div>
+
       <div className="flex-1 bg-gray-900 text-gray-100 rounded-lg overflow-auto font-mono text-sm p-4">
-        {logs.length === 0 ? (
-          <p className="text-gray-500 italic">Waiting for logs...</p>
+        {filteredLogs.length === 0 ? (
+          <p className="text-gray-500 italic">
+            {logs.length === 0 ? 'Waiting for logs...' : 'No logs match the current filter.'}
+          </p>
         ) : (
-          logs.map((log) => (
-            <div key={log.id} className="mb-1">
+          filteredLogs.map((log) => (
+            <div key={log.id} className="mb-1" data-testid="log-entry">
               <span className="text-gray-500">[{log.timestamp.includes('T') ? log.timestamp.split('T')[1].split('.')[0] : log.timestamp}]</span>{' '}
-              <span className={`font-bold ${
-                log.level === 'ERROR' || log.level === 'CRITICAL' ? 'text-red-400' :
-                log.level === 'WARNING' ? 'text-yellow-400' : 'text-blue-400'
-              }`}>{log.level.padEnd(8)}</span>{' '}
+              <span className={`font-bold ${LEVEL_COLORS[log.level]}`}>{log.level.padEnd(8)}</span>{' '}
               <span className="text-gray-400">[{log.logger}]</span>{' '}
               <span>{log.message}</span>
             </div>

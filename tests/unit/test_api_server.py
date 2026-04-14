@@ -56,18 +56,6 @@ def test_get_graph_layout_limit_constraints():
     assert response.status_code == 422
 
 
-def test_get_logs_limit_constraints():
-    """Verify that /api/logs/ limit has ge=1, le=1000 constraints."""
-    app = create_app()
-    client = TestClient(app, base_url="http://localhost")
-
-    response = client.get("/api/logs/?limit=0")
-    assert response.status_code == 422
-
-    response = client.get("/api/logs/?limit=1001")
-    assert response.status_code == 422
-
-
 # ---------------------------------------------------------------------------
 # Exception Handling Tests
 # ---------------------------------------------------------------------------

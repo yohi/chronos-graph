@@ -2,37 +2,25 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from context_store.dashboard.log_collector import get_log_handler
-from context_store.dashboard.schemas import LogEntry
+from context_store.dashboard.schemas import LogsRecentResponse
 from context_store.dashboard.websocket_manager import get_ws_manager
 
 router = APIRouter()
 
 
-@router.get("/recent", response_model=list[LogEntry])
+@router.get("/recent", response_model=LogsRecentResponse)
 async def get_recent_logs(
     limit: int = Query(100, ge=1, le=1000),
-) -> list[LogEntry]:
+) -> LogsRecentResponse:
     """Get recent log entries from the in-memory collector.
 
     This endpoint returns logs collected since the dashboard started.
     """
     handler = get_log_handler()
-    return handler.get_recent(limit=limit)
-
-
-@router.get("/", response_model=list[LogEntry])
-async def get_logs(
-    request: Request,
-    limit: int = Query(100, ge=1, le=1000),
-) -> list[LogEntry]:
-    """Get recent system logs."""
-    from context_store.dashboard.services import DashboardService
-
-    service: DashboardService = request.app.state.service
-    return await service.get_recent_logs(limit=limit)
+    return LogsRecentResponse(entries=handler.get_recent(limit=limit))
 
 
 @router.websocket("/ws")

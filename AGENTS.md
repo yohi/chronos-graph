@@ -65,3 +65,24 @@ uv run pytest tests/unit/ -v  # テスト実行
 - `Run MyPy` — mypy src/
 - `Run Full Lint` — ruff + mypy
 - `Run All Checks (CI)` — lint + tests
+
+**Frontend (Dashboard) commands**:
+```bash
+cd frontend
+npm install            # 依存関係インストール
+npx tsc --noEmit       # 型チェック
+npm run lint           # ESLint
+npm run build          # プロダクションビルド
+npx playwright test    # E2E テスト（webServer 自動起動）
+```
+
+## Dashboard
+
+Read-Only 可視化ダッシュボード。MCP サーバーとは独立した別プロセスで動作する。
+
+- **起動**: `uv run python -m context_store.dashboard.api_server`（DB 初期化済みであること）
+- **Docker**: `docker compose up -d chronos-dashboard`
+- **URL**: `http://localhost:8000`
+- **ソース**: バックエンド `src/context_store/dashboard/`、フロントエンド `frontend/`
+- **Read-Only**: SQLite は `file:...?mode=ro` URI、Neo4j は `READ_ACCESS` セッションで接続
+- **E2E テスト**: `frontend/e2e/dashboard.spec.ts`（Playwright + axe-core a11y）

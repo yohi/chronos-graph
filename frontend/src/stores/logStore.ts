@@ -41,7 +41,7 @@ export const useLogStore = create<LogState>((set, get) => ({
 
     try {
       const res = await logsApi.getRecent(limit)
-      
+
       // Guard: only apply if this is still the latest request
       if (get().lastFetchId !== fetchId) return
 

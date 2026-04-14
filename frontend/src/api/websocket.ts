@@ -10,13 +10,13 @@ function getWsBase(): string {
   try {
     const stored = localStorage.getItem('chronos-api-base-url')
     const validatedBase = normalizeApiBaseUrl(stored)
-    
+
     if (validatedBase === '/api') {
       return DEFAULT_WS_BASE
     }
 
     // Convert http(s):// → ws(s)://
-    return validatedBase.replace(/^http/, 'ws').replace(/\/api$/, '')
+    return validatedBase.replace(/^http/, 'ws').replace(/\/api\/?$/, '')
   } catch {
     // localStorage unavailable
   }

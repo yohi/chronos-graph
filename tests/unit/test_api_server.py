@@ -85,3 +85,48 @@ async def test_traverse_graph_503_on_runtime_error():
 
     response = client.post("/api/graph/test-id/traverse", json={"max_depth": 1})
     assert response.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# SPA Fallback & Security Tests
+# ---------------------------------------------------------------------------
+
+
+def test_spa_fallback_path_traversal(tmp_path):
+    """Verify that SPA fallback prevents path traversal."""
+    # Create a mock dist directory
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("index_content")
+    (dist / "favicon.ico").write_text("icon_content")
+
+    # Create a sensitive file outside dist
+    secret = tmp_path / "secret.txt"
+    secret.write_text("secret_content")
+
+    app = create_app(frontend_dist_override=dist)
+    client = TestClient(app, base_url="http://localhost")
+
+    # 1. Normal file request should work
+    response = client.get("/favicon.ico")
+    assert response.status_code == 200
+    assert response.text == "icon_content"
+
+    # 2. Non-existent file should fallback to index.html
+    response = client.get("/no-exist.html")
+    assert response.status_code == 200
+    assert response.text == "index_content"
+
+    # 3. Path traversal attempt should NOT return the secret file
+    # Starlette/FastAPI will decode %2e%2e/%2e%2e to ../../
+    # We test if it escapes the dist root.
+    response = client.get("/../secret.txt")
+    # It should either return index.html (fallback) or 404/400, but NOT the secret.
+    # In our implementation, if it's not relative to dist, it passes through to index_file check.
+    assert response.text != "secret_content"
+    assert response.text == "index_content"
+
+    # Test with double dots encoded
+    response = client.get("/%2e%2e/secret.txt")
+    assert response.text != "secret_content"
+    assert response.text == "index_content"

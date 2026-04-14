@@ -62,7 +62,7 @@ async function request<T>(path: string, init?: RequestInit & { timeout?: number 
   const cleanPath = getValidatedPath(path)
   const storedBase = localStorage.getItem('chronos-api-base-url')
   const base = normalizeApiBaseUrl(storedBase)
-  
+
   const urlObj = new URL(base, window.location.origin)
   verifyOrigin(urlObj)
 
@@ -74,14 +74,14 @@ async function request<T>(path: string, init?: RequestInit & { timeout?: number 
   const target = new URL(window.location.origin)
   target.protocol = urlObj.protocol
   target.host = urlObj.host
-  
+
   // Ensure base path and relative path are joined correctly
   const basePath = urlObj.pathname.endsWith('/') ? urlObj.pathname : urlObj.pathname + '/'
   target.pathname = basePath + pathPart
   target.search = searchPart
-  
+
   const requestHeaders = new Headers(init?.headers)
-  
+
   // Only add default JSON Content-Type if body is present and not already set
   if (init?.body && !requestHeaders.has('Content-Type')) {
     requestHeaders.set('Content-Type', 'application/json')

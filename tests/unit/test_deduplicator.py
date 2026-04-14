@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -33,7 +34,7 @@ def _make_scored_memory(memory: Memory, score: float) -> ScoredMemory:
     return ScoredMemory(memory=memory, score=score)
 
 
-def _make_storage_adapter(search_results: list[ScoredMemory]) -> StorageAdapter:
+def _make_storage_adapter(search_results: list[ScoredMemory]) -> Any:
     """モックの StorageAdapter を作成する。"""
     adapter = MagicMock(spec=StorageAdapter)
     adapter.vector_search = AsyncMock(return_value=search_results)
@@ -219,6 +220,7 @@ async def test_deduplicator_uses_highest_similarity() -> None:
     result = await deduplicator.deduplicate(new_memory)
 
     assert result.action == DeduplicationAction.REPLACE
+    assert result.existing_memory is not None
     assert result.existing_memory.id == existing_high.id
 
 

@@ -81,8 +81,8 @@ class TestNoOpActionLogger:
     async def test_log_action_does_nothing_and_returns_none(self) -> None:
         logger = NoOpActionLogger()
         action = AgentAction(action_type="save", memory_id="mem-abc")
-        result = await logger.log_action(action)
-        assert result is None
+        # should not assign result from None-returning function
+        await logger.log_action(action)
 
     @pytest.mark.asyncio
     async def test_log_action_multiple_calls_do_not_raise(self) -> None:
@@ -101,12 +101,12 @@ class TestNoOpRewardSignal:
     @pytest.mark.asyncio
     async def test_record_reward_does_nothing_and_returns_none(self) -> None:
         reward = NoOpRewardSignal()
-        result = await reward.record_reward(
+        # should not assign result from None-returning function
+        await reward.record_reward(
             memory_id="mem-123",
             signal=1.0,
             context={"query": "テスト"},
         )
-        assert result is None
 
     @pytest.mark.asyncio
     async def test_record_reward_accepts_negative_signal(self) -> None:

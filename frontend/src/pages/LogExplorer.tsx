@@ -58,14 +58,31 @@ export default function LogExplorer() {
       socket.onmessage = (event) => {
         if (!isMountedRef.current) return
         try {
-          const entry = JSON.parse(event.data) as LogEntry
-          // Validation: Ensure required fields are present
-          if (entry && entry.timestamp && entry.message && entry.level) {
+          const parsed = JSON.parse(event.data)
+          
+          // Validation: Perform strict runtime checks (design doc §5.3)
+          const isValid = (
+            parsed &&
+            typeof parsed.timestamp === 'string' &&
+            typeof parsed.message === 'string' &&
+            ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'].includes(parsed.level) &&
+            typeof (parsed.logger ?? '') === 'string'
+          )
+
+          if (isValid) {
+            const entry: LogEntry = {
+              timestamp: parsed.timestamp,
+              level: parsed.level as LogEntry['level'],
+              message: parsed.message,
+              logger: parsed.logger ?? 'unknown'
+            }
             const logEntry: DisplayLogEntry = {
               ...entry,
               id: crypto.randomUUID()
             }
             setLogs((prev) => [logEntry, ...prev].slice(0, 1000))
+          } else {
+            console.warn('Dropped invalid log entry from WebSocket:', parsed)
           }
         } catch (err) {
           console.warn('Failed to parse WebSocket message:', err)

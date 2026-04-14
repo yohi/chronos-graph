@@ -1,5 +1,7 @@
 # ChronosGraph: 記憶保存戦略アーキテクチャ設計
 
+**レビュー回数: 2回目**
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:writing-plans to create
 > an implementation plan from this spec before writing any code.
 
@@ -27,6 +29,7 @@ ChronosGraph の記憶形成において、以下の2軸を統合するハイブ
 | ジョブ管理 | `TaskDispatcher` 経由の非同期ジョブ | テスト時に同期実行を注入可能 |
 | トリガー管理 | クライアント側が全責任 | サーバーで会話ターン追跡は不適切 |
 | RL フック | 既存 Protocol + NoOp を維持（実装は将来フェーズ） | 学習ループ本体が未導入のため YAGNI |
+| 逐次返却方式 | `ingest_stream()` AsyncGenerator + `ingest()` ラッパー | リアルタイム進捗更新を実現しつつ既存 API の後方互換性を維持 |
 | ベストエフォート書き込み | 共通ユーティリティ `best_effort_write` に集約 | DRY: 同一パターンの散在を防止 |
 | システムプロンプト | `docs/` 配下のドキュメント | コードベースへの影響なし |
 
@@ -83,13 +86,14 @@ Orchestrator.session_flush()
 # Background:
 BatchProcessor.process()
   ├─ JobManager.mark_running(job_id)
-  ├─ results = IngestionPipeline.ingest(conversation_log, source_type=CONVERSATION)
-  │   ├─ Chunker._split_conversation() → Q&A pair splitting
-  │   ├─ Classifier.classify() → EPISODIC (default)
-  │   ├─ EmbeddingProvider.embed() → vectorization
-  │   ├─ Deduplicator.deduplicate() → dedup check (>= 0.90 → SUPERSEDES)
-  │   └─ StorageAdapter.save_memory() → persist (per-chunk commit)
-  ├─ for result in results: JobManager.update_progress(job_id, result.memory_id)
+  ├─ async for result in IngestionPipeline.ingest_stream(...):
+  │   │  # 各チャンクが処理完了するたびに yield される
+  │   │  ├─ Chunker._split_conversation() → Q&A pair splitting
+  │   │  ├─ Classifier.classify() → EPISODIC (default)
+  │   │  ├─ EmbeddingProvider.embed() → vectorization
+  │   │  ├─ Deduplicator.deduplicate() → dedup check (>= 0.90 → SUPERSEDES)
+  │   │  └─ StorageAdapter.save_memory() → persist (per-chunk commit)
+  │   └─ JobManager.update_progress(job_id, result.memory_id)  ← リアルタイム更新
   └─ JobManager.mark_completed(job_id)
 ```
 
@@ -200,14 +204,15 @@ class BatchProcessor:
 
         Flow:
         1. JobManager.mark_running(job_id)
-        2. results = IngestionPipeline.ingest() with source_type=CONVERSATION
-        3. Iterate over results: JobManager.update_progress(job_id, result.memory_id)
-        4. JobManager.mark_completed(job_id) on success
-        5. JobManager.mark_failed(job_id, error) on exception (after logging)
+        2. async for result in IngestionPipeline.ingest_stream():
+             JobManager.update_progress(job_id, result.memory_id)
+           → チャンク処理完了のたびにリアルタイムで進捗更新
+        3. JobManager.mark_completed(job_id) on success
+        4. JobManager.mark_failed(job_id, error) on exception (after logging)
 
-        Note: Progress updates happen AFTER ingest() returns (not via per-chunk
-        callback), because IngestionPipeline.ingest() processes all chunks
-        internally and returns the full result list.
+        ingest_stream() は AsyncGenerator[IngestionResult, None] を返し、
+        各チャンクの処理が完了するたびに yield する。これにより
+        session_flush_status で中間進捗をリアルタイムに確認可能。
         """
 ```
 
@@ -373,7 +378,118 @@ async def best_effort_write(
 - Instantiate `JobManager`, `BatchProcessor`, `AsyncTaskDispatcher`
 - Pass `TaskDispatcher` to Orchestrator
 
-### 6.4 ingestion/pipeline.py (IngestionResult / _process_chunk)
+### 6.4 ingestion/pipeline.py (ingest_stream / IngestionResult / _process_chunk)
+
+#### 6.4.1 ingest_stream() — AsyncGenerator によるチャンク逐次返却
+
+既存の `ingest()` が全チャンクを処理後にまとめて `list[IngestionResult]` を返す設計を改め、
+チャンク処理完了のたびに `yield` する `ingest_stream()` を導入する。
+
+```python
+async def ingest_stream(
+    self,
+    source: str,
+    *,
+    source_type: SourceType = SourceType.MANUAL,
+    metadata: dict[str, Any] | None = None,
+) -> AsyncGenerator[IngestionResult, None]:
+    """コンテンツを取り込み、チャンクごとに逐次 yield する。
+
+    各チャンクの処理（分類→埋め込み→重複排除→永続化）が完了するたびに
+    IngestionResult を yield する。呼び出し元は async for でリアルタイムに
+    結果を受け取り、進捗更新や中間処理を実行できる。
+
+    Args:
+        source: コンテンツ本文または URL
+        source_type: ソースタイプ
+        metadata: 追加メタデータ（project, session_id など）
+
+    Yields:
+        IngestionResult: 各チャンクの処理結果
+
+    Raises:
+        RuntimeError: 全チャンクが失敗した場合
+    """
+    meta = metadata or {}
+
+    if source_type == SourceType.URL:
+        raw_contents = await self._fetch_url_content(source)
+    elif source_type == SourceType.CONVERSATION:
+        raw_contents = await self._conversation_adapter.adapt(source, metadata=meta)
+    else:
+        raw_contents = [RawContent(content=source, source_type=source_type, metadata=meta)]
+
+    document_memories: dict[str, list[Memory]] = {}
+    failed_chunks: list[dict[str, Any]] = []
+    total_chunks = 0
+    yielded_count = 0
+
+    for raw in raw_contents:
+        chunks = list(self._chunker.chunk(raw))
+        total_chunks += len(chunks)
+
+        for chunk in chunks:
+            document_id = str(chunk.metadata.get("document_id", ""))
+            prior_document_memories = document_memories.get(document_id, [])
+            content_hash = self._compute_hash(chunk.content)
+            try:
+                result = await self._process_chunk(
+                    chunk,
+                    base_metadata=meta,
+                    prior_document_memories=prior_document_memories,
+                )
+                if result:
+                    yielded_count += 1
+                    if document_id and result.persisted_memory is not None:
+                        document_memories.setdefault(document_id, []).append(
+                            result.persisted_memory
+                        )
+                    yield result  # チャンク完了のたびに逐次返却
+            except Exception as e:
+                logger.error(
+                    "Chunk 処理失敗 (content_hash=%s, doc_id=%s): %s",
+                    content_hash[:8], document_id, e, exc_info=True,
+                )
+                failed_chunks.append({
+                    "content_hash": content_hash,
+                    "document_id": document_id,
+                    "error": str(e),
+                })
+
+    if total_chunks > 0 and yielded_count == 0:
+        raise RuntimeError(
+            f"Ingestion 全件失敗 ({len(failed_chunks)}/{total_chunks} chunks). "
+            f"Failures: {failed_chunks}"
+        )
+```
+
+#### 6.4.2 ingest() — 既存インターフェースの維持（DRY ラッパー）
+
+既存の `ingest()` は `ingest_stream()` を内部利用するラッパーとして再実装する。
+これにより、`memory_save` 等の既存呼び出し元は変更不要。
+
+```python
+async def ingest(
+    self,
+    source: str,
+    *,
+    source_type: SourceType = SourceType.MANUAL,
+    metadata: dict[str, Any] | None = None,
+) -> list[IngestionResult]:
+    """コンテンツを取り込んで永続化する（一括返却）。
+
+    内部的に ingest_stream() を使用し、全結果を収集して返す。
+    既存の呼び出し元との後方互換性を維持する。
+    """
+    return [
+        result
+        async for result in self.ingest_stream(
+            source, source_type=source_type, metadata=metadata
+        )
+    ]
+```
+
+#### 6.4.3 IngestionResult / _process_chunk の変更
 
 - `IngestionResult` に `embedding_completed_at: datetime` フィールドを追加
 - `_process_chunk()` 内で `embed()` 完了直後にタイムスタンプを記録し、`IngestionResult` に格納
@@ -437,6 +553,9 @@ All tests MUST be executed within the devcontainer environment.
 4. **Transaction boundary (IngestionResult ベースの検証):** `IngestionPipeline._process_chunk()` の戻り値 `IngestionResult` に `embedding_completed_at` タイムスタンプを含め、`embedding_completed_at < persisted_at` をアサートすることで、モック順序に依存せず embed → save_memory の実行順序を検証。並行実行時は複数チャンクの `IngestionResult` を収集し、各結果のタイムスタンプの一貫性を検証
 5. **Graceful shutdown:** `cancel_all()` cancels running jobs within timeout
 6. **Chunk failure resilience:** `best_effort_write` 経由で失敗チャンクをスキップし、部分的な失敗がジョブ全体を失敗させないことを検証
+7. **ingest_stream() リアルタイム進捗:** `BatchProcessor.process()` 内で `ingest_stream()` の各 yield ごとに `JobManager.update_progress()` が呼ばれ、`session_flush_status` で中間進捗（`done: 1/5`, `done: 2/5`, ...）が確認できることを検証
+8. **ingest_stream() モック容易性:** テスト用の `AsyncGenerator` をモックとして注入し、yield タイミングと進捗更新の対応関係を決定論的に検証。パターン: `async def mock_stream(): yield result1; yield result2`
+9. **ingest() 後方互換性:** `ingest_stream()` ラッパーとしての `ingest()` が、既存テストと同一の `list[IngestionResult]` を返すことを検証
 
 ---
 

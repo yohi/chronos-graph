@@ -1,15 +1,19 @@
 import { useEffect, useState, useRef } from 'react'
+import { logsApi } from '../api/logs'
+import { buildWsUrl } from '../api/websocket'
+import type { LogEntry } from '../types/api'
 
-interface LogEntry {
+interface DisplayLogEntry extends LogEntry {
   id: string
-  timestamp: string
-  level: string
-  logger: string
-  message: string
+}
+
+// Helper to generate a deterministic ID for a log entry to enable deduplication
+const getLogId = (entry: LogEntry): string => {
+  return `${entry.timestamp}|${entry.level}|${entry.logger}|${entry.message}`
 }
 
 export default function LogExplorer() {
-  const [logs, setLogs] = useState<LogEntry[]>([])
+  const [logs, setLogs] = useState<DisplayLogEntry[]>([])
   const [status, setStatus] = useState<'connecting' | 'connected' | 'error'>('connecting')
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -18,55 +22,44 @@ export default function LogExplorer() {
   useEffect(() => {
     isMountedRef.current = true
 
-    // 過去のログを取得 (最新が上に来るようにソート/リバースを確認)
-    fetch('/api/logs/recent?limit=50')
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`)
-        return res.json()
-      })
-      .then((data: unknown) => {
+    // Fetch past logs via logsApi (which uses apiClient and respects localStorage override)
+    logsApi.getRecent(50)
+      .then((data) => {
         if (!isMountedRef.current) return
-        if (!Array.isArray(data)) {
-          console.error('Expected array of logs, got:', typeof data)
-          setLogs([])
-          return
-        }
-
-        // Validate and add unique IDs if missing
-        const validLogs: LogEntry[] = data
-          .filter((entry: unknown): entry is LogEntry => {
-            if (!entry || typeof entry !== 'object') return false
-            const e = entry as Record<string, unknown>
-            return (
-              typeof e.timestamp === 'string' &&
-              typeof e.message === 'string' &&
-              typeof e.level === 'string' &&
-              typeof e.logger === 'string'
-            )
-          })
-          .map((entry, idx) => ({
+        
+        // Validate and add deterministic IDs for React keys and deduplication
+        const fetchedLogs: DisplayLogEntry[] = data.entries
+          .map((entry) => ({
             ...entry,
-            id: entry.id || `${entry.timestamp}-${entry.logger}-${idx}`
+            id: getLogId(entry)
           }))
 
-        // 常に最新が先頭になるように並び替える
-        const sorted = [...validLogs].sort(
-          (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-        )
-        setLogs(sorted)
+        // Merge with existing logs (e.g. from WS received during fetch)
+        setLogs((prev) => {
+          const merged = [...prev, ...fetchedLogs]
+          // Deduplicate by ID
+          const uniqueMap = new Map<string, DisplayLogEntry>()
+          merged.forEach((item) => uniqueMap.set(item.id, item))
+          const unique = Array.from(uniqueMap.values())
+          
+          // Sort descending (latest first)
+          return unique.sort(
+            (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+          ).slice(0, 1000)
+        })
       })
       .catch((err) => {
         console.error('Failed to fetch recent logs:', err)
-        if (isMountedRef.current) setLogs([])
+        // Keep existing logs (might have WS data)
       })
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const host = window.location.host
-    const wsUrl = `${protocol}//${host}/api/logs/ws`
+    // Use buildWsUrl to respect localStorage override
+    const wsUrl = buildWsUrl('/api/logs/ws')
 
     const connect = () => {
       if (!isMountedRef.current) return
 
+      setStatus('connecting')
       const socket = new WebSocket(wsUrl)
       wsRef.current = socket
 
@@ -79,22 +72,38 @@ export default function LogExplorer() {
       socket.onmessage = (event) => {
         if (!isMountedRef.current) return
         try {
-          const entry = JSON.parse(event.data)
-          // 厳密なバリデーション: 全ての必須フィールドが文字列であることを確認
-          if (
-            entry &&
-            typeof entry.timestamp === 'string' &&
-            typeof entry.message === 'string' &&
-            typeof entry.level === 'string' &&
-            typeof entry.logger === 'string'
-          ) {
-            const logEntry: LogEntry = {
-              ...entry,
-              id: entry.id || crypto.randomUUID()
+          const parsed = JSON.parse(event.data)
+          
+          // Validation: Perform strict runtime checks (design doc §5.3)
+          const isValid = (
+            parsed &&
+            typeof parsed.timestamp === 'string' &&
+            typeof parsed.message === 'string' &&
+            ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'].includes(parsed.level) &&
+            typeof (parsed.logger ?? '') === 'string'
+          )
+
+          if (isValid) {
+            const entry: LogEntry = {
+              timestamp: parsed.timestamp,
+              level: parsed.level as LogEntry['level'],
+              message: parsed.message,
+              logger: parsed.logger ?? 'unknown'
             }
-            setLogs((prev) => [logEntry, ...prev].slice(0, 1000))
+            const logEntry: DisplayLogEntry = {
+              ...entry,
+              id: getLogId(entry)
+            }
+            // Use functional update to merge and deduplicate even for WS messages
+            setLogs((prev) => {
+              // Quick check if already present
+              if (prev.some(l => l.id === logEntry.id)) return prev
+              
+              const merged = [logEntry, ...prev]
+              return merged.slice(0, 1000)
+            })
           } else {
-            console.warn('Received invalid log entry format via WS:', entry)
+            console.warn('Dropped invalid log entry from WebSocket:', parsed)
           }
         } catch (err) {
           console.warn('Failed to parse WebSocket message:', err)
@@ -104,7 +113,12 @@ export default function LogExplorer() {
       socket.onclose = () => {
         if (isMountedRef.current) {
           setStatus('error')
-          reconnectTimerRef.current = setTimeout(connect, 3000)
+          reconnectTimerRef.current = setTimeout(() => {
+            if (isMountedRef.current) {
+              setStatus('connecting')
+              connect()
+            }
+          }, 3000)
         }
       }
 

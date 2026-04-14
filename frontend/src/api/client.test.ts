@@ -22,6 +22,12 @@ describe('getValidatedPath', () => {
     expect(() => getValidatedPath('api/status#fragment')).toThrow('Security Error: Invalid characters in path')
   })
 
+  it('rejects percent-encoded directory traversal', () => {
+    expect(() => getValidatedPath('api/%2e%2e%2fsecret')).toThrow('Security Error: Invalid path segments')
+    expect(() => getValidatedPath('api/%2E%2E%2Fsecret')).toThrow('Security Error: Invalid path segments')
+    expect(() => getValidatedPath('api/%2e%2e/secret')).toThrow('Security Error: Invalid path segments')
+  })
+
   it('rejects disallowed special characters', () => {
     expect(() => getValidatedPath('api/status;rm')).toThrow('Security Error: Invalid characters in path')
     expect(() => getValidatedPath('api/status$SHELL')).toThrow('Security Error: Invalid characters in path')
@@ -84,17 +90,10 @@ describe('apiClient timeout and signals', () => {
             reject(err)
           })
         }
-        // If not aborted, just hang (or resolve if we want to test success)
       })
     })
 
     const promise = apiClient.get('status', { signal: controller.signal })
-    controller.abort()
-
-    await expect(promise).rejects.toHaveProperty('name', 'AbortError')
-  })
-})
-se = apiClient.get('status', { signal: controller.signal })
     controller.abort()
 
     await expect(promise).rejects.toHaveProperty('name', 'AbortError')

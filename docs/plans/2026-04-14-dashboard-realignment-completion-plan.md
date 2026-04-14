@@ -13,18 +13,20 @@
 
 ---
 
-### Task 1: Fix Settings Validation and DB Connection
+## Task 1: Fix Settings Validation and DB Connection
 
 **Files:**
-- Modify: `.env`
+- Modify: `.env.example`
 
-- [ ] **Step 1: Update .env configuration**
+- [ ] **Step 1: Update configuration template**
 
-Replace `EMBEDDING_PROVIDER=openai` with `EMBEDDING_PROVIDER=local-model` and `POSTGRES_PORT=5432` with `POSTGRES_PORT=5435` in `.env`.
+Note: For local testing, ensure you copy `.env.example` to `.env` if you haven't already.
+
+Replace `EMBEDDING_PROVIDER=openai` with `EMBEDDING_PROVIDER=local-model` and `POSTGRES_PORT=5432` with `POSTGRES_PORT=5435` in `.env.example`.
 
 ```bash
-sed -i 's/EMBEDDING_PROVIDER=openai/EMBEDDING_PROVIDER=local-model/' .env
-sed -i 's/POSTGRES_PORT=5432/POSTGRES_PORT=5435/' .env
+sed -i 's/EMBEDDING_PROVIDER=openai/EMBEDDING_PROVIDER=local-model/' .env.example
+sed -i 's/POSTGRES_PORT=5432/POSTGRES_PORT=5435/' .env.example
 ```
 
 - [ ] **Step 2: Run configuration tests**
@@ -40,14 +42,16 @@ Expected: PASS without database connection errors.
 
 - [ ] **Step 4: Commit**
 
+Update `.env.example` to reflect the new default port if necessary, but **NEVER** commit the real `.env` file.
+
 ```bash
-git add .env
-git commit -m "fix: update environment configuration for local testing"
+git add .env.example
+git commit -m "docs: update env example for local testing"
 ```
 
 ---
 
-### Task 2: Build Frontend for Production
+## Task 2: Build Frontend for Production
 
 **Files:**
 - Modify: `frontend/package.json` (indirectly via install)

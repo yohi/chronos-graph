@@ -81,17 +81,28 @@ async function request<T>(path: string, init?: RequestInit & { timeout?: number 
   target.pathname = basePath + pathPart
   target.search = searchPart
   
-  const headers = { ...(init?.headers || {}) } as Record<string, string>
+  const requestHeaders = new Headers(init?.headers)
   
   // Only add default JSON Content-Type if body is present and not already set
-  const hasContentType = Object.keys(headers).some(k => k.toLowerCase() === 'content-type')
-  if (init?.body && !hasContentType) {
-    headers['Content-Type'] = 'application/json'
+  if (init?.body && !requestHeaders.has('Content-Type')) {
+    requestHeaders.set('Content-Type', 'application/json')
   }
 
+  const headers = Object.fromEntries(requestHeaders.entries())
+
   // Setup AbortController for timeout
+  let timedOut = false
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), init?.timeout ?? 30000)
+
+  // Handle immediate external abort before starting timeout
+  if (init?.signal?.aborted) {
+    controller.abort()
+  }
+
+  const timeoutId = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, init?.timeout ?? 30000)
 
   // Use AbortSignal.any to combine timeout signal and external signal if available
   let signal: AbortSignal
@@ -119,10 +130,11 @@ async function request<T>(path: string, init?: RequestInit & { timeout?: number 
     return await handleResponse<T>(res)
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
-      if (init?.signal?.aborted) {
-        throw error // Re-throw if it was external cancellation
+      if (timedOut) {
+        throw new Error('API Request Timeout')
       }
-      throw new Error('API Request Timeout')
+      // Re-throw if it was external cancellation or immediate abort
+      throw error
     }
     throw error
   } finally {

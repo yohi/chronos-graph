@@ -9,7 +9,7 @@ cytoscape.use(coseBilkent)
 export default function NetworkView() {
   const containerRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<cytoscape.Core | null>(null)
-  const { layoutData, loading, error, fetchLayout, setSelectedNode } = useGraphStore()
+  const { layoutData, loading, error, fetchLayout, setSelectedNode, selectedNodeId, selectedNodeDetail, clearSelection } = useGraphStore()
 
   useEffect(() => {
     fetchLayout()
@@ -52,6 +52,10 @@ export default function NetworkView() {
         {
           selector: 'node[memoryType="procedural"]',
           style: { 'background-color': '#F59E0B', 'text-outline-color': '#F59E0B' },
+        },
+        {
+          selector: 'node:selected',
+          style: { 'border-width': 3, 'border-color': '#F59E0B' },
         },
         {
           selector: 'edge',
@@ -119,18 +123,64 @@ export default function NetworkView() {
         </div>
       )}
 
-      <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700 relative overflow-hidden">
-        {loading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-black/50 z-10">
-            <p>Loading graph...</p>
+      <div className="flex-1 flex gap-4 overflow-hidden">
+        {/* Graph canvas */}
+        <div className="flex-1 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700 relative overflow-hidden">
+          {loading && (
+            <div className="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-black/50 z-10">
+              <p>Loading graph...</p>
+            </div>
+          )}
+          {error && (
+            <div className="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-black/50 z-10">
+              <p className="text-red-500">Error: {error}</p>
+            </div>
+          )}
+          <div ref={containerRef} className="w-full h-full" data-testid="network-graph" />
+        </div>
+
+        {/* NodeDetailPanel — selectedNodeId がある場合のみ表示 */}
+        {selectedNodeId && (
+          <div
+            data-testid="node-detail-panel"
+            className="w-80 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 overflow-auto flex-shrink-0"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold">Node Detail</h3>
+              <button
+                onClick={clearSelection}
+                aria-label="Close detail panel"
+                className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500"
+              >
+                ✕
+              </button>
+            </div>
+            {selectedNodeDetail ? (
+              <div className="space-y-3 text-sm">
+                <div>
+                  <p className="text-gray-500 uppercase text-xs font-medium">Content</p>
+                  <p className="mt-1">{selectedNodeDetail.content}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500 uppercase text-xs font-medium">Type</p>
+                  <p className="mt-1 capitalize">{selectedNodeDetail.memoryType}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500 uppercase text-xs font-medium">Importance</p>
+                  <p className="mt-1">{selectedNodeDetail.importance.toFixed(2)}</p>
+                </div>
+                {selectedNodeDetail.project && (
+                  <div>
+                    <p className="text-gray-500 uppercase text-xs font-medium">Project</p>
+                    <p className="mt-1">{selectedNodeDetail.project}</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500">Loading details...</p>
+            )}
           </div>
         )}
-        {error && (
-          <div className="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-black/50 z-10">
-            <p className="text-red-500">Error: {error}</p>
-          </div>
-        )}
-        <div ref={containerRef} className="w-full h-full" data-testid="network-graph" />
       </div>
     </div>
   )

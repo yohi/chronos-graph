@@ -13,29 +13,40 @@ const ALLOWED_ORIGINS = [
 
 /**
  * Validates and normalizes the API base URL.
- * Shared between HTTP client and WebSocket manager.
+ * SSRF Protection: Ensures the URL is either a relative path starting with /
+ * or a valid absolute URL using the http/https protocols.
  */
 export function normalizeApiBaseUrl(rawUrl: string | null): string {
   if (!rawUrl || !rawUrl.trim()) return DEFAULT_BASE_URL
 
   const urlStr = rawUrl.trim()
 
-  // Always allow standard relative /api path
-  if (urlStr === '/api' || urlStr === '/api/') return '/api'
+  // 1. Valid relative path starting with /
+  if (urlStr.startsWith('/') && !urlStr.startsWith('//')) {
+    // Basic path traversal check
+    if (urlStr.includes('..')) return DEFAULT_BASE_URL
+    return urlStr
+  }
 
   try {
-    // Attempt to parse as full URL, defaulting to same origin for relative-looking paths
-    const url = new URL(urlStr, window.location.origin)
+    // 2. Absolute URL validation
+    const url = new URL(urlStr)
 
-    // Allow same-origin or explicit whitelist (localhost dev servers)
+    // SSRF: Restrict to http/https protocols
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return DEFAULT_BASE_URL
+    }
+
+    // SSRF: Allow same-origin or explicit whitelist (localhost dev servers)
+    // window.location.origin is used as the baseline for 'same-origin'
     const isSameOrigin = url.origin === window.location.origin
     const isWhitelisted = ALLOWED_ORIGINS.includes(url.origin)
 
     if (isSameOrigin || isWhitelisted) {
-      return urlStr
+      return url.origin + url.pathname.replace(/\/+$/, '')
     }
   } catch {
-    // Ignore invalid URL formats and fallback
+    // Not a valid absolute URL, and already checked for relative path starting with /
   }
 
   return DEFAULT_BASE_URL

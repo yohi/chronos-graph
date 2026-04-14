@@ -127,8 +127,8 @@ test.describe('NetworkView page', () => {
 
     await expect(page.getByRole('heading', { name: 'Network View' })).toBeVisible()
 
-    // Cytoscape canvas container should be present
-    const container = page.locator('.cy-container, [class*="w-full"][class*="h-full"]').last()
+    // Cytoscape canvas container should be present (design doc §5.2)
+    const container = page.getByTestId('network-graph')
     await expect(container).toBeVisible()
   })
 
@@ -149,7 +149,7 @@ test.describe('NetworkView page', () => {
     await page.goto('/network')
 
     // Truncation warning banner should appear (design doc §4.3)
-    await expect(page.getByText(/全 500 件中 2 件を表示/)).toBeVisible()
+    await expect(page.getByText(/Showing 2 of 500 memories/)).toBeVisible()
   })
 })
 

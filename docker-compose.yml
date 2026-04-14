@@ -75,7 +75,6 @@ services:
       - "-c"
       - |
         cd /workspaces/chronos-graph
-        uv sync --all-extras --quiet
         uv run chronos-dashboard
     ports:
       # 127.0.0.1 binding blocks access from outside the host (design doc §2.2)
@@ -90,8 +89,8 @@ services:
       DASHBOARD_ALLOWED_HOSTS: "localhost,127.0.0.1"
     volumes:
       - .:/workspaces/chronos-graph
-      # Share SQLite DB from host (read-only mount for safety)
-      - ${SQLITE_DB_PATH:-~/.context-store}:/data/context-store:ro
+      # Codacy: Use ${HOME} for better portability
+      - ${SQLITE_DB_PATH:-${HOME}/.context-store}:/data/context-store:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/api/system/config || exit 1"]
       interval: 10s

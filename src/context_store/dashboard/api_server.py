@@ -131,12 +131,16 @@ def create_app(
     if frontend_dist_override is not None:
         frontend_dist = frontend_dist_override
     else:
+        # Robust path resolution: find project root containing pyproject.toml
+        # or fallback to package resources if installed.
+        current_file = Path(__file__).resolve()
         try:
-            _root = next(
-                p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").exists()
-            )
+            _root = next(p for p in current_file.parents if (p / "pyproject.toml").exists())
         except StopIteration:
-            _root = Path(__file__).parent.parent.parent.parent  # Fallback to fragile method
+            # Fallback for installed package — assuming frontend/dist is bundled
+            # in a predictable location relative to the package.
+            _root = current_file.parent.parent.parent.parent
+
         frontend_dist = _root / "frontend" / "dist"
 
     index_file = frontend_dist / "index.html"
@@ -158,17 +162,20 @@ def create_app(
             """Serve the SPA or static files for any path not matched by previous routes."""
             from fastapi import HTTPException
 
+            # Codacy: Explicitly exclude API and WebSocket paths from fallback
+            # to prevent returning index.html (200 OK) for invalid API calls.
             if (
                 full_path == "api"
                 or full_path.startswith("api/")
                 or full_path == "ws"
                 or full_path.startswith("ws/")
             ):
-                raise HTTPException(status_code=404, detail="Route not found")
+                raise HTTPException(status_code=404, detail="API/WS route not found")
 
             # Check if requested path is a physical file in dist (e.g. favicon.ico)
             # Prevent path traversal by resolving and checking bounds.
             try:
+                # Use resolve() to handle '..' and ensure it's within frontend_dist
                 target_path = (frontend_dist / full_path).resolve()
                 dist_resolved = frontend_dist.resolve()
                 if (

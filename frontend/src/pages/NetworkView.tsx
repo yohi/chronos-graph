@@ -114,8 +114,8 @@ export default function NetworkView() {
       {/* Truncation warning banner (design doc §4.3) */}
       {isTruncated && (
         <div className="mb-4 px-4 py-2 rounded bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-200 text-sm">
-          全 {layoutData!.totalNodes} 件中 {layoutData!.returnedNodes} 件を表示しています。
-          importance 上位のノードのみが描画されています。プロジェクトフィルタで絞り込むと全件表示できる場合があります。
+          Showing {layoutData!.returnedNodes} of {layoutData!.totalNodes} memories.
+          Only top memories by importance are rendered. Try filtering by project to see more details.
         </div>
       )}
 
@@ -130,7 +130,7 @@ export default function NetworkView() {
             <p className="text-red-500">Error: {error}</p>
           </div>
         )}
-        <div ref={containerRef} className="w-full h-full" />
+        <div ref={containerRef} className="w-full h-full" data-testid="network-graph" />
       </div>
     </div>
   )

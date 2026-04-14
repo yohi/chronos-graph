@@ -36,9 +36,9 @@ def _make_scored_memory(memory: Memory, score: float) -> ScoredMemory:
 def _make_storage_adapter(search_results: list[ScoredMemory]) -> StorageAdapter:
     """モックの StorageAdapter を作成する。"""
     adapter = MagicMock(spec=StorageAdapter)
-    adapter.vector_search = AsyncMock(return_value=search_results)
-    adapter.update_memory = AsyncMock(return_value=True)
-    adapter.save_memory = AsyncMock(return_value=str(uuid4()))
+    adapter.vector_search = AsyncMock(return_value=search_results)  # type: ignore[assignment]
+    adapter.update_memory = AsyncMock(return_value=True)  # type: ignore[assignment]
+    adapter.save_memory = AsyncMock(return_value=str(uuid4()))  # type: ignore[assignment]
     return adapter
 
 
@@ -219,6 +219,7 @@ async def test_deduplicator_uses_highest_similarity() -> None:
     result = await deduplicator.deduplicate(new_memory)
 
     assert result.action == DeduplicationAction.REPLACE
+    assert result.existing_memory is not None
     assert result.existing_memory.id == existing_high.id
 
 

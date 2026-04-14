@@ -1,17 +1,19 @@
-import { defineConfig, devices } from '@playwright/test';
+import { defineConfig, devices } from '@playwright/test'
 
+/**
+ * Playwright E2E configuration.
+ * Design doc §7.2: happy-path tests for dashboard, network view, logs, theme.
+ */
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
-  // Fail the build on CI if you accidentally left test.only in the source code.
   forbidOnly: !!process.env.CI,
-  // Retry on CI only
   retries: process.env.CI ? 2 : 0,
-  // Opt out of parallel tests on CI.
   workers: process.env.CI ? 1 : undefined,
-  reporter: 'list',
+  reporter: 'html',
   use: {
-    baseURL: 'http://127.0.0.1:8000',
+    // Vite dev server base URL (proxied to FastAPI in dev)
+    baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:5173',
     trace: 'on-first-retry',
   },
   projects: [
@@ -20,18 +22,13 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
-  // Run your local dev server before starting the tests
-  webServer: {
-    command: 'python -m context_store.dashboard.api_server',
-    url: 'http://127.0.0.1:8000',
-    reuseExistingServer: true,
-    cwd: '..',
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: {
-      STORAGE_BACKEND: 'sqlite',
-      // Ensure it points to a test DB or an existing one
-      SQLITE_DB_PATH: './tests/integration/test_graph.db'
-    }
-  },
-});
+  // Auto-start Vite dev server when running locally
+  webServer: process.env.E2E_BASE_URL
+    ? undefined
+    : {
+        command: 'npm run dev',
+        url: 'http://localhost:5173',
+        reuseExistingServer: !process.env.CI,
+        timeout: 60_000,
+      },
+})

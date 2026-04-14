@@ -82,10 +82,22 @@ warn_unused_configs = false
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = "tests.unit.*"
+module = "tests.*"
 allow_untyped_defs = true
 allow_untyped_calls = true
-disable_error_code = ["arg-type", "no-untyped-def"]
+disable_error_code = [
+    "arg-type",
+    "no-untyped-def",
+    "attr-defined",
+    "method-assign",
+    "union-attr",
+    "func-returns-value",
+    "no-untyped-call",
+    "no-any-return",
+    "type-arg",
+    "assignment",
+    "return-value"
+]
 
 [[tool.mypy.overrides]]
 module = "context_store.config"

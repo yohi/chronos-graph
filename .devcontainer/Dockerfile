@@ -27,12 +27,16 @@ WORKDIR /workspaces/chronos-graph
 # Copy dependency files first for better caching
 COPY pyproject.toml uv.lock ./
 
-# Install all dependencies at system level (for git hooks with volume mounts)
-RUN uv pip install --system -e ".[dev,storage-postgres]"
+# Codacy: Synchronize dependencies during build instead of runtime for predictability.
+# We use --frozen to ensure it matches the lockfile exactly.
+RUN uv sync --all-extras --frozen
 
 # Copy source code
 COPY src/ src/
 COPY tests/ tests/
+
+# Finalize the installation (ensure project is installed in the environment)
+RUN uv sync --all-extras --frozen
 
 # Set up the default user (VS Code will use this)
 RUN groupadd -g 1000 vscode && \

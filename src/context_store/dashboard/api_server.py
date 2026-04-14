@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import pathlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse
@@ -126,8 +125,17 @@ def create_app(
     app.include_router(graph.router, prefix="/api/graph", tags=["graph"])
     app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
 
-    # SPA Fallback and Static Files
-    frontend_dist = Path(__file__).parent.parent.parent.parent / "frontend" / "dist"
+    # --- SPA static file serving + fallback (design doc §3.5) ---
+    # Resolve frontend/dist relative to project root.
+    try:
+        _root = next(
+            p for p in Path(__file__).resolve().parents
+            if (p / "pyproject.toml").exists()
+        )
+    except StopIteration:
+        _root = Path(__file__).parent.parent.parent.parent  # Fallback to fragile method
+
+    frontend_dist = _root / "frontend" / "dist"
     index_file = frontend_dist / "index.html"
     assets_dir = frontend_dist / "assets"
 
@@ -142,12 +150,18 @@ def create_app(
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str) -> FileResponse:
-        """Serve the SPA for any path not matched by previous routes."""
+        """Serve the SPA or static files for any path not matched by previous routes."""
         from fastapi import HTTPException
 
         if full_path == "api" or full_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="API route not found")
 
+        # Check if requested path is a physical file in dist (e.g. favicon.ico)
+        target_path = frontend_dist / full_path
+        if full_path and target_path.is_file():
+            return FileResponse(str(target_path))
+
+        # Fallback to index.html for SPA routing
         if index_file.exists():
             return FileResponse(str(index_file))
 

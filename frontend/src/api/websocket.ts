@@ -16,7 +16,7 @@ function getWsBase(): string {
     }
 
     // Convert http(s):// → ws(s)://
-    return validatedBase.replace(/^http/, 'ws').replace(/\/api$/, '')
+    return validatedBase.replace(/^http/, 'ws').replace(/\/api\/?$/, '')
   } catch {
     // localStorage unavailable
   }

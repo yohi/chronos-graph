@@ -1,15 +1,14 @@
 import { useEffect, useState, useRef } from 'react'
+import { logsApi } from '../api/logs'
+import { buildWsUrl } from '../api/websocket'
+import type { LogEntry } from '../types/api'
 
-interface LogEntry {
+interface DisplayLogEntry extends LogEntry {
   id: string
-  timestamp: string
-  level: string
-  logger: string
-  message: string
 }
 
 export default function LogExplorer() {
-  const [logs, setLogs] = useState<LogEntry[]>([])
+  const [logs, setLogs] = useState<DisplayLogEntry[]>([])
   const [status, setStatus] = useState<'connecting' | 'connected' | 'error'>('connecting')
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -18,38 +17,19 @@ export default function LogExplorer() {
   useEffect(() => {
     isMountedRef.current = true
 
-    // 過去のログを取得 (最新が上に来るようにソート/リバースを確認)
-    fetch('/api/logs/recent?limit=50')
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`)
-        return res.json()
-      })
-      .then((data: unknown) => {
+    // Fetch past logs via logsApi (which uses apiClient and respects localStorage override)
+    logsApi.getRecent(50)
+      .then((data) => {
         if (!isMountedRef.current) return
-        if (!Array.isArray(data)) {
-          console.error('Expected array of logs, got:', typeof data)
-          setLogs([])
-          return
-        }
-
-        // Validate and add unique IDs if missing
-        const validLogs: LogEntry[] = data
-          .filter((entry: unknown): entry is LogEntry => {
-            if (!entry || typeof entry !== 'object') return false
-            const e = entry as Record<string, unknown>
-            return (
-              typeof e.timestamp === 'string' &&
-              typeof e.message === 'string' &&
-              typeof e.level === 'string' &&
-              typeof e.logger === 'string'
-            )
-          })
+        
+        // Validate and add unique IDs for React keys
+        const validLogs: DisplayLogEntry[] = data.entries
           .map((entry, idx) => ({
             ...entry,
-            id: entry.id || `${entry.timestamp}-${entry.logger}-${idx}`
+            id: `${entry.timestamp}-${entry.logger}-${idx}`
           }))
 
-        // 常に最新が先頭になるように並び替える
+        // Sort descending (latest first)
         const sorted = [...validLogs].sort(
           (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
         )
@@ -60,9 +40,8 @@ export default function LogExplorer() {
         if (isMountedRef.current) setLogs([])
       })
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const host = window.location.host
-    const wsUrl = `${protocol}//${host}/api/logs/ws`
+    // Use buildWsUrl to respect localStorage override
+    const wsUrl = buildWsUrl('/api/logs/ws')
 
     const connect = () => {
       if (!isMountedRef.current) return
@@ -79,22 +58,14 @@ export default function LogExplorer() {
       socket.onmessage = (event) => {
         if (!isMountedRef.current) return
         try {
-          const entry = JSON.parse(event.data)
-          // 厳密なバリデーション: 全ての必須フィールドが文字列であることを確認
-          if (
-            entry &&
-            typeof entry.timestamp === 'string' &&
-            typeof entry.message === 'string' &&
-            typeof entry.level === 'string' &&
-            typeof entry.logger === 'string'
-          ) {
-            const logEntry: LogEntry = {
+          const entry = JSON.parse(event.data) as LogEntry
+          // Validation: Ensure required fields are present
+          if (entry && entry.timestamp && entry.message && entry.level) {
+            const logEntry: DisplayLogEntry = {
               ...entry,
-              id: entry.id || crypto.randomUUID()
+              id: crypto.randomUUID()
             }
             setLogs((prev) => [logEntry, ...prev].slice(0, 1000))
-          } else {
-            console.warn('Received invalid log entry format via WS:', entry)
           }
         } catch (err) {
           console.warn('Failed to parse WebSocket message:', err)

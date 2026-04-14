@@ -82,7 +82,7 @@ describe('apiClient timeout and signals', () => {
 
     vi.mocked(window.fetch).mockImplementation((_url, init?: RequestInit) => {
       const signal = init?.signal
-      return new Promise((resolve, reject) => {
+      return new Promise((_resolve, reject) => {
         if (signal?.aborted) {
           const err = new Error('Aborted')
           err.name = 'AbortError'

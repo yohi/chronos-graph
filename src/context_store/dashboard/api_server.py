@@ -151,30 +151,38 @@ def create_app(
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
-    @app.get("/{full_path:path}")
-    async def serve_spa(full_path: str) -> FileResponse:
-        """Serve the SPA or static files for any path not matched by previous routes."""
-        from fastapi import HTTPException
+    if index_file.exists():
 
-        if full_path == "api" or full_path.startswith("api/"):
-            raise HTTPException(status_code=404, detail="API route not found")
+        @app.get("/{full_path:path}")
+        async def serve_spa(full_path: str) -> FileResponse:
+            """Serve the SPA or static files for any path not matched by previous routes."""
+            from fastapi import HTTPException
 
-        # Check if requested path is a physical file in dist (e.g. favicon.ico)
-        # Prevent path traversal by resolving and checking bounds.
-        try:
-            target_path = (frontend_dist / full_path).resolve()
-            dist_resolved = frontend_dist.resolve()
-            if full_path and target_path.is_relative_to(dist_resolved) and target_path.is_file():
-                return FileResponse(str(target_path))
-        except (OSError, ValueError, RuntimeError):
-            # Handle cases where path resolution or bounds checking fails
-            pass
+            if (
+                full_path == "api"
+                or full_path.startswith("api/")
+                or full_path == "ws"
+                or full_path.startswith("ws/")
+            ):
+                raise HTTPException(status_code=404, detail="Route not found")
 
-        # Fallback to index.html for SPA routing
-        if index_file.exists():
+            # Check if requested path is a physical file in dist (e.g. favicon.ico)
+            # Prevent path traversal by resolving and checking bounds.
+            try:
+                target_path = (frontend_dist / full_path).resolve()
+                dist_resolved = frontend_dist.resolve()
+                if (
+                    full_path
+                    and target_path.is_relative_to(dist_resolved)
+                    and target_path.is_file()
+                ):
+                    return FileResponse(str(target_path))
+            except (OSError, ValueError, RuntimeError):
+                # Handle cases where path resolution or bounds checking fails
+                pass
+
+            # Fallback to index.html for SPA routing
             return FileResponse(str(index_file))
-
-        raise HTTPException(status_code=404, detail="SPA build not found")
 
     return app
 

@@ -23,21 +23,29 @@ export default function LogExplorer() {
         if (!isMountedRef.current) return
         
         // Validate and add unique IDs for React keys
-        const validLogs: DisplayLogEntry[] = data.entries
+        const fetchedLogs: DisplayLogEntry[] = data.entries
           .map((entry, idx) => ({
             ...entry,
             id: `${entry.timestamp}-${entry.logger}-${idx}`
           }))
 
-        // Sort descending (latest first)
-        const sorted = [...validLogs].sort(
-          (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-        )
-        setLogs(sorted)
+        // Merge with existing logs (e.g. from WS received during fetch)
+        setLogs((prev) => {
+          const merged = [...prev, ...fetchedLogs]
+          // Deduplicate by ID
+          const uniqueMap = new Map<string, DisplayLogEntry>()
+          merged.forEach((item) => uniqueMap.set(item.id, item))
+          const unique = Array.from(uniqueMap.values())
+          
+          // Sort descending (latest first)
+          return unique.sort(
+            (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+          ).slice(0, 1000)
+        })
       })
       .catch((err) => {
         console.error('Failed to fetch recent logs:', err)
-        if (isMountedRef.current) setLogs([])
+        // Keep existing logs (might have WS data)
       })
 
     // Use buildWsUrl to respect localStorage override
@@ -46,6 +54,7 @@ export default function LogExplorer() {
     const connect = () => {
       if (!isMountedRef.current) return
 
+      setStatus('connecting')
       const socket = new WebSocket(wsUrl)
       wsRef.current = socket
 
@@ -92,7 +101,12 @@ export default function LogExplorer() {
       socket.onclose = () => {
         if (isMountedRef.current) {
           setStatus('error')
-          reconnectTimerRef.current = setTimeout(connect, 3000)
+          reconnectTimerRef.current = setTimeout(() => {
+            if (isMountedRef.current) {
+              setStatus('connecting')
+              connect()
+            }
+          }, 3000)
         }
       }
 

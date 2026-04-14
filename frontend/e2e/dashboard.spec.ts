@@ -223,7 +223,7 @@ test.describe('LogExplorer', () => {
     // Mock WebSocket to avoid connecting to a real server
     await page.addInitScript(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ;(window as any).WebSocket = class MockWebSocket {
+      (window as any).WebSocket = class MockWebSocket {
         onopen: (() => void) | null = null
         onmessage: ((e: { data: string }) => void) | null = null
         onclose: (() => void) | null = null

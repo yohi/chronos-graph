@@ -2,16 +2,21 @@
  * WebSocket connection manager.
  * Used by useWebSocket hook for log streaming (design doc §5.3).
  */
+import { normalizeApiBaseUrl } from '../utils/apiUtils'
 
 const DEFAULT_WS_BASE = '' // relative — browser resolves ws(s):// automatically
 
 function getWsBase(): string {
   try {
     const stored = localStorage.getItem('chronos-api-base-url')
-    if (stored && stored.trim()) {
-      // Convert http(s):// → ws(s)://
-      return stored.trim().replace(/^http/, 'ws').replace(/\/api$/, '')
+    const validatedBase = normalizeApiBaseUrl(stored)
+
+    if (validatedBase === '/api') {
+      return DEFAULT_WS_BASE
     }
+
+    // Convert http(s):// → ws(s)://
+    return validatedBase.replace(/^http/, 'ws').replace(/\/api\/?$/, '')
   } catch {
     // localStorage unavailable
   }

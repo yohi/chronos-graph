@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import pathlib
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse
@@ -74,6 +74,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app(
     service_override: DashboardService | None = None,
+    frontend_dist_override: Path | None = None,
 ) -> FastAPI:
     """Create FastAPI app for dashboard."""
     settings = Settings()
@@ -126,23 +127,62 @@ def create_app(
     app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
 
     # --- SPA static file serving + fallback (design doc §3.5) ---
-    # Resolve frontend/dist relative to this file's package root.
-    _root = pathlib.Path(__file__).parent.parent.parent.parent  # repo root
-    _dist = _root / "frontend" / "dist"
+    # Resolve frontend/dist relative to project root.
+    if frontend_dist_override is not None:
+        frontend_dist = frontend_dist_override
+    else:
+        try:
+            _root = next(
+                p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").exists()
+            )
+        except StopIteration:
+            _root = Path(__file__).parent.parent.parent.parent  # Fallback to fragile method
+        frontend_dist = _root / "frontend" / "dist"
 
-    if _dist.exists():
-        # Mount static assets (JS/CSS/images) at /assets so they are served
-        # before the catch-all route gets a chance to intercept them.
-        _assets = _dist / "assets"
-        if _assets.exists():
-            app.mount("/assets", StaticFiles(directory=str(_assets)), name="assets")
+    index_file = frontend_dist / "index.html"
+    assets_dir = frontend_dist / "assets"
 
-        # Catch-all: every GET request that is NOT /api/* or /ws/* returns
-        # index.html so that React Router can handle client-side navigation.
+    if not index_file.exists():
+        logger.warning(
+            "SPA build not found at %s. The frontend will not be served correctly.",
+            index_file,
+        )
+
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+    if index_file.exists():
+
         @app.get("/{full_path:path}", include_in_schema=False)
-        async def spa_fallback(request: Request, full_path: str) -> FileResponse:  # noqa: ARG001
-            """SPA fallback route — serves index.html for all non-API paths."""
-            return FileResponse(str(_dist / "index.html"))
+        async def serve_spa(full_path: str) -> FileResponse:
+            """Serve the SPA or static files for any path not matched by previous routes."""
+            from fastapi import HTTPException
+
+            if (
+                full_path == "api"
+                or full_path.startswith("api/")
+                or full_path == "ws"
+                or full_path.startswith("ws/")
+            ):
+                raise HTTPException(status_code=404, detail="Route not found")
+
+            # Check if requested path is a physical file in dist (e.g. favicon.ico)
+            # Prevent path traversal by resolving and checking bounds.
+            try:
+                target_path = (frontend_dist / full_path).resolve()
+                dist_resolved = frontend_dist.resolve()
+                if (
+                    full_path
+                    and target_path.is_relative_to(dist_resolved)
+                    and target_path.is_file()
+                ):
+                    return FileResponse(str(target_path))
+            except (OSError, ValueError, RuntimeError):
+                # Handle cases where path resolution or bounds checking fails
+                pass
+
+            # Fallback to index.html for SPA routing
+            return FileResponse(str(index_file))
 
     return app
 

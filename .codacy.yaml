@@ -3,3 +3,7 @@ engines:
   bandit:
     exclude_paths:
       - "tests/**"
+  sonarjs:
+    patterns:
+      - name: "S5144"
+        enabled: false

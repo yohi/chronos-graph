@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: .devcontainer/Dockerfile
-    user: root
+    user: "1000:1000"
     volumes:
       - .:/workspaces/chronos-graph
     working_dir: /workspaces/chronos-graph
@@ -17,7 +17,7 @@ services:
       dockerfile: Dockerfile
     image: chronos-graph-postgres:latest
     ports:
-      - "5433:5432"
+      - "5435:5432"
     environment:
       POSTGRES_DB: context_store
       POSTGRES_USER: context_store
@@ -98,6 +98,13 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     profiles:
       - dashboard
 

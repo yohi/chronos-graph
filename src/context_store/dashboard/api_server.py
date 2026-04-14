@@ -74,6 +74,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app(
     service_override: DashboardService | None = None,
+    frontend_dist_override: Path | None = None,
 ) -> FastAPI:
     """Create FastAPI app for dashboard."""
     settings = Settings()
@@ -127,12 +128,17 @@ def create_app(
 
     # --- SPA static file serving + fallback (design doc §3.5) ---
     # Resolve frontend/dist relative to project root.
-    try:
-        _root = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").exists())
-    except StopIteration:
-        _root = Path(__file__).parent.parent.parent.parent  # Fallback to fragile method
+    if frontend_dist_override is not None:
+        frontend_dist = frontend_dist_override
+    else:
+        try:
+            _root = next(
+                p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").exists()
+            )
+        except StopIteration:
+            _root = Path(__file__).parent.parent.parent.parent  # Fallback to fragile method
+        frontend_dist = _root / "frontend" / "dist"
 
-    frontend_dist = _root / "frontend" / "dist"
     index_file = frontend_dist / "index.html"
     assets_dir = frontend_dist / "assets"
 
@@ -154,9 +160,15 @@ def create_app(
             raise HTTPException(status_code=404, detail="API route not found")
 
         # Check if requested path is a physical file in dist (e.g. favicon.ico)
-        target_path = frontend_dist / full_path
-        if full_path and target_path.is_file():
-            return FileResponse(str(target_path))
+        # Prevent path traversal by resolving and checking bounds.
+        try:
+            target_path = (frontend_dist / full_path).resolve()
+            dist_resolved = frontend_dist.resolve()
+            if full_path and target_path.is_relative_to(dist_resolved) and target_path.is_file():
+                return FileResponse(str(target_path))
+        except (OSError, ValueError, RuntimeError):
+            # Handle cases where path resolution or bounds checking fails
+            pass
 
         # Fallback to index.html for SPA routing
         if index_file.exists():

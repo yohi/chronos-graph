@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from context_store.dashboard.log_collector import get_log_handler
-from context_store.dashboard.schemas import LogEntry, LogsRecentResponse
+from context_store.dashboard.schemas import LogsRecentResponse
 from context_store.dashboard.websocket_manager import get_ws_manager
 
 router = APIRouter()

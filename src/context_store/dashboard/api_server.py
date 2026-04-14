@@ -128,10 +128,7 @@ def create_app(
     # --- SPA static file serving + fallback (design doc §3.5) ---
     # Resolve frontend/dist relative to project root.
     try:
-        _root = next(
-            p for p in Path(__file__).resolve().parents
-            if (p / "pyproject.toml").exists()
-        )
+        _root = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").exists())
     except StopIteration:
         _root = Path(__file__).parent.parent.parent.parent  # Fallback to fragile method
 

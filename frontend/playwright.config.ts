@@ -23,7 +23,7 @@ export default defineConfig({
     },
   ],
   // Auto-start Vite dev server when running locally
-  webServer: process.env.CI
+  webServer: process.env.E2E_BASE_URL
     ? undefined
     : {
         command: 'npm run dev',

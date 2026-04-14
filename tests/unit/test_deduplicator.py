@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -34,12 +33,12 @@ def _make_scored_memory(memory: Memory, score: float) -> ScoredMemory:
     return ScoredMemory(memory=memory, score=score)
 
 
-def _make_storage_adapter(search_results: list[ScoredMemory]) -> Any:
+def _make_storage_adapter(search_results: list[ScoredMemory]) -> StorageAdapter:
     """モックの StorageAdapter を作成する。"""
     adapter = MagicMock(spec=StorageAdapter)
-    adapter.vector_search = AsyncMock(return_value=search_results)
-    adapter.update_memory = AsyncMock(return_value=True)
-    adapter.save_memory = AsyncMock(return_value=str(uuid4()))
+    adapter.vector_search = AsyncMock(return_value=search_results)  # type: ignore[assignment]
+    adapter.update_memory = AsyncMock(return_value=True)  # type: ignore[assignment]
+    adapter.save_memory = AsyncMock(return_value=str(uuid4()))  # type: ignore[assignment]
     return adapter
 
 

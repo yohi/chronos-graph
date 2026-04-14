@@ -84,11 +84,11 @@ test.describe('Dashboard page', () => {
     // Wait for loading to complete
     await expect(page.getByText('System Overview')).toBeVisible()
 
-    // Verify stat values are rendered
-    await expect(page.getByText('42')).toBeVisible()   // activeCount
-    await expect(page.getByText('8')).toBeVisible()    // archivedCount
-    await expect(page.getByText('50')).toBeVisible()   // totalCount
-    await expect(page.getByText('123')).toBeVisible()  // edgeCount
+    // Verify stat values are rendered (design doc §7.2 case 1)
+    await expect(page.getByText('42', { exact: true })).toBeVisible() // activeCount
+    await expect(page.getByText('8', { exact: true })).toBeVisible() // archivedCount
+    await expect(page.getByText('50', { exact: true })).toBeVisible() // totalCount
+    await expect(page.getByText('123', { exact: true })).toBeVisible() // edgeCount
 
     // Verify project badges
     await expect(page.getByText('proj-a')).toBeVisible()

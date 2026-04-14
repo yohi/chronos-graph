@@ -25,7 +25,8 @@ export function normalizeApiBaseUrl(rawUrl: string | null): string {
   if (urlStr.startsWith('/') && !urlStr.startsWith('//')) {
     // Basic path traversal check
     if (urlStr.includes('..')) return DEFAULT_BASE_URL
-    return urlStr
+    // Normalize: remove trailing slash but keep / itself
+    return urlStr.length > 1 ? urlStr.replace(/\/+$/, '') : urlStr
   }
 
   try {

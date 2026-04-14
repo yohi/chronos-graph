@@ -68,7 +68,7 @@ services:
     build:
       context: .
       dockerfile: .devcontainer/Dockerfile
-    user: root
+    user: "1000:1000"
     working_dir: /workspaces/chronos-graph
     command:
       - "bash"

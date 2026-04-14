@@ -7,6 +7,11 @@ interface DisplayLogEntry extends LogEntry {
   id: string
 }
 
+// Helper to generate a deterministic ID for a log entry to enable deduplication
+const getLogId = (entry: LogEntry): string => {
+  return `${entry.timestamp}|${entry.level}|${entry.logger}|${entry.message}`
+}
+
 export default function LogExplorer() {
   const [logs, setLogs] = useState<DisplayLogEntry[]>([])
   const [status, setStatus] = useState<'connecting' | 'connected' | 'error'>('connecting')
@@ -22,11 +27,11 @@ export default function LogExplorer() {
       .then((data) => {
         if (!isMountedRef.current) return
         
-        // Validate and add unique IDs for React keys
+        // Validate and add deterministic IDs for React keys and deduplication
         const fetchedLogs: DisplayLogEntry[] = data.entries
-          .map((entry, idx) => ({
+          .map((entry) => ({
             ...entry,
-            id: `${entry.timestamp}-${entry.logger}-${idx}`
+            id: getLogId(entry)
           }))
 
         // Merge with existing logs (e.g. from WS received during fetch)
@@ -87,9 +92,16 @@ export default function LogExplorer() {
             }
             const logEntry: DisplayLogEntry = {
               ...entry,
-              id: crypto.randomUUID()
+              id: getLogId(entry)
             }
-            setLogs((prev) => [logEntry, ...prev].slice(0, 1000))
+            // Use functional update to merge and deduplicate even for WS messages
+            setLogs((prev) => {
+              // Quick check if already present
+              if (prev.some(l => l.id === logEntry.id)) return prev
+              
+              const merged = [logEntry, ...prev]
+              return merged.slice(0, 1000)
+            })
           } else {
             console.warn('Dropped invalid log entry from WebSocket:', parsed)
           }

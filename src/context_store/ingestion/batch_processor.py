@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from context_store.ingestion.chunker import Chunker
 from context_store.models.memory import SourceType
 
 if TYPE_CHECKING:
@@ -21,37 +20,25 @@ logger = logging.getLogger(__name__)
 class BatchProcessor:
     """Thin wrapper over IngestionPipeline for batch conversation log processing.
 
-    Delegates all processing to IngestionPipeline.ingest().
+    Delegates all processing to IngestionPipeline.
     """
 
     def __init__(
         self,
-        ingestion_pipeline: "IngestionPipeline",
-        chunker: Chunker | None = None,
+        ingestion_pipeline: IngestionPipeline,
     ) -> None:
         self._pipeline = ingestion_pipeline
-        self._chunker = chunker or Chunker()
 
     async def estimate_chunks(self, conversation_log: str) -> int:
-        """Estimate chunk count using IngestionPipeline logic (no side effects).
+        """実際の取り込みフローに基づき、会話ログのチャンク数を推定する。
 
-        1. ConversationAdapter splits log into turn-based RawContent (e.g. 5 turns).
-        2. Chunker.chunk() further splits each into Q&A pairs (e.g. 3 turns).
+        IngestionPipeline.estimate_chunks() に委譲することで、
+        Adapter による分割ロジックとの乖離を防ぐ。
         """
-        if not conversation_log:
-            return 0
-
-        # Pipeline と同様に Adapter を通して分割してからカウントする
-        raw_contents = await self._pipeline._conversation_adapter.adapt(
+        return await self._pipeline.estimate_chunks(
             conversation_log,
-            metadata={},
+            source_type=SourceType.CONVERSATION,
         )
-
-        total_chunks = 0
-        for raw in raw_contents:
-            total_chunks += sum(1 for _ in self._chunker.chunk(raw))
-
-        return total_chunks
 
     async def process(
         self,
@@ -62,6 +49,10 @@ class BatchProcessor:
         tags: list[str] | None = None,
     ) -> bool:
         """Background batch processing entry point.
+
+        Flow:
+        1. IngestionPipeline.ingest() with source_type=CONVERSATION
+        2. Errors are logged (committed chunks are retained, uncommitted are lost)
 
         Returns:
             bool: True if processing completed successfully, False otherwise.

@@ -73,6 +73,7 @@ session_flush(conversation_log)
   │
   ▼
 Orchestrator.session_flush()
+  ├─ len(TaskRegistry) >= batch_max_concurrent_jobs → {"error": "Too many concurrent jobs"}
   ├─ BatchProcessor.estimate_chunks() → estimated_chunks
   ├─ task = asyncio.create_task(BatchProcessor.process(...))
   ├─ TaskRegistry.register(task)
@@ -113,12 +114,20 @@ class TaskRegistry:
 
         done_callback implementation:
         1. self._tasks.discard(task) で自身を除去
-        2. task.exception() で未処理例外を取得
+        2. task.cancelled() を確認
+           - True の場合: logger.debug() で正常キャンセルとして記録 → 終了
+        3. task.exception() で未処理例外を取得
            - 例外が存在する場合: logger.error() でスタックトレース付きログ出力
-           - CancelledError の場合: logger.debug() で正常キャンセルとして記録
            - 例外なしの場合: logger.debug() で正常完了を記録
-        3. 例外は再送出しない（バックグラウンドタスクのため呼び出し元に伝播不可）
+        4. 例外は再送出しない（バックグラウンドタスクのため呼び出し元に伝播不可）
+
+        Note: task.cancelled() を先行チェックしないと、キャンセル済みタスクに対して
+        task.exception() を呼んだ際に CancelledError が送出されるため順序は重要。
         """
+
+    def __len__(self) -> int:
+        """Return the number of currently running tasks."""
+        return len(self._tasks)
 
     async def cancel_all(self, timeout: float = 5.0) -> None:
         """Cancel all running tasks with timeout. Called during graceful shutdown."""

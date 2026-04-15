@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from context_store.ingestion.adapters import RawContent
 from context_store.ingestion.chunker import Chunker
 from context_store.models.memory import SourceType
 
@@ -28,27 +27,31 @@ class BatchProcessor:
     def __init__(
         self,
         ingestion_pipeline: "IngestionPipeline",
+        chunker: Chunker | None = None,
     ) -> None:
         self._pipeline = ingestion_pipeline
-        self._chunker = Chunker()
+        self._chunker = chunker or Chunker()
 
-    def estimate_chunks(self, conversation_log: str) -> int:
-        """Estimate chunk count using Chunker dry-run (no side effects).
+    async def estimate_chunks(self, conversation_log: str) -> int:
+        """Estimate chunk count using IngestionPipeline logic (no side effects).
 
-        Creates a temporary RawContent with source_type=CONVERSATION,
-        passes it through Chunker.chunk() to count yielded chunks,
-        but does NOT persist anything. This is a pure read-only estimation.
+        1. ConversationAdapter splits log into turn-based RawContent (e.g. 5 turns).
+        2. Chunker.chunk() further splits each into Q&A pairs (e.g. 3 turns).
         """
         if not conversation_log:
             return 0
 
-        raw = RawContent(
-            content=conversation_log,
-            source_type=SourceType.CONVERSATION,
+        # Pipeline と同様に Adapter を通して分割してからカウントする
+        raw_contents = await self._pipeline._conversation_adapter.adapt(
+            conversation_log,
             metadata={},
         )
-        # Chunker.chunk() はジェネレータなので、全件をカウントする
-        return sum(1 for _ in self._chunker.chunk(raw))
+
+        total_chunks = 0
+        for raw in raw_contents:
+            total_chunks += sum(1 for _ in self._chunker.chunk(raw))
+
+        return total_chunks
 
     async def process(
         self,
@@ -57,12 +60,11 @@ class BatchProcessor:
         session_id: str,
         project: str | None = None,
         tags: list[str] | None = None,
-    ) -> None:
+    ) -> bool:
         """Background batch processing entry point.
 
-        Flow:
-        1. IngestionPipeline.ingest() with source_type=CONVERSATION
-        2. Errors are logged (committed chunks are retained, uncommitted are lost)
+        Returns:
+            bool: True if processing completed successfully, False otherwise.
         """
         metadata: dict[str, object] = {"session_id": session_id}
         if project is not None:
@@ -80,9 +82,11 @@ class BatchProcessor:
                 "Batch processing completed: session_id=%s",
                 session_id,
             )
+            return True
         except Exception:
             logger.error(
                 "Batch processing failed: session_id=%s",
                 session_id,
                 exc_info=True,
             )
+            return False

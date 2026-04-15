@@ -345,7 +345,7 @@ class Orchestrator:
         # まずライフサイクルマネージャーを終了させ、タスクの完了を待機する
         await self._lifecycle_manager.graceful_shutdown()
 
-        # 残っているバックグラウンドタスクがあればキャンセル（5s タイムアウト）
+        # 残っているバックグラウンドタスクがあればキャンセル (5s タイムアウト)
         await self._task_registry.cancel_all(timeout=5.0)
 
         await self._storage.dispose()

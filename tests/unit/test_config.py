@@ -1,5 +1,5 @@
 import pytest
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from context_store.config import Settings
 from tests.unit.conftest import make_settings
@@ -389,3 +389,24 @@ def test_dashboard_allowed_hosts_fallback(monkeypatch, default_settings):
     # 4. 空リスト
     s4 = Settings(_env_file=None, **default_settings, dashboard_allowed_hosts=[])
     assert s4.dashboard_allowed_hosts == ["localhost", "127.0.0.1"]
+
+
+class TestBatchConfig:
+    """バッチ処理設定のテスト。"""
+
+    def test_batch_max_concurrent_jobs_default(self, monkeypatch, default_settings) -> None:
+        """batch_max_concurrent_jobs のデフォルト値は 3。"""
+        s = Settings(_env_file=None, **default_settings)
+        assert s.batch_max_concurrent_jobs == 3
+
+    def test_batch_max_concurrent_jobs_from_env(self, monkeypatch, default_settings) -> None:
+        """環境変数から batch_max_concurrent_jobs を設定できる。"""
+        monkeypatch.setenv("BATCH_MAX_CONCURRENT_JOBS", "5")
+        s = Settings(_env_file=None, **default_settings)
+        assert s.batch_max_concurrent_jobs == 5
+
+    def test_batch_max_concurrent_jobs_minimum(self, monkeypatch, default_settings) -> None:
+        """batch_max_concurrent_jobs は最小 1。"""
+        monkeypatch.setenv("BATCH_MAX_CONCURRENT_JOBS", "0")
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None, **default_settings)

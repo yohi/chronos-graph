@@ -343,7 +343,10 @@ class Orchestrator:
     async def dispose(self) -> None:
         """全アダプターのリソースを解放する。"""
         # まずライフサイクルマネージャーを終了させ、タスクの完了を待機する
-        await self._lifecycle_manager.graceful_shutdown()
+        try:
+            await self._lifecycle_manager.graceful_shutdown()
+        except Exception as exc:
+            logger.warning("Graceful shutdown incomplete (ignored): %s", exc)
 
         # 残っているバックグラウンドタスクがあればキャンセル (5s タイムアウト)
         await self._task_registry.cancel_all(timeout=5.0)

@@ -1089,3 +1089,10 @@ class LifecycleManager:
         # それでも残っている場合はキャンセル
         if len(self._task_registry) > 0:
             await self._task_registry.cancel_all(timeout=1.0)
+
+        # 最終チェック: それでもタスクが残っている場合はエラーとして報告
+        remaining = len(self._task_registry)
+        if remaining > 0:
+            msg = f"graceful_shutdown: {remaining} task(s) still remain after cancellation"
+            logger.error(msg)
+            raise RuntimeError(msg)

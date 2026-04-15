@@ -11,6 +11,19 @@ from context_store.ingestion.batch_processor import BatchProcessor
 from context_store.models.memory import SourceType
 
 
+class TestInit:
+    """BatchProcessor.__init__() のテスト。"""
+
+    def test_init_raises_value_error_on_invalid_concurrency(self) -> None:
+        """batch_max_concurrent_jobs が 1 未満の場合、ValueError を投げる。"""
+        mock_pipeline = MagicMock()
+        with pytest.raises(ValueError, match="batch_max_concurrent_jobs must be at least 1"):
+            BatchProcessor(ingestion_pipeline=mock_pipeline, batch_max_concurrent_jobs=0)
+
+        with pytest.raises(ValueError, match="batch_max_concurrent_jobs must be at least 1"):
+            BatchProcessor(ingestion_pipeline=mock_pipeline, batch_max_concurrent_jobs=-1)
+
+
 class TestEstimateChunks:
     """BatchProcessor.estimate_chunks() のテスト。"""
 
@@ -100,10 +113,10 @@ class TestProcess:
         )
 
     @pytest.mark.asyncio
-    async def test_process_logs_error_on_pipeline_failure(
+    async def test_process_logs_error_and_re_raises_on_pipeline_failure(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """IngestionPipeline.ingest() が例外を投げた場合、ログに記録し False を返す。"""
+        """IngestionPipeline.ingest() が例外を投げた場合、ログに記録し、例外を再送する。"""
         logger_name = "context_store.ingestion.batch_processor"
         caplog.set_level(logging.ERROR, logger=logger_name)
 
@@ -111,10 +124,11 @@ class TestProcess:
         mock_pipeline.ingest = AsyncMock(side_effect=RuntimeError("pipeline error"))
         processor = BatchProcessor(ingestion_pipeline=mock_pipeline)
 
-        result = await processor.process(
-            "User: test\nAssistant: fail",
-            session_id="test-session",
-        )
+        # 例外が再送されることを確認
+        with pytest.raises(RuntimeError, match="pipeline error"):
+            await processor.process(
+                "User: test\nAssistant: fail",
+                session_id="test-session",
+            )
 
-        assert result is False
         assert any("Batch processing failed" in record.message for record in caplog.records)

@@ -113,6 +113,37 @@ class ChronosServer:
     # ツールハンドラ
     # ---------------------------------------------------------------------------
 
+    async def session_flush(
+        self,
+        conversation_log: str,
+        session_id: str | None = None,
+        project: str | None = None,
+        tags: list[str] | None = None,
+    ) -> str:
+        """会話ログをバックグラウンドでバッチ保存する。
+
+        Args:
+            conversation_log: 会話ログ全文 (User: .../Assistant: ... 形式)。
+                最大 200,000 文字。
+            session_id: セッション識別子（省略可、自動生成）。
+            project: プロジェクト名。
+            tags: タグのリスト。
+
+        Returns:
+            処理結果の JSON 文字列。
+        """
+        await self._ensure_initialized()
+        if self._orchestrator is None:
+            raise RuntimeError("Orchestrator not initialized")
+
+        result = await self._orchestrator.session_flush(
+            conversation_log=conversation_log,
+            session_id=session_id,
+            project=project,
+            tags=tags,
+        )
+        return json.dumps(result)
+
     async def memory_save(
         self,
         content: str,
@@ -344,6 +375,30 @@ _server = ChronosServer()
 # ---------------------------------------------------------------------------
 # FastMCP ツール登録
 # ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def session_flush(
+    conversation_log: str,
+    session_id: str | None = None,
+    project: str | None = None,
+    tags: list[str] | None = None,
+) -> str:
+    """会話ログをバックグラウンドでバッチ保存する。
+
+    Args:
+        conversation_log: 会話ログ全文 (User: .../Assistant: ... 形式)。
+            最大 200,000 文字。超過時はバリデーションエラーを返す。
+        session_id: セッション識別子（省略可、自動生成）。
+        project: プロジェクト名。
+        tags: タグのリスト。
+    """
+    return await _server.session_flush(
+        conversation_log=conversation_log,
+        session_id=session_id,
+        project=project,
+        tags=tags,
+    )
 
 
 @mcp.tool()

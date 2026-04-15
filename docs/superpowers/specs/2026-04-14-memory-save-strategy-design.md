@@ -18,8 +18,6 @@ ChronosGraph の記憶形成において、以下の2軸を統合するハイブ
 - **A. エージェント駆動の自律的保存 (主軸)**: エージェントが重要と判断した Semantic/Procedural 情報を `memory_save` で即座に保存
 - **B. バックグラウンドバッチ処理 (補助)**: セッションの会話ログを `session_flush` で非同期バッチ保存
 
-加えて、RL 拡張ポイントの実体実装として `ActionLogger` / `RewardSignal` の SQLite 実装を提供する。
-
 ### 1.1 Design Decisions
 
 | 決定事項 | 選択 | 理由 |
@@ -28,7 +26,6 @@ ChronosGraph の記憶形成において、以下の2軸を統合するハイブ
 | エンドポイント方式 | 非同期ジョブ型 | `stdio` の逐次 RPC をブロックしない |
 | ジョブ管理 | インメモリ `asyncio.create_task()` | 外部依存なし、YAGNI |
 | トリガー管理 | クライアント側が全責任 | サーバーで会話ターン追跡は不適切 |
-| RL フック | Protocol の SQLite 実装 (ログ蓄積のみ) | 学習ループは将来フェーズ |
 | システムプロンプト | `docs/` 配下のドキュメント | コードベースへの影響なし |
 
 ---
@@ -50,26 +47,22 @@ ChronosGraph の記憶形成において、以下の2軸を統合するハイブ
 │  ┌─────────────────────────────────────────────────────────┐ │
 │  │                    Orchestrator                          │ │
 │  │                                                          │ │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │ │
-│  │  │  Ingestion   │  │   Batch      │  │  Action      │  │ │
-│  │  │  Pipeline    │  │   Processor  │  │  Logger      │  │ │
-│  │  │  (既存)      │  │  NEW         │  │  NEW impl    │  │ │
-│  │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  │ │
-│  │         │                 │                  │          │ │
-│  │         │    ┌────────────┘                  │          │ │
-│  │         │    │  ┌───────────────┐            │          │ │
-│  │         │    │  │ Job Manager   │            │          │ │
-│  │         │    │  │ NEW           │            │          │ │
-│  │         │    │  └───────────────┘            │          │ │
-│  │         │    │                               │          │ │
-│  │  ┌──────┴────┴───────────────────────────────┴───────┐  │ │
-│  │  │            Storage Layer (既存)                     │  │ │
-│  │  └───────────────────────────────────────────────────┘  │ │
+│  │  ┌──────────────┐  ┌──────────────┐                     │ │
+│  │  │  Ingestion   │  │   Batch      │                     │ │
+│  │  │  Pipeline    │  │   Processor  │                     │ │
+│  │  │  (既存)      │  │  NEW         │                     │ │
+│  │  └──────┬───────┘  └──────┬───────┘                     │ │
+│  │         │                 │                              │ │
+│  │         │    ┌────────────┘                              │ │
+│  │         │    │  ┌───────────────┐                        │ │
+│  │         │    │  │ Job Manager   │                        │ │
+│  │         │    │  │ NEW           │                        │ │
+│  │         │    │  └───────────────┘                        │ │
+│  │         │    │                                           │ │
+│  │  ┌──────┴────┴──────────────────────────────────────┐   │ │
+│  │  │            Storage Layer (既存)                    │   │ │
+│  │  └──────────────────────────────────────────────────┘   │ │
 │  └─────────────────────────────────────────────────────────┘ │
-│                                                               │
-│  新規テーブル:                                                 │
-│  ├─ action_log (ActionLogger 用)                              │
-│  └─ reward_log (RewardSignal 用)                              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -97,21 +90,6 @@ BatchProcessor.process()
   │   └─ StorageAdapter.save_memory() → persist (per-chunk commit)
   ├─ for result in results: JobManager.update_progress(job_id, result.memory_id)
   └─ JobManager.mark_completed(job_id)
-```
-
-### 2.3 Data Flow: RL Hooks
-
-```text
-# ActionLogger (save 操作後):
-Orchestrator.save() → IngestionPipeline.ingest() → success
-  └─ ActionLogger.log_action(AgentAction(action_type="memory_save", memory_id=...))
-       └─ INSERT INTO action_log (best-effort, no exception propagation)
-
-# RewardSignal (search 操作後):
-RetrievalPipeline.search() → PostProcessor.process()
-  ├─ access_count / last_accessed_at update (existing)
-  └─ RewardSignal.record_reward(memory_id, signal=score, context={query, score, source})
-       └─ INSERT INTO reward_log (best-effort, no exception propagation)
 ```
 
 ---
@@ -232,74 +210,6 @@ class BatchProcessor:
         """
 ```
 
-### 3.3 SqliteActionLogger
-
-**File:** `src/context_store/extensions/action_logger.py`
-
-```python
-class SqliteActionLogger:
-    """ActionLogger Protocol implementation for SQLite.
-
-    Persists agent actions to the action_log table.
-    Uses a separate DB connection from StorageAdapter to avoid
-    transaction boundary interference.
-
-    All writes are best-effort: failures emit WARNING logs but
-    do not propagate exceptions to callers.
-    """
-
-    def __init__(self, db_path: str) -> None:
-        self._db_path = db_path
-
-    async def log_action(self, action: AgentAction) -> None:
-        """INSERT action into action_log table (best-effort)."""
-
-    async def close(self) -> None:
-        """Close DB connection."""
-```
-
-**Action logging points in Orchestrator:**
-
-| Operation | action_type | memory_id | query |
-|---|---|---|---|
-| `save()` success | `"memory_save"` | saved memory_id | None |
-| `search()` success | `"memory_search"` | None | search query |
-| `session_flush()` start | `"session_flush"` | None | None (job_id in metadata) |
-| `delete()` success | `"memory_delete"` | deleted memory_id | None |
-
-### 3.4 SqliteRewardSignal
-
-**File:** `src/context_store/extensions/reward_signal.py`
-
-```python
-class SqliteRewardSignal:
-    """RewardSignal Protocol implementation for SQLite.
-
-    Records reward signals for memories that are retrieved during search.
-    Signal value is the final search score of the scored memory.
-
-    All writes are best-effort: failures emit WARNING logs but
-    do not propagate exceptions to callers.
-    """
-
-    def __init__(self, db_path: str) -> None:
-        self._db_path = db_path
-
-    async def record_reward(
-        self, memory_id: str, signal: float, context: dict[str, Any]
-    ) -> None:
-        """INSERT reward signal into reward_log table (best-effort)."""
-
-    async def close(self) -> None:
-        """Close DB connection."""
-```
-
-**Integration point:** `retrieval/post_processor.py`
-
-The existing `PostProcessor` updates `access_count` and `last_accessed_at` for search results.
-The `RewardSignal` hook is added here — after the access update, call `record_reward()`
-for each scored memory with the search score as the reward signal value.
-
 ---
 
 ## 4. MCP Tool Interface
@@ -343,132 +253,75 @@ for each scored memory with the search score as the reward signal value.
 
 ---
 
-## 5. Data Model
+## 5. Configuration
 
-### 5.1 action_log Table
-
-```sql
-CREATE TABLE IF NOT EXISTS action_log (
-    id          TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
-    action_type TEXT NOT NULL,
-    memory_id   TEXT,
-    query       TEXT,
-    metadata    TEXT DEFAULT '{}',
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_action_log_type ON action_log(action_type);
-CREATE INDEX IF NOT EXISTS idx_action_log_memory ON action_log(memory_id);
-CREATE INDEX IF NOT EXISTS idx_action_log_created ON action_log(created_at);
-```
-
-### 5.2 reward_log Table
-
-```sql
-CREATE TABLE IF NOT EXISTS reward_log (
-    id          TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
-    memory_id   TEXT NOT NULL,
-    signal      REAL NOT NULL,
-    context     TEXT DEFAULT '{}',
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_reward_log_memory ON reward_log(memory_id);
-CREATE INDEX IF NOT EXISTS idx_reward_log_created ON reward_log(created_at);
-```
-
----
-
-## 6. Configuration
-
-### 6.1 New Settings Parameters
+### 5.1 New Settings Parameters
 
 | Parameter | Env Var | Default | Description |
 |---|---|---|---|
 | `batch_max_concurrent_jobs` | `BATCH_MAX_CONCURRENT_JOBS` | `3` | Max concurrent batch jobs |
 | `batch_max_retained_jobs` | `BATCH_MAX_RETAINED_JOBS` | `100` | Max in-memory job history |
-| `rl_action_logging_enabled` | `RL_ACTION_LOGGING_ENABLED` | `true` | Enable ActionLogger |
-| `rl_reward_logging_enabled` | `RL_REWARD_LOGGING_ENABLED` | `true` | Enable RewardSignal |
 
 ---
 
-## 7. Modified Existing Files
+## 6. Modified Existing Files
 
-### 7.1 server.py
+### 6.1 server.py
 
 - Add `session_flush` and `session_flush_status` MCP tool registrations
 - Delegate to `ChronosServer.session_flush()` and `ChronosServer.session_flush_status()`
 
-### 7.2 orchestrator.py
+### 6.2 orchestrator.py
 
 - Add `BatchProcessor` and `JobManager` as constructor dependencies
 - Add `session_flush()` method: estimate chunks → create job → create_task → return job_id
 - Add `session_flush_status()` method: delegate to JobManager.get_job()
-- Add `ActionLogger.log_action()` calls after save/search/delete operations
-- Update `dispose()` to call `JobManager.cancel_all()` and close RL components
+- Update `dispose()` to call `JobManager.cancel_all()`
 
-### 7.3 orchestrator.py (create_orchestrator factory)
+### 6.3 orchestrator.py (create_orchestrator factory)
 
 - Instantiate `JobManager` and `BatchProcessor`
-- When `storage_backend == "sqlite"` and `rl_action_logging_enabled`:
-  instantiate `SqliteActionLogger` instead of `NoOpActionLogger`
-- When `storage_backend == "sqlite"` and `rl_reward_logging_enabled`:
-  instantiate `SqliteRewardSignal` instead of `NoOpRewardSignal`
-- Pass `RewardSignal` to `PostProcessor`
 
-### 7.4 retrieval/post_processor.py
+### 6.4 config.py
 
-- Add `reward_signal: RewardSignal | None = None` constructor parameter
-- After access_count/last_accessed_at update, call `record_reward()` for each result
-
-### 7.5 config.py
-
-- Add batch and RL configuration parameters (see Section 6.1)
-
-### 7.6 storage/sqlite.py
-
-- Add `action_log` and `reward_log` table creation in schema initialization
+- Add batch configuration parameters (see Section 5.1)
 
 ---
 
-## 8. Error Handling
+## 7. Error Handling
 
 | Scenario | Behavior |
 |---|---|
 | Process terminates during `session_flush` | Committed chunks are retained; uncommitted are lost. Job state (in-memory) is lost |
 | `batch_max_concurrent_jobs` exceeded | Immediate error response: `{"error": "Too many concurrent jobs"}` |
 | Unknown `job_id` in `session_flush_status` | Return `{"error": "Job not found", "job_id": "..."}` |
-| ActionLogger/RewardSignal DB write failure | WARNING log only; main save/search continues (best-effort) |
 | Individual chunk ingestion failure in batch | Skip failed chunk, continue others. Mark job as `failed` only if ALL chunks fail |
 
 ---
 
-## 9. Testing Strategy
+## 8. Testing Strategy
 
 All tests MUST be executed within the devcontainer environment.
 
-### 9.1 New Test Files
+### 8.1 New Test Files
 
 | Test File | Coverage |
 |---|---|
 | `tests/unit/test_job_manager.py` | JobManager state transitions, concurrency limits, cleanup |
 | `tests/unit/test_batch_processor.py` | BatchProcessor chunk estimation, Ingestion delegation, progress updates |
-| `tests/unit/test_action_logger.py` | SqliteActionLogger INSERT, best-effort error handling |
-| `tests/unit/test_reward_signal.py` | SqliteRewardSignal INSERT, PostProcessor integration |
 | `tests/unit/test_session_flush_tools.py` | session_flush / session_flush_status MCP tool E2E |
 
-### 9.2 Key Test Scenarios
+### 8.2 Key Test Scenarios
 
 1. **Job state transitions:** `QUEUED → RUNNING → COMPLETED` and `QUEUED → RUNNING → FAILED`
 2. **Concurrency limit:** Reject when exceeding `batch_max_concurrent_jobs`
-3. **Best-effort logging:** ActionLogger DB connection failure does not block main processing
-4. **Transaction boundary:** Verify `embed()` completes before `save_memory()` (mock ordering)
-5. **Graceful shutdown:** `cancel_all()` cancels running jobs within timeout
-6. **Chunk failure resilience:** Partial chunk failures in batch do not fail the entire job
+3. **Transaction boundary:** Verify `embed()` completes before `save_memory()` (mock ordering)
+4. **Graceful shutdown:** `cancel_all()` cancels running jobs within timeout
+5. **Chunk failure resilience:** Partial chunk failures in batch do not fail the entire job
 
 ---
 
-## 10. Graceful Shutdown Integration
+## 9. Graceful Shutdown Integration
 
 ```python
 # Orchestrator.dispose() changes:
@@ -482,36 +335,28 @@ async def dispose(self) -> None:
     if self._graph is not None:
         await self._graph.dispose()
     await self._cache.dispose()
-
-    # NEW: Close RL components
-    if hasattr(self.action_logger, 'close'):
-        await self.action_logger.close()
-    if hasattr(self.reward_signal, 'close'):
-        await self.reward_signal.close()
 ```
 
 ---
 
-## 11. Out of Scope
+## 10. Out of Scope
 
 | Item | Reason |
 |---|---|
-| RL learning loop | Data accumulation only in action_log/reward_log. Learning is a future phase |
-| PostgreSQL ActionLogger/RewardSignal | Initial implementation is SQLite only. Extensible via Protocol |
+| RL hooks (ActionLogger / RewardSignal) | ログ蓄積・学習ループともに将来フェーズへ延期 |
 | Job persistence across process restarts | YAGNI for `stdio` short-lived MCP server |
 | HTTP/SSE transport | Planned for v2.1 (per SPEC.md §7.1.1) |
 | Concept drift detection | Future extension point (per SPEC.md §6.5) |
 
 ---
 
-## 12. SPEC.md Alignment
+## 11. SPEC.md Alignment
 
 | SPEC.md Section | This Design |
 |---|---|
 | §4.3 Chunker (Q&A pair splitting, 1-3 turns) | Reuse existing `Chunker._split_conversation()` |
 | §4.4 Deduplicator (cosine >= 0.90 → SUPERSEDES) | All batch-saved memories pass through existing Deduplicator |
 | §6 Lifecycle Manager | Batch-saved memories are subject to normal lifecycle (decay, archive, purge) |
-| §10 RL Extension Points (Protocol definitions) | Maintain Protocol; add SQLite implementations |
 | Devcontainer constraint | All testing must run in devcontainer |
 
 ---
@@ -532,9 +377,11 @@ equivalent AI agent system instructions. It is NOT embedded in the MCP server co
 タスクを実行する際、以下の基準に従って memory_save ツールを能動的に呼び出してください。
 
 1. **記憶の評価（Thinkingプロセス）:**
-   ユーザーからの指示を完了した後、または重要なエラーを解決した直後に、
-   現在のコンテキスト内に「再利用価値のある知識」が含まれているか
-   適応的思考（Adaptive Thinking）を用いて評価してください。
+   以下のいずれかの条件を満たした時点で、現在のコンテキスト内に
+   「再利用価値のある知識」が含まれているか適応的思考（Adaptive Thinking）を
+   用いて評価してください。
+   - ユーザーからの指示を完了した後
+   - コマンド実行がエラー終了（非0）から正常終了（0）に変化した実行の直後
 
 2. **保存対象の抽出:**
    単なる相槌や一時的な状態は保存しないでください。以下のいずれかに該当する
@@ -550,9 +397,11 @@ equivalent AI agent system instructions. It is NOT embedded in the MCP server co
    背景状況なしでも理解できる「具体的で独立した要約文」にしてください。
 
 4. **会話ログのバッチ保存:**
-   3〜5ターンの会話が蓄積されたタイミング、またはセッション終了時に、
-   session_flush ツールを呼び出して会話ログ全体をバッチ保存してください。
+   以下のいずれかの条件を満たした時点で、session_flush ツールを呼び出して
+   会話ログ全体をバッチ保存してください。
    これにより、EPISODIC 記憶がシステムに自動分類・保存されます。
+   - 会話ログの総文字数が 8,000 文字に達した時
+   - MCPサーバープロセスの終了前（graceful shutdown 時）
 </instructions>
 
 <memory_rules>
@@ -578,4 +427,26 @@ equivalent AI agent system instructions. It is NOT embedded in the MCP server co
   不確実なノイズを長期記憶に混入させないことが優先されます。
 - テストや静的解析を実行する場合は、必ずDevcontainer環境内で実行してください。
 </constraints>
+
+<quick_rubric>
+memory_save または session_flush を呼び出した後、以下のチェックリストで
+自己検証を行い、すべて合格した場合のみ保存を確定してください。
+
+1. **ツール呼び出しの正当性:**
+   - [ ] 保存トリガー条件（指示完了 / エラー→正常遷移 / 文字数閾値到達 / プロセス終了前）のいずれかに該当するか？
+   - [ ] memory_save の場合: Semantic または Procedural に分類できる具体的な知識か？
+         （一時的な状態・相槌・感情表現ではないか？）
+   - [ ] session_flush の場合: conversation_log 引数に会話ログ全文を渡しているか？
+
+2. **要約の自己完結性:**
+   - [ ] 保存するテキストは、背景状況や会話履歴を参照せずに単体で理解できるか？
+   - [ ] 固有名詞・コマンド・パス等の具体的な情報が省略されていないか？
+   - [ ] 「先ほどの」「上記の」「これ」等の指示代名詞を含んでいないか？
+
+3. **重複・ノイズの回避:**
+   - [ ] 同一セッション内で、実質的に同じ内容を既に memory_save していないか？
+   - [ ] 情報が不足・曖昧な場合は、保存を見送る判断をしたか？
+
+いずれかのチェック項目が不合格の場合、保存を取り消すか内容を修正してください。
+</quick_rubric>
 ```

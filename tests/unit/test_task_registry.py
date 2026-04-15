@@ -84,6 +84,7 @@ class TestTaskRegistryDoneCallback:
     @pytest.mark.asyncio
     async def test_done_callback_logs_exception(self, caplog: pytest.LogCaptureFixture) -> None:
         """未処理例外のあるタスクは logger.error() で記録される。"""
+        caplog.set_level(logging.ERROR, logger="context_store.ingestion.task_registry")
         registry = TaskRegistry()
 
         async def raise_error() -> None:
@@ -92,7 +93,7 @@ class TestTaskRegistryDoneCallback:
         task = asyncio.create_task(raise_error())
         registry.register(task)
 
-        # タスク完了を待機（例外はコールバックでキャッチ）
+        # タスク完了を待機 (例外はコールバックでキャッチ)
         with pytest.raises(RuntimeError):
             await task
         await asyncio.sleep(0)
@@ -166,15 +167,24 @@ class TestTaskRegistryCancelAll:
             try:
                 await asyncio.sleep(100)
             except asyncio.CancelledError:
-                # キャンセルを無視してスリープ（ただしタイムアウト以内に終わる）
+                # キャンセルを無視してスリープ (ただしタイムアウト以内に終わる)
                 await asyncio.sleep(0.1)
 
         task = asyncio.create_task(stubborn())
         registry.register(task)
 
+        # タスクを開始させる
+        await asyncio.sleep(0)
+
         # タイムアウト 0.5s で cancel_all
         await registry.cancel_all(timeout=0.5)
         # cancel_all がハングせずに戻ることを確認
+
+        await asyncio.sleep(0)
+        # stubborn タスクは CancelledError を握り潰して正常終了する（cancelled ではない）
+        assert task.done()
+        assert not task.cancelled()
+        assert len(registry) == 0
 
     @pytest.mark.asyncio
     async def test_cancel_all_logs_warning_on_timeout(
@@ -200,7 +210,8 @@ class TestTaskRegistryCancelAll:
         await registry.cancel_all(timeout=0.1)
 
         assert any(
-            "StubbornTask" in record.message and "terminate within 0.1 seconds" in record.message
+            "StubbornTask" in record.message
+            and "did not finish within timeout=0.1s" in record.message
             for record in caplog.records
             if record.levelno == logging.WARNING
         )

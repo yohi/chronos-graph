@@ -33,7 +33,7 @@ class TaskRegistry:
         3. task.exception() で未処理例外を取得
            - 例外が存在する場合: logger.error() でスタックトレース付きログ出力
            - 例外なしの場合: logger.debug() で正常完了を記録
-        4. 例外は再送出しない（バックグラウンドタスクのため呼び出し元に伝播不可）
+        4. 例外は再送出しない (バックグラウンドタスクのため呼び出し元に伝播不可)
 
         Note: task.cancelled() を先行チェックしないと、キャンセル済みタスクに対して
         task.exception() を呼んだ際に CancelledError が送出されるため順序は重要。
@@ -49,20 +49,28 @@ class TaskRegistry:
         """Done callback: auto-remove task and log errors."""
         self._tasks.discard(task)
 
-        if task.cancelled():
-            logger.debug("Background task cancelled: %s", task.get_name())
-            return
+        try:
+            if task.cancelled():
+                logger.debug("Background task cancelled: %s", task.get_name())
+                return
 
-        exc = task.exception()
-        if exc is not None:
+            exc = task.exception()
+            if exc is not None:
+                logger.error(
+                    "Background task failed: %s: %s",
+                    task.get_name(),
+                    exc,
+                    exc_info=exc,
+                )
+            else:
+                logger.debug("Background task completed: %s", task.get_name())
+        except Exception as e:
             logger.error(
-                "Background task failed: %s: %s",
+                "Error in TaskRegistry._on_task_done for task %s: %s",
                 task.get_name(),
-                exc,
-                exc_info=exc,
+                e,
+                exc_info=e,
             )
-        else:
-            logger.debug("Background task completed: %s", task.get_name())
 
     async def cancel_all(self, timeout: float = 5.0) -> None:
         """Cancel all running tasks with timeout. Called during graceful shutdown."""
@@ -76,9 +84,9 @@ class TaskRegistry:
         # タスクの完了を待機（タイムアウト付き）
         done, pending = await asyncio.wait(tasks, timeout=timeout)
         if pending:
-            task_names = [t.get_name() for t in pending]
             logger.warning(
-                "Some background tasks did not terminate within %.1f seconds: %s",
+                "cancel_all: %d task(s) did not finish within timeout=%.1fs: %s",
+                len(pending),
                 timeout,
-                ", ".join(task_names),
+                [t.get_name() for t in pending],
             )

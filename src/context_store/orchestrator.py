@@ -345,8 +345,8 @@ class Orchestrator:
         # まずライフサイクルマネージャーを終了させ、タスクの完了を待機する
         try:
             await self._lifecycle_manager.graceful_shutdown()
-        except Exception as exc:
-            logger.warning("Graceful shutdown incomplete (ignored): %s", exc)
+        except RuntimeError as exc:
+            logger.warning("Graceful shutdown incomplete (ignored): %s", exc, exc_info=True)
 
         # 残っているバックグラウンドタスクがあればキャンセル (5s タイムアウト)
         await self._task_registry.cancel_all(timeout=5.0)

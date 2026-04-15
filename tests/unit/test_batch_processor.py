@@ -14,37 +14,32 @@ from context_store.models.memory import SourceType
 class TestEstimateChunks:
     """BatchProcessor.estimate_chunks() のテスト。"""
 
-    def test_estimate_chunks_with_qa_pairs(self) -> None:
-        """Q&A ペアを含む会話ログのチャンク数を推定できる。"""
+    @pytest.mark.asyncio
+    async def test_estimate_chunks_delegates_to_pipeline(self) -> None:
+        """estimate_chunks() は IngestionPipeline.estimate_chunks() に委譲する。"""
         mock_pipeline = MagicMock()
-        mock_chunker = MagicMock()
-        # 3つのチャンクを返すようにモック
-        mock_chunker.chunk.return_value = [MagicMock(), MagicMock(), MagicMock()]
-        processor = BatchProcessor(ingestion_pipeline=mock_pipeline, chunker=mock_chunker)
-
-        conversation_log = "User: hello\nAssistant: hi"
-        result = processor.estimate_chunks(conversation_log)
-
-        assert result == 3
-        mock_chunker.chunk.assert_called_once()
-
-    def test_estimate_chunks_empty_returns_zero(self) -> None:
-        """空文字列は 0 チャンクを返す。"""
-        mock_pipeline = MagicMock()
+        mock_pipeline.estimate_chunks = AsyncMock(return_value=5)
         processor = BatchProcessor(ingestion_pipeline=mock_pipeline)
 
-        result = processor.estimate_chunks("")
-        assert result == 0
+        conversation_log = "User: hello\nAssistant: hi"
+        result = await processor.estimate_chunks(conversation_log)
 
-    def test_estimate_chunks_no_qa_pattern(self) -> None:
-        """Q&A パターンなしのテキストも 0 以上のチャンク数を返す。"""
+        assert result == 5
+        mock_pipeline.estimate_chunks.assert_called_once_with(
+            conversation_log,
+            source_type=SourceType.CONVERSATION,
+        )
+
+    @pytest.mark.asyncio
+    async def test_estimate_chunks_empty_handled_by_pipeline(self) -> None:
+        """空文字列の処理もパイプラインに委譲する。"""
         mock_pipeline = MagicMock()
-        mock_chunker = MagicMock()
-        mock_chunker.chunk.return_value = [MagicMock()]
-        processor = BatchProcessor(ingestion_pipeline=mock_pipeline, chunker=mock_chunker)
+        mock_pipeline.estimate_chunks = AsyncMock(return_value=0)
+        processor = BatchProcessor(ingestion_pipeline=mock_pipeline)
 
-        result = processor.estimate_chunks("ランダムテキスト")
-        assert result == 1
+        result = await processor.estimate_chunks("")
+        assert result == 0
+        mock_pipeline.estimate_chunks.assert_called_once()
 
 
 class TestProcess:

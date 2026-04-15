@@ -9,8 +9,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from context_store.ingestion.adapters import RawContent
-from context_store.ingestion.chunker import Chunker
 from context_store.models.memory import SourceType
 
 if TYPE_CHECKING:
@@ -22,34 +20,25 @@ logger = logging.getLogger(__name__)
 class BatchProcessor:
     """Thin wrapper over IngestionPipeline for batch conversation log processing.
 
-    Delegates all processing to IngestionPipeline.ingest().
+    Delegates all processing to IngestionPipeline.
     """
 
     def __init__(
         self,
         ingestion_pipeline: "IngestionPipeline",
-        chunker: Chunker | None = None,
     ) -> None:
         self._pipeline = ingestion_pipeline
-        self._chunker = chunker or Chunker()
 
-    def estimate_chunks(self, conversation_log: str) -> int:
-        """Estimate chunk count using Chunker dry-run (no side effects).
+    async def estimate_chunks(self, conversation_log: str) -> int:
+        """実際の取り込みフローに基づき、会話ログのチャンク数を推定する。
 
-        Creates a temporary RawContent with source_type=CONVERSATION,
-        passes it through Chunker.chunk() to count yielded chunks,
-        but does NOT persist anything. This is a pure read-only estimation.
+        IngestionPipeline.estimate_chunks() に委譲することで、
+        Adapter による分割ロジックとの乖離を防ぐ。
         """
-        if not conversation_log:
-            return 0
-
-        raw = RawContent(
-            content=conversation_log,
+        return await self._pipeline.estimate_chunks(
+            conversation_log,
             source_type=SourceType.CONVERSATION,
-            metadata={},
         )
-        # Chunker.chunk() はジェネレータなので、全件をカウントする
-        return sum(1 for _ in self._chunker.chunk(raw))
 
     async def process(
         self,

@@ -131,6 +131,43 @@ class IngestionPipeline:
 
         await self._embedding_provider.close()
 
+    async def estimate_chunks(
+        self,
+        source: str,
+        *,
+        source_type: SourceType = SourceType.MANUAL,
+        metadata: dict[str, Any] | None = None,
+    ) -> int:
+        """実際のインジェストフロー（Adapter + Chunker）に基づきチャンク数を推定する。
+
+        永続化や埋め込み生成は行わない読み取り専用の推定。
+        """
+        if not source:
+            return 0
+
+        meta = metadata or {}
+
+        # ステップ1: ソースからコンテンツを取得（Adapter 適用）
+        if source_type == SourceType.URL:
+            # URL の場合は実際にフェッチする必要があるため、簡易的な推定は困難
+            # 現時点では RawContent 1件として扱うか、フェッチを許容する
+            try:
+                raw_contents = await self._fetch_url_content(source)
+            except Exception:
+                return 0
+        elif source_type == SourceType.CONVERSATION:
+            raw_contents = await self._conversation_adapter.adapt(source, metadata=meta)
+        else:
+            raw_contents = [RawContent(content=source, source_type=source_type, metadata=meta)]
+
+        total_chunks = 0
+        for raw in raw_contents:
+            # ステップ2: チャンク分割（Chunker 適用）
+            # Chunker.chunk() はジェネレータなので長さをカウント
+            total_chunks += sum(1 for _ in self._chunker.chunk(raw))
+
+        return total_chunks
+
     async def ingest(
         self,
         source: str,

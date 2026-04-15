@@ -118,6 +118,7 @@ async def _build_orchestrator(
     reward_signal=None,
     policy_hook=None,
     settings=None,
+    batch_processor=None,
 ):
     """Orchestrator を依存性注入でビルドするヘルパー。
 
@@ -135,6 +136,7 @@ async def _build_orchestrator(
     lifecycle_manager = lifecycle_manager or _make_mock_lifecycle_manager()
     task_registry = task_registry or _make_mock_task_registry()
     settings = settings or make_settings()
+    batch_processor = batch_processor or AsyncMock()
 
     orch = Orchestrator(
         storage=storage,
@@ -149,6 +151,7 @@ async def _build_orchestrator(
         reward_signal=reward_signal,
         policy_hook=policy_hook,
         settings=settings,
+        batch_processor=batch_processor,
     )
     # フェイルファストチェック（次元不一致時は ConfigurationError を raise）
     await orch._check_vector_dimension()
@@ -556,3 +559,87 @@ class TestDisposeOperation:
         await orch.dispose()
 
         task_registry.cancel_all.assert_called_once()
+
+
+class TestSessionFlush:
+    """session_flush() のテスト。"""
+
+    @pytest.mark.asyncio
+    async def test_session_flush_accepted(self):
+        """正常系: タスクが受理され、レジストリに登録される。"""
+        task_registry = _make_mock_task_registry()
+        batch_processor = AsyncMock()
+        batch_processor.estimate_chunks = AsyncMock(return_value=5)
+
+        orch, *_ = await _build_orchestrator(
+            task_registry=task_registry,
+            batch_processor=batch_processor,
+        )
+
+        resp = await orch.session_flush("test log")
+
+        assert resp["status"] == "accepted"
+        assert resp["estimated_chunks"] == 5
+        task_registry.register.assert_called_once()
+        batch_processor.estimate_chunks.assert_called_once_with("test log")
+
+    @pytest.mark.asyncio
+    async def test_session_flush_empty_log_returns_error(self):
+        """バリデーション: 空のログはエラー。"""
+        orch, *_ = await _build_orchestrator()
+        resp = await orch.session_flush("")
+        assert "error" in resp
+        assert "empty" in resp["error"]
+
+    @pytest.mark.asyncio
+    async def test_session_flush_too_long_log_returns_error(self):
+        """バリデーション: 長すぎるログはエラー。"""
+        settings = make_settings()
+        settings.session_flush_max_log_length = 10
+        orch, *_ = await _build_orchestrator(settings=settings)
+
+        resp = await orch.session_flush("this is too long")
+        assert "error" in resp
+        assert "exceeds maximum length" in resp["error"]
+
+    @pytest.mark.asyncio
+    async def test_session_flush_concurrency_limit(self):
+        """同時実行数制限: max_jobs を超えるとエラー。"""
+        settings = make_settings()
+        settings.batch_max_concurrent_jobs = 1
+        task_registry = _make_mock_task_registry()
+        task_registry.__len__ = MagicMock(return_value=1)  # すでに1つ実行中
+
+        orch, *_ = await _build_orchestrator(
+            settings=settings,
+            task_registry=task_registry,
+            batch_processor=AsyncMock(),
+        )
+
+        resp = await orch.session_flush("test log")
+        assert "error" in resp
+        assert "Too many concurrent jobs" in resp["error"]
+
+    @pytest.mark.asyncio
+    async def test_session_flush_not_configured(self):
+        """BatchProcessor または TaskRegistry が未設定の場合エラー。"""
+        # _build_orchestrator はデフォルトでモックを作るので、明示的に None を渡す
+        orch, *_ = await _build_orchestrator(task_registry=None)
+        # Note: _build_orchestrator helper currently doesn't allow passing batch_processor=None
+        # easily because it's not in the helper args, but Orchestrator can take it.
+        from context_store.orchestrator import Orchestrator
+
+        orch = Orchestrator(
+            storage=AsyncMock(),
+            graph=None,
+            cache=AsyncMock(),
+            embedding_provider=AsyncMock(),
+            ingestion_pipeline=AsyncMock(),
+            retrieval_pipeline=AsyncMock(),
+            lifecycle_manager=AsyncMock(),
+            task_registry=None,  # type: ignore
+        )
+
+        resp = await orch.session_flush("test log")
+        assert "error" in resp
+        assert "not configured" in resp["error"]

@@ -97,6 +97,8 @@ class Settings(BaseSettings):
     # --- Ingestion ---
     conversation_chunk_size: int = Field(default=5, ge=1)
     batch_max_concurrent_jobs: int = Field(default=3, ge=1)
+    session_flush_max_log_length: int = Field(default=200_000, ge=1)
+    batch_cancel_timeout: float = Field(default=5.0, gt=0.0)
 
     # --- Search ---
     default_top_k: int = Field(default=10, ge=1)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from context_store.extensions.noop import NoOpActionLogger, NoOpPolicyHook, NoOpRewardSignal
@@ -81,7 +82,6 @@ class Orchestrator:
         self._task_registry = task_registry
         self._batch_processor = batch_processor
         self._settings = settings
-        self._batch_processor = batch_processor
 
         # RL 拡張フック（None の場合は NoOp）
         self.action_logger: "ActionLogger" = (
@@ -131,9 +131,6 @@ class Orchestrator:
     # 操作の委譲
     # ---------------------------------------------------------------------------
 
-    # 入力バリデーション定数
-    _SESSION_FLUSH_MAX_LOG_LENGTH = 200_000
-
     async def session_flush(
         self,
         conversation_log: str,
@@ -145,22 +142,21 @@ class Orchestrator:
 
         Args:
             conversation_log: 会話ログ全文。
-            session_id: セッション ID（None の場合は自動生成）。
+            session_id: セッション ID (None の場合は自動生成)。
             project: プロジェクト名。
             tags: タグのリスト。
 
         Returns:
             status=accepted の dict、またはエラー dict。
         """
-        import uuid as uuid_mod
-
         # 入力バリデーション
         if not conversation_log:
             return {"error": "conversation_log must not be empty"}
-        if len(conversation_log) > self._SESSION_FLUSH_MAX_LOG_LENGTH:
+
+        max_log_length = self._settings.session_flush_max_log_length if self._settings else 200_000
+        if len(conversation_log) > max_log_length:
             return {
-                "error": f"conversation_log exceeds maximum length of "
-                f"{self._SESSION_FLUSH_MAX_LOG_LENGTH} characters"
+                "error": f"conversation_log exceeds maximum length of {max_log_length} characters"
             }
 
         if self._task_registry is None or self._batch_processor is None:
@@ -172,10 +168,10 @@ class Orchestrator:
             return {"error": "Too many concurrent jobs"}
 
         # チャンク数推定
-        estimated_chunks = self._batch_processor.estimate_chunks(conversation_log)
+        estimated_chunks = await self._batch_processor.estimate_chunks(conversation_log)
 
         # バックグラウンドタスク作成
-        effective_session_id = session_id or str(uuid_mod.uuid4())
+        effective_session_id = session_id or str(uuid.uuid4())
         task = asyncio.create_task(
             self._batch_processor.process(
                 conversation_log,
@@ -407,20 +403,36 @@ class Orchestrator:
 
     async def dispose(self) -> None:
         """全アダプターのリソースを解放する。"""
-        # まずライフサイクルマネージャーを終了させ、タスクの完了を待機する
+        # 1. ライフサイクルマネージャーのシャットダウン
         try:
             await self._lifecycle_manager.graceful_shutdown()
-        except RuntimeError as exc:
-            logger.warning("Graceful shutdown incomplete (ignored): %s", exc, exc_info=True)
+        except Exception as exc:
+            logger.warning("Graceful shutdown incomplete: %s", exc, exc_info=True)
 
-        # 残っているバックグラウンドタスクがあればキャンセル (5s タイムアウト)
+        # 2. バックグラウンドタスクのキャンセル
         if self._task_registry is not None:
-            await self._task_registry.cancel_all(timeout=5.0)
+            timeout = self._settings.batch_cancel_timeout if self._settings else 5.0
+            try:
+                await self._task_registry.cancel_all(timeout=timeout)
+            except Exception as exc:
+                logger.warning("Task cancellation failed: %s", exc, exc_info=True)
 
-        await self._storage.dispose()
-        if self._graph is not None:
-            await self._graph.dispose()
-        await self._cache.dispose()
+        # 3. 各アダプターの解放 (個別に try-finally)
+        try:
+            await self._storage.dispose()
+        except Exception as exc:
+            logger.error("Failed to dispose storage: %s", exc, exc_info=True)
+
+        try:
+            if self._graph is not None:
+                await self._graph.dispose()
+        except Exception as exc:
+            logger.error("Failed to dispose graph: %s", exc, exc_info=True)
+
+        try:
+            await self._cache.dispose()
+        except Exception as exc:
+            logger.error("Failed to dispose cache: %s", exc, exc_info=True)
 
 
 # ---------------------------------------------------------------------------

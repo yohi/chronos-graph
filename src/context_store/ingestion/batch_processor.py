@@ -32,6 +32,7 @@ class BatchProcessor:
         if batch_max_concurrent_jobs < 1:
             raise ValueError("batch_max_concurrent_jobs must be at least 1")
         self._pipeline = ingestion_pipeline
+        self._chunker = ingestion_pipeline.chunker
         self._semaphore = asyncio.Semaphore(batch_max_concurrent_jobs)
 
     async def estimate_chunks(self, conversation_log: str) -> int:

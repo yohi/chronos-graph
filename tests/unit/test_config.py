@@ -1,5 +1,5 @@
 import pytest
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from context_store.config import Settings
 from tests.unit.conftest import make_settings
@@ -408,5 +408,5 @@ class TestBatchConfig:
     def test_batch_max_concurrent_jobs_minimum(self, monkeypatch, default_settings) -> None:
         """batch_max_concurrent_jobs は最小 1。"""
         monkeypatch.setenv("BATCH_MAX_CONCURRENT_JOBS", "0")
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             Settings(_env_file=None, **default_settings)

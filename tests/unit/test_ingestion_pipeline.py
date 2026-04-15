@@ -479,3 +479,48 @@ async def test_pipeline_memo_key_uniqueness_with_document_id() -> None:
     assert results[1].persisted_memory.source_metadata["document_id"] == "doc-B"
     # 各々が保存されている（save_memory が 2回呼ばれている）ことを確認
     assert storage.save_memory.call_count == 2
+
+
+# ===========================================================================
+# Estimate Chunks テスト
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_pipeline_estimate_chunks_conversation_discrepancy() -> None:
+    """指摘事項に基づき、6ターンの会話が 3チャンクとして推定されることを検証。
+
+    Flow:
+    1. ConversationAdapter (chunk_size=5) -> [t1-t5, t6] の 2グループ
+    2. Chunker (MAX_TURNS_PER_CHUNK=3) -> [t1-t3, t4-t5] + [t6] = 3チャンク
+    """
+    storage = _make_mock_storage()
+    graph = _make_mock_graph()
+    embedding_provider = _make_mock_embedding_provider()
+
+    # デフォルト設定 (conversation_chunk_size=5, MAX_TURNS_PER_CHUNK=3) を使用
+    pipeline = IngestionPipeline(
+        storage=storage,
+        graph=graph,
+        embedding_provider=embedding_provider,
+        settings=make_settings(conversation_chunk_size=5),
+    )
+
+    # 6ターンの会話ログを作成（6つの発話）
+    conversation_log = "User: t1\nAssistant: r1\nUser: t2\nAssistant: r2\nUser: t3\nAssistant: r3\n"
+
+    count = await pipeline.estimate_chunks(
+        conversation_log,
+        source_type=SourceType.CONVERSATION,
+    )
+
+    # 指摘に基づき、3 チャンクになるはず
+    # 1. Adapter が 5ターンと 1ターンに分割 ([t1,r1,t2,r2,t3], [r3] は間違い。
+    #    User: t1 (1), Assistant: r1 (2), User: t2 (3), Assistant: r2 (4),
+    #    User: t3 (5), Assistant: r3 (6)
+    #    Adapter(5) -> [t1,r1,t2,r2,t3] と [Assistant: r3]
+    #    Chunker(3) -> ([t1,r1,t2], [r2,t3]) と ([r3])
+    #    合計 3 チャンク。
+    #    (もし Adapter なしで直接 Chunker に渡すと [t1,r1,t2] と
+    #    [r2,t3,Assistant: r3] の 2 チャンクになる)
+    assert count == 3

@@ -96,6 +96,7 @@ class Settings(BaseSettings):
 
     # --- Ingestion ---
     conversation_chunk_size: int = Field(default=5, ge=1)
+    batch_max_concurrent_jobs: int = Field(default=3, ge=1)
 
     # --- Search ---
     default_top_k: int = Field(default=10, ge=1)

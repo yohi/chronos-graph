@@ -21,8 +21,8 @@ def test_mask_url_empty_string() -> None:
     assert mask_url("") == ""
 
 
-def test_mask_url_invalid_input() -> None:
-    """無効な URL 形式の場合、'invalid-url' を返す（例外を投げない）。"""
-    # 実際には urlparse はほとんどの文字列を受け入れるが、
-    # 極端なケースでの挙動を確認
+def test_mask_url_non_url_input() -> None:
+    """URL 形式でない文字列の場合、そのままの文字列を返す。"""
+    # urlparse は多くの文字列をパスとして受け入れるため、
+    # URL として成立しない文字列もそのまま返される。
     assert mask_url("not a url") == "not a url"

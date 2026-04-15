@@ -113,17 +113,17 @@ async def _build_orchestrator(
     ingestion_pipeline=None,
     retrieval_pipeline=None,
     lifecycle_manager=None,
-    task_registry=None,
+    task_registry=_UNSET,
     action_logger=None,
     reward_signal=None,
     policy_hook=None,
     settings=None,
-    batch_processor=None,
+    batch_processor=_UNSET,
 ):
     """Orchestrator を依存性注入でビルドするヘルパー。
 
-    graph に None を明示的に渡すとグラフ機能無効（graph=None）として扱う。
-    省略した場合はデフォルトのモックを使用する。
+    graph, batch_processor, task_registry に None を明示的に渡すと、
+    その機能が無効な状態として扱う。省略（_UNSET）した場合はデフォルトのモックを使用する。
     """
     from context_store.orchestrator import Orchestrator
 
@@ -134,9 +134,9 @@ async def _build_orchestrator(
     ingestion_pipeline = ingestion_pipeline or _make_mock_ingestion_pipeline()
     retrieval_pipeline = retrieval_pipeline or _make_mock_retrieval_pipeline()
     lifecycle_manager = lifecycle_manager or _make_mock_lifecycle_manager()
-    task_registry = task_registry or _make_mock_task_registry()
+    task_registry = _make_mock_task_registry() if task_registry is _UNSET else task_registry
     settings = settings or make_settings()
-    batch_processor = batch_processor or AsyncMock()
+    batch_processor = AsyncMock() if batch_processor is _UNSET else batch_processor
 
     orch = Orchestrator(
         storage=storage,
@@ -623,23 +623,39 @@ class TestSessionFlush:
     @pytest.mark.asyncio
     async def test_session_flush_not_configured(self):
         """BatchProcessor または TaskRegistry が未設定の場合エラー。"""
-        # _build_orchestrator はデフォルトでモックを作るので、明示的に None を渡す
+        # TaskRegistry が None のケース
         orch, *_ = await _build_orchestrator(task_registry=None)
-        # Note: _build_orchestrator helper currently doesn't allow passing batch_processor=None
-        # easily because it's not in the helper args, but Orchestrator can take it.
-        from context_store.orchestrator import Orchestrator
-
-        orch = Orchestrator(
-            storage=AsyncMock(),
-            graph=None,
-            cache=AsyncMock(),
-            embedding_provider=AsyncMock(),
-            ingestion_pipeline=AsyncMock(),
-            retrieval_pipeline=AsyncMock(),
-            lifecycle_manager=AsyncMock(),
-            task_registry=None,  # type: ignore
-        )
-
         resp = await orch.session_flush("test log")
         assert "error" in resp
         assert "not configured" in resp["error"]
+
+        # BatchProcessor が None のケース
+        orch, *_ = await _build_orchestrator(batch_processor=None)
+        resp = await orch.session_flush("test log")
+        assert "error" in resp
+        assert "not configured" in resp["error"]
+
+    @pytest.mark.asyncio
+    async def test_session_flush_calls_lifecycle_hook(self):
+        """バッチ処理完了後に LifecycleManager.on_memory_saved() が呼ばれる。"""
+        task_registry = _make_mock_task_registry()
+        lifecycle = _make_mock_lifecycle_manager()
+        batch_processor = AsyncMock()
+        batch_processor.process = AsyncMock(return_value=True)
+        batch_processor.estimate_chunks = AsyncMock(return_value=1)
+
+        orch, *_ = await _build_orchestrator(
+            task_registry=task_registry,
+            lifecycle_manager=lifecycle,
+            batch_processor=batch_processor,
+        )
+
+        # session_flush を実行（バックグラウンドタスクが登録される）
+        await orch.session_flush("test log")
+
+        # 登録されたタスクを取得して実行
+        task = task_registry.register.call_args[0][0]
+        await task
+
+        # フックが呼ばれたことを確認
+        lifecycle.on_memory_saved.assert_called_once()

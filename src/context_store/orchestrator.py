@@ -6,6 +6,7 @@ RL 拡張フックを受け取り、None の場合は NoOp 実装を使用する
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -18,7 +19,9 @@ if TYPE_CHECKING:
     from context_store.config import Settings
     from context_store.embedding.protocols import EmbeddingProvider
     from context_store.extensions.protocols import ActionLogger, PolicyHook, RewardSignal
+    from context_store.ingestion.batch_processor import BatchProcessor
     from context_store.ingestion.pipeline import IngestionPipeline, IngestionResult
+    from context_store.ingestion.task_registry import TaskRegistry
     from context_store.lifecycle.manager import LifecycleManager
     from context_store.retrieval.pipeline import RetrievalPipeline, RetrievalResponse
     from context_store.storage.protocols import CacheAdapter, GraphAdapter, StorageAdapter
@@ -62,6 +65,8 @@ class Orchestrator:
         reward_signal: "RewardSignal | None" = None,
         policy_hook: "PolicyHook | None" = None,
         settings: "Settings | None" = None,
+        task_registry: "TaskRegistry | None" = None,
+        batch_processor: "BatchProcessor | None" = None,
     ) -> None:
         self._storage = storage
         self._graph = graph
@@ -71,6 +76,8 @@ class Orchestrator:
         self._retrieval_pipeline = retrieval_pipeline
         self._lifecycle_manager = lifecycle_manager
         self._settings = settings
+        self._task_registry = task_registry
+        self._batch_processor = batch_processor
 
         # RL 拡張フック（None の場合は NoOp）
         self.action_logger: "ActionLogger" = (
@@ -119,6 +126,64 @@ class Orchestrator:
     # ---------------------------------------------------------------------------
     # 操作の委譲
     # ---------------------------------------------------------------------------
+
+    # 入力バリデーション定数
+    _SESSION_FLUSH_MAX_LOG_LENGTH = 200_000
+
+    async def session_flush(
+        self,
+        conversation_log: str,
+        session_id: str | None = None,
+        project: str | None = None,
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """会話ログをバックグラウンドでバッチ保存する (Fire-and-forget)。
+
+        Args:
+            conversation_log: 会話ログ全文。
+            session_id: セッション ID（None の場合は自動生成）。
+            project: プロジェクト名。
+            tags: タグのリスト。
+
+        Returns:
+            status=accepted の dict、またはエラー dict。
+        """
+        import uuid as uuid_mod
+
+        # 入力バリデーション
+        if not conversation_log:
+            return {"error": "conversation_log must not be empty"}
+        if len(conversation_log) > self._SESSION_FLUSH_MAX_LOG_LENGTH:
+            return {
+                "error": f"conversation_log exceeds maximum length of "
+                f"{self._SESSION_FLUSH_MAX_LOG_LENGTH} characters"
+            }
+
+        if self._task_registry is None or self._batch_processor is None:
+            return {"error": "Batch processing is not configured"}
+
+        # 同時実行数チェック
+        max_jobs = self._settings.batch_max_concurrent_jobs if self._settings else 3
+        if len(self._task_registry) >= max_jobs:
+            return {"error": "Too many concurrent jobs"}
+
+        # チャンク数推定
+        estimated_chunks = self._batch_processor.estimate_chunks(conversation_log)
+
+        # バックグラウンドタスク作成
+        effective_session_id = session_id or str(uuid_mod.uuid4())
+        task = asyncio.create_task(
+            self._batch_processor.process(
+                conversation_log,
+                session_id=effective_session_id,
+                project=project,
+                tags=tags,
+            ),
+            name=f"session_flush:{effective_session_id}",
+        )
+        self._task_registry.register(task)
+
+        return {"status": "accepted", "estimated_chunks": estimated_chunks}
 
     async def save(
         self,
@@ -338,6 +403,10 @@ class Orchestrator:
 
     async def dispose(self) -> None:
         """全アダプターのリソースを解放する。"""
+        # バックグラウンドタスクのキャンセル（5s タイムアウト）
+        if self._task_registry is not None:
+            await self._task_registry.cancel_all(timeout=5.0)
+
         await self._lifecycle_manager.graceful_shutdown()
         await self._storage.dispose()
         if self._graph is not None:
@@ -472,6 +541,13 @@ async def create_orchestrator(
             settings=settings,
         )
 
+        # TaskRegistry と BatchProcessor 組み立て
+        from context_store.ingestion.batch_processor import BatchProcessor
+        from context_store.ingestion.task_registry import TaskRegistry
+
+        task_registry = TaskRegistry()
+        batch_processor = BatchProcessor(ingestion_pipeline=ingestion_pipeline)
+
         # Orchestrator 生成・初期化
         orchestrator = Orchestrator(
             storage=storage,
@@ -485,6 +561,8 @@ async def create_orchestrator(
             reward_signal=reward_signal,
             policy_hook=policy_hook,
             settings=settings,
+            task_registry=task_registry,
+            batch_processor=batch_processor,
         )
 
         # フェイルファストチェック

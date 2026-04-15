@@ -72,6 +72,25 @@ class TaskRegistry:
                 exc_info=e,
             )
 
+    async def wait_all(self, timeout: float = 5.0) -> None:
+        """Wait for all running tasks to complete with timeout.
+
+        If timeout is reached, remaining tasks are NOT cancelled by this method.
+        Use cancel_all() if you want to ensure all tasks are terminated.
+        """
+        if not self._tasks:
+            return
+
+        tasks = list(self._tasks)
+        _done, pending = await asyncio.wait(tasks, timeout=timeout)
+        if pending:
+            logger.warning(
+                "wait_all: %d task(s) did not finish within timeout=%.1fs: %s",
+                len(pending),
+                timeout,
+                [t.get_name() for t in pending],
+            )
+
     async def cancel_all(self, timeout: float = 5.0) -> None:
         """Cancel all running tasks with timeout. Called during graceful shutdown."""
         if not self._tasks:
@@ -81,8 +100,8 @@ class TaskRegistry:
         for task in tasks:
             task.cancel()
 
-        # タスクの完了を待機（タイムアウト付き）
-        done, pending = await asyncio.wait(tasks, timeout=timeout)
+        # タスクの完了を待機 (タイムアウト付き)
+        _done, pending = await asyncio.wait(tasks, timeout=timeout)
         if pending:
             logger.warning(
                 "cancel_all: %d task(s) did not finish within timeout=%.1fs: %s",

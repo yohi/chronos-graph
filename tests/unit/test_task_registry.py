@@ -62,7 +62,7 @@ class TestTaskRegistryRegister:
 
     @pytest.mark.asyncio
     async def test_register_task_with_return_value(self) -> None:
-        """Any 型のタスク（戻り値あり）を register できる。"""
+        """Any 型のタスク(戻り値あり)を register できる。"""
         registry = TaskRegistry()
 
         async def returns_bool() -> bool:
@@ -181,7 +181,7 @@ class TestTaskRegistryCancelAll:
         # cancel_all がハングせずに戻ることを確認
 
         await asyncio.sleep(0)
-        # stubborn タスクは CancelledError を握り潰して正常終了する（cancelled ではない）
+        # stubborn タスクは CancelledError を握り潰して正常終了する (cancelled ではない)
         assert task.done()
         assert not task.cancelled()
         assert len(registry) == 0
@@ -217,6 +217,57 @@ class TestTaskRegistryCancelAll:
         )
 
         # 後片付け（テストが終わった後にタスクが残らないようにする）
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    @pytest.mark.asyncio
+    async def test_wait_all_waits_for_completion(self) -> None:
+        """wait_all() は全タスクの完了を待機する。"""
+        registry = TaskRegistry()
+        completed = []
+
+        async def slow_task() -> None:
+            await asyncio.sleep(0.1)
+            completed.append(True)
+
+        task = asyncio.create_task(slow_task())
+        registry.register(task)
+
+        await registry.wait_all(timeout=0.5)
+        assert len(completed) == 1
+        assert len(registry) == 0
+
+    @pytest.mark.asyncio
+    async def test_wait_all_does_not_cancel_on_timeout(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """wait_all() はタイムアウトしてもタスクをキャンセルしない。"""
+        registry = TaskRegistry()
+
+        async def stubborn() -> None:
+            await asyncio.sleep(1.0)
+
+        task = asyncio.create_task(stubborn())
+        registry.register(task)
+
+        # タイムアウト 0.1s で wait_all
+        await registry.wait_all(timeout=0.1)
+
+        # タイムアウトしてもタスクは生きている (キャンセルされていない)
+        assert not task.done()
+        assert not task.cancelled()
+        assert len(registry) == 1
+
+        assert any(
+            "wait_all: 1 task(s) did not finish within timeout=0.1s" in record.message
+            for record in caplog.records
+            if record.levelno == logging.WARNING
+        )
+
+        # 後片付け
         task.cancel()
         try:
             await task

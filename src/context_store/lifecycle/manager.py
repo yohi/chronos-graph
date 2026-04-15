@@ -17,6 +17,7 @@ from context_store.storage.protocols import MemoryFilters
 
 if TYPE_CHECKING:
     from context_store.config import Settings
+    from context_store.ingestion.task_registry import TaskRegistry
     from context_store.lifecycle.archiver import Archiver
     from context_store.lifecycle.consolidator import Consolidator
     from context_store.lifecycle.decay_scorer import DecayScorer
@@ -70,7 +71,7 @@ class WalState:
         wal_failure_count: WAL チェックポイントの累積失敗数。
         wal_last_failure_ts: 最後に失敗した日時（UTC）。
         wal_last_checkpoint_result: 最後のチェックポイント結果テキスト。
-        wal_last_observed_size_bytes: 最後に観測した WAL ファイルサイズ（バイト）。
+        wal_last_observed_size_bytes: 最後に観測した WAL ファイルサイズ (バイト)。
         wal_consecutive_passive_failures: PASSIVE モードの連続失敗回数。
         wal_failure_window: スライディングウィンドウ（失敗日時のリスト）。
     """
@@ -622,6 +623,7 @@ class LifecycleManager:
         consolidator: コンソリデーター。
         decay_scorer: 減衰スコアラー。
         storage: ストレージアダプター（統計収集用）。
+        task_registry: バックグラウンドタスクレジストリ。
         settings: アプリケーション設定。省略時はデフォルト値を使用。
         lock_path: OS レベルのファイルロックパス。
         wal_checkpoint_fn: WAL チェックポイント実行関数。None の場合はスキップ。
@@ -635,6 +637,7 @@ class LifecycleManager:
         consolidator: "Consolidator",
         decay_scorer: "DecayScorer",
         storage: "StorageAdapter",
+        task_registry: "TaskRegistry",
         settings: "Settings | None" = None,
         lock_path: str = ".lifecycle.lock",
         wal_checkpoint_fn: "WalCheckpointFn | None" = None,
@@ -645,8 +648,11 @@ class LifecycleManager:
         self._consolidator = consolidator
         self._decay_scorer = decay_scorer
         self._storage = storage
+        self._task_registry = task_registry
         self._lock_path = lock_path
         self._wal_checkpoint_fn = wal_checkpoint_fn
+
+        self._shutting_down = False
 
         if settings is None:
             from context_store.config import Settings
@@ -667,9 +673,6 @@ class LifecycleManager:
         )
         self._wal_checkpoint_mode_passive = settings.wal_checkpoint_mode_passive
         self._wal_checkpoint_mode_truncate = settings.wal_checkpoint_mode_truncate
-
-        self._active_tasks: list[asyncio.Task[None]] = []
-        self._shutting_down = False
 
     async def start(self) -> None:
         """MCPサーバー起動時に呼び出す。時間ベースのクリーンアップチェックをスケジュール。
@@ -694,10 +697,6 @@ class LifecycleManager:
                     should_run = True
 
             if should_run:
-                # シャットダウン中であれば実行しない
-                if getattr(self, "_shutting_down", False):
-                    return
-
                 logger.info(
                     "Time-based cleanup triggered (last_cleanup_at=%s).", state.last_cleanup_at
                 )
@@ -706,26 +705,12 @@ class LifecycleManager:
             logger.exception("Time-based cleanup check failed.")
 
     def _spawn_background_task(self, factory: Callable[[], Coroutine[Any, Any, Any]]) -> None:
-        """例外ハンドリング付きでバックグラウンドタスクを開始する。"""
-        if getattr(self, "_shutting_down", False):
+        """TaskRegistry を使用してバックグラウンドタスクを開始する。"""
+        if self._shutting_down:
             return
 
-        task: asyncio.Task[None] = asyncio.create_task(factory())
-        self._active_tasks.append(task)
-
-        def done_callback(t: asyncio.Task[None]) -> None:
-            if t in self._active_tasks:
-                self._active_tasks.remove(t)
-            try:
-                # 例外が発生していた場合はログに記録
-                if not t.cancelled():
-                    exc = t.exception()
-                    if exc:
-                        logger.error("Background task failed: %s", exc, exc_info=True)
-            except asyncio.InvalidStateError:
-                pass
-
-        task.add_done_callback(done_callback)
+        task = asyncio.create_task(factory())
+        self._task_registry.register(task)
 
     async def _check_lock_integrity(self, token: str) -> None:
         """現在のロック所有者が自身であることを確認する。
@@ -1097,27 +1082,17 @@ class LifecycleManager:
         return wal_state
 
     async def graceful_shutdown(self) -> None:
-        """進行中のタスクをタイムアウト付きで完了待機する（最大 5 秒）。"""
+        """進行中のタスクをタイムアウト付きで完了待機する。タイムアウト時は強制キャンセルする。"""
         self._shutting_down = True
+        # まずは完了を待機
+        await self._task_registry.wait_all(timeout=5.0)
+        # それでも残っている場合はキャンセル
+        if len(self._task_registry) > 0:
+            await self._task_registry.cancel_all(timeout=1.0)
 
-        if not self._active_tasks:
-            return
-
-        logger.info("Graceful shutdown: waiting for task(s)...")
-        start_time = asyncio.get_event_loop().time()
-        try:
-            while self._active_tasks:
-                if asyncio.get_event_loop().time() - start_time >= 5.0:
-                    raise asyncio.TimeoutError()
-                tasks = list(self._active_tasks)
-                await asyncio.wait_for(
-                    asyncio.gather(*tasks, return_exceptions=True),
-                    timeout=5.0 - (asyncio.get_event_loop().time() - start_time),
-                )
-        except asyncio.TimeoutError:
-            logger.warning("Graceful shutdown timed out, cancelling remaining tasks.")
-            for task in list(self._active_tasks):
-                if not task.done():
-                    task.cancel()
-            # キャンセルされたタスクが終了（およびクリーンアップ）するのを待機
-            await asyncio.gather(*list(self._active_tasks), return_exceptions=True)
+        # 最終チェック: それでもタスクが残っている場合はエラーとして報告
+        remaining = len(self._task_registry)
+        if remaining > 0:
+            msg = f"graceful_shutdown: {remaining} task(s) still remain after cancellation"
+            logger.error(msg)
+            raise RuntimeError(msg)

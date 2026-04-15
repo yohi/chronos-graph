@@ -18,11 +18,13 @@ if TYPE_CHECKING:
     from context_store.config import Settings
     from context_store.embedding.protocols import EmbeddingProvider
     from context_store.extensions.protocols import ActionLogger, PolicyHook, RewardSignal
+    from context_store.ingestion.batch_processor import BatchProcessor
     from context_store.ingestion.pipeline import IngestionPipeline, IngestionResult
     from context_store.ingestion.task_registry import TaskRegistry
     from context_store.lifecycle.manager import LifecycleManager
     from context_store.retrieval.pipeline import RetrievalPipeline, RetrievalResponse
     from context_store.storage.protocols import CacheAdapter, GraphAdapter, StorageAdapter
+
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,7 @@ class Orchestrator:
         retrieval_pipeline: 検索パイプライン。
         lifecycle_manager: ライフサイクルマネージャー。
         task_registry: タスクレジストリ。
+        batch_processor: バッチ処理ラッパー。
         action_logger: RL 拡張: アクションロガー（None の場合は NoOp）。
         reward_signal: RL 拡張: 報酬シグナル（None の場合は NoOp）。
         policy_hook: RL 拡張: 検索戦略フック（None の場合は NoOp）。
@@ -61,6 +64,7 @@ class Orchestrator:
         retrieval_pipeline: "RetrievalPipeline",
         lifecycle_manager: "LifecycleManager",
         task_registry: "TaskRegistry",
+        batch_processor: "BatchProcessor | None" = None,
         action_logger: "ActionLogger | None" = None,
         reward_signal: "RewardSignal | None" = None,
         policy_hook: "PolicyHook | None" = None,
@@ -74,6 +78,7 @@ class Orchestrator:
         self._retrieval_pipeline = retrieval_pipeline
         self._lifecycle_manager = lifecycle_manager
         self._task_registry = task_registry
+        self._batch_processor = batch_processor
         self._settings = settings
 
         # RL 拡張フック（None の場合は NoOp）
@@ -487,6 +492,13 @@ async def create_orchestrator(
             settings=settings,
         )
 
+        # BatchProcessor 組み立て（task_registry は LifecycleManager と共有）
+        from context_store.ingestion.batch_processor import BatchProcessor
+
+        batch_processor = BatchProcessor(
+            ingestion_pipeline=ingestion_pipeline,
+            batch_max_concurrent_jobs=settings.batch_max_concurrent_jobs,
+        )
         # Orchestrator 生成・初期化
         orchestrator = Orchestrator(
             storage=storage,
@@ -497,6 +509,7 @@ async def create_orchestrator(
             retrieval_pipeline=retrieval_pipeline,
             lifecycle_manager=lifecycle_manager,
             task_registry=task_registry,
+            batch_processor=batch_processor,
             action_logger=action_logger,
             reward_signal=reward_signal,
             policy_hook=policy_hook,

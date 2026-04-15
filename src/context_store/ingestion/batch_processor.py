@@ -6,6 +6,7 @@ IngestionPipeline への委譲を行う薄いラッパー。
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -26,8 +27,10 @@ class BatchProcessor:
     def __init__(
         self,
         ingestion_pipeline: IngestionPipeline,
+        batch_max_concurrent_jobs: int = 3,
     ) -> None:
         self._pipeline = ingestion_pipeline
+        self._semaphore = asyncio.Semaphore(batch_max_concurrent_jobs)
 
     async def estimate_chunks(self, conversation_log: str) -> int:
         """実際の取り込みフローに基づき、会話ログのチャンク数を推定する。
@@ -51,11 +54,15 @@ class BatchProcessor:
         """Background batch processing entry point.
 
         Flow:
-        1. IngestionPipeline.ingest() with source_type=CONVERSATION
-        2. Errors are logged (committed chunks are retained, uncommitted are lost)
+        1. Acquire semaphore to limit concurrency
+        2. IngestionPipeline.ingest() with source_type=CONVERSATION
+        3. Errors are logged and re-raised (committed chunks are retained, uncommitted are lost)
 
         Returns:
-            bool: True if processing completed successfully, False otherwise.
+            bool: True if processing completed successfully.
+
+        Raises:
+            Exception: If ingestion pipeline fails.
         """
         metadata: dict[str, object] = {"session_id": session_id}
         if project is not None:
@@ -63,21 +70,22 @@ class BatchProcessor:
         if tags:
             metadata["tags"] = tags
 
-        try:
-            await self._pipeline.ingest(
-                conversation_log,
-                source_type=SourceType.CONVERSATION,
-                metadata=metadata,
-            )
-            logger.info(
-                "Batch processing completed: session_id=%s",
-                session_id,
-            )
-            return True
-        except Exception:
-            logger.error(
-                "Batch processing failed: session_id=%s",
-                session_id,
-                exc_info=True,
-            )
-            return False
+        async with self._semaphore:
+            try:
+                await self._pipeline.ingest(
+                    conversation_log,
+                    source_type=SourceType.CONVERSATION,
+                    metadata=metadata,
+                )
+                logger.info(
+                    "Batch processing completed: session_id=%s",
+                    session_id,
+                )
+                return True
+            except Exception:
+                logger.error(
+                    "Batch processing failed: session_id=%s",
+                    session_id,
+                    exc_info=True,
+                )
+                raise

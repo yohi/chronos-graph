@@ -39,7 +39,10 @@ class TestEstimateChunks:
 
         result = await processor.estimate_chunks("")
         assert result == 0
-        mock_pipeline.estimate_chunks.assert_called_once()
+        mock_pipeline.estimate_chunks.assert_called_once_with(
+            "",
+            source_type=SourceType.CONVERSATION,
+        )
 
 
 class TestProcess:

@@ -153,7 +153,13 @@ class IngestionPipeline:
             # 現時点では RawContent 1件として扱うか、フェッチを許容する
             try:
                 raw_contents = await self._fetch_url_content(source)
-            except Exception:
+            except Exception as e:
+                logger.warning(
+                    "URL fetch failed during chunk estimation (url=%s): %s",
+                    source,
+                    e,
+                    exc_info=True,
+                )
                 return 0
         elif source_type == SourceType.CONVERSATION:
             raw_contents = await self._conversation_adapter.adapt(source, metadata=meta)

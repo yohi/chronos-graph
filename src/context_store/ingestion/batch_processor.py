@@ -28,9 +28,10 @@ class BatchProcessor:
     def __init__(
         self,
         ingestion_pipeline: "IngestionPipeline",
+        chunker: Chunker | None = None,
     ) -> None:
         self._pipeline = ingestion_pipeline
-        self._chunker = Chunker()
+        self._chunker = chunker or Chunker()
 
     def estimate_chunks(self, conversation_log: str) -> int:
         """Estimate chunk count using Chunker dry-run (no side effects).
@@ -57,7 +58,7 @@ class BatchProcessor:
         session_id: str,
         project: str | None = None,
         tags: list[str] | None = None,
-    ) -> None:
+    ) -> bool:
         """Background batch processing entry point.
 
         Flow:
@@ -80,9 +81,11 @@ class BatchProcessor:
                 "Batch processing completed: session_id=%s",
                 session_id,
             )
+            return True
         except Exception:
             logger.error(
                 "Batch processing failed: session_id=%s",
                 session_id,
                 exc_info=True,
             )
+            return False

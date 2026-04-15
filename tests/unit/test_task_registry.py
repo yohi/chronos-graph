@@ -60,6 +60,23 @@ class TestTaskRegistryRegister:
         await asyncio.sleep(0)
         assert len(registry) == 0
 
+    @pytest.mark.asyncio
+    async def test_register_task_with_return_value(self) -> None:
+        """Any 型のタスク（戻り値あり）を register できる。"""
+        registry = TaskRegistry()
+
+        async def returns_bool() -> bool:
+            return True
+
+        # asyncio.Task[bool] は asyncio.Task[Any] に適合するはず
+        task = asyncio.create_task(returns_bool())
+        registry.register(task)
+        assert len(registry) == 1
+
+        await task
+        await asyncio.sleep(0)
+        assert len(registry) == 0
+
 
 class TestTaskRegistryDoneCallback:
     """done_callback のエラーハンドリングテスト。"""
@@ -158,3 +175,39 @@ class TestTaskRegistryCancelAll:
         # タイムアウト 0.5s で cancel_all
         await registry.cancel_all(timeout=0.5)
         # cancel_all がハングせずに戻ることを確認
+
+    @pytest.mark.asyncio
+    async def test_cancel_all_logs_warning_on_timeout(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """キャンセルが間に合わないタスクがある場合、警告ログを出力する。"""
+        registry = TaskRegistry()
+
+        async def stubborn() -> None:
+            try:
+                await asyncio.sleep(100)
+            except asyncio.CancelledError:
+                # キャンセルされても無視して長くスリープ
+                await asyncio.sleep(1.0)
+
+        task = asyncio.create_task(stubborn(), name="StubbornTask")
+        registry.register(task)
+
+        # タスクを開始させる
+        await asyncio.sleep(0)
+
+        # タイムアウト 0.1s で cancel_all
+        await registry.cancel_all(timeout=0.1)
+
+        assert any(
+            "StubbornTask" in record.message and "terminate within 0.1 seconds" in record.message
+            for record in caplog.records
+            if record.levelno == logging.WARNING
+        )
+
+        # 後片付け（テストが終わった後にタスクが残らないようにする）
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass

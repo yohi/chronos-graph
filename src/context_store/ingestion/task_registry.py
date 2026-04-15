@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +21,9 @@ class TaskRegistry:
     """
 
     def __init__(self) -> None:
-        self._tasks: set[asyncio.Task[None]] = set()
+        self._tasks: set[asyncio.Task[Any]] = set()
 
-    def register(self, task: asyncio.Task[None]) -> None:
+    def register(self, task: asyncio.Task[Any]) -> None:
         """Register a task. Add done_callback for auto-removal and error logging.
 
         done_callback implementation:
@@ -44,7 +45,7 @@ class TaskRegistry:
         """Return the number of currently running tasks."""
         return len(self._tasks)
 
-    def _on_task_done(self, task: asyncio.Task[None]) -> None:
+    def _on_task_done(self, task: asyncio.Task[Any]) -> None:
         """Done callback: auto-remove task and log errors."""
         self._tasks.discard(task)
 
@@ -73,4 +74,11 @@ class TaskRegistry:
             task.cancel()
 
         # タスクの完了を待機（タイムアウト付き）
-        await asyncio.wait(tasks, timeout=timeout)
+        done, pending = await asyncio.wait(tasks, timeout=timeout)
+        if pending:
+            task_names = [t.get_name() for t in pending]
+            logger.warning(
+                "Some background tasks did not terminate within %.1f seconds: %s",
+                timeout,
+                ", ".join(task_names),
+            )

@@ -16,9 +16,11 @@ def test_mask_url_preserves_path_and_host() -> None:
     assert mask_url(url) == url
 
 
-def test_mask_url_empty_string() -> None:
-    """空文字列は空文字列を返す。"""
-    assert mask_url("") == ""
+def test_mask_url_removes_userinfo() -> None:
+    """URL のユーザー名とパスワードが削除される。"""
+    url = "https://admin:secret123@example.com/api/data?token=abc#section"
+    expected = "https://example.com/api/data"
+    assert mask_url(url) == expected
 
 
 def test_mask_url_non_url_input() -> None:

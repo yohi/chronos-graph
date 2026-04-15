@@ -29,6 +29,8 @@ class BatchProcessor:
         ingestion_pipeline: IngestionPipeline,
         batch_max_concurrent_jobs: int = 3,
     ) -> None:
+        if batch_max_concurrent_jobs < 1:
+            raise ValueError("batch_max_concurrent_jobs must be at least 1")
         self._pipeline = ingestion_pipeline
         self._semaphore = asyncio.Semaphore(batch_max_concurrent_jobs)
 

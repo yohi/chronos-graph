@@ -492,7 +492,7 @@ async def create_orchestrator(
             settings=settings,
         )
 
-        # BatchProcessor 組み立て（task_registry は LifecycleManager と共有）
+        # BatchProcessor 組み立て(task_registry は LifecycleManager と共有)
         from context_store.ingestion.batch_processor import BatchProcessor
 
         batch_processor = BatchProcessor(

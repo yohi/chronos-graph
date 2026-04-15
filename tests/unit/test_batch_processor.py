@@ -11,6 +11,19 @@ from context_store.ingestion.batch_processor import BatchProcessor
 from context_store.models.memory import SourceType
 
 
+class TestInit:
+    """BatchProcessor.__init__() のテスト。"""
+
+    def test_init_raises_value_error_on_invalid_concurrency(self) -> None:
+        """batch_max_concurrent_jobs が 1 未満の場合、ValueError を投げる。"""
+        mock_pipeline = MagicMock()
+        with pytest.raises(ValueError, match="batch_max_concurrent_jobs must be at least 1"):
+            BatchProcessor(ingestion_pipeline=mock_pipeline, batch_max_concurrent_jobs=0)
+
+        with pytest.raises(ValueError, match="batch_max_concurrent_jobs must be at least 1"):
+            BatchProcessor(ingestion_pipeline=mock_pipeline, batch_max_concurrent_jobs=-1)
+
+
 class TestEstimateChunks:
     """BatchProcessor.estimate_chunks() のテスト。"""
 

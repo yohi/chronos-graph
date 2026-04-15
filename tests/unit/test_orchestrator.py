@@ -95,6 +95,15 @@ def _make_mock_lifecycle_manager() -> MagicMock:
     return manager
 
 
+def _make_mock_task_registry() -> MagicMock:
+    """TaskRegistry モックを生成する。"""
+    registry = AsyncMock()
+    registry.register = MagicMock()
+    registry.cancel_all = AsyncMock()
+    registry.__len__ = MagicMock(return_value=0)
+    return registry
+
+
 async def _build_orchestrator(
     *,
     storage=None,
@@ -104,6 +113,7 @@ async def _build_orchestrator(
     ingestion_pipeline=None,
     retrieval_pipeline=None,
     lifecycle_manager=None,
+    task_registry=None,
     action_logger=None,
     reward_signal=None,
     policy_hook=None,
@@ -123,6 +133,7 @@ async def _build_orchestrator(
     ingestion_pipeline = ingestion_pipeline or _make_mock_ingestion_pipeline()
     retrieval_pipeline = retrieval_pipeline or _make_mock_retrieval_pipeline()
     lifecycle_manager = lifecycle_manager or _make_mock_lifecycle_manager()
+    task_registry = task_registry or _make_mock_task_registry()
     settings = settings or make_settings()
 
     orch = Orchestrator(
@@ -133,6 +144,7 @@ async def _build_orchestrator(
         ingestion_pipeline=ingestion_pipeline,
         retrieval_pipeline=retrieval_pipeline,
         lifecycle_manager=lifecycle_manager,
+        task_registry=task_registry,
         action_logger=action_logger,
         reward_signal=reward_signal,
         policy_hook=policy_hook,
@@ -149,6 +161,7 @@ async def _build_orchestrator(
         ingestion_pipeline,
         retrieval_pipeline,
         lifecycle_manager,
+        task_registry,
     )
 
 
@@ -533,3 +546,13 @@ class TestDisposeOperation:
         await orch.dispose()
 
         lifecycle.graceful_shutdown.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_dispose_calls_task_registry_cancel_all(self):
+        """dispose() が TaskRegistry.cancel_all() を呼び出す。"""
+        task_registry = _make_mock_task_registry()
+        orch, *_ = await _build_orchestrator(task_registry=task_registry)
+
+        await orch.dispose()
+
+        task_registry.cancel_all.assert_called_once()

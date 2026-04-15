@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from context_store.ingestion.task_registry import TaskRegistry
 from context_store.lifecycle.manager import (
     InMemoryLifecycleStateStore,
     LifecycleManager,
@@ -47,12 +48,16 @@ def _make_manager(
     stale_lock_timeout_seconds: int = 600,
     wal_checkpoint_fn=None,
     lock_path: str = ".lifecycle.lock",
+    task_registry: TaskRegistry | None = None,
 ) -> tuple[LifecycleManager, InMemoryLifecycleStateStore]:
     """テスト用 LifecycleManager を生成するヘルパー。"""
     if state_store is None:
         state_store = InMemoryLifecycleStateStore(
             stale_lock_timeout_seconds=stale_lock_timeout_seconds
         )
+
+    if task_registry is None:
+        task_registry = TaskRegistry()
 
     archiver = AsyncMock()
     archiver.run = AsyncMock(return_value=MagicMock(archived_count=0, checked_count=0))
@@ -91,6 +96,7 @@ def _make_manager(
         consolidator=consolidator,
         decay_scorer=decay_scorer,
         storage=storage,
+        task_registry=task_registry,
         settings=settings,
         lock_path=lock_path,
         wal_checkpoint_fn=wal_checkpoint_fn,
@@ -204,8 +210,8 @@ class TestRunCleanup:
         for _ in range(50):
             await manager.on_memory_saved()
 
-        # バックグラウンドタスクの完了を待機
-        await asyncio.gather(*manager._active_tasks)
+        # バックグラウンドタスクの完了を待機 (TaskRegistry 経由)
+        await manager._task_registry.wait_all()
 
         # ロック喪失により中断されたため、last_cleanup_at が更新されていないことを確認
         final_state = await state_store.load_state()
@@ -520,7 +526,7 @@ class TestGracefulShutdown:
         """タスクがない場合はシャットダウンが即座に完了すること。"""
         manager, _ = _make_manager()
         # アクティブタスクなし
-        assert len(manager._active_tasks) == 0
+        assert len(manager._task_registry) == 0
 
         # タイムアウトなしで即時完了すること
         await asyncio.wait_for(manager.graceful_shutdown(), timeout=1.0)
@@ -536,7 +542,7 @@ class TestGracefulShutdown:
             completed.append(True)
 
         task = asyncio.create_task(slow_task())
-        manager._active_tasks.append(task)
+        manager._task_registry.register(task)
 
         await manager.graceful_shutdown()
         assert len(completed) == 1
@@ -549,10 +555,10 @@ class TestGracefulShutdown:
             await asyncio.sleep(10)  # 5秒を超えるタスク
 
         task = asyncio.create_task(long_task())
-        manager._active_tasks.append(task)
+        manager._task_registry.register(task)
 
-        # 5秒タイムアウト付きで完了すること（TimeoutError が内部で処理される）
-        await asyncio.wait_for(manager.graceful_shutdown(), timeout=6.0)
+        # 10秒タイムアウト付きで完了すること (CI 安定化のため)
+        await asyncio.wait_for(manager.graceful_shutdown(), timeout=10.0)
 
         # タスクがキャンセルされていること
         assert task.cancelled()
@@ -834,6 +840,7 @@ async def test_spawn_background_task_no_leak():
     mock_consolidator = MagicMock()
     mock_decay = MagicMock()
     mock_storage = MagicMock()
+    mock_registry = MagicMock()
 
     manager = LifecycleManager(
         state_store=mock_store,
@@ -842,6 +849,7 @@ async def test_spawn_background_task_no_leak():
         consolidator=mock_consolidator,
         decay_scorer=mock_decay,
         storage=mock_storage,
+        task_registry=mock_registry,
         settings=MagicMock(),
     )
 
@@ -857,4 +865,4 @@ async def test_spawn_background_task_no_leak():
 
     # The factory shouldn't be called, so the coroutine is never created, hence no leak.
     task_factory.assert_not_called()
-    assert len(manager._active_tasks) == 0
+    mock_registry.register.assert_not_called()

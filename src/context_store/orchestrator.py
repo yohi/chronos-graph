@@ -46,6 +46,7 @@ class Orchestrator:
         ingestion_pipeline: 取り込みパイプライン。
         retrieval_pipeline: 検索パイプライン。
         lifecycle_manager: ライフサイクルマネージャー。
+        task_registry: タスクレジストリ。
         action_logger: RL 拡張: アクションロガー（None の場合は NoOp）。
         reward_signal: RL 拡張: 報酬シグナル（None の場合は NoOp）。
         policy_hook: RL 拡張: 検索戦略フック（None の場合は NoOp）。
@@ -61,11 +62,11 @@ class Orchestrator:
         ingestion_pipeline: "IngestionPipeline",
         retrieval_pipeline: "RetrievalPipeline",
         lifecycle_manager: "LifecycleManager",
+        task_registry: "TaskRegistry | None" = None,
         action_logger: "ActionLogger | None" = None,
         reward_signal: "RewardSignal | None" = None,
         policy_hook: "PolicyHook | None" = None,
         settings: "Settings | None" = None,
-        task_registry: "TaskRegistry | None" = None,
         batch_processor: "BatchProcessor | None" = None,
     ) -> None:
         self._storage = storage
@@ -75,8 +76,8 @@ class Orchestrator:
         self._ingestion_pipeline = ingestion_pipeline
         self._retrieval_pipeline = retrieval_pipeline
         self._lifecycle_manager = lifecycle_manager
-        self._settings = settings
         self._task_registry = task_registry
+        self._settings = settings
         self._batch_processor = batch_processor
 
         # RL 拡張フック（None の場合は NoOp）
@@ -403,11 +404,16 @@ class Orchestrator:
 
     async def dispose(self) -> None:
         """全アダプターのリソースを解放する。"""
-        # バックグラウンドタスクのキャンセル（5s タイムアウト）
+        # まずライフサイクルマネージャーを終了させ、タスクの完了を待機する
+        try:
+            await self._lifecycle_manager.graceful_shutdown()
+        except RuntimeError as exc:
+            logger.warning("Graceful shutdown incomplete (ignored): %s", exc, exc_info=True)
+
+        # 残っているバックグラウンドタスクがあればキャンセル (5s タイムアウト)
         if self._task_registry is not None:
             await self._task_registry.cancel_all(timeout=5.0)
 
-        await self._lifecycle_manager.graceful_shutdown()
         await self._storage.dispose()
         if self._graph is not None:
             await self._graph.dispose()
@@ -443,6 +449,7 @@ async def create_orchestrator(
     """
     from context_store.embedding import create_embedding_provider
     from context_store.ingestion.pipeline import IngestionPipeline
+    from context_store.ingestion.task_registry import TaskRegistry
     from context_store.lifecycle.archiver import Archiver
     from context_store.lifecycle.consolidator import Consolidator
     from context_store.lifecycle.decay_scorer import DecayScorer
@@ -531,6 +538,7 @@ async def create_orchestrator(
             graph=graph,
             retention_days=settings.purge_retention_days,
         )
+        task_registry = TaskRegistry()
         lifecycle_manager = LifecycleManager(
             state_store=state_store,
             archiver=archiver,
@@ -538,14 +546,13 @@ async def create_orchestrator(
             consolidator=consolidator,
             decay_scorer=decay_scorer,
             storage=storage,
+            task_registry=task_registry,
             settings=settings,
         )
 
-        # TaskRegistry と BatchProcessor 組み立て
+        # BatchProcessor 組み立て（task_registry は LifecycleManager と共有）
         from context_store.ingestion.batch_processor import BatchProcessor
-        from context_store.ingestion.task_registry import TaskRegistry
 
-        task_registry = TaskRegistry()
         batch_processor = BatchProcessor(ingestion_pipeline=ingestion_pipeline)
 
         # Orchestrator 生成・初期化
@@ -557,11 +564,11 @@ async def create_orchestrator(
             ingestion_pipeline=ingestion_pipeline,
             retrieval_pipeline=retrieval_pipeline,
             lifecycle_manager=lifecycle_manager,
+            task_registry=task_registry,
             action_logger=action_logger,
             reward_signal=reward_signal,
             policy_hook=policy_hook,
             settings=settings,
-            task_registry=task_registry,
             batch_processor=batch_processor,
         )
 

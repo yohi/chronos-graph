@@ -31,6 +31,7 @@ from context_store.ingestion.deduplicator import DeduplicationAction, Deduplicat
 from context_store.ingestion.graph_linker import GraphLinker
 from context_store.models.memory import Memory, MemoryType, SourceType
 from context_store.storage.protocols import GraphAdapter, MemoryFilters, StorageAdapter
+from context_store.utils import mask_url
 
 logger = logging.getLogger(__name__)
 
@@ -64,13 +65,14 @@ class IngestionPipeline:
         graph: GraphAdapter | None,
         embedding_provider: EmbeddingProvider,
         settings: Settings | None = None,
+        chunker: Chunker | None = None,
     ) -> None:
         self._storage = storage
         self._graph = graph
         self._embedding_provider = embedding_provider
         self._settings = settings
 
-        self._chunker = Chunker()
+        self._chunker = chunker or Chunker()
         self._classifier = Classifier()
         self._deduplicator = Deduplicator(storage=storage)
         self._graph_linker = GraphLinker(storage=storage, graph=graph)
@@ -86,8 +88,31 @@ class IngestionPipeline:
         self._content_results: dict[Any, asyncio.Task[IngestionResult | None]] = {}
         self._locks_mutex = asyncio.Lock()
 
+    async def _prepare_raw_contents(
+        self,
+        source: str,
+        source_type: SourceType,
+        metadata: dict[str, Any],
+    ) -> list[RawContent]:
+        """ソースタイプに応じて適切な Adapter を適用し、RawContent のリストを作成する。"""
+        if source_type == SourceType.URL:
+            try:
+                return await self._fetch_url_content(source)
+            except Exception as e:
+                logger.warning(
+                    "URL fetch failed (url=%s): %s",
+                    mask_url(source),
+                    e,
+                    exc_info=True,
+                )
+                return []
+        elif source_type == SourceType.CONVERSATION:
+            return await self._conversation_adapter.adapt(source, metadata=metadata)
+        else:
+            return [RawContent(content=source, source_type=source_type, metadata=metadata)]
+
     async def _get_content_lock(self, content_hash: str) -> asyncio.Lock:
-        """コンテンツハッシュに対応する Lock を取得（なければ作成）する。"""
+        """コンテンツハッシュに対応する Lock を取得 (なければ作成) する。"""
         async with self._locks_mutex:
             lock = self._content_locks.get(content_hash)
             if lock is None:
@@ -117,7 +142,7 @@ class IngestionPipeline:
         return str(obj)
 
     async def _fetch_url_content(self, url: str) -> list[RawContent]:
-        """URL からコンテンツを取得する（テストでモック可能）。"""
+        """URL からコンテンツを取得する (テストでモック可能)。"""
         if self._url_adapter is None:
             self._url_adapter = URLAdapter(settings=self._settings)
         return await self._url_adapter.adapt(url)
@@ -130,6 +155,33 @@ class IngestionPipeline:
                 await aclose()
 
         await self._embedding_provider.close()
+
+    async def estimate_chunks(
+        self,
+        source: str,
+        *,
+        source_type: SourceType = SourceType.MANUAL,
+        metadata: dict[str, Any] | None = None,
+    ) -> int:
+        """実際のインジェストフロー（Adapter + Chunker）に基づきチャンク数を推定する。
+
+        永続化や埋め込み生成は行わない読み取り専用の推定。
+        """
+        if not source:
+            return 0
+
+        meta = metadata or {}
+
+        # ステップ1: ソースからコンテンツを取得（Adapter 適用）
+        raw_contents = await self._prepare_raw_contents(source, source_type, meta)
+
+        total_chunks = 0
+        for raw in raw_contents:
+            # ステップ2: チャンク分割（Chunker 適用）
+            # Chunker.chunk() はジェネレータなので長さをカウント
+            total_chunks += sum(1 for _ in self._chunker.chunk(raw))
+
+        return total_chunks
 
     async def ingest(
         self,
@@ -151,12 +203,7 @@ class IngestionPipeline:
         meta = metadata or {}
 
         # ステップ1: ソースからコンテンツを取得
-        if source_type == SourceType.URL:
-            raw_contents = await self._fetch_url_content(source)
-        elif source_type == SourceType.CONVERSATION:
-            raw_contents = await self._conversation_adapter.adapt(source, metadata=meta)
-        else:
-            raw_contents = [RawContent(content=source, source_type=source_type, metadata=meta)]
+        raw_contents = await self._prepare_raw_contents(source, source_type, meta)
 
         results: list[IngestionResult] = []
         document_memories: dict[str, list[Memory]] = {}

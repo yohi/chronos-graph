@@ -55,19 +55,24 @@ class TestProcess:
         mock_pipeline.ingest = AsyncMock(return_value=[])
         processor = BatchProcessor(ingestion_pipeline=mock_pipeline)
 
+        conversation_log = "User: test\nAssistant: response"
         result = await processor.process(
-            "User: test\nAssistant: response",
+            conversation_log,
             session_id="test-session",
             project="test-project",
             tags=["tag1"],
         )
 
         assert result is True
-        mock_pipeline.ingest.assert_called_once()
-        call_args = mock_pipeline.ingest.call_args
-        assert call_args[0][0] == "User: test\nAssistant: response"
-        # source_type の検証を追加
-        assert call_args[1]["source_type"] == SourceType.CONVERSATION
+        mock_pipeline.ingest.assert_called_once_with(
+            conversation_log,
+            source_type=SourceType.CONVERSATION,
+            metadata={
+                "session_id": "test-session",
+                "project": "test-project",
+                "tags": ["tag1"],
+            },
+        )
 
     @pytest.mark.asyncio
     async def test_process_passes_metadata(self) -> None:
@@ -76,18 +81,23 @@ class TestProcess:
         mock_pipeline.ingest = AsyncMock(return_value=[])
         processor = BatchProcessor(ingestion_pipeline=mock_pipeline)
 
+        conversation_log = "User: hello\nAssistant: hi"
         await processor.process(
-            "User: hello\nAssistant: hi",
+            conversation_log,
             session_id="sess-123",
             project="my-project",
             tags=["important"],
         )
 
-        call_kwargs = mock_pipeline.ingest.call_args[1]
-        metadata = call_kwargs["metadata"]
-        assert metadata["session_id"] == "sess-123"
-        assert metadata["project"] == "my-project"
-        assert metadata["tags"] == ["important"]
+        mock_pipeline.ingest.assert_called_once_with(
+            conversation_log,
+            source_type=SourceType.CONVERSATION,
+            metadata={
+                "session_id": "sess-123",
+                "project": "my-project",
+                "tags": ["important"],
+            },
+        )
 
     @pytest.mark.asyncio
     async def test_process_logs_error_on_pipeline_failure(

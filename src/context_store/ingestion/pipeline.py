@@ -31,6 +31,7 @@ from context_store.ingestion.deduplicator import DeduplicationAction, Deduplicat
 from context_store.ingestion.graph_linker import GraphLinker
 from context_store.models.memory import Memory, MemoryType, SourceType
 from context_store.storage.protocols import GraphAdapter, MemoryFilters, StorageAdapter
+from context_store.utils import mask_url
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +157,7 @@ class IngestionPipeline:
             except Exception as e:
                 logger.warning(
                     "URL fetch failed during chunk estimation (url=%s): %s",
-                    source,
+                    mask_url(source),
                     e,
                     exc_info=True,
                 )

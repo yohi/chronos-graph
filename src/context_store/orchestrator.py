@@ -342,10 +342,12 @@ class Orchestrator:
 
     async def dispose(self) -> None:
         """全アダプターのリソースを解放する。"""
-        # まずバックグラウンドタスクをキャンセル
+        # まずライフサイクルマネージャーを終了させ、タスクの完了を待機する
+        await self._lifecycle_manager.graceful_shutdown()
+
+        # 残っているバックグラウンドタスクがあればキャンセル（5s タイムアウト）
         await self._task_registry.cancel_all(timeout=5.0)
 
-        await self._lifecycle_manager.graceful_shutdown()
         await self._storage.dispose()
         if self._graph is not None:
             await self._graph.dispose()

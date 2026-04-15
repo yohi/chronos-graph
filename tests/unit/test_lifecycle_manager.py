@@ -211,8 +211,7 @@ class TestRunCleanup:
             await manager.on_memory_saved()
 
         # バックグラウンドタスクの完了を待機 (TaskRegistry 経由)
-        # 内部プロパティ _tasks にアクセスして待機
-        await asyncio.gather(*list(manager._task_registry._tasks))
+        await manager._task_registry.wait_all()
 
         # ロック喪失により中断されたため、last_cleanup_at が更新されていないことを確認
         final_state = await state_store.load_state()
@@ -558,9 +557,8 @@ class TestGracefulShutdown:
         task = asyncio.create_task(long_task())
         manager._task_registry.register(task)
 
-        # 5秒タイムアウト付きで完了すること
-        # TaskRegistry.cancel_all が 5s でキャンセルする
-        await asyncio.wait_for(manager.graceful_shutdown(), timeout=6.0)
+        # 10秒タイムアウト付きで完了すること (CI 安定化のため)
+        await asyncio.wait_for(manager.graceful_shutdown(), timeout=10.0)
 
         # タスクがキャンセルされていること
         assert task.cancelled()

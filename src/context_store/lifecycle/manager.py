@@ -71,7 +71,7 @@ class WalState:
         wal_failure_count: WAL チェックポイントの累積失敗数。
         wal_last_failure_ts: 最後に失敗した日時（UTC）。
         wal_last_checkpoint_result: 最後のチェックポイント結果テキスト。
-        wal_last、observed_size_bytes: 最後に観測した WAL ファイルサイズ（バイト）。
+        wal_last_observed_size_bytes: 最後に観測した WAL ファイルサイズ (バイト)。
         wal_consecutive_passive_failures: PASSIVE モードの連続失敗回数。
         wal_failure_window: スライディングウィンドウ（失敗日時のリスト）。
     """

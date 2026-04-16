@@ -72,7 +72,7 @@ class IngestionPipeline:
         self._embedding_provider = embedding_provider
         self._settings = settings
 
-        self._chunker = chunker or Chunker()
+        self._chunker = chunker or Chunker(settings=settings)
         self._classifier = Classifier()
         self._deduplicator = Deduplicator(storage=storage)
         self._graph_linker = GraphLinker(storage=storage, graph=graph)
@@ -87,6 +87,11 @@ class IngestionPipeline:
         )
         self._content_results: dict[Any, asyncio.Task[IngestionResult | None]] = {}
         self._locks_mutex = asyncio.Lock()
+
+    @property
+    def chunker(self) -> Chunker:
+        """このパイプラインで使用されている Chunker を取得する。"""
+        return self._chunker
 
     async def _prepare_raw_contents(
         self,

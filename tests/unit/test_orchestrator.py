@@ -113,16 +113,17 @@ async def _build_orchestrator(
     ingestion_pipeline=None,
     retrieval_pipeline=None,
     lifecycle_manager=None,
-    task_registry=None,
+    task_registry=_UNSET,
     action_logger=None,
     reward_signal=None,
     policy_hook=None,
     settings=None,
+    batch_processor=_UNSET,
 ):
     """Orchestrator を依存性注入でビルドするヘルパー。
 
-    graph に None を明示的に渡すとグラフ機能無効（graph=None）として扱う。
-    省略した場合はデフォルトのモックを使用する。
+    graph, batch_processor, task_registry に None を明示的に渡すと、
+    その機能が無効な状態として扱う。省略(_UNSET)した場合はデフォルトのモックを使用する。
     """
     from context_store.orchestrator import Orchestrator
 
@@ -133,8 +134,9 @@ async def _build_orchestrator(
     ingestion_pipeline = ingestion_pipeline or _make_mock_ingestion_pipeline()
     retrieval_pipeline = retrieval_pipeline or _make_mock_retrieval_pipeline()
     lifecycle_manager = lifecycle_manager or _make_mock_lifecycle_manager()
-    task_registry = task_registry or _make_mock_task_registry()
+    task_registry = _make_mock_task_registry() if task_registry is _UNSET else task_registry
     settings = settings or make_settings()
+    batch_processor = AsyncMock() if batch_processor is _UNSET else batch_processor
 
     orch = Orchestrator(
         storage=storage,
@@ -149,8 +151,9 @@ async def _build_orchestrator(
         reward_signal=reward_signal,
         policy_hook=policy_hook,
         settings=settings,
+        batch_processor=batch_processor,
     )
-    # フェイルファストチェック（次元不一致時は ConfigurationError を raise）
+    # フェイルファストチェック(次元不一致時は ConfigurationError を raise)
     await orch._check_vector_dimension()
     return (
         orch,
@@ -175,7 +178,7 @@ class TestOrchestratorCreation:
 
     @pytest.mark.asyncio
     async def test_orchestrator_creates_with_defaults(self):
-        """デフォルト引数（RL フック未指定）で Orchestrator を生成できる。"""
+        """デフォルト引数(RL フック未指定)で Orchestrator を生成できる。"""
         orch, *_ = await _build_orchestrator()
         assert orch is not None
         assert isinstance(orch.action_logger, NoOpActionLogger)
@@ -235,7 +238,7 @@ class TestDimensionCheck:
 
     @pytest.mark.asyncio
     async def test_dimension_unknown_logs_warning_and_continues(self, caplog):
-        """stored_dim=None の場合は警告ログを出力して続行する（初回起動）。"""
+        """stored_dim=None の場合は警告ログを出力して続行する(初回起動)。"""
         storage = _make_mock_storage(vector_dim=None)
         embedding = _make_mock_embedding(dimension=1536)
 
@@ -375,7 +378,7 @@ class TestSearchGraphOperation:
 
     @pytest.mark.asyncio
     async def test_search_graph_raises_when_graph_is_none(self):
-        """グラフが無効（graph=None）の場合 RuntimeError を raise する。"""
+        """グラフが無効(graph=None)の場合 RuntimeError を raise する。"""
         orch, *_ = await _build_orchestrator(graph=None)
 
         with pytest.raises(RuntimeError) as exc_info:
@@ -388,7 +391,7 @@ class TestSearchGraphOperation:
         """グラフが有効な場合 RetrievalPipeline.search() に委譲される。
 
         注意: edge_types と depth は現時点では RetrievalPipeline に渡されない。
-        Phase 9 で graph_traversal に委譲される予定（orchestrator.py の TODO 参照）。
+        Phase 9 で graph_traversal に委譲される予定(orchestrator.py の TODO 参照)。
         """
         graph = _make_mock_graph()
         retrieval = _make_mock_retrieval_pipeline()
@@ -556,3 +559,107 @@ class TestDisposeOperation:
         await orch.dispose()
 
         task_registry.cancel_all.assert_called_once()
+
+
+class TestSessionFlush:
+    """session_flush() のテスト。"""
+
+    @pytest.mark.asyncio
+    async def test_session_flush_accepted(self):
+        """正常系: タスクが受理され、レジストリに登録される。"""
+        task_registry = _make_mock_task_registry()
+        batch_processor = AsyncMock()
+        batch_processor.estimate_chunks = AsyncMock(return_value=5)
+
+        orch, *_ = await _build_orchestrator(
+            task_registry=task_registry,
+            batch_processor=batch_processor,
+        )
+
+        resp = await orch.session_flush("test log")
+
+        assert resp["status"] == "accepted"
+        assert resp["estimated_chunks"] == 5
+        task_registry.register.assert_called_once()
+        batch_processor.estimate_chunks.assert_called_once_with("test log")
+
+        # 登録されたタスクを取得して待機し、クリーンアップする
+        task = task_registry.register.call_args[0][0]
+        await task
+
+    @pytest.mark.asyncio
+    async def test_session_flush_empty_log_returns_error(self):
+        """バリデーション: 空のログはエラー。"""
+        orch, *_ = await _build_orchestrator()
+        resp = await orch.session_flush("")
+        assert "error" in resp
+        assert "empty" in resp["error"]
+
+    @pytest.mark.asyncio
+    async def test_session_flush_too_long_log_returns_error(self):
+        """バリデーション: 長すぎるログはエラー。"""
+        settings = make_settings()
+        settings.session_flush_max_log_length = 10
+        orch, *_ = await _build_orchestrator(settings=settings)
+
+        resp = await orch.session_flush("this is too long")
+        assert "error" in resp
+        assert "exceeds maximum length" in resp["error"]
+
+    @pytest.mark.asyncio
+    async def test_session_flush_concurrency_limit(self):
+        """同時実行数制限: max_jobs を超えるとエラー。"""
+        settings = make_settings()
+        settings.batch_max_concurrent_jobs = 1
+        task_registry = _make_mock_task_registry()
+        task_registry.__len__ = MagicMock(return_value=1)  # すでに1つ実行中
+
+        orch, *_ = await _build_orchestrator(
+            settings=settings,
+            task_registry=task_registry,
+            batch_processor=AsyncMock(),
+        )
+
+        resp = await orch.session_flush("test log")
+        assert "error" in resp
+        assert "Too many concurrent jobs" in resp["error"]
+
+    @pytest.mark.asyncio
+    async def test_session_flush_not_configured(self):
+        """BatchProcessor または TaskRegistry が未設定の場合エラー。"""
+        # TaskRegistry が None のケース
+        orch, *_ = await _build_orchestrator(task_registry=None)
+        resp = await orch.session_flush("test log")
+        assert "error" in resp
+        assert "not configured" in resp["error"]
+
+        # BatchProcessor が None のケース
+        orch, *_ = await _build_orchestrator(batch_processor=None)
+        resp = await orch.session_flush("test log")
+        assert "error" in resp
+        assert "not configured" in resp["error"]
+
+    @pytest.mark.asyncio
+    async def test_session_flush_calls_lifecycle_hook(self):
+        """バッチ処理完了後に LifecycleManager.on_memory_saved() が呼ばれる。"""
+        task_registry = _make_mock_task_registry()
+        lifecycle = _make_mock_lifecycle_manager()
+        batch_processor = AsyncMock()
+        batch_processor.process = AsyncMock(return_value=True)
+        batch_processor.estimate_chunks = AsyncMock(return_value=1)
+
+        orch, *_ = await _build_orchestrator(
+            task_registry=task_registry,
+            lifecycle_manager=lifecycle,
+            batch_processor=batch_processor,
+        )
+
+        # session_flush を実行 (バックグラウンドタスクが登録される)
+        await orch.session_flush("test log")
+
+        # 登録されたタスクを取得して実行
+        task = task_registry.register.call_args[0][0]
+        await task
+
+        # フックが呼ばれたことを確認
+        lifecycle.on_memory_saved.assert_called_once()

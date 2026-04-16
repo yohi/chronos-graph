@@ -10,10 +10,12 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+from context_store.config import Settings
 from context_store.models.memory import SourceType
 
 if TYPE_CHECKING:
     from context_store.ingestion.pipeline import IngestionPipeline
+    from context_store.lifecycle.manager import LifecycleManager
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +29,18 @@ class BatchProcessor:
     def __init__(
         self,
         ingestion_pipeline: IngestionPipeline,
-        batch_max_concurrent_jobs: int = 3,
+        lifecycle_manager: LifecycleManager,
+        settings: Settings,
     ) -> None:
+        batch_max_concurrent_jobs = settings.batch_max_concurrent_jobs
+
         if batch_max_concurrent_jobs < 1:
             raise ValueError("batch_max_concurrent_jobs must be at least 1")
         self._pipeline = ingestion_pipeline
+        self._lifecycle_manager = lifecycle_manager
+        self._chunker = ingestion_pipeline.chunker
+        # 指摘に基づき、設定値でチャンカーを明示的に構成(既存のチャンカーがある場合でも上書き)
+        self._chunker.max_turns_per_chunk = settings.conversation_chunk_size
         self._semaphore = asyncio.Semaphore(batch_max_concurrent_jobs)
 
     async def estimate_chunks(self, conversation_log: str) -> int:
@@ -52,16 +61,13 @@ class BatchProcessor:
         session_id: str,
         project: str | None = None,
         tags: list[str] | None = None,
-    ) -> bool:
+    ) -> None:
         """Background batch processing entry point.
 
         Flow:
         1. Acquire semaphore to limit concurrency
         2. IngestionPipeline.ingest() with source_type=CONVERSATION
         3. Errors are logged and re-raised (committed chunks are retained, uncommitted are lost)
-
-        Returns:
-            bool: True if processing completed successfully.
 
         Raises:
             Exception: If ingestion pipeline fails.
@@ -83,7 +89,6 @@ class BatchProcessor:
                     "Batch processing completed: session_id=%s",
                     session_id,
                 )
-                return True
             except Exception:
                 logger.error(
                     "Batch processing failed: session_id=%s",
@@ -91,3 +96,13 @@ class BatchProcessor:
                     exc_info=True,
                 )
                 raise
+
+            # インジェクション成功後にライフサイクルマネージャーに通知
+            try:
+                await self._lifecycle_manager.on_memory_saved()
+            except Exception:
+                logger.error(
+                    "Lifecycle hook failed after successful ingestion: session_id=%s",
+                    session_id,
+                    exc_info=True,
+                )

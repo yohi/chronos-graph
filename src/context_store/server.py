@@ -1,8 +1,8 @@
 """MCP Server (FastMCP) - ChronosGraph の MCP エントリーポイント。
 
 FastMCP を使用して 7 ツールと 2 リソースを公開する。
-Orchestrator は初回ツール呼び出し時に遅延初期化する（MCPハンドシェイク時は
-重いモジュールをロードしない）。
+Orchestrator は初回ツール呼び出し時に遅延初期化する(MCPハンドシェイク時は
+重いモジュールをロードしない)。
 """
 
 from __future__ import annotations
@@ -20,11 +20,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# FastMCP インスタンス（グローバル）
+# FastMCP インスタンス(グローバル)
 mcp: FastMCP = FastMCP("chronos-graph")
 
 # ---------------------------------------------------------------------------
-# ChronosServer クラス（状態管理 + ビジネスロジック）
+# ChronosServer クラス(状態管理 + ビジネスロジック)
 # ---------------------------------------------------------------------------
 
 
@@ -59,7 +59,7 @@ class ChronosServer:
         self._orchestrator = await create_orchestrator(self._settings)
 
     async def _ensure_initialized(self) -> None:
-        """Orchestrator を遅延初期化する（二重初期化を防ぐ）。
+        """Orchestrator を遅延初期化する(二重初期化を防ぐ)。
 
         asyncio.Lock を使用して複数の同時非同期呼び出し時でも
         デッドロック・重複初期化を防ぐ。
@@ -124,8 +124,8 @@ class ChronosServer:
 
         Args:
             conversation_log: 会話ログ全文 (User: .../Assistant: ... 形式)。
-                最大 200,000 文字。
-            session_id: セッション識別子（省略可、自動生成）。
+                最大長は settings.session_flush_max_log_length で制御される。
+            session_id: セッション識別子(省略可、自動生成)。
             project: プロジェクト名。
             tags: タグのリスト。
 
@@ -156,10 +156,10 @@ class ChronosServer:
 
         Args:
             content: 保存するテキスト。
-            source: ソース種別（"conversation", "manual", "url"）。デフォルト "conversation"。
+            source: ソース種別("conversation", "manual", "url")。デフォルト "conversation"。
             project: プロジェクト名。
             tags: タグのリスト。
-            importance: 重要度スコア（0.0〜1.0）。
+            importance: 重要度スコア(0.0〜1.0)。
 
         Returns:
             保存結果の JSON 文字列。
@@ -243,7 +243,7 @@ class ChronosServer:
         Args:
             query: 検索クエリ。
             project: プロジェクトフィルタ。
-            memory_type: 記憶種別フィルタ（"episodic", "semantic", "procedural"）。
+            memory_type: 記憶種別フィルタ("episodic", "semantic", "procedural")。
             top_k: 返す最大件数。
             max_tokens: 最大トークン数。
 
@@ -318,7 +318,7 @@ class ChronosServer:
 
         Args:
             older_than_days: この日数より古い記憶を削除対象とする。
-            dry_run: True の場合は削除せず対象件数のみを返す（デフォルト True）。
+            dry_run: True の場合は削除せず対象件数のみを返す(デフォルト True)。
 
         Returns:
             削除結果の JSON 文字列。
@@ -343,7 +343,7 @@ class ChronosServer:
         """ストレージの統計情報を返す。
 
         Args:
-            project: プロジェクトフィルタ（None の場合は全体）。
+            project: プロジェクトフィルタ(None の場合は全体)。
 
         Returns:
             統計情報の JSON 文字列。
@@ -388,8 +388,9 @@ async def session_flush(
 
     Args:
         conversation_log: 会話ログ全文 (User: .../Assistant: ... 形式)。
-            最大 200,000 文字。超過時はバリデーションエラーを返す。
-        session_id: セッション識別子（省略可、自動生成）。
+            最大長は settings.session_flush_max_log_length で制御される。
+            超過時はバリデーションエラーを返す。
+        session_id: セッション識別子(省略可、自動生成)。
         project: プロジェクト名。
         tags: タグのリスト。
     """
@@ -413,10 +414,10 @@ async def memory_save(
 
     Args:
         content: 保存するテキスト。
-        source: ソース種別（"conversation", "manual", "url"）。デフォルト "conversation"。
+        source: ソース種別("conversation", "manual", "url")。デフォルト "conversation"。
         project: プロジェクト名。
         tags: タグのリスト。
-        importance: 重要度スコア（0.0〜1.0）。
+        importance: 重要度スコア(0.0〜1.0)。
     """
     return await _server.memory_save(
         content=content,
@@ -456,7 +457,7 @@ async def memory_search(
     Args:
         query: 検索クエリ。
         project: プロジェクトフィルタ。
-        memory_type: 記憶種別フィルタ（"episodic", "semantic", "procedural"）。
+        memory_type: 記憶種別フィルタ("episodic", "semantic", "procedural")。
         top_k: 返す最大件数。
         max_tokens: 最大トークン数。
     """
@@ -511,7 +512,7 @@ async def memory_prune(
 
     Args:
         older_than_days: この日数より古い記憶を削除対象とする。
-        dry_run: True の場合は削除せず対象件数のみを返す（デフォルト True）。
+        dry_run: True の場合は削除せず対象件数のみを返す(デフォルト True)。
     """
     return await _server.memory_prune(
         older_than_days=older_than_days,
@@ -524,7 +525,7 @@ async def memory_stats(project: str | None = None) -> str:
     """ストレージの統計情報を返す。
 
     Args:
-        project: プロジェクトフィルタ（None の場合は全体）。
+        project: プロジェクトフィルタ(None の場合は全体)。
     """
     return await _server.memory_stats(project=project)
 

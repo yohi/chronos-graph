@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from context_store.orchestrator import Orchestrator
 from context_store.server import ChronosServer
 
 
@@ -14,7 +15,8 @@ from context_store.server import ChronosServer
 def server_with_mock_orchestrator() -> ChronosServer:
     """Mock Orchestrator を持つ ChronosServer。"""
     server = ChronosServer()
-    mock_orchestrator = MagicMock()
+    # spec=Orchestrator を追加してインターフェースを固定
+    mock_orchestrator = MagicMock(spec=Orchestrator)
     mock_orchestrator.session_flush = AsyncMock(
         return_value={"status": "accepted", "estimated_chunks": 3}
     )
@@ -74,3 +76,7 @@ class TestSessionFlushTool:
         )
         result = json.loads(result_str)
         assert result["error"] == "conversation_log must not be empty"
+        # オーケストレーターに空ログが渡されたことを検証（デフォルト引数も含む）
+        mock_orch.session_flush.assert_called_once_with(
+            conversation_log="", session_id=None, project=None, tags=None
+        )

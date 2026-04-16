@@ -10,36 +10,36 @@
 
 ---
 
-### Task 1: Verify current tests
+## Task 1: Verify current tests
 
 **Files:**
 - Test: `tests/unit/test_session_flush_tools.py`
 
-- [ ] **Step 1: Run existing unit tests to ensure baseline is green**
+### Step 1: Run existing unit tests to ensure baseline is green
 
 Run: `uv run pytest tests/unit/test_session_flush_tools.py -v`
 Expected: PASS
 
 ---
 
-### Task 2: Improve assertion specificity
+## Task 2: Improve assertion specificity
 
 **Files:**
 - Modify: `tests/unit/test_session_flush_tools.py:75-76`
 
-- [ ] **Step 1: Update the assertion to check for specific error message**
+### Step 1: Update the assertion to check for specific error message
 
 ```python
         result = json.loads(result_str)
         assert result["error"] == "conversation_log must not be empty"
 ```
 
-- [ ] **Step 2: Run the test to verify it passes with the stricter assertion**
+### Step 2: Run the test to verify it passes with the stricter assertion
 
 Run: `uv run pytest tests/unit/test_session_flush_tools.py -v`
 Expected: PASS
 
-- [ ] **Step 3: Commit the change**
+### Step 3: Commit the change
 
 ```bash
 git add tests/unit/test_session_flush_tools.py

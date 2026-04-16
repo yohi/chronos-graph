@@ -175,16 +175,12 @@ class Orchestrator:
                 # ロジック上ここには来ないはずだが、防御的にチェック
                 return
 
-            try:
-                await self._batch_processor.process(
-                    conversation_log,
-                    session_id=effective_session_id,
-                    project=project,
-                    tags=tags,
-                )
-            except Exception:
-                # エラーは BatchProcessor.process 内でログ出力済み
-                raise
+            await self._batch_processor.process(
+                conversation_log,
+                session_id=effective_session_id,
+                project=project,
+                tags=tags,
+            )
 
         async with self._flush_lock:
             # 同時実行数チェック

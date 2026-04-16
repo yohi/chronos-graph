@@ -61,16 +61,13 @@ class BatchProcessor:
         session_id: str,
         project: str | None = None,
         tags: list[str] | None = None,
-    ) -> bool:
+    ) -> None:
         """Background batch processing entry point.
 
         Flow:
         1. Acquire semaphore to limit concurrency
         2. IngestionPipeline.ingest() with source_type=CONVERSATION
         3. Errors are logged and re-raised (committed chunks are retained, uncommitted are lost)
-
-        Returns:
-            bool: True if processing completed successfully.
 
         Raises:
             Exception: If ingestion pipeline fails.
@@ -88,14 +85,10 @@ class BatchProcessor:
                     source_type=SourceType.CONVERSATION,
                     metadata=metadata,
                 )
-                # インジェクション成功後にライフサイクルマネージャーに通知
-                await self._lifecycle_manager.on_memory_saved()
-
                 logger.info(
                     "Batch processing completed: session_id=%s",
                     session_id,
                 )
-                return True
             except Exception:
                 logger.error(
                     "Batch processing failed: session_id=%s",
@@ -103,3 +96,13 @@ class BatchProcessor:
                     exc_info=True,
                 )
                 raise
+
+            # インジェクション成功後にライフサイクルマネージャーに通知
+            try:
+                await self._lifecycle_manager.on_memory_saved()
+            except Exception:
+                logger.error(
+                    "Lifecycle hook failed after successful ingestion: session_id=%s",
+                    session_id,
+                    exc_info=True,
+                )

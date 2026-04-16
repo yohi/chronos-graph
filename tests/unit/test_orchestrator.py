@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock
 
@@ -640,26 +641,29 @@ class TestSessionFlush:
         assert "not configured" in resp["error"]
 
     @pytest.mark.asyncio
-    async def test_session_flush_calls_lifecycle_hook(self):
-        """バッチ処理完了後に LifecycleManager.on_memory_saved() が呼ばれる。"""
+    async def test_session_flush_calls_batch_processor(self):
+        """session_flush() が BatchProcessor.process() を呼び出す。"""
         task_registry = _make_mock_task_registry()
-        lifecycle = _make_mock_lifecycle_manager()
         batch_processor = AsyncMock()
         batch_processor.process = AsyncMock(return_value=True)
         batch_processor.estimate_chunks = AsyncMock(return_value=1)
 
         orch, *_ = await _build_orchestrator(
             task_registry=task_registry,
-            lifecycle_manager=lifecycle,
             batch_processor=batch_processor,
         )
 
-        # session_flush を実行 (バックグラウンドタスクが登録される)
-        await orch.session_flush("test log")
+        # session_flush を実行
+        await orch.session_flush("test log", session_id="sess-123")
 
         # 登録されたタスクを取得して実行
         task = task_registry.register.call_args[0][0]
         await task
 
-        # フックが呼ばれたことを確認
-        lifecycle.on_memory_saved.assert_called_once()
+        # BatchProcessor.process が正しく呼ばれたことを確認
+        batch_processor.process.assert_called_once_with(
+            "test log",
+            session_id="sess-123",
+            project=None,
+            tags=None,
+        )

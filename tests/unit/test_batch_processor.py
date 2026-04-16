@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock
 
@@ -9,6 +10,7 @@ import pytest
 
 from context_store.ingestion.batch_processor import BatchProcessor
 from context_store.models.memory import SourceType
+from tests.unit.conftest import make_settings
 
 
 class TestInit:
@@ -17,11 +19,24 @@ class TestInit:
     def test_init_raises_value_error_on_invalid_concurrency(self) -> None:
         """batch_max_concurrent_jobs が 1 未満の場合、ValueError を投げる。"""
         mock_pipeline = MagicMock()
-        with pytest.raises(ValueError, match="batch_max_concurrent_jobs must be at least 1"):
-            BatchProcessor(ingestion_pipeline=mock_pipeline, batch_max_concurrent_jobs=0)
+        mock_lifecycle = MagicMock()
+        settings = make_settings()
+        settings.batch_max_concurrent_jobs = 0
 
         with pytest.raises(ValueError, match="batch_max_concurrent_jobs must be at least 1"):
-            BatchProcessor(ingestion_pipeline=mock_pipeline, batch_max_concurrent_jobs=-1)
+            BatchProcessor(
+                ingestion_pipeline=mock_pipeline,
+                lifecycle_manager=mock_lifecycle,
+                settings=settings,
+            )
+
+        settings.batch_max_concurrent_jobs = -1
+        with pytest.raises(ValueError, match="batch_max_concurrent_jobs must be at least 1"):
+            BatchProcessor(
+                ingestion_pipeline=mock_pipeline,
+                lifecycle_manager=mock_lifecycle,
+                settings=settings,
+            )
 
 
 class TestEstimateChunks:
@@ -32,7 +47,14 @@ class TestEstimateChunks:
         """estimate_chunks() は IngestionPipeline.estimate_chunks() に委譲する。"""
         mock_pipeline = MagicMock()
         mock_pipeline.estimate_chunks = AsyncMock(return_value=5)
-        processor = BatchProcessor(ingestion_pipeline=mock_pipeline)
+        mock_lifecycle = MagicMock()
+        settings = make_settings()
+
+        processor = BatchProcessor(
+            ingestion_pipeline=mock_pipeline,
+            lifecycle_manager=mock_lifecycle,
+            settings=settings,
+        )
 
         conversation_log = "User: hello\nAssistant: hi"
         result = await processor.estimate_chunks(conversation_log)
@@ -48,7 +70,14 @@ class TestEstimateChunks:
         """空文字列の処理もパイプラインに委譲する。"""
         mock_pipeline = MagicMock()
         mock_pipeline.estimate_chunks = AsyncMock(return_value=0)
-        processor = BatchProcessor(ingestion_pipeline=mock_pipeline)
+        mock_lifecycle = MagicMock()
+        settings = make_settings()
+
+        processor = BatchProcessor(
+            ingestion_pipeline=mock_pipeline,
+            lifecycle_manager=mock_lifecycle,
+            settings=settings,
+        )
 
         result = await processor.estimate_chunks("")
         assert result == 0
@@ -66,7 +95,14 @@ class TestProcess:
         """process() は IngestionPipeline.ingest() に委譲し、成功時に True を返す。"""
         mock_pipeline = MagicMock()
         mock_pipeline.ingest = AsyncMock(return_value=[])
-        processor = BatchProcessor(ingestion_pipeline=mock_pipeline)
+        mock_lifecycle = AsyncMock()
+        settings = make_settings()
+
+        processor = BatchProcessor(
+            ingestion_pipeline=mock_pipeline,
+            lifecycle_manager=mock_lifecycle,
+            settings=settings,
+        )
 
         conversation_log = "User: test\nAssistant: response"
         result = await processor.process(
@@ -86,13 +122,22 @@ class TestProcess:
                 "tags": ["tag1"],
             },
         )
+        # LifecycleManager への通知を確認
+        mock_lifecycle.on_memory_saved.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_process_passes_metadata(self) -> None:
         """process() は session_id, project, tags をメタデータに含める。"""
         mock_pipeline = MagicMock()
         mock_pipeline.ingest = AsyncMock(return_value=[])
-        processor = BatchProcessor(ingestion_pipeline=mock_pipeline)
+        mock_lifecycle = AsyncMock()
+        settings = make_settings()
+
+        processor = BatchProcessor(
+            ingestion_pipeline=mock_pipeline,
+            lifecycle_manager=mock_lifecycle,
+            settings=settings,
+        )
 
         conversation_log = "User: hello\nAssistant: hi"
         await processor.process(
@@ -122,7 +167,14 @@ class TestProcess:
 
         mock_pipeline = MagicMock()
         mock_pipeline.ingest = AsyncMock(side_effect=RuntimeError("pipeline error"))
-        processor = BatchProcessor(ingestion_pipeline=mock_pipeline)
+        mock_lifecycle = AsyncMock()
+        settings = make_settings()
+
+        processor = BatchProcessor(
+            ingestion_pipeline=mock_pipeline,
+            lifecycle_manager=mock_lifecycle,
+            settings=settings,
+        )
 
         # 例外が再送されることを確認
         with pytest.raises(RuntimeError, match="pipeline error"):
@@ -132,3 +184,5 @@ class TestProcess:
             )
 
         assert any("Batch processing failed" in record.message for record in caplog.records)
+        # 失敗時は LifecycleManager への通知は行われない
+        mock_lifecycle.on_memory_saved.assert_not_called()

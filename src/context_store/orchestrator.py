@@ -170,23 +170,23 @@ class Orchestrator:
         effective_session_id = session_id or str(uuid.uuid4())
 
         async def _flush_wrapper() -> None:
-            """バックグラウンドでバッチ処理を実行し、完了後にライフサイクルフックを呼ぶ。"""
+            """バックグラウンドでバッチ処理を実行する。"""
             if self._batch_processor is None:
+
                 # ロジック上ここには来ないはずだが、防御的にチェック
                 return
 
             try:
-                success = await self._batch_processor.process(
+                await self._batch_processor.process(
                     conversation_log,
                     session_id=effective_session_id,
                     project=project,
                     tags=tags,
                 )
-                if success:
-                    await self._lifecycle_manager.on_memory_saved()
             except Exception:
                 # エラーは BatchProcessor.process 内でログ出力済み
                 raise
+
 
         async with self._flush_lock:
             # 同時実行数チェック
@@ -599,7 +599,8 @@ async def create_orchestrator(
 
         batch_processor = BatchProcessor(
             ingestion_pipeline=ingestion_pipeline,
-            batch_max_concurrent_jobs=settings.batch_max_concurrent_jobs,
+            lifecycle_manager=lifecycle_manager,
+            settings=settings,
         )
         # Orchestrator 生成・初期化
         orchestrator = Orchestrator(

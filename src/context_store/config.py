@@ -100,6 +100,8 @@ class Settings(BaseSettings):
     max_tokens_per_chunk: int = Field(default=1000, ge=1)
     max_turns_per_chunk: int = Field(default=3, ge=1)
     batch_max_concurrent_jobs: int = Field(default=3, ge=1)
+    # session_flush_max_log_length: エージェントプロンプトでの推奨閾値 (8,000文字) とは異なり、
+    # 物理的なセーフティガードとしての最大長 (デフォルト20万文字) を定義する。
     session_flush_max_log_length: int = Field(default=200_000, ge=1)
     batch_cancel_timeout: float = Field(default=5.0, gt=0.0)
 

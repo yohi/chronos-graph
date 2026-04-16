@@ -9,6 +9,7 @@ from context_store.ingestion.adapters import (
     SourceAdapter,
     URLAdapter,
 )
+from context_store.ingestion.batch_processor import BatchProcessor
 from context_store.ingestion.chunker import Chunker
 from context_store.ingestion.classifier import ClassificationResult, Classifier
 from context_store.ingestion.deduplicator import (
@@ -18,6 +19,7 @@ from context_store.ingestion.deduplicator import (
 )
 from context_store.ingestion.graph_linker import EdgeType, GraphLinker
 from context_store.ingestion.pipeline import IngestionPipeline, IngestionResult
+from context_store.ingestion.task_registry import TaskRegistry
 
 __all__ = [
     "RawContent",
@@ -25,6 +27,7 @@ __all__ = [
     "ConversationAdapter",
     "ManualAdapter",
     "URLAdapter",
+    "BatchProcessor",
     "Chunker",
     "ClassificationResult",
     "Classifier",
@@ -35,4 +38,5 @@ __all__ = [
     "GraphLinker",
     "IngestionPipeline",
     "IngestionResult",
+    "TaskRegistry",
 ]

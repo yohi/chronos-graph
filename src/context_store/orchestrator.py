@@ -172,7 +172,6 @@ class Orchestrator:
         async def _flush_wrapper() -> None:
             """バックグラウンドでバッチ処理を実行する。"""
             if self._batch_processor is None:
-
                 # ロジック上ここには来ないはずだが、防御的にチェック
                 return
 
@@ -186,7 +185,6 @@ class Orchestrator:
             except Exception:
                 # エラーは BatchProcessor.process 内でログ出力済み
                 raise
-
 
         async with self._flush_lock:
             # 同時実行数チェック

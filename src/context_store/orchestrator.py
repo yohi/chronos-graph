@@ -175,12 +175,17 @@ class Orchestrator:
                 # ロジック上ここには来ないはずだが、防御的にチェック
                 return
 
-            await self._batch_processor.process(
-                conversation_log,
-                session_id=effective_session_id,
-                project=project,
-                tags=tags,
-            )
+            try:
+                await self._batch_processor.process(
+                    conversation_log,
+                    session_id=effective_session_id,
+                    project=project,
+                    tags=tags,
+                )
+                # 処理完了をライフサイクルマネージャーに通知
+                await self._lifecycle_manager.on_memory_saved()
+            except Exception as e:
+                logger.error("Failed to process session flush for %s: %s", effective_session_id, e)
 
         async with self._flush_lock:
             # 同時実行数チェック

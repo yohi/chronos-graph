@@ -1,4 +1,4 @@
-"""session_flush MCP ツールの E2E テスト。"""
+"""session_flush MCP ツールのユニットテスト。"""
 
 from __future__ import annotations
 

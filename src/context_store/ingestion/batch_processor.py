@@ -39,7 +39,7 @@ class BatchProcessor:
         self._pipeline = ingestion_pipeline
         self._lifecycle_manager = lifecycle_manager
         self._chunker = ingestion_pipeline.chunker
-        # 指摘に基づき、設定値でチャンカーを明示的に構成（既存のチャンカーがある場合でも上書き）
+        # 指摘に基づき、設定値でチャンカーを明示的に構成(既存のチャンカーがある場合でも上書き)
         self._chunker.max_turns_per_chunk = settings.conversation_chunk_size
         self._semaphore = asyncio.Semaphore(batch_max_concurrent_jobs)
 

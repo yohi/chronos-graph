@@ -1,11 +1,11 @@
 """Chunker: SourceType に応じてコンテンツを適切なサイズに分割する。
 
-- CONVERSATION: Q&Aペア（最大3ターン）
-- MANUAL: 短文はそのまま、長文はセクション分割（〜1000トークン相当）
+- CONVERSATION: Q&Aペア(最大3ターン)
+- MANUAL: 短文はそのまま、長文はセクション分割(〜1000トークン相当)
 - URL: Markdown見出し (H1/H2) ベースのセクション分割
 
-コードブロック（```）の途中でチャンクを分断しないスマートチャンキングを実装する。
-遅延評価のためジェネレータ（yield）を使用する。
+コードブロック(```)の途中でチャンクを分断しないスマートチャンキングを実装する。
+遅延評価のためジェネレータ(yield)を使用する。
 """
 
 from __future__ import annotations
@@ -29,34 +29,43 @@ DEFAULT_MAX_TURNS_PER_CHUNK = 3
 # ターン区切りパターン
 TURN_PATTERN = re.compile(r"^(User|Assistant|Human|AI|System):\s*", re.IGNORECASE | re.MULTILINE)
 
-# Markdown 見出しパターン（H1/H2のみでセクション分割）
+# Markdown 見出しパターン(H1/H2のみでセクション分割)
 HEADING_PATTERN = re.compile(r"^(#{1,2})\s+.+$", re.MULTILINE)
 
 
 class Chunker:
     """SourceType に応じてコンテンツを適切なサイズに分割するクラス。
 
-    遅延評価のためジェネレータ（yield）を使用する。
+    遅延評価のためジェネレータ(yield)を使用する。
     """
 
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings
-        self.chars_per_token = DEFAULT_CHARS_PER_TOKEN
-        self.max_tokens_per_chunk = DEFAULT_MAX_TOKENS_PER_CHUNK
-        self.max_turns_per_chunk = DEFAULT_MAX_TURNS_PER_CHUNK
-
-        if self._settings:
-            # Note: In the future, we may want to add max_turns_per_chunk to Settings.
-            # For now, we keep the default (3) to avoid conflict with ConversationAdapter's
-            # chunk_size (conversation_chunk_size).
-            pass
+        self.chars_per_token = (
+            max(1, settings.chars_per_token) if settings else DEFAULT_CHARS_PER_TOKEN
+        )
+        self.max_tokens_per_chunk = (
+            max(1, settings.max_tokens_per_chunk) if settings else DEFAULT_MAX_TOKENS_PER_CHUNK
+        )
+        self.max_turns_per_chunk = (
+            max(1, settings.max_turns_per_chunk) if settings else DEFAULT_MAX_TURNS_PER_CHUNK
+        )
 
         self.max_chars_per_chunk = self.max_tokens_per_chunk * self.chars_per_token
+        self._fence_positions: list[int] = []
 
-    def _is_inside_code_block(self, text: str, pos: int) -> bool:
-        """テキスト中の位置 pos がコードブロック内かどうかを判定する。"""
-        # pos より前の ``` の出現回数が奇数ならコードブロック内
-        count = text[:pos].count("```")
+    def _precompute_fences(self, text: str) -> None:
+        """テキスト中のコードフェンス(```)の位置を事前計算する。"""
+        self._fence_positions = [m.start() for m in re.finditer("```", text)]
+
+    def _is_inside_code_block(self, pos: int) -> bool:
+        """位置 pos がコードブロック内かどうかを判定する。"""
+        if not self._fence_positions:
+            return False
+        # pos より前にあるフェンスの数を二分探索でカウント
+        import bisect
+
+        count = bisect.bisect_left(self._fence_positions, pos)
         return count % 2 == 1
 
     def _split_preserving_code_blocks(self, text: str, max_chars: int) -> list[str]:
@@ -64,7 +73,9 @@ class Chunker:
         if len(text) <= max_chars:
             return [text]
 
+        self._precompute_fences(text)
         chunks: list[str] = []
+        offset = 0
         remaining = text
 
         while len(remaining) > max_chars:
@@ -72,7 +83,7 @@ class Chunker:
             split_pos = max_chars
 
             # コードブロック内なら、終了する ``` を探す
-            if self._is_inside_code_block(remaining, split_pos):
+            if self._is_inside_code_block(offset + split_pos):
                 end_pos = remaining.find("```", split_pos)
                 if end_pos != -1:
                     split_pos = end_pos + 3  # ``` の後ろ
@@ -80,13 +91,14 @@ class Chunker:
                     # 終了 ``` が見つからなければ全体を1チャンクにする
                     break
 
-            # 段落境界（\n\n）で調整（コードブロック内でなければ）
-            if not self._is_inside_code_block(remaining, split_pos):
+            # 段落境界(\n\n)で調整(コードブロック内でなければ)
+            if not self._is_inside_code_block(offset + split_pos):
                 boundary = remaining.rfind("\n\n", 0, split_pos)
                 if boundary > max_chars // 2:
                     split_pos = boundary + 2
 
             chunks.append(remaining[:split_pos])
+            offset += split_pos
             remaining = remaining[split_pos:]
 
         if remaining:
@@ -127,11 +139,12 @@ class Chunker:
 
         コードブロックを分断しない。
         """
-        # 見出し位置を収集（コードブロック内を除く）
+        self._precompute_fences(content)
+        # 見出し位置を収集(コードブロック内を除く)
         heading_positions: list[int] = []
         for match in HEADING_PATTERN.finditer(content):
             pos = match.start()
-            if not self._is_inside_code_block(content, pos):
+            if not self._is_inside_code_block(pos):
                 heading_positions.append(pos)
 
         if not heading_positions:
@@ -140,7 +153,7 @@ class Chunker:
 
         # 見出し位置でセクションを分割
         sections: list[str] = []
-        starts = heading_positions + [len(content)]
+        starts = [*heading_positions, len(content)]
 
         # 先頭に見出しより前のコンテンツがあれば追加
         if heading_positions[0] > 0:
@@ -174,7 +187,7 @@ class Chunker:
         if HEADING_PATTERN.search(content):
             return self._split_by_headings(content)
 
-        # 段落（\n\n）で分割を試みる
+        # 段落(\n\n)で分割を試みる
         return self._split_preserving_code_blocks(content, self.max_chars_per_chunk)
 
     def chunk(self, raw: RawContent) -> Generator[RawContent, None, None]:

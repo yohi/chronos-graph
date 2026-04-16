@@ -153,7 +153,7 @@ async def _build_orchestrator(
         settings=settings,
         batch_processor=batch_processor,
     )
-    # フェイルファストチェック（次元不一致時は ConfigurationError を raise）
+    # フェイルファストチェック(次元不一致時は ConfigurationError を raise)
     await orch._check_vector_dimension()
     return (
         orch,
@@ -583,6 +583,10 @@ class TestSessionFlush:
         task_registry.register.assert_called_once()
         batch_processor.estimate_chunks.assert_called_once_with("test log")
 
+        # 登録されたタスクを取得して待機し、クリーンアップする
+        task = task_registry.register.call_args[0][0]
+        await task
+
     @pytest.mark.asyncio
     async def test_session_flush_empty_log_returns_error(self):
         """バリデーション: 空のログはエラー。"""
@@ -650,7 +654,7 @@ class TestSessionFlush:
             batch_processor=batch_processor,
         )
 
-        # session_flush を実行（バックグラウンドタスクが登録される）
+        # session_flush を実行 (バックグラウンドタスクが登録される)
         await orch.session_flush("test log")
 
         # 登録されたタスクを取得して実行

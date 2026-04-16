@@ -182,8 +182,6 @@ class Orchestrator:
                     project=project,
                     tags=tags,
                 )
-                # 処理完了をライフサイクルマネージャーに通知
-                await self._lifecycle_manager.on_memory_saved()
             except Exception as e:
                 logger.error("Failed to process session flush for %s: %s", effective_session_id, e)
 

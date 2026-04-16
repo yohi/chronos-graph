@@ -164,6 +164,7 @@ uv run python -m context_store.dashboard.api_server
 
 | ツール | 説明 |
 |---|---|
+| `session_flush` | 会話ログをバックグラウンドでバッチ保存。即座に `status: "accepted"` と `estimated_chunks`（概算チャンク数）を含むレスポンスを返す |
 | `memory_save` | テキストを記憶として保存 |
 | `memory_save_url` | URL からコンテンツを取得して保存 |
 | `memory_search` | ハイブリッド検索（ベクトル + キーワード + グラフ） |
@@ -192,6 +193,8 @@ MCP Client (Claude / Cursor / etc.)
   Orchestrator
   ├── Ingestion Pipeline
   │     Adapter → Chunker → Classifier → Embedding → Deduplicator → GraphLinker
+  ├── Batch Processor (Batch Ingestion)
+  │     TaskRegistry → Ingestion Pipeline 委譲
   ├── Retrieval Pipeline
   │     QueryAnalyzer → [VectorSearch + KeywordSearch + GraphTraversal] → ResultFusion → PostProcessor
   └── Lifecycle Manager

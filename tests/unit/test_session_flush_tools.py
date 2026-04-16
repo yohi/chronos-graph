@@ -73,4 +73,4 @@ class TestSessionFlushTool:
             conversation_log="",
         )
         result = json.loads(result_str)
-        assert "error" in result
+        assert result["error"] == "conversation_log must not be empty"

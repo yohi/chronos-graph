@@ -46,11 +46,10 @@ class Chunker:
         self.max_turns_per_chunk = DEFAULT_MAX_TURNS_PER_CHUNK
 
         if self._settings:
-            # Note: Add these to Settings if needed. For now using defaults or
-            # deriving from conversation_chunk_size if appropriate.
-            # Using defaults as Settings currently doesn't have max_tokens_per_chunk
-            # but it has conversation_chunk_size.
-            self.max_turns_per_chunk = self._settings.conversation_chunk_size
+            # Note: In the future, we may want to add max_turns_per_chunk to Settings.
+            # For now, we keep the default (3) to avoid conflict with ConversationAdapter's
+            # chunk_size (conversation_chunk_size).
+            pass
 
         self.max_chars_per_chunk = self.max_tokens_per_chunk * self.chars_per_token
 

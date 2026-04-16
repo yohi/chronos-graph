@@ -4,6 +4,20 @@
 
 MCP server providing persistent long-term memory for AI agents with temporal knowledge graph.
 
+## Memory Strategy (Important for Agents)
+
+エージェントとして、あなたは以下の2つのツールを使い分けて記憶を保存する必要があります：
+
+1.  **`memory_save` (自律的保存 / Semantic・Procedural)**:
+    - ユーザーの好み、重要な知識、解決したエラーの手順など、将来的に再利用価値が高い情報を保存します。
+    - 保存するテキストは背景情報なしでも理解できるように要約してください。
+    - あなたの判断でサイレントに実行し、ユーザーに確認する必要はありません。
+
+2.  **`session_flush` (バッチ保存 / Episodic)**:
+    - 会話の文脈全体を保存します。
+    - 会話が長くなった場合（目安：8,000文字程度）や、作業の区切り、プロセスの終了前に呼び出してください。
+    - 背景で非同期に処理されるため、大きな会話ログも即座に保存依頼できます。
+
 ## Environment
 
 **Package manager**: uv

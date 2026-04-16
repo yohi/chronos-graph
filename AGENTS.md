@@ -53,6 +53,10 @@ MCP server providing persistent long-term memory for AI agents with temporal kno
 ### 3. 実行オプション
 - **ユニットテストの実行**: セットアップ後にテストを実行するかどうか。
 
+### 4. エージェント用指示の永続化 (グローバル設定推奨)
+- **グローバル設定の更新**: `docs/agent-prompts/memory-save-system-prompt.md` の内容を、あなたのエージェントの**グローバル設定**（例: `~/.gemini/GEMINI.md`, `~/.clauderules`, または Cursor の `Rules for AI`）に追加してください。
+- **理由**: プロジェクトルートの `.cursorrules` 等に追記するとチーム全体に影響するため、個人の環境でのみ有効にするのがマナーです。これを行わない限り、エージェントは自律的に `memory_save` 等を実行しません。
+
 **注記（エージェント向け）**:
 - セットアップ実行中にエラー（テスト失敗など）が発生した場合は、**独断でソースコードの修正を開始せず**、まずはエラー内容をユーザーに報告して指示を仰いでください。
 - 確認したオプションを引数として `scripts/bootstrap.sh` を実行します。

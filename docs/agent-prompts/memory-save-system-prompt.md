@@ -28,7 +28,6 @@ When performing tasks, actively invoke the `memory_save` tool according to the f
 4. **Batch Session Saving (session_flush):**
    Invoke the `session_flush` tool to batch save the entire conversation log when:
    - The total character count of the conversation log reaches 8,000.
-   - The MCP server process is about to exit (graceful shutdown).
 
    Temporary conversation logs are automatically classified and saved as EPISODIC memories via `session_flush`, so manual saving via `memory_save` for general logs is unnecessary.
    Pass the full conversation text to the `conversation_log` argument. The `session_id` is optional (it will be auto-generated).
@@ -63,7 +62,7 @@ After calling `memory_save` or `session_flush`, perform a self-verification usin
 1. **Justification for Tool Call:**
    - [ ] Does it meet the trigger conditions?
          - memory_save: Post-instruction completion or failure-to-success transition.
-         - session_flush: Reaching 8,000 characters or process exit.
+         - session_flush: Reaching 8,000 characters.
    - [ ] For memory_save: Does it follow the format requirements?
          - Semantic: `[Semantic]` prefix + "Subject" & "Fact/Rule/Value" pair.
          - Procedural: `[Procedural]` prefix + "Trigger" & "Numbered Steps" pair.

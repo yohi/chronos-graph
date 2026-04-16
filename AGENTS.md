@@ -55,7 +55,9 @@ MCP server providing persistent long-term memory for AI agents with temporal kno
 
 ### 4. エージェント用指示の永続化 (グローバル設定推奨)
 - **グローバル設定の更新**: `docs/agent-prompts/memory-save-system-prompt.md` の内容を、あなたのエージェントの**グローバル設定**（例: `~/.gemini/GEMINI.md`, `~/.clauderules`, または Cursor の `Rules for AI`）に追加してください。
-- **理由**: プロジェクトルートの `.cursorrules` 等に追記するとチーム全体に影響するため、個人の環境でのみ有効にするのがマナーです。これを行わない限り、エージェントは自律的に `memory_save` 等を実行しません。
+- **理由**: プロジェクトルートの `.cursorrules` 等に追記するとチーム全体に影響するため、個人の環境でのみ有効にするのがマナーです。
+  - **注記**: `.gitignore` では `CLAUDE.md` や `GEMINI.md` 等を意図的に除外しています。これは、各ユーザーが独自の API キーや個人の好みを誤ってコミットするのを防ぐためです。プロジェクト共有の設定をコミットしたい場合は、`AGENTS.md` や `README.md` を更新するか、明示的に `git add -f` を使用してください。
+- **理由**: これを行わない限り、エージェントは自律的に `memory_save` 等を実行しません。
 
 **注記（エージェント向け）**:
 - セットアップ実行中にエラー（テスト失敗など）が発生した場合は、**独断でソースコードの修正を開始せず**、まずはエラー内容をユーザーに報告して指示を仰いでください。

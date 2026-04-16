@@ -74,10 +74,10 @@ frontend/test-results/
 .eslintcache
 
 # Agent local rules
-.cursorrules
-.clauderules
-.clinerules
-.windsurfrules
-GEMINI.md
-CLAUDE.md
-mcp_config_*.json
+/.cursorrules
+/.clauderules
+/.clinerules
+/.windsurfrules
+/GEMINI.md
+/CLAUDE.md
+/mcp_config_*.json

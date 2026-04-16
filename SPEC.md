@@ -198,10 +198,10 @@ LLM は使用しない（トークン消費ゼロの原則）。
 ```
 
 **session_flush (バッチ保存):**
-会話ログ全体をバックグラウンドで処理する機能。`Orchestrator` が `BatchProcessor` を介して `IngestionPipeline` を呼び出し、`TaskRegistry` でバックグラウンドタスクを管理する。
-- **Fire-and-forget**: ジョブを受理した時点で `{"status": "accepted"}` を即時返却。
-- **並行制限**: `batch_max_concurrent_jobs` により同時実行数を制限。
-- **Graceful Shutdown**: `TaskRegistry` によりシャットダウン時に全タスクを一括キャンセル。
+会話ログ全体をバックグラウンドで処理する機能。`Orchestrator` が `BatchProcessor` を介して `IngestionPipeline` へジョブを投入し、`TaskRegistry` でバックグラウンドタスクのライフサイクルを管理する。
+- **Fire-and-forget**: ジョブを受理した時点で `{"status": "accepted", "estimated_chunks": n}` を即時返却する。`estimated_chunks` は `Chunker` による事前の概算であり、実際の永続化結果を保証するものではない。
+- **並行制限**: 同時実行ジョブ数は `batch_max_concurrent_jobs` 設定により制限される。上限到達時は受理されずエラーを返す。
+- **Shutdown Semantics**: システム終了時、`TaskRegistry` は未完了のバックグラウンドジョブの完了を待機せず、強制的にキャンセル（`cancel_all`）する。そのため、シャットダウン直前に投入されたジョブは永続化されない可能性がある。
 
 **トランザクション境界の設計原則:**
 `EmbeddingProvider` によるベクトル化処理（外部API呼び出しや重いローカル推論）は、**必ず Storage Layer の書き込みトランザクション（`save_memory` 等）を開始する前**に完了させてください。

@@ -86,6 +86,9 @@ https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
     *   `uv run pytest tests/unit/ -v`
 4.  **[ ] MCP設定の生成:**
     *   `uv run python scripts/generate_config.py > mcp_config.json` を実行し、MCPクライアント用の設定ファイルを生成してください。
+5.  **[ ] エージェントへの指示の追加 (Personal/Global):**
+    *   `docs/agent-prompts/memory-save-system-prompt.md` の内容を、あなたのエージェントの**グローバル設定**（`~/.gemini/GEMINI.md`, `~/.clauderules`, または Cursor の `Rules for AI`）に追加してください。
+    *   **注記**: チーム共有のプロジェクトルート（`.cursorrules` 等）に追記すると、他のメンバーのエージェントの挙動にも影響するため、個人のグローバル設定に配置することを強く推奨します。
 
 上記の全手順を、ユーザーと対話しながら一括で行うには `bash scripts/bootstrap.sh` を実行してください。
 

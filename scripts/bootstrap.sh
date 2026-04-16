@@ -14,7 +14,7 @@ SKIP_TESTS=false
 MCP_OUTPUT="generic"
 MCP_METHOD="python"
 UV_FROM=""
-GRAPH_ENABLED=true
+GRAPH_ENABLED=true  # bootstrap.sh では利便性のためデフォルトで有効（アプリデフォルトは false）
 
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
@@ -152,14 +152,34 @@ else
     exit 1
 fi
 
-echo -e "${GREEN}Bootstrap complete!${NC}"
-echo -e "Next steps:"
-echo -e "1. Edit .env if you haven't already."
-echo -e "2. Use mcp_config.json to configure your MCP client (Claude Desktop/Cursor)."
+# 5. Agent Instruction Guidance (Optional)
+NEXT_STEPS_MSG="
+To allow your AI agent to save memories autonomously, you need to add instructions.
+Since this project is often shared with a team, ${BLUE}DO NOT${NC} append these rules
+to project-root files (like .cursorrules) if you don't want to affect others.
+
+Recommended: Add the content of ${BLUE}docs/agent-prompts/memory-save-system-prompt.md${NC}
+to your ${GREEN}GLOBAL${NC} configuration:
+- ${BLUE}Gemini CLI:${NC}  Append to ${GREEN}~/.gemini/GEMINI.md${NC}
+- ${BLUE}Cursor:${NC}      Copy to ${GREEN}Settings > General > Rules for AI${NC}
+- ${BLUE}Claude Code:${NC} Append to ${GREEN}~/.clauderules${NC}
+
+Next steps:
+1. Edit .env if you haven't already.
+2. Use mcp_config.json to configure your MCP client (Claude Desktop/Cursor).
+3. ${BLUE}IMPORTANT:${NC} To enable autonomous memory saving, add the content of
+   ${BLUE}docs/agent-prompts/memory-save-system-prompt.md${NC} to your ${GREEN}GLOBAL${NC} settings
+   (e.g., ~/.gemini/GEMINI.md for Gemini CLI or Cursor Settings)."
+
+echo -e "\n${BLUE}Final Step: Enabling Autonomous Memory${NC}"
+echo -e "$NEXT_STEPS_MSG"
+
+echo -e "\n${GREEN}Bootstrap complete!${NC}"
+
 if [[ "$MCP_METHOD" == "uvx" ]]; then
-    echo -e "3. Start the server with: ${BLUE}uv tool run context-store${NC}"
+    echo -e "4. Start the server with: ${BLUE}uv tool run context-store${NC}"
 elif [[ "$MCP_METHOD" == "uv" ]]; then
-    echo -e "3. Start the server with: ${BLUE}uv run context-store${NC}"
+    echo -e "4. Start the server with: ${BLUE}uv run context-store${NC}"
 else
-    echo -e "3. Start the server with: ${BLUE}python -m context_store${NC}"
+    echo -e "4. Start the server with: ${BLUE}python -m context_store${NC}"
 fi

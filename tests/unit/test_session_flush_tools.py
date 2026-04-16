@@ -76,7 +76,7 @@ class TestSessionFlushTool:
         )
         result = json.loads(result_str)
         assert result["error"] == "conversation_log must not be empty"
-        # オーケストレーターに空ログが渡されたことを検証（デフォルト引数も含む）
+        # オーケストレーターに空ログが渡されたことを検証 (デフォルト引数も含む)
         mock_orch.session_flush.assert_called_once_with(
             conversation_log="", session_id=None, project=None, tags=None
         )

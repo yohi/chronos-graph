@@ -193,6 +193,8 @@ MCP Client (Claude / Cursor / etc.)
   Orchestrator
   ├── Ingestion Pipeline
   │     Adapter → Chunker → Classifier → Embedding → Deduplicator → GraphLinker
+  ├── Batch Processor (Batch Ingestion)
+  │     TaskRegistry → Ingestion Pipeline 委譲
   ├── Retrieval Pipeline
   │     QueryAnalyzer → [VectorSearch + KeywordSearch + GraphTraversal] → ResultFusion → PostProcessor
   └── Lifecycle Manager

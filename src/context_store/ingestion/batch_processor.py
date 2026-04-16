@@ -10,6 +10,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+from context_store.config import Settings
 from context_store.models.memory import SourceType
 
 if TYPE_CHECKING:
@@ -27,8 +28,11 @@ class BatchProcessor:
     def __init__(
         self,
         ingestion_pipeline: IngestionPipeline,
-        batch_max_concurrent_jobs: int = 3,
+        batch_max_concurrent_jobs: int | None = None,
     ) -> None:
+        if batch_max_concurrent_jobs is None:
+            batch_max_concurrent_jobs = Settings.model_fields["batch_max_concurrent_jobs"].default
+
         if batch_max_concurrent_jobs < 1:
             raise ValueError("batch_max_concurrent_jobs must be at least 1")
         self._pipeline = ingestion_pipeline

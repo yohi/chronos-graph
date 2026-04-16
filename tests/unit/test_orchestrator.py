@@ -123,7 +123,7 @@ async def _build_orchestrator(
     """Orchestrator を依存性注入でビルドするヘルパー。
 
     graph, batch_processor, task_registry に None を明示的に渡すと、
-    その機能が無効な状態として扱う。省略（_UNSET）した場合はデフォルトのモックを使用する。
+    その機能が無効な状態として扱う。省略(_UNSET)した場合はデフォルトのモックを使用する。
     """
     from context_store.orchestrator import Orchestrator
 
@@ -178,7 +178,7 @@ class TestOrchestratorCreation:
 
     @pytest.mark.asyncio
     async def test_orchestrator_creates_with_defaults(self):
-        """デフォルト引数（RL フック未指定）で Orchestrator を生成できる。"""
+        """デフォルト引数(RL フック未指定)で Orchestrator を生成できる。"""
         orch, *_ = await _build_orchestrator()
         assert orch is not None
         assert isinstance(orch.action_logger, NoOpActionLogger)
@@ -238,7 +238,7 @@ class TestDimensionCheck:
 
     @pytest.mark.asyncio
     async def test_dimension_unknown_logs_warning_and_continues(self, caplog):
-        """stored_dim=None の場合は警告ログを出力して続行する（初回起動）。"""
+        """stored_dim=None の場合は警告ログを出力して続行する(初回起動)。"""
         storage = _make_mock_storage(vector_dim=None)
         embedding = _make_mock_embedding(dimension=1536)
 
@@ -378,7 +378,7 @@ class TestSearchGraphOperation:
 
     @pytest.mark.asyncio
     async def test_search_graph_raises_when_graph_is_none(self):
-        """グラフが無効（graph=None）の場合 RuntimeError を raise する。"""
+        """グラフが無効(graph=None)の場合 RuntimeError を raise する。"""
         orch, *_ = await _build_orchestrator(graph=None)
 
         with pytest.raises(RuntimeError) as exc_info:
@@ -391,7 +391,7 @@ class TestSearchGraphOperation:
         """グラフが有効な場合 RetrievalPipeline.search() に委譲される。
 
         注意: edge_types と depth は現時点では RetrievalPipeline に渡されない。
-        Phase 9 で graph_traversal に委譲される予定（orchestrator.py の TODO 参照）。
+        Phase 9 で graph_traversal に委譲される予定(orchestrator.py の TODO 参照)。
         """
         graph = _make_mock_graph()
         retrieval = _make_mock_retrieval_pipeline()

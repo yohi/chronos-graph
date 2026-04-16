@@ -2,21 +2,21 @@
 
 ## Project
 
-MCP server providing persistent long-term memory for AI agents with temporal knowledge graph.
+MCP server providing persistent long-term memory for AI agents with a temporal knowledge graph.
 
 ## Memory Strategy (Important for Agents)
 
-エージェントとして、あなたは以下の2つのツールを使い分けて記憶を保存する必要があります：
+As an agent, you must utilize the following two tools selectively for saving memories:
 
-1.  **`memory_save` (自律的保存 / Semantic・Procedural)**:
-    - ユーザーの好み、重要な知識、解決したエラーの手順など、将来的に再利用価値が高い情報を保存します。
-    - 保存するテキストは背景情報なしでも理解できるように要約してください。
-    - あなたの判断でサイレントに実行し、ユーザーに確認する必要はありません。
+1.  **`memory_save` (Autonomous Saving / Semantic & Procedural)**:
+    - Save information with high reuse value for future sessions, such as user preferences, critical knowledge, and procedures used to resolve errors.
+    - Summarize the saved text so it can be understood without context.
+    - Execute silently at your own discretion; do not ask the user for confirmation.
 
-2.  **`session_flush` (バッチ保存 / Episodic)**:
-    - 会話の文脈全体を保存します。
-    - 会話が長くなった場合（目安：8,000文字程度）や、作業の区切り、プロセスの終了前に呼び出してください。
-    - **注意**: このツールは受理（Receipt）のみを即座に報告し、実際の保存処理はバックグラウンドで非同期に行われます。そのため、ツールが完了を返した直後に、保存されたデータが検索可能になるとは限りません。保存データに依存したアクションを行う場合は、十分な間隔を空けるか、明示的な保存完了を確認できるまで待機してください。
+2.  **`session_flush` (Batch Saving / Episodic)**:
+    - Save the entire conversation context.
+    - Invoke this tool when the conversation becomes long (approx. 8,000 characters) or at logical task boundaries.
+    - **Note**: This tool only reports acceptance (Receipt) immediately; the actual saving process occurs asynchronously in the background. Therefore, saved data may not be searchable immediately after the tool returns. If taking actions dependent on saved data, allow sufficient time or wait until explicit completion is confirmed.
 
 ## Environment
 
@@ -34,49 +34,49 @@ MCP server providing persistent long-term memory for AI agents with temporal kno
 
 ## Setup & Onboarding
 
-エージェントが最初に行うべきセットアップ手順です。
+Initial setup procedure for agents.
 
-**重要（対話の義務化）**: セットアップを開始する前に、**各AIエージェントが提供する対話ツール（例: `ask_user`）を必ず使用して**、以下のオプションをユーザーに提示し、選択を待ってください。独断でデフォルト値を使用して進めてはいけません。
+**Mandatory Interaction**: Before starting setup, **you MUST use the agent's interaction tool (e.g., `ask_user`)** to present the following options to the user and wait for their selection. Do not proceed with default values autonomously.
 
-### 1. 基本構成の確認
-- **ストレージバックエンド**: `sqlite` (軽量) または `postgres` (フル機能)
-- **モデルプロバイダー**: `openai`, `litellm`, `local`, `custom`
-- **MCP設定のターゲット**: `claude`, `cursor`, または `generic`
-- **MCP起動方法**: `python` (直接実行) または `uvx` (パッケージ管理ツール経由)
+### 1. Basic Configuration
+- **Storage Backend**: `sqlite` (Lightweight) or `postgres` (Full-featured)
+- **Model Provider**: `openai`, `litellm`, `local`, `custom`
+- **MCP Target**: `claude`, `cursor`, or `generic`
+- **MCP Activation Method**: `python` (Direct) or `uvx` (via uv)
 
-**注記**: `bootstrap.sh` は内部的に `local` を `local-model` に、`custom` を `custom-api` にマッピングして環境変数を設定します。
+**Note**: `bootstrap.sh` internally maps `local` to `local-model` and `custom` to `custom-api` for environment variables.
 
-### 2. 環境変数の確認
-- **APIキーの準備**: `OPENAI_API_KEY` などのキーを今すぐ設定するか、後で `.env` を手動編集するか。
-- **グラフ機能の有効化**: `GRAPH_ENABLED` (デフォルト: true)
+### 2. Environment Variables
+- **API Key Readiness**: Whether to set `OPENAI_API_KEY` now or edit `.env` manually later.
+- **Graph Features**: `GRAPH_ENABLED` (Default: true)
 
-### 3. 実行オプション
-- **ユニットテストの実行**: セットアップ後にテストを実行するかどうか。
+### 3. Execution Options
+- **Run Unit Tests**: Whether to run tests immediately after setup.
 
-### 4. エージェント用指示の永続化 (グローバル設定推奨)
-- **グローバル設定の更新**: `docs/agent-prompts/memory-save-system-prompt.md` の内容を、あなたのエージェントの**グローバル設定**（例: `~/.gemini/GEMINI.md`, `~/.clauderules`, または Cursor の `Rules for AI`）に追加してください。
-- **理由**: プロジェクトルートの `.cursorrules` 等に追記するとチーム全体に影響するため、個人の環境でのみ有効にするのがマナーです。
-  - **注記**: `.gitignore` では `CLAUDE.md` や `GEMINI.md` 等を意図的に除外しています。これは、各ユーザーが独自の API キーや個人の好みを誤ってコミットするのを防ぐためです。プロジェクト共有の設定をコミットしたい場合は、`AGENTS.md` や `README.md` を更新するか、明示的に `git add -f` を使用してください。
-- **理由**: これを行わない限り、エージェントは自律的に `memory_save` 等を実行しません。
+### 4. Persisting Agent Instructions (Recommended Global Config)
+- **Global Config Update**: Add the content of `docs/agent-prompts/memory-save-system-prompt.md` to your agent's **GLOBAL configuration** (e.g., `~/.gemini/GEMINI.md`, `~/.clauderules`, or Cursor's `Rules for AI`).
+- **Reason**: Appending rules to project-root files like `.cursorrules` affects the entire team. Keeping them in your global environment is better practice.
+- **Note**: `.gitignore` intentionally excludes `CLAUDE.md`, `GEMINI.md`, etc., to prevent accidental commits of personal API keys or preferences. To commit project-shared settings, update `AGENTS.md` or `README.md`, or use `git add -f`.
+- **Note**: Agents will not perform autonomous `memory_save` unless these instructions are added to their global prompt.
 
-**注記（エージェント向け）**:
-- セットアップ実行中にエラー（テスト失敗など）が発生した場合は、**独断でソースコードの修正を開始せず**、まずはエラー内容をユーザーに報告して指示を仰いでください。
-- 確認したオプションを引数として `scripts/bootstrap.sh` を実行します。
+**Note for Agents**:
+- If errors (e.g., test failures) occur during setup, **do not start fixing source code autonomously**. Report the error to the user and ask for instructions.
+- Run `scripts/bootstrap.sh` with the confirmed options as arguments.
 
-### セットアップ実行例
+### Setup Example
 
 ```bash
-# 基本的な実行
+# Basic execution
 bash scripts/bootstrap.sh --backend sqlite --embedding openai --mcp-output cursor
 
-# ローカルモデルを使用し、テストをスキップする場合
+# Using local model and skipping tests
 bash scripts/bootstrap.sh --backend sqlite --embedding local --skip-tests --mcp-output claude
 ```
 
-**個別のコマンド**:
+**Individual Commands**:
 ```bash
-uv sync --all-extras    # 依存関係のインストール
-uv run pytest tests/unit/ -v  # テスト実行
+uv sync --all-extras    # Install dependencies
+uv run pytest tests/unit/ -v  # Run tests
 ```
 
 **Tasks** (Ctrl+Shift+P → Tasks: Run Task):
@@ -89,20 +89,20 @@ uv run pytest tests/unit/ -v  # テスト実行
 **Frontend (Dashboard) commands**:
 ```bash
 cd frontend
-npm install            # 依存関係インストール
-npx tsc --noEmit       # 型チェック
+npm install            # Install dependencies
+npx tsc --noEmit       # Type check
 npm run lint           # ESLint
-npm run build          # プロダクションビルド
-npx playwright test    # E2E テスト（webServer 自動起動）
+npm run build          # Production build
+npx playwright test    # E2E tests (auto-starts webServer)
 ```
 
 ## Dashboard
 
-Read-Only 可視化ダッシュボード。MCP サーバーとは独立した別プロセスで動作する。
+Read-Only visualization dashboard. Operates as a separate process independent of the MCP server.
 
-- **起動**: `uv run python -m context_store.dashboard.api_server`（DB 初期化済みであること）
+- **Start**: `uv run python -m context_store.dashboard.api_server` (DB must be initialized)
 - **Docker**: `docker compose up -d chronos-dashboard`
 - **URL**: `http://localhost:8000`
-- **ソース**: バックエンド `src/context_store/dashboard/`、フロントエンド `frontend/`
-- **Read-Only**: SQLite は `file:...?mode=ro` URI、Neo4j は `READ_ACCESS` セッションで接続
-- **E2E テスト**: `frontend/e2e/dashboard.spec.ts`（Playwright + axe-core a11y）
+- **Source**: Backend in `src/context_store/dashboard/`, Frontend in `frontend/`
+- **Read-Only**: SQLite uses `file:...?mode=ro` URI; Neo4j connects with `READ_ACCESS` session.
+- **E2E Tests**: `frontend/e2e/dashboard.spec.ts` (Playwright + axe-core a11y)

@@ -91,7 +91,7 @@ class TestProcess:
 
     @pytest.mark.asyncio
     async def test_process_delegates_to_ingestion_pipeline(self) -> None:
-        """process() は IngestionPipeline.ingest() に委譲し、成功時に True を返す。"""
+        """process() は IngestionPipeline.ingest() に委譲する。"""
         mock_pipeline = MagicMock()
         mock_pipeline.ingest = AsyncMock(return_value=[])
         mock_lifecycle = AsyncMock()
@@ -104,14 +104,14 @@ class TestProcess:
         )
 
         conversation_log = "User: test\nAssistant: response"
-        result = await processor.process(
+        # 戻り値は None
+        await processor.process(
             conversation_log,
             session_id="test-session",
             project="test-project",
             tags=["tag1"],
         )
 
-        assert result is True
         mock_pipeline.ingest.assert_called_once_with(
             conversation_log,
             source_type=SourceType.CONVERSATION,
@@ -185,3 +185,37 @@ class TestProcess:
         assert any("Batch processing failed" in record.message for record in caplog.records)
         # 失敗時は LifecycleManager への通知は行われない
         mock_lifecycle.on_memory_saved.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_process_logs_error_on_lifecycle_failure_but_does_not_raise(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Lifecycle hook が失敗しても、例外は投げず、エラーログのみ記録する。"""
+        logger_name = "context_store.ingestion.batch_processor"
+        caplog.set_level(logging.ERROR, logger=logger_name)
+
+        mock_pipeline = MagicMock()
+        mock_pipeline.ingest = AsyncMock(return_value=[])
+        mock_lifecycle = AsyncMock()
+        mock_lifecycle.on_memory_saved = AsyncMock(side_effect=RuntimeError("hook error"))
+        settings = make_settings()
+
+        processor = BatchProcessor(
+            ingestion_pipeline=mock_pipeline,
+            lifecycle_manager=mock_lifecycle,
+            settings=settings,
+        )
+
+        # 例外は投げられない
+        await processor.process(
+            "User: test\nAssistant: success",
+            session_id="test-session",
+        )
+
+        # パイプラインは成功している
+        mock_pipeline.ingest.assert_called_once()
+        # ライフサイクルエラーが記録されている
+        assert any(
+            "Lifecycle hook failed after successful ingestion" in record.message
+            for record in caplog.records
+        )

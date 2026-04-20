@@ -49,6 +49,18 @@ class MigrationRunner:
         # Get all migration files
         files = sorted(self.migrations_dir.glob("*.sql"))
 
+        # Baseline path: if no migrations are applied, but core tables exist,
+        # mark initial migrations as applied without executing them.
+        if not applied and await self._is_baseline_needed():
+            logger.info("Existing schema detected. Marking initial migrations as applied.")
+            # We consider 0001 and 0002 as baseline if they exist
+            baseline_patterns = ["0001_", "0002_"]
+            for file_path in files:
+                if any(file_path.name.startswith(p) for p in baseline_patterns):
+                    await self._mark_as_applied(file_path.name)
+                    applied.add(file_path.name)
+                    logger.info(f"Baseline migration marked: {file_path.name}")
+
         for file_path in files:
             version = file_path.name
             if version not in applied:
@@ -56,6 +68,35 @@ class MigrationRunner:
                 logger.info(f"Applied migration: {version}")
             else:
                 logger.debug(f"Migration already applied: {version}")
+
+    async def _is_baseline_needed(self) -> bool:
+        """Check if core tables already exist indicating a legacy DB."""
+        if self.db_type == "sqlite":
+            query = "SELECT name FROM sqlite_master WHERE type='table' AND name='memories'"
+            async with self.connection.execute(query) as cursor:
+                row = await cursor.fetchone()
+                return row is not None
+        else:
+            query = "SELECT tablename FROM pg_catalog.pg_tables WHERE tablename = 'memories'"
+            async with self.connection.acquire() as conn:
+                row = await conn.fetchrow(query)
+                return row is not None
+
+    async def _mark_as_applied(self, version: str) -> None:
+        """Mark a migration as applied without executing its SQL."""
+        if self.db_type == "sqlite":
+            await self.connection.execute("BEGIN")
+            try:
+                await self.connection.execute(
+                    "INSERT INTO schema_migrations (version) VALUES (?)", (version,)
+                )
+                await self.connection.commit()
+            except Exception:
+                await self.connection.rollback()
+                raise
+        else:
+            async with self.connection.acquire() as conn:
+                await conn.execute("INSERT INTO schema_migrations (version) VALUES ($1)", version)
 
     async def _ensure_migration_table(self) -> None:
         """Create schema_migrations table if not exists."""

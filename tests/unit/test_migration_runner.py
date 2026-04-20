@@ -81,3 +81,45 @@ async def test_migration_idempotency(tmp_path):
             rows = await cursor.fetchall()
             versions = [r[0] for r in rows]
             assert versions == ["0001_initial.sql", "0002_second.sql"]
+
+@pytest.mark.asyncio
+async def test_sqlite_baseline_path(tmp_path):
+    db_path = tmp_path / "test_baseline.db"
+    
+    # 1. Setup mock migrations directory
+    migrations_dir = tmp_path / "migrations_baseline" / "sqlite"
+    migrations_dir.mkdir(parents=True)
+    
+    # Create initial migration files (baseline)
+    (migrations_dir / "0001_initial.sql").write_text("CREATE TABLE memories (id TEXT PRIMARY KEY);")
+    (migrations_dir / "0002_graph.sql").write_text("ALTER TABLE memories ADD COLUMN project TEXT;")
+    # A new migration that should still be applied
+    (migrations_dir / "0003_new.sql").write_text("CREATE TABLE new_table (id INTEGER PRIMARY KEY);")
+    
+    async with aiosqlite.connect(db_path) as conn:
+        # 2. Simulate legacy DB: create memories table but NO schema_migrations
+        await conn.execute("CREATE TABLE memories (id TEXT PRIMARY KEY, content TEXT);")
+        await conn.commit()
+        
+        runner = MigrationRunner("sqlite", conn)
+        runner.migrations_dir = migrations_dir
+        
+        # 3. Run migrations
+        # It should detect 'memories' table and mark 0001 and 0002 as applied,
+        # then actually apply 0003.
+        await runner.run()
+        
+        # 4. Verify
+        # Check applied versions
+        async with conn.execute("SELECT version FROM schema_migrations ORDER BY version") as cursor:
+            rows = await cursor.fetchall()
+            versions = [r[0] for r in rows]
+            assert "0001_initial.sql" in versions
+            assert "0002_graph.sql" in versions
+            assert "0003_new.sql" in versions
+            
+        # Verify 0003 was actually applied (new_table exists)
+        sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='new_table'"
+        async with conn.execute(sql) as cursor:
+            row = await cursor.fetchone()
+            assert row is not None

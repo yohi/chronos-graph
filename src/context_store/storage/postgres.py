@@ -90,7 +90,11 @@ class PostgresStorageAdapter:
             max_size=10,
         )
         adapter = cls(pool)
-        await adapter.initialize()
+        try:
+            await adapter.initialize()
+        except Exception:
+            await pool.close()
+            raise
         return adapter
 
     async def initialize(self) -> None:

@@ -19,9 +19,13 @@ src/context_store/storage/migrations/
 ├── __init__.py
 ├── runner.py          # マイグレーション実行ロジック
 ├── sqlite/
-│   └── 0001_initial.sql
+│   ├── 0001_initial.sql
+│   ├── 0002_graph.sql
+│   └── ...
 └── postgres/
-    └── 0001_initial.sql
+    ├── 0001_initial.sql
+    ├── 0002_graph.sql
+    └── ...
 ```
 
 ### 履歴管理テーブル (`schema_migrations`)

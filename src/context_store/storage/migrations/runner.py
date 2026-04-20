@@ -66,71 +66,92 @@ class MigrationRunner:
         );
         """
         if self.db_type == "sqlite":
-            await self.connection.execute("BEGIN")
-            try:
-                await self.connection.execute(query)
-                await self.connection.commit()
-            except Exception:
-                await self.connection.rollback()
-                raise
+            await self._ensure_sqlite_table(query)
         else:
-            # PostgreSQL
-            async with self.connection.acquire() as conn:
-                await conn.execute(query)
+            await self._ensure_postgres_table(query)
+
+    async def _ensure_sqlite_table(self, query: str) -> None:
+        """Ensure migration table in SQLite."""
+        await self.connection.execute("BEGIN")
+        try:
+            await self.connection.execute(query)
+            await self.connection.commit()
+        except Exception:
+            await self.connection.rollback()
+            raise
+
+    async def _ensure_postgres_table(self, query: str) -> None:
+        """Ensure migration table in PostgreSQL."""
+        async with self.connection.acquire() as conn:
+            await conn.execute(query)
 
     async def _get_applied_migrations(self) -> set[str]:
         """Get set of applied migration versions."""
-        query = "SELECT version FROM schema_migrations"
         if self.db_type == "sqlite":
-            async with self.connection.execute(query) as cursor:
-                rows = await cursor.fetchall()
-                return {row[0] for row in rows}
-        else:
-            # PostgreSQL
-            async with self.connection.acquire() as conn:
-                rows = await conn.fetch(query)
-                return {row["version"] for row in rows}
+            return await self._get_sqlite_applied()
+        return await self._get_postgres_applied()
+
+    async def _get_sqlite_applied(self) -> set[str]:
+        """Get applied migrations from SQLite."""
+        query = "SELECT version FROM schema_migrations"
+        async with self.connection.execute(query) as cursor:
+            rows = await cursor.fetchall()
+            return {row[0] for row in rows}
+
+    async def _get_postgres_applied(self) -> set[str]:
+        """Get applied migrations from PostgreSQL."""
+        query = "SELECT version FROM schema_migrations"
+        async with self.connection.acquire() as conn:
+            rows = await conn.fetch(query)
+            return {row["version"] for row in rows}
 
     async def _apply_migration(self, file_path: Path) -> None:
         """Apply a single migration file in a transaction."""
+        if self.db_type == "sqlite":
+            await self._apply_sqlite_migration(file_path)
+        else:
+            await self._apply_postgres_migration(file_path)
+
+    async def _apply_sqlite_migration(self, file_path: Path) -> None:
+        """Apply a single migration to SQLite."""
         sql = file_path.read_text()
         version = file_path.name
 
-        if self.db_type == "sqlite":
-            # Avoid executescript() as it issues an implicit COMMIT.
-            # Use sqlite3.complete_statement to split SQL into full statements.
-            statements = []
-            current = []
-            for line in sql.splitlines():
-                current.append(line)
-                combined = "\n".join(current)
-                if sqlite3.complete_statement(combined):
-                    statements.append(combined)
-                    current = []
+        # Avoid executescript() as it issues an implicit COMMIT.
+        # Use sqlite3.complete_statement to split SQL into full statements.
+        statements = []
+        current = []
+        for line in sql.splitlines():
+            current.append(line)
+            combined = "\n".join(current)
+            if sqlite3.complete_statement(combined):
+                statements.append(combined)
+                current = []
 
-            if current and "".join(current).strip():
-                # Remaining part might be missing a semicolon but we try anyway or warn
-                statements.append("\n".join(current))
+        if current and "".join(current).strip():
+            statements.append("\n".join(current))
 
-            # Start transaction explicitly
-            await self.connection.execute("BEGIN")
-            try:
-                for stmt in statements:
-                    await self.connection.execute(stmt)
+        # Start transaction explicitly
+        await self.connection.execute("BEGIN")
+        try:
+            for stmt in statements:
+                await self.connection.execute(stmt)
 
-                await self.connection.execute(
-                    "INSERT INTO schema_migrations (version) VALUES (?)", (version,)
-                )
-                await self.connection.commit()
-            except Exception as e:
-                await self.connection.rollback()
-                logger.error(f"Failed to apply SQLite migration {version}: {e}")
-                raise
-        else:
-            # PostgreSQL (asyncpg)
-            async with self.connection.acquire() as conn:
-                async with conn.transaction():
-                    await conn.execute(sql)
-                    await conn.execute(
-                        "INSERT INTO schema_migrations (version) VALUES ($1)", version
-                    )
+            await self.connection.execute(
+                "INSERT INTO schema_migrations (version) VALUES (?)", (version,)
+            )
+            await self.connection.commit()
+        except Exception as e:
+            await self.connection.rollback()
+            logger.error(f"Failed to apply SQLite migration {version}: {e}")
+            raise
+
+    async def _apply_postgres_migration(self, file_path: Path) -> None:
+        """Apply a single migration to PostgreSQL."""
+        sql = file_path.read_text()
+        version = file_path.name
+
+        async with self.connection.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(sql)
+                await conn.execute("INSERT INTO schema_migrations (version) VALUES ($1)", version)

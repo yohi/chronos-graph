@@ -77,20 +77,24 @@ class SQLiteGraphAdapter:
             # Skip schema creation for read-only mode
             return
 
-        lock = StaleAwareFileLock(
-            f"{self._db_path}.lock",
-            timeout=self._settings.sqlite_acquire_timeout,
-            stale_timeout_seconds=self._settings.stale_lock_timeout_seconds,
-        )
-
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(self._lock_executor, lock.acquire)
         try:
-            async with self._connect() as conn:
-                runner = MigrationRunner("sqlite", conn)
-                await runner.run()
-        finally:
-            await loop.run_in_executor(self._lock_executor, lock.release)
+            lock = StaleAwareFileLock(
+                f"{self._db_path}.lock",
+                timeout=self._settings.sqlite_acquire_timeout,
+                stale_timeout_seconds=self._settings.stale_lock_timeout_seconds,
+            )
+
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(self._lock_executor, lock.acquire)
+            try:
+                async with self._connect() as conn:
+                    runner = MigrationRunner("sqlite", conn)
+                    await runner.run()
+            finally:
+                await loop.run_in_executor(self._lock_executor, lock.release)
+        except Exception:
+            await self.dispose()
+            raise
 
     @asynccontextmanager
     async def _connect(self) -> AsyncGenerator[aiosqlite.Connection, None]:

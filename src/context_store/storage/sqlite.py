@@ -177,18 +177,22 @@ class SQLiteStorageAdapter:
                 os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True
             )
         adapter = cls(db_path, settings, read_only=read_only)
-        if not read_only:
-            lock = StaleAwareFileLock(
-                f"{db_path}.lock",
-                timeout=settings.sqlite_acquire_timeout,
-                stale_timeout_seconds=settings.stale_lock_timeout_seconds,
-            )
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(adapter._lock_executor, lock.acquire)
-            try:
-                await adapter._migrate()
-            finally:
-                await loop.run_in_executor(adapter._lock_executor, lock.release)
+        try:
+            if not read_only:
+                lock = StaleAwareFileLock(
+                    f"{db_path}.lock",
+                    timeout=settings.sqlite_acquire_timeout,
+                    stale_timeout_seconds=settings.stale_lock_timeout_seconds,
+                )
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(adapter._lock_executor, lock.acquire)
+                try:
+                    await adapter._migrate()
+                finally:
+                    await loop.run_in_executor(adapter._lock_executor, lock.release)
+        except Exception:
+            await adapter.dispose()
+            raise
         return adapter
 
     # ------------------------------------------------------------------

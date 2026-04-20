@@ -79,10 +79,15 @@ class SQLiteGraphAdapter:
             timeout=self._settings.sqlite_acquire_timeout,
             stale_timeout_seconds=self._settings.stale_lock_timeout_seconds,
         )
-        with lock:
+
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lock.acquire)
+        try:
             async with self._connect() as conn:
                 runner = MigrationRunner("sqlite", conn)
                 await runner.run()
+        finally:
+            await loop.run_in_executor(None, lock.release)
 
     @asynccontextmanager
     async def _connect(self) -> AsyncGenerator[aiosqlite.Connection, None]:

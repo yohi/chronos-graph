@@ -81,7 +81,7 @@ uv run pytest tests/unit/ -v  # Run tests
 
 **Tasks** (Ctrl+Shift+P → Tasks: Run Task):
 - `Run Tests` — pytest tests/ -v
-- `Run Migration Tests` — pytest tests/unit/test_migration_runner.py tests/unit/test_sqlite_storage.py tests/integration/test_postgres_schema.py -v
+- `Run Migration Tests` — pytest tests/unit/test_migration_runner.py tests/unit/test_sqlite_storage.py tests/integration/test_postgres_schema.py tests/integration/test_sqlite_schema.py -v
 - `Run Ruff Check` — ruff check src/ tests/
 - `Run MyPy` — mypy src/
 - `Run Full Lint` — ruff + mypy

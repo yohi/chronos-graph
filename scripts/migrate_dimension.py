@@ -45,15 +45,30 @@ async def migrate():
             logger.info("Dimensions already match. No migration needed.")
             # Proceed anyway if the user wants to force re-embedding?
         
-        logger.info("Fetching all active and archived memories...")
-        # Get all memories.
-        active_memories = await storage.list_by_filter(MemoryFilters(archived=False))
-        archived_memories = await storage.list_by_filter(MemoryFilters(archived=True))
-        all_memories = active_memories + archived_memories
+        logger.info("Fetching all memories (active and archived)...")
+        # MemoryFilters(archived=False) returns both active and archived memories.
+        all_memories = await storage.list_by_filter(MemoryFilters(archived=False))
         
         if not all_memories:
             logger.info("No memories found in storage.")
             return
+
+        # Update vectors_metadata for SQLite BEFORE processing memories.
+        # This is necessary because update_memory checks the stored dimension.
+        if settings.storage_backend == "sqlite":
+            logger.info(f"Updating vectors_metadata to dimension {current_dim}...")
+            try:
+                import aiosqlite
+                db_path = os.path.expanduser(settings.sqlite_db_path)
+                async with aiosqlite.connect(db_path) as conn:
+                    await conn.execute("DELETE FROM vectors_metadata")
+                    await conn.execute("INSERT INTO vectors_metadata (dimension) VALUES (?)", (current_dim,))
+                    await conn.commit()
+                logger.info("vectors_metadata updated successfully.")
+            except Exception as e:
+                logger.error(f"Failed to update vectors_metadata: {e}")
+                logger.error("Aborting migration to prevent inconsistent state.")
+                sys.exit(1)
 
         total = len(all_memories)
         logger.info(f"Found {total} memories to migrate.")
@@ -73,18 +88,6 @@ async def migrate():
                 logger.error(f"Error re-embedding memory {memory.id}: {e}")
         
         logger.info("Migration finished successfully.")
-        
-        # Update vectors_metadata for SQLite
-        if settings.storage_backend == "sqlite":
-            logger.info(f"Updating vectors_metadata to dimension {current_dim}...")
-            # We need to access the database directly to update metadata
-            import aiosqlite
-            db_path = os.path.expanduser(settings.sqlite_db_path)
-            async with aiosqlite.connect(db_path) as conn:
-                await conn.execute("DELETE FROM vectors_metadata")
-                await conn.execute("INSERT INTO vectors_metadata (dimension) VALUES (?)", (current_dim,))
-                await conn.commit()
-            logger.info("vectors_metadata updated.")
         
     finally:
         await storage.dispose()

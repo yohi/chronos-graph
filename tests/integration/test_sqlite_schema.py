@@ -24,13 +24,16 @@ async def sqlite_db(tmp_path):
     adapter = await SQLiteStorageAdapter.create(settings)
 
     # Initialize graph storage
-    graph_adapter = SQLiteGraphAdapter(db_path=db_path, settings=settings)
-    await graph_adapter.initialize()
+    graph_adapter: SQLiteGraphAdapter | None = None
+    try:
+        graph_adapter = SQLiteGraphAdapter(db_path=db_path, settings=settings)
+        await graph_adapter.initialize()
 
-    yield db_path
-
-    await adapter.dispose()
-    await graph_adapter.dispose()
+        yield db_path
+    finally:
+        if graph_adapter is not None:
+            await graph_adapter.dispose()
+        await adapter.dispose()
 
 
 @pytest.fixture

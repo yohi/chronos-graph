@@ -52,23 +52,7 @@ class MigrationRunner:
         # Baseline path: if no migrations are applied, check if specific tables exist
         # to mark corresponding migrations as applied without executing them.
         if not applied:
-            to_baseline = []
-            # Map migration prefixes to the tables they should provide
-            requirements = {
-                "0001": ["memories"],
-                "0002": ["memory_nodes", "memory_edges"],
-            }
-            for file_path in files:
-                # Extract prefix e.g. "0001" from "0001_initial.sql"
-                prefix = file_path.name.split("_")[0]
-                req_tables = requirements.get(prefix)
-                if req_tables and await self._check_tables_exist(req_tables):
-                    to_baseline.append(file_path.name)
-
-            if to_baseline:
-                logger.info(f"Existing tables detected. Baselining: {', '.join(to_baseline)}")
-                await self._mark_batch_applied(to_baseline)
-                applied.update(to_baseline)
+            await self._handle_baseline(files, applied)
 
         for file_path in files:
             version = file_path.name
@@ -78,17 +62,39 @@ class MigrationRunner:
             else:
                 logger.debug(f"Migration already applied: {version}")
 
+    async def _handle_baseline(self, files: list[Path], applied: set[str]) -> None:
+        """Detect existing tables and mark corresponding migrations as applied."""
+        to_baseline = []
+        # Map migration prefixes to the tables they should provide
+        requirements = {
+            "0001": ["memories"],
+            "0002": ["memory_nodes", "memory_edges"],
+        }
+        for file_path in files:
+            # Extract prefix e.g. "0001" from "0001_initial.sql"
+            prefix = file_path.name.split("_")[0]
+            req_tables = requirements.get(prefix)
+            if req_tables and await self._check_tables_exist(req_tables):
+                to_baseline.append(file_path.name)
+
+        if to_baseline:
+            logger.info(f"Existing tables detected. Baselining: {', '.join(to_baseline)}")
+            await self._mark_batch_applied(to_baseline)
+            applied.update(to_baseline)
+
     async def _check_tables_exist(self, table_names: list[str]) -> bool:
         """Check if all specified tables exist in the database."""
         if self.db_type == "sqlite":
-            placeholders = ", ".join("?" * len(table_names))
-            query = (
-                f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders})"  # noqa: S608
-            )
-            async with self.connection.execute(query, table_names) as cursor:
-                rows = await cursor.fetchall()
-                return len(rows) == len(table_names)
+            # Check one-by-one to avoid dynamic IN clause which flags security scanners
+            for name in table_names:
+                query = "SELECT name FROM sqlite_master WHERE type='table' AND name = ?"
+                async with self.connection.execute(query, (name,)) as cursor:
+                    row = await cursor.fetchone()
+                    if row is None:
+                        return False
+            return True
         else:
+            # For PostgreSQL, use ANY($1) which is standard and safe
             query = "SELECT tablename FROM pg_catalog.pg_tables WHERE tablename = ANY($1)"
             async with self.connection.acquire() as conn:
                 rows = await conn.fetch(query, table_names)

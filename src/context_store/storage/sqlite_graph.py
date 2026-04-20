@@ -35,6 +35,7 @@ import aiosqlite
 from context_store.models.graph import Edge, GraphResult
 from context_store.storage.migrations.runner import MigrationRunner
 from context_store.utils.sqlite_interrupt import SafeSqliteInterruptCtx
+from context_store.utils.stale_lock import StaleAwareFileLock
 
 if TYPE_CHECKING:
     from context_store.config import Settings
@@ -72,9 +73,16 @@ class SQLiteGraphAdapter:
         if self._read_only:
             # Skip schema creation for read-only mode
             return
-        async with self._connect() as conn:
-            runner = MigrationRunner("sqlite", conn)
-            await runner.run()
+
+        lock = StaleAwareFileLock(
+            f"{self._db_path}.lock",
+            timeout=self._settings.sqlite_acquire_timeout,
+            stale_timeout_seconds=self._settings.stale_lock_timeout_seconds,
+        )
+        with lock:
+            async with self._connect() as conn:
+                runner = MigrationRunner("sqlite", conn)
+                await runner.run()
 
     @asynccontextmanager
     async def _connect(self) -> AsyncGenerator[aiosqlite.Connection, None]:

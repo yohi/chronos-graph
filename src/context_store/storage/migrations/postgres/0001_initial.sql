@@ -13,9 +13,9 @@ CREATE TABLE IF NOT EXISTS memories (
     ),
     source_metadata    JSONB        DEFAULT '{}',
     embedding          vector(768),
-    semantic_relevance FLOAT        DEFAULT 0.5,
-    importance_score   FLOAT        DEFAULT 0.5,
-    access_count       INT          DEFAULT 0,
+    semantic_relevance FLOAT        NOT NULL DEFAULT 0.5 CHECK (semantic_relevance >= 0 AND semantic_relevance <= 1),
+    importance_score   FLOAT        NOT NULL DEFAULT 0.5 CHECK (importance_score >= 0 AND importance_score <= 1),
+    access_count       INT          NOT NULL DEFAULT 0 CHECK (access_count >= 0),
     last_accessed_at   TIMESTAMPTZ  DEFAULT NOW(),
     created_at         TIMESTAMPTZ  DEFAULT NOW(),
     updated_at         TIMESTAMPTZ  DEFAULT NOW(),
@@ -25,19 +25,33 @@ CREATE TABLE IF NOT EXISTS memories (
     content_hash       TEXT         NOT NULL UNIQUE
 );
 
--- lifecycle_state table
+-- lifecycle_state table (Singleton)
 CREATE TABLE IF NOT EXISTS lifecycle_state (
-    id               SERIAL      PRIMARY KEY,
-    last_cleanup_at  TIMESTAMPTZ,
-    save_count       INT         DEFAULT 0,
-    cleanup_running  BOOLEAN     DEFAULT FALSE,
-    updated_at       TIMESTAMPTZ DEFAULT NOW()
+    id                      INT          PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    save_count              INT          NOT NULL DEFAULT 0,
+    last_cleanup_at         TIMESTAMPTZ,
+    last_cleanup_cursor_at  TIMESTAMPTZ,
+    last_cleanup_id         TEXT,
+    cleanup_lock_owner      TEXT,
+    cleanup_lock_touched_at TIMESTAMPTZ,
+    updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
--- Insert default row if not exists
-INSERT INTO lifecycle_state (id)
-VALUES (1)
-ON CONFLICT (id) DO NOTHING;
+-- lifecycle_wal_state table (Singleton)
+-- Note: WAL state is mostly relevant for SQLite, but kept for schema parity
+CREATE TABLE IF NOT EXISTS lifecycle_wal_state (
+    id                               INT   PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    wal_failure_count                INT   NOT NULL DEFAULT 0,
+    wal_last_failure_ts              TIMESTAMPTZ,
+    wal_last_checkpoint_result       TEXT,
+    wal_last_observed_size_bytes     BIGINT,
+    wal_consecutive_passive_failures INT   NOT NULL DEFAULT 0,
+    wal_failure_window               JSONB NOT NULL DEFAULT '[]'
+);
+
+-- Insert default rows if not exist
+INSERT INTO lifecycle_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+INSERT INTO lifecycle_wal_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 
 -- B-tree indexes
 CREATE INDEX IF NOT EXISTS idx_memories_memory_type  ON memories (memory_type);

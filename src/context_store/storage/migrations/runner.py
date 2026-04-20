@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -62,8 +63,13 @@ class MigrationRunner:
         );
         """
         if self.db_type == "sqlite":
-            await self.connection.execute(query)
-            await self.connection.commit()
+            await self.connection.execute("BEGIN")
+            try:
+                await self.connection.execute(query)
+                await self.connection.commit()
+            except Exception:
+                await self.connection.rollback()
+                raise
         else:
             # PostgreSQL
             async with self.connection.acquire() as conn:
@@ -88,13 +94,35 @@ class MigrationRunner:
         version = file_path.name
 
         if self.db_type == "sqlite":
-            # SQLite (aiosqlite) doesn't support multiple statements in execute() easily
-            # if they are not separated or if it's not executescript()
-            await self.connection.executescript(sql)
-            await self.connection.execute(
-                "INSERT INTO schema_migrations (version) VALUES (?)", (version,)
-            )
-            await self.connection.commit()
+            # Avoid executescript() as it issues an implicit COMMIT.
+            # Use sqlite3.complete_statement to split SQL into full statements.
+            statements = []
+            current = []
+            for line in sql.splitlines():
+                current.append(line)
+                combined = "\n".join(current)
+                if sqlite3.complete_statement(combined):
+                    statements.append(combined)
+                    current = []
+
+            if current and "".join(current).strip():
+                # Remaining part might be missing a semicolon but we try anyway or warn
+                statements.append("\n".join(current))
+
+            # Start transaction explicitly
+            await self.connection.execute("BEGIN")
+            try:
+                for stmt in statements:
+                    await self.connection.execute(stmt)
+
+                await self.connection.execute(
+                    "INSERT INTO schema_migrations (version) VALUES (?)", (version,)
+                )
+                await self.connection.commit()
+            except Exception as e:
+                await self.connection.rollback()
+                logger.error(f"Failed to apply SQLite migration {version}: {e}")
+                raise
         else:
             # PostgreSQL (asyncpg)
             async with self.connection.acquire() as conn:

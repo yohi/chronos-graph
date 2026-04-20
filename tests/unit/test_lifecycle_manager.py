@@ -655,12 +655,26 @@ class TestSQLiteLifecycleStateStore:
 
     async def test_load_default_state(self):
         """初期状態が正しく読み込まれること。"""
+        from pathlib import Path
+
+        import aiosqlite
+
         from context_store.lifecycle.manager import SQLiteLifecycleStateStore
+        from context_store.storage.migrations.runner import MigrationRunner
 
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             db_path = f.name
 
         try:
+            # テーブルを初期化
+            async with aiosqlite.connect(db_path) as conn:
+                runner = MigrationRunner("sqlite", conn)
+                # 実物の migrations ディレクトリを使用
+                base_dir = Path(__file__).parent.parent.parent
+                m_dir = base_dir / "src" / "context_store" / "storage" / "migrations" / "sqlite"
+                runner.migrations_dir = m_dir
+                await runner.run()
+
             store = SQLiteLifecycleStateStore(db_path=db_path)
             state = await store.load_state()
             assert state.save_count == 0
@@ -671,12 +685,25 @@ class TestSQLiteLifecycleStateStore:
 
     async def test_save_and_load_state(self):
         """状態の保存と読み込みが正しく動作すること。"""
+        from pathlib import Path
+
+        import aiosqlite
+
         from context_store.lifecycle.manager import SQLiteLifecycleStateStore
+        from context_store.storage.migrations.runner import MigrationRunner
 
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             db_path = f.name
 
         try:
+            # テーブルを初期化
+            async with aiosqlite.connect(db_path) as conn:
+                runner = MigrationRunner("sqlite", conn)
+                # 実物の migrations ディレクトリを使用
+                base_dir = Path(__file__).parent.parent.parent
+                m_dir = base_dir / "src" / "context_store" / "storage" / "migrations" / "sqlite"
+                runner.migrations_dir = m_dir
+                await runner.run()
             store = SQLiteLifecycleStateStore(db_path=db_path)
             now = datetime.now(timezone.utc).replace(microsecond=0)  # マイクロ秒を除外
             state = LifecycleState(
@@ -698,12 +725,25 @@ class TestSQLiteLifecycleStateStore:
 
     async def test_acquire_and_release_lock(self):
         """DB ロックの取得と解放が正しく動作すること。"""
+        from pathlib import Path
+
+        import aiosqlite
+
         from context_store.lifecycle.manager import SQLiteLifecycleStateStore
+        from context_store.storage.migrations.runner import MigrationRunner
 
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             db_path = f.name
 
         try:
+            # テーブルを初期化
+            async with aiosqlite.connect(db_path) as conn:
+                runner = MigrationRunner("sqlite", conn)
+                # 実物の migrations ディレクトリを使用
+                base_dir = Path(__file__).parent.parent.parent
+                m_dir = base_dir / "src" / "context_store" / "storage" / "migrations" / "sqlite"
+                runner.migrations_dir = m_dir
+                await runner.run()
             store = SQLiteLifecycleStateStore(db_path=db_path)
 
             token = "test_token"
@@ -727,12 +767,26 @@ class TestSQLiteLifecycleStateStore:
 
     async def test_stale_lock_detection_in_sqlite(self):
         """SQLite のスタルロックが検出・解放されること。"""
+        from pathlib import Path
+
+        import aiosqlite
+
         from context_store.lifecycle.manager import SQLiteLifecycleStateStore
+        from context_store.storage.migrations.runner import MigrationRunner
 
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             db_path = f.name
 
         try:
+            # テーブルを初期化
+            async with aiosqlite.connect(db_path) as conn:
+                runner = MigrationRunner("sqlite", conn)
+                # 実物の migrations ディレクトリを使用
+                base_dir = Path(__file__).parent.parent.parent
+                m_dir = base_dir / "src" / "context_store" / "storage" / "migrations" / "sqlite"
+                runner.migrations_dir = m_dir
+                await runner.run()
+
             store = SQLiteLifecycleStateStore(db_path=db_path, stale_lock_timeout_seconds=1)
 
             # 手動でスタルなロック状態を作る
@@ -769,12 +823,26 @@ class TestSQLiteLifecycleStateStore:
 
     async def test_wal_state_save_and_load(self):
         """WAL 状態の保存と読み込みが正しく動作すること。"""
+        from pathlib import Path
+
+        import aiosqlite
+
         from context_store.lifecycle.manager import SQLiteLifecycleStateStore
+        from context_store.storage.migrations.runner import MigrationRunner
 
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             db_path = f.name
 
         try:
+            # テーブルを初期化
+            async with aiosqlite.connect(db_path) as conn:
+                runner = MigrationRunner("sqlite", conn)
+                # 実物の migrations ディレクトリを使用
+                base_dir = Path(__file__).parent.parent.parent
+                m_dir = base_dir / "src" / "context_store" / "storage" / "migrations" / "sqlite"
+                runner.migrations_dir = m_dir
+                await runner.run()
+
             store = SQLiteLifecycleStateStore(db_path=db_path)
 
             now = datetime.now(timezone.utc).replace(microsecond=0)
@@ -799,9 +867,24 @@ class TestSQLiteLifecycleStateStore:
 
     async def test_save_state_requires_correct_token(self, tmp_path):
         """正しいトークンがないと save_state が失敗することを確認。"""
+        from pathlib import Path
+
+        import aiosqlite
+
         from context_store.lifecycle.manager import SQLiteLifecycleStateStore
+        from context_store.storage.migrations.runner import MigrationRunner
 
         db_path = str(tmp_path / "test_cas.db")
+
+        # テーブルを初期化
+        async with aiosqlite.connect(db_path) as conn:
+            runner = MigrationRunner("sqlite", conn)
+            # 実物の migrations ディレクトリを使用
+            base_dir = Path(__file__).parent.parent.parent
+            m_dir = base_dir / "src" / "context_store" / "storage" / "migrations" / "sqlite"
+            runner.migrations_dir = m_dir
+            await runner.run()
+
         store = SQLiteLifecycleStateStore(db_path)
 
         token = "owner-token"

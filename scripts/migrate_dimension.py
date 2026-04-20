@@ -32,7 +32,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def migrate(force: bool = False) -> None:
+async def migrate(force: bool = False) -> int:
     logger.info("Starting dimension migration...")
     settings = Settings()
 
@@ -105,7 +105,7 @@ async def migrate(force: bool = False) -> None:
                     logger.warning(f"Failed to update memory {memory.id}")
                     failed_count += 1
                     failed_ids.append(str(memory.id))
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"Error re-embedding memory {memory.id}: {e}")
                 failed_count += 1
                 failed_ids.append(str(memory.id))
@@ -117,6 +117,8 @@ async def migrate(force: bool = False) -> None:
             logger.warning(f"Failed to migrate: {failed_count}")
             sample_size = min(5, len(failed_ids))
             logger.warning(f"Sample failed IDs: {failed_ids[:sample_size]}")
+
+        return failed_count
 
     finally:
         await storage.dispose()
@@ -130,7 +132,9 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        asyncio.run(migrate(force=args.force))
+        failed_count = asyncio.run(migrate(force=args.force))
+        if failed_count > 0:
+            sys.exit(1)
     except KeyboardInterrupt:
         logger.info("Migration interrupted by user.")
         sys.exit(1)

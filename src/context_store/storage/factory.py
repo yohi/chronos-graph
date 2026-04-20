@@ -166,17 +166,10 @@ class SQLiteCacheCoherenceChecker:
 
             # Ensure the table exists (only in write mode)
             if not self._read_only:
+                # TODO(refactor): Table creation is now handled by migration runner
+                # (see 0000_system.sql). Wait until callers no longer need inline init.
                 async with aiosqlite.connect(self._db_path) as conn:
-                    await conn.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS system_metadata (
-                            key        TEXT PRIMARY KEY,
-                            value      TEXT NOT NULL,
-                            updated_at TEXT NOT NULL
-                        )
-                        """
-                    )
-                    await conn.commit()
+                    pass
 
             while True:
                 await asyncio.sleep(self._poll_interval)

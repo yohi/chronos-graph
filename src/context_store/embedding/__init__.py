@@ -54,6 +54,7 @@ def create_embedding_provider(settings: "Settings") -> EmbeddingProvider:
         return CustomAPIEmbeddingProvider(
             endpoint=settings.custom_api_endpoint,
             dimension=settings.embedding_dimension,
+            model_name=settings.custom_api_model_name,
         )
 
     raise ValueError(

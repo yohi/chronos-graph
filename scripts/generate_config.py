@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 try:
     from context_store.config import Settings as RealSettings
 except ImportError:
-    # インポート失敗時のフォールバック（スタンドアロン実行用）
+    # インポート失敗時のフォールバック(スタンドアロン実行用)
     class SettingsFallback:
         @property
         def model_fields(self) -> dict[str, Any]:
@@ -84,8 +84,10 @@ def get_embedding_envs(provider: str) -> dict[str, str]:
         envs["LITELLM_API_BASE"] = "http://localhost:4000"
         envs["LITELLM_MODEL"] = "openai/text-embedding-3-small"
     elif provider == "custom-api":
-        envs["CUSTOM_API_ENDPOINT"] = "http://localhost:8080/embed"
-        envs["CUSTOM_API_MODEL_NAME"] = "custom-model"
+        envs["CUSTOM_API_ENDPOINT"] = os.environ.get(
+            "CUSTOM_API_ENDPOINT", "http://localhost:8080/embed"
+        )
+        envs["CUSTOM_API_MODEL_NAME"] = os.environ.get("CUSTOM_API_MODEL_NAME", "custom-model")
     return envs
 
 

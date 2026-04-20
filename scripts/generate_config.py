@@ -17,13 +17,27 @@ Examples:
     # uv を使用したワンライナー設定
     python scripts/generate_config.py --method uv --output claude
 """
+
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
-from typing import Any
+from typing import Any, get_args
+
+# src を sys.path に追加して context_store をインポート可能にする
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+try:
+    from context_store.config import Settings
+except ImportError:
+    # インポート失敗時のフォールバック（スタンドアロン実行用）
+    class Settings:  # type: ignore
+        model_fields = {
+            "embedding_provider": type("obj", (), {"annotation": Any, "default": "local-model"})
+        }
 
 
 def str_to_bool(value: str) -> bool:
@@ -48,8 +62,14 @@ def get_embedding_envs(provider: str) -> dict[str, str]:
     envs = {"EMBEDDING_PROVIDER": provider}
     if provider == "openai":
         envs["OPENAI_API_KEY"] = "<your-openai-api-key>"
-    elif provider == "local":
-        envs["LOCAL_EMBEDDING_MODEL"] = "all-MiniLM-L6-v2"
+    elif provider == "local-model":
+        envs["LOCAL_MODEL_NAME"] = "cl-nagoya/ruri-v3-310m"
+    elif provider == "litellm":
+        envs["LITELLM_API_BASE"] = "http://localhost:4000"
+        envs["LITELLM_MODEL"] = "openai/text-embedding-3-small"
+    elif provider == "custom-api":
+        envs["CUSTOM_API_ENDPOINT"] = "http://localhost:8080/embed"
+        envs["CUSTOM_API_MODEL_NAME"] = "custom-model"
     return envs
 
 
@@ -148,15 +168,20 @@ def generate_cursor_config(base_config: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> None:
     """メインエントリポイント。"""
+    # Settings から埋め込みプロバイダーの選択肢を取得
+    provider_field = Settings.model_fields["embedding_provider"]
+    embedding_choices = list(get_args(provider_field.annotation))
+    default_embedding = provider_field.default
+
     parser = argparse.ArgumentParser(description="ChronosGraph MCP client config generator")
     parser.add_argument(
         "--backend", choices=["sqlite", "postgres"], default="sqlite", help="Storage backend"
     )
     parser.add_argument(
         "--embedding",
-        choices=["openai", "local", "litellm", "custom"],
-        default="openai",
-        help="Embedding provider",
+        choices=embedding_choices,
+        default=default_embedding,
+        help=f"Embedding provider (default: {default_embedding})",
     )
     parser.add_argument("--graph", type=str_to_bool, default=True, help="Enable graph features")
     parser.add_argument(

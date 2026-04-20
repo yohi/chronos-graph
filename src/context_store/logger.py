@@ -70,21 +70,15 @@ def get_logger(name: str) -> logging.Logger:
     if not logger.handlers:
         with logger_init_lock:
             if not logger.handlers:
-                # stdout for DEBUG/INFO, stderr for WARNING and above
-                stdout_handler = logging.StreamHandler(sys.stdout)
-                stdout_handler.setLevel(logging.DEBUG)
-                stdout_handler.setFormatter(StructuredFormatter())
-                stdout_handler.addFilter(lambda r: r.levelno < logging.WARNING)
-
+                # stderr for all logs (stdout is reserved for MCP JSON-RPC)
                 stderr_handler = logging.StreamHandler(sys.stderr)
-                stderr_handler.setLevel(logging.WARNING)
+                stderr_handler.setLevel(logging.DEBUG)
                 stderr_handler.setFormatter(StructuredFormatter())
 
                 # Memory handler for dashboard
                 memory_handler = MemoryHandler()
                 memory_handler.setLevel(logging.DEBUG)
 
-                logger.addHandler(stdout_handler)
                 logger.addHandler(stderr_handler)
                 logger.addHandler(memory_handler)
                 logger.setLevel(logging.DEBUG)

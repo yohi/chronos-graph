@@ -8,6 +8,7 @@ import math
 import os
 import struct
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
@@ -17,6 +18,7 @@ import aiosqlite
 
 from context_store.config import Settings
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
+from context_store.storage.migrations.runner import MigrationRunner
 from context_store.storage.protocols import ALLOWED_SORT_COLUMNS, MemoryFilters, StorageError
 from context_store.utils.stale_lock import StaleAwareFileLock
 
@@ -85,68 +87,6 @@ def validate_embedding(
 # ---------------------------------------------------------------------------
 # Schema DDL
 # ---------------------------------------------------------------------------
-
-_DDL_MEMORIES = """
-CREATE TABLE IF NOT EXISTS memories (
-    id              TEXT PRIMARY KEY,
-    content         TEXT NOT NULL,
-    memory_type     TEXT NOT NULL,
-    source_type     TEXT NOT NULL,
-    source_metadata TEXT NOT NULL DEFAULT '{}',
-    semantic_relevance REAL NOT NULL DEFAULT 0.5,
-    importance_score   REAL NOT NULL DEFAULT 0.5,
-    access_count       INTEGER NOT NULL DEFAULT 0,
-    last_accessed_at   TEXT NOT NULL,
-    created_at         TEXT NOT NULL,
-    updated_at         TEXT NOT NULL,
-    archived_at        TEXT,
-    tags               TEXT NOT NULL DEFAULT '[]',
-    project            TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_memories_created_id ON memories(created_at, id);
-"""
-
-_DDL_VECTORS_METADATA = """
-CREATE TABLE IF NOT EXISTS vectors_metadata (
-    dimension INTEGER NOT NULL UNIQUE
-);
-"""
-
-_DDL_FTS = """
-CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-    content,
-    content=memories,
-    content_rowid=rowid
-);
-"""
-
-# Triggers to keep FTS in sync
-_DDL_FTS_TRIGGERS = """
-CREATE TRIGGER IF NOT EXISTS memories_ai
-AFTER INSERT ON memories BEGIN
-    INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
-END;
-
-CREATE TRIGGER IF NOT EXISTS memories_ad
-AFTER DELETE ON memories BEGIN
-    INSERT INTO memories_fts(memories_fts, rowid, content)
-        VALUES ('delete', old.rowid, old.content);
-END;
-
-CREATE TRIGGER IF NOT EXISTS memories_au
-AFTER UPDATE OF content ON memories BEGIN
-    INSERT INTO memories_fts(memories_fts, rowid, content)
-        VALUES ('delete', old.rowid, old.content);
-    INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
-END;
-"""
-
-_DDL_EMBEDDINGS = """
-CREATE TABLE IF NOT EXISTS memory_embeddings (
-    memory_id TEXT PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
-    embedding BLOB NOT NULL
-);
-"""
 
 # ---------------------------------------------------------------------------
 # Row <-> Memory conversion helpers
@@ -221,6 +161,8 @@ class SQLiteStorageAdapter:
 
         # Cached vector dimension (avoids repeated DB queries)
         self._vector_dim: int | None = None
+        # Dedicated executor to ensure acquire/release happen on the same thread
+        self._lock_executor = ThreadPoolExecutor(max_workers=1)
 
     # ------------------------------------------------------------------
     # Factory
@@ -235,14 +177,22 @@ class SQLiteStorageAdapter:
                 os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True
             )
         adapter = cls(db_path, settings, read_only=read_only)
-        if not read_only:
-            lock = StaleAwareFileLock(
-                f"{db_path}.lock",
-                timeout=settings.sqlite_acquire_timeout,
-                stale_timeout_seconds=settings.stale_lock_timeout_seconds,
-            )
-            with lock:
-                await adapter._migrate()
+        try:
+            if not read_only:
+                lock = StaleAwareFileLock(
+                    f"{db_path}.lock",
+                    timeout=settings.sqlite_acquire_timeout,
+                    stale_timeout_seconds=settings.stale_lock_timeout_seconds,
+                )
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(adapter._lock_executor, lock.acquire)
+                try:
+                    await adapter._migrate()
+                finally:
+                    await loop.run_in_executor(adapter._lock_executor, lock.release)
+        except Exception:
+            await adapter.dispose()
+            raise
         return adapter
 
     # ------------------------------------------------------------------
@@ -345,13 +295,10 @@ class SQLiteStorageAdapter:
     # ------------------------------------------------------------------
 
     async def _migrate(self) -> None:
-        """Create tables and indexes if they do not exist."""
+        """Apply schema migrations."""
         async with self._connect() as conn:
-            await conn.executescript(_DDL_MEMORIES)
-            await conn.execute(_DDL_VECTORS_METADATA)
-            await conn.execute(_DDL_EMBEDDINGS)
-            await conn.executescript(_DDL_FTS + _DDL_FTS_TRIGGERS)
-            await conn.commit()
+            runner = MigrationRunner("sqlite", conn)
+            await runner.run()
 
         # Warm the dimension cache
         self._vector_dim = await self._load_vector_dim()
@@ -1096,6 +1043,7 @@ class SQLiteStorageAdapter:
         if self._disposed:
             return
         self._disposed = True
+        self._lock_executor.shutdown(wait=True)
         # aiosqlite connections are context-managed; nothing persistent to close.
 
 

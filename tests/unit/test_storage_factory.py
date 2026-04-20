@@ -192,9 +192,11 @@ class TestPostgresBackend:
         mock_pool = MagicMock()
         mock_pool.close = AsyncMock()
         create_pool_mock = AsyncMock(return_value=mock_pool)
+        mock_init = AsyncMock()
 
         with (
             patch("asyncpg.create_pool", create_pool_mock),
+            patch("context_store.storage.postgres.PostgresStorageAdapter.initialize", mock_init),
             patch.object(
                 type(settings),
                 "postgres_dsn",
@@ -209,6 +211,7 @@ class TestPostgresBackend:
             try:
                 assert isinstance(storage, PostgresStorageAdapter)
                 assert graph_adp is None  # postgres + graph_enabled=False
+                mock_init.assert_awaited_once()
             finally:
                 await dispose_adapters(storage, graph_adp, cache_adp)
 
@@ -227,8 +230,10 @@ class TestPostgresBackend:
         mock_pool = MagicMock()
         mock_pool.close = AsyncMock()
         create_pool_mock = AsyncMock(return_value=mock_pool)
+        mock_init = AsyncMock()
         with (
             patch("asyncpg.create_pool", create_pool_mock),
+            patch("context_store.storage.postgres.PostgresStorageAdapter.initialize", mock_init),
             patch.object(
                 type(settings),
                 "postgres_dsn",
@@ -240,6 +245,7 @@ class TestPostgresBackend:
             storage, graph_adp, cache_adp = await create_storage(settings)
             try:
                 assert graph_adp is None
+                mock_init.assert_awaited_once()
             finally:
                 await dispose_adapters(storage, graph_adp, cache_adp)
 

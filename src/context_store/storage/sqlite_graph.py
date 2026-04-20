@@ -27,41 +27,21 @@ import asyncio
 import json
 import logging
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, AsyncGenerator
 
 import aiosqlite
 
 from context_store.models.graph import Edge, GraphResult
+from context_store.storage.migrations.runner import MigrationRunner
 from context_store.utils.sqlite_interrupt import SafeSqliteInterruptCtx
+from context_store.utils.stale_lock import StaleAwareFileLock
 
 if TYPE_CHECKING:
     from context_store.config import Settings
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Schema DDL
-# ---------------------------------------------------------------------------
-
-_DDL_NODES = """
-CREATE TABLE IF NOT EXISTS memory_nodes (
-    id       TEXT PRIMARY KEY,
-    metadata TEXT NOT NULL DEFAULT '{}'
-);
-"""
-
-_DDL_EDGES = """
-CREATE TABLE IF NOT EXISTS memory_edges (
-    from_id   TEXT NOT NULL,
-    to_id     TEXT NOT NULL,
-    edge_type TEXT NOT NULL,
-    props     TEXT NOT NULL DEFAULT '{}',
-    PRIMARY KEY (from_id, to_id, edge_type),
-    FOREIGN KEY(from_id) REFERENCES memory_nodes(id) ON DELETE CASCADE,
-    FOREIGN KEY(to_id) REFERENCES memory_nodes(id) ON DELETE CASCADE
-);
-"""
 
 # ---------------------------------------------------------------------------
 # SQLiteGraphAdapter
@@ -84,26 +64,37 @@ class SQLiteGraphAdapter:
         self._max_logical_depth: int = settings.graph_max_logical_depth
         self._max_physical_hops: int = settings.graph_max_physical_hops
         self._timeout: float = settings.graph_traversal_timeout_seconds
+        # Dedicated executor to ensure acquire/release happen on the same thread
+        self._lock_executor = ThreadPoolExecutor(max_workers=1)
 
     # ------------------------------------------------------------------
     # Factory / lifecycle
     # ------------------------------------------------------------------
 
     async def initialize(self) -> None:
-        """Create tables if they do not exist."""
+        """Apply schema migrations."""
         if self._read_only:
             # Skip schema creation for read-only mode
             return
-        async with self._connect() as conn:
-            await conn.execute(_DDL_NODES)
-            await conn.execute(_DDL_EDGES)
-            await conn.execute(
-                "CREATE INDEX IF NOT EXISTS memory_edges_to_idx ON memory_edges (to_id)"
+
+        try:
+            lock = StaleAwareFileLock(
+                f"{self._db_path}.lock",
+                timeout=self._settings.sqlite_acquire_timeout,
+                stale_timeout_seconds=self._settings.stale_lock_timeout_seconds,
             )
-            await conn.execute(
-                "CREATE INDEX IF NOT EXISTS memory_edges_type_idx ON memory_edges (edge_type)"
-            )
-            await conn.commit()
+
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(self._lock_executor, lock.acquire)
+            try:
+                async with self._connect() as conn:
+                    runner = MigrationRunner("sqlite", conn)
+                    await runner.run()
+            finally:
+                await loop.run_in_executor(self._lock_executor, lock.release)
+        except Exception:
+            await self.dispose()
+            raise
 
     @asynccontextmanager
     async def _connect(self) -> AsyncGenerator[aiosqlite.Connection, None]:
@@ -129,7 +120,10 @@ class SQLiteGraphAdapter:
 
     async def dispose(self) -> None:
         """Release resources (idempotent)."""
+        if self._disposed:
+            return
         self._disposed = True
+        self._lock_executor.shutdown(wait=True)
 
     # ------------------------------------------------------------------
     # GraphAdapter: create_node

@@ -81,10 +81,18 @@ uv run pytest tests/unit/ -v  # Run tests
 
 **Tasks** (Ctrl+Shift+P → Tasks: Run Task):
 - `Run Tests` — pytest tests/ -v
+- `Run Migration Tests` — pytest tests/unit/test_migration_runner.py tests/integration/test_postgres_schema.py -v
 - `Run Ruff Check` — ruff check src/ tests/
 - `Run MyPy` — mypy src/
 - `Run Full Lint` — ruff + mypy
 - `Run All Checks (CI)` — lint + tests
+
+## Internal Knowledge (For Developers)
+
+- **Schema Management**: Database DDL is managed by the custom migration system.
+  - SQL files are located in `src/context_store/storage/migrations/{sqlite,postgres}/`.
+  - Do not hardcode table creation queries in Python code. Instead, add a new `.sql` file to the migration directories.
+- **Logging**: All system logs are directed to `stderr` to avoid interfering with MCP stdout communication.
 
 **Frontend (Dashboard) commands**:
 ```bash

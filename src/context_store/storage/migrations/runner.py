@@ -83,7 +83,7 @@ class MigrationRunner:
         if self.db_type == "sqlite":
             placeholders = ", ".join("?" * len(table_names))
             query = (
-                f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders})"
+                f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders})"  # noqa: S608
             )
             async with self.connection.execute(query, table_names) as cursor:
                 rows = await cursor.fetchall()

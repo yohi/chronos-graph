@@ -94,7 +94,8 @@ async def test_sqlite_baseline_path(tmp_path):
     # Create initial migration files (baseline)
     (migrations_dir / "0001_initial.sql").write_text("CREATE TABLE memories (id TEXT PRIMARY KEY);")
     (migrations_dir / "0002_graph.sql").write_text(
-        "CREATE TABLE memory_nodes (id TEXT PRIMARY KEY);\nCREATE TABLE memory_edges (from_id TEXT);"
+        "CREATE TABLE memory_nodes (id TEXT PRIMARY KEY);\n"
+        "CREATE TABLE memory_edges (from_id TEXT);"
     )
     # A new migration that should still be applied
     (migrations_dir / "0003_new.sql").write_text("CREATE TABLE new_table (id INTEGER PRIMARY KEY);")
@@ -145,7 +146,8 @@ async def test_sqlite_full_baseline_path(tmp_path):
 
     (migrations_dir / "0001_initial.sql").write_text("CREATE TABLE memories (id TEXT PRIMARY KEY);")
     (migrations_dir / "0002_graph.sql").write_text(
-        "CREATE TABLE memory_nodes (id TEXT PRIMARY KEY);\nCREATE TABLE memory_edges (from_id TEXT);"
+        "CREATE TABLE memory_nodes (id TEXT PRIMARY KEY);\n"
+        "CREATE TABLE memory_edges (from_id TEXT);"
     )
 
     async with aiosqlite.connect(db_path) as conn:

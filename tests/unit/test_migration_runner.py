@@ -93,12 +93,14 @@ async def test_sqlite_baseline_path(tmp_path):
 
     # Create initial migration files (baseline)
     (migrations_dir / "0001_initial.sql").write_text("CREATE TABLE memories (id TEXT PRIMARY KEY);")
-    (migrations_dir / "0002_graph.sql").write_text("ALTER TABLE memories ADD COLUMN project TEXT;")
+    (migrations_dir / "0002_graph.sql").write_text(
+        "CREATE TABLE memory_nodes (id TEXT PRIMARY KEY);\nCREATE TABLE memory_edges (from_id TEXT);"
+    )
     # A new migration that should still be applied
     (migrations_dir / "0003_new.sql").write_text("CREATE TABLE new_table (id INTEGER PRIMARY KEY);")
 
     async with aiosqlite.connect(db_path) as conn:
-        # 2. Simulate legacy DB: create memories table but NO schema_migrations
+        # 2. Simulate legacy DB: create memories table but NO memory_nodes/edges
         await conn.execute("CREATE TABLE memories (id TEXT PRIMARY KEY, content TEXT);")
         await conn.commit()
 
@@ -106,8 +108,9 @@ async def test_sqlite_baseline_path(tmp_path):
         runner.migrations_dir = migrations_dir
 
         # 3. Run migrations
-        # It should detect 'memories' table and mark 0001 and 0002 as applied,
-        # then actually apply 0003.
+        # It should detect 'memories' table and mark 0001 as applied,
+        # but 0002 is NOT baselined because memory_nodes is missing.
+        # So 0002 and 0003 will be applied normally.
         await runner.run()
 
         # 4. Verify
@@ -115,12 +118,50 @@ async def test_sqlite_baseline_path(tmp_path):
         async with conn.execute("SELECT version FROM schema_migrations ORDER BY version") as cursor:
             rows = await cursor.fetchall()
             versions = [r[0] for r in rows]
+            # 0001 was baselined, 0002 and 0003 were applied
             assert "0001_initial.sql" in versions
             assert "0002_graph.sql" in versions
             assert "0003_new.sql" in versions
+
+        # Verify 0002 was actually applied (memory_nodes exists)
+        sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='memory_nodes'"
+        async with conn.execute(sql) as cursor:
+            row = await cursor.fetchone()
+            assert row is not None
 
         # Verify 0003 was actually applied (new_table exists)
         sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='new_table'"
         async with conn.execute(sql) as cursor:
             row = await cursor.fetchone()
             assert row is not None
+
+
+@pytest.mark.asyncio
+async def test_sqlite_full_baseline_path(tmp_path):
+    """Test that multiple migrations are baselined if all their tables exist."""
+    db_path = tmp_path / "test_full_baseline.db"
+    migrations_dir = tmp_path / "migrations_full" / "sqlite"
+    migrations_dir.mkdir(parents=True)
+
+    (migrations_dir / "0001_initial.sql").write_text("CREATE TABLE memories (id TEXT PRIMARY KEY);")
+    (migrations_dir / "0002_graph.sql").write_text(
+        "CREATE TABLE memory_nodes (id TEXT PRIMARY KEY);\nCREATE TABLE memory_edges (from_id TEXT);"
+    )
+
+    async with aiosqlite.connect(db_path) as conn:
+        # Create all tables beforehand
+        await conn.execute("CREATE TABLE memories (id TEXT PRIMARY KEY);")
+        await conn.execute("CREATE TABLE memory_nodes (id TEXT PRIMARY KEY);")
+        await conn.execute("CREATE TABLE memory_edges (from_id TEXT);")
+        await conn.commit()
+
+        runner = MigrationRunner("sqlite", conn)
+        runner.migrations_dir = migrations_dir
+
+        await runner.run()
+
+        # Both should be in schema_migrations
+        async with conn.execute("SELECT version FROM schema_migrations ORDER BY version") as cursor:
+            rows = await cursor.fetchall()
+            versions = [r[0] for r in rows]
+            assert versions == ["0001_initial.sql", "0002_graph.sql"]

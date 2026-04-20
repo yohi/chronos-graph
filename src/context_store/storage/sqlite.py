@@ -180,8 +180,12 @@ class SQLiteStorageAdapter:
                 timeout=settings.sqlite_acquire_timeout,
                 stale_timeout_seconds=settings.stale_lock_timeout_seconds,
             )
-            with lock:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, lock.acquire)
+            try:
                 await adapter._migrate()
+            finally:
+                await loop.run_in_executor(None, lock.release)
         return adapter
 
     # ------------------------------------------------------------------

@@ -11,6 +11,7 @@ import asyncpg  # type: ignore[import-not-found]
 
 from context_store.config import Settings
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
+from context_store.storage.migrations.runner import MigrationRunner
 from context_store.storage.protocols import ALLOWED_SORT_COLUMNS, MemoryFilters, StorageError
 
 
@@ -88,7 +89,14 @@ class PostgresStorageAdapter:
             min_size=1,
             max_size=10,
         )
-        return cls(pool)
+        adapter = cls(pool)
+        await adapter.initialize()
+        return adapter
+
+    async def initialize(self) -> None:
+        """Apply schema migrations."""
+        runner = MigrationRunner("postgres", self._pool)
+        await runner.run()
 
     # ------------------------------------------------------------------
     # StorageAdapter Protocol

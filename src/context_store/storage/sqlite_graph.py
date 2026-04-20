@@ -33,35 +33,13 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator
 import aiosqlite
 
 from context_store.models.graph import Edge, GraphResult
+from context_store.storage.migrations.runner import MigrationRunner
 from context_store.utils.sqlite_interrupt import SafeSqliteInterruptCtx
 
 if TYPE_CHECKING:
     from context_store.config import Settings
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Schema DDL
-# ---------------------------------------------------------------------------
-
-_DDL_NODES = """
-CREATE TABLE IF NOT EXISTS memory_nodes (
-    id       TEXT PRIMARY KEY,
-    metadata TEXT NOT NULL DEFAULT '{}'
-);
-"""
-
-_DDL_EDGES = """
-CREATE TABLE IF NOT EXISTS memory_edges (
-    from_id   TEXT NOT NULL,
-    to_id     TEXT NOT NULL,
-    edge_type TEXT NOT NULL,
-    props     TEXT NOT NULL DEFAULT '{}',
-    PRIMARY KEY (from_id, to_id, edge_type),
-    FOREIGN KEY(from_id) REFERENCES memory_nodes(id) ON DELETE CASCADE,
-    FOREIGN KEY(to_id) REFERENCES memory_nodes(id) ON DELETE CASCADE
-);
-"""
 
 # ---------------------------------------------------------------------------
 # SQLiteGraphAdapter
@@ -90,20 +68,13 @@ class SQLiteGraphAdapter:
     # ------------------------------------------------------------------
 
     async def initialize(self) -> None:
-        """Create tables if they do not exist."""
+        """Apply schema migrations."""
         if self._read_only:
             # Skip schema creation for read-only mode
             return
         async with self._connect() as conn:
-            await conn.execute(_DDL_NODES)
-            await conn.execute(_DDL_EDGES)
-            await conn.execute(
-                "CREATE INDEX IF NOT EXISTS memory_edges_to_idx ON memory_edges (to_id)"
-            )
-            await conn.execute(
-                "CREATE INDEX IF NOT EXISTS memory_edges_type_idx ON memory_edges (edge_type)"
-            )
-            await conn.commit()
+            runner = MigrationRunner("sqlite", conn)
+            await runner.run()
 
     @asynccontextmanager
     async def _connect(self) -> AsyncGenerator[aiosqlite.Connection, None]:

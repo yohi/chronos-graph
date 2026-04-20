@@ -27,7 +27,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-async def migrate():
+async def migrate() -> None:
     logger.info("Starting dimension migration...")
     settings = Settings()
     
@@ -58,7 +58,7 @@ async def migrate():
         if settings.storage_backend == "sqlite":
             logger.info(f"Updating vectors_metadata to dimension {current_dim}...")
             try:
-                import aiosqlite
+                import aiosqlite  # type: ignore
                 db_path = os.path.expanduser(settings.sqlite_db_path)
                 async with aiosqlite.connect(db_path) as conn:
                     await conn.execute("DELETE FROM vectors_metadata")

@@ -32,6 +32,7 @@ async def test_sqlite_migration_run(tmp_path):
         # Check if schema_migrations table exists and has record
         async with conn.execute("SELECT version FROM schema_migrations") as cursor:
             row = await cursor.fetchone()
+            assert row is not None
             assert row[0] == "0001_initial.sql"
 
 

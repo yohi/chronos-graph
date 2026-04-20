@@ -27,6 +27,7 @@ import asyncio
 import json
 import logging
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, AsyncGenerator
 
@@ -63,6 +64,8 @@ class SQLiteGraphAdapter:
         self._max_logical_depth: int = settings.graph_max_logical_depth
         self._max_physical_hops: int = settings.graph_max_physical_hops
         self._timeout: float = settings.graph_traversal_timeout_seconds
+        # Dedicated executor to ensure acquire/release happen on the same thread
+        self._lock_executor = ThreadPoolExecutor(max_workers=1)
 
     # ------------------------------------------------------------------
     # Factory / lifecycle
@@ -81,13 +84,13 @@ class SQLiteGraphAdapter:
         )
 
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, lock.acquire)
+        await loop.run_in_executor(self._lock_executor, lock.acquire)
         try:
             async with self._connect() as conn:
                 runner = MigrationRunner("sqlite", conn)
                 await runner.run()
         finally:
-            await loop.run_in_executor(None, lock.release)
+            await loop.run_in_executor(self._lock_executor, lock.release)
 
     @asynccontextmanager
     async def _connect(self) -> AsyncGenerator[aiosqlite.Connection, None]:
@@ -113,7 +116,10 @@ class SQLiteGraphAdapter:
 
     async def dispose(self) -> None:
         """Release resources (idempotent)."""
+        if self._disposed:
+            return
         self._disposed = True
+        self._lock_executor.shutdown(wait=False)
 
     # ------------------------------------------------------------------
     # GraphAdapter: create_node

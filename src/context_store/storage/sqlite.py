@@ -8,6 +8,7 @@ import math
 import os
 import struct
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
@@ -160,6 +161,8 @@ class SQLiteStorageAdapter:
 
         # Cached vector dimension (avoids repeated DB queries)
         self._vector_dim: int | None = None
+        # Dedicated executor to ensure acquire/release happen on the same thread
+        self._lock_executor = ThreadPoolExecutor(max_workers=1)
 
     # ------------------------------------------------------------------
     # Factory
@@ -181,11 +184,11 @@ class SQLiteStorageAdapter:
                 stale_timeout_seconds=settings.stale_lock_timeout_seconds,
             )
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, lock.acquire)
+            await loop.run_in_executor(adapter._lock_executor, lock.acquire)
             try:
                 await adapter._migrate()
             finally:
-                await loop.run_in_executor(None, lock.release)
+                await loop.run_in_executor(adapter._lock_executor, lock.release)
         return adapter
 
     # ------------------------------------------------------------------
@@ -1036,6 +1039,7 @@ class SQLiteStorageAdapter:
         if self._disposed:
             return
         self._disposed = True
+        self._lock_executor.shutdown(wait=False)
         # aiosqlite connections are context-managed; nothing persistent to close.
 
 

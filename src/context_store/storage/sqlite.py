@@ -1043,7 +1043,7 @@ class SQLiteStorageAdapter:
         if self._disposed:
             return
         self._disposed = True
-        self._lock_executor.shutdown(wait=False)
+        self._lock_executor.shutdown(wait=True)
         # aiosqlite connections are context-managed; nothing persistent to close.
 
 

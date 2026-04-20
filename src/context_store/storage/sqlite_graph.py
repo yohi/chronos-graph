@@ -123,7 +123,7 @@ class SQLiteGraphAdapter:
         if self._disposed:
             return
         self._disposed = True
-        self._lock_executor.shutdown(wait=False)
+        self._lock_executor.shutdown(wait=True)
 
     # ------------------------------------------------------------------
     # GraphAdapter: create_node

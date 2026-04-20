@@ -37,7 +37,7 @@ async def migrate(force: bool = False) -> None:
     settings = Settings()
 
     # We bypass Orchestrator to avoid the dimension check at startup.
-    # We use the private _create_storage_adapter because it's a direct way to 
+    # We use the private _create_storage_adapter because it's a direct way to
     # get a storage instance without triggering the system-wide validation
     # that happens in Orchestrator.initialize().
     storage = await _create_storage_adapter(settings)

@@ -31,12 +31,13 @@ from typing import Any, Literal, get_args
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 try:
-    from context_store.config import Settings
+    from context_store.config import Settings as RealSettings
 except ImportError:
     # インポート失敗時のフォールバック（スタンドアロン実行用）
-    class SettingsFallback:  # type: ignore
+    class SettingsFallback:
         @property
         def model_fields(self) -> dict[str, Any]:
+            """イミュータブルな定義を返すプロパティ。"""
             return {
                 "embedding_provider": type(
                     "obj",
@@ -48,7 +49,11 @@ except ImportError:
                 )
             }
 
-    Settings = SettingsFallback()
+    # インスタンス化して使用
+    settings: Any = SettingsFallback()
+else:
+    # Pydantic Settings はインスタンス化しても model_fields にアクセス可能
+    settings = RealSettings()
 
 
 def str_to_bool(value: str) -> bool:
@@ -185,11 +190,11 @@ def generate_cursor_config(base_config: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> None:
     """メインエントリポイント。"""
-    # Settings から埋め込みプロバイダーの選択肢を取得
-    provider_field = Settings.model_fields["embedding_provider"]
+    # Settings インスタンスから埋め込みプロバイダーの選択肢を取得
+    provider_field = settings.model_fields["embedding_provider"]
     embedding_choices = list(get_args(provider_field.annotation))
     if not embedding_choices:
-        # get_args(Any) や Literal が解決できない場合の明示的なフォールバック
+        # get_args が解決できない場合の明示的なフォールバック
         embedding_choices = ["openai", "local-model", "litellm", "custom-api"]
     default_embedding = provider_field.default
 
@@ -216,21 +221,20 @@ def main() -> None:
     args = parser.parse_args()
 
     python_path = find_python()
-    graph_enabled = args.graph
 
-    if args.backend == "postgres":
-        config = generate_postgres_config(
-            python_path, args.embedding, graph_enabled, args.method, args.uv_from
+    if args.backend == "sqlite":
+        config = generate_sqlite_config(
+            python_path, args.embedding, args.graph, args.method, args.uv_from
         )
     else:
-        config = generate_sqlite_config(
-            python_path, args.embedding, graph_enabled, args.method, args.uv_from
+        config = generate_postgres_config(
+            python_path, args.embedding, args.graph, args.method, args.uv_from
         )
 
     if args.output == "cursor":
         config = generate_cursor_config(config)
 
-    print(json.dumps(config, indent=args.indent, ensure_ascii=False))
+    print(json.dumps(config, indent=args.indent))
 
 
 if __name__ == "__main__":

@@ -5,17 +5,18 @@ from __future__ import annotations
 import logging
 import sqlite3
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, AsyncContextManager
 
 logger = logging.getLogger(__name__)
 
 
 class Connection(Protocol):
-    """Protocol for database connections (aiosqlite or asyncpg)."""
+    """Protocol for database connections or pools (aiosqlite or asyncpg)."""
 
     async def execute(self, query: str, *args: Any) -> Any: ...
     async def fetch(self, query: str, *args: Any) -> list[Any]: ...
-    async def transaction(self) -> Any: ...
+    def transaction(self) -> AsyncContextManager[Any]: ...
+    def acquire(self) -> AsyncContextManager[Connection]: ...
 
 
 class MigrationRunner:
@@ -24,13 +25,13 @@ class MigrationRunner:
     def __init__(
         self,
         db_type: str,
-        connection: Any,
+        connection: Connection | Any,
     ) -> None:
         """Initialize the runner.
 
         Args:
             db_type: "sqlite" or "postgres".
-            connection: The database connection (aiosqlite.Connection or asyncpg.Pool/Connection).
+            connection: The database connection (aiosqlite.Connection or asyncpg.Pool).
         """
         self.db_type = db_type
         self.connection = connection

@@ -36,7 +36,10 @@ async def migrate(force: bool = False) -> None:
     logger.info("Starting dimension migration...")
     settings = Settings()
 
-    # We bypass Orchestrator to avoid the dimension check at startup
+    # We bypass Orchestrator to avoid the dimension check at startup.
+    # We use the private _create_storage_adapter because it's a direct way to 
+    # get a storage instance without triggering the system-wide validation
+    # that happens in Orchestrator.initialize().
     storage = await _create_storage_adapter(settings)
     embedding_provider = create_embedding_provider(settings)
 
@@ -83,6 +86,10 @@ async def migrate(force: bool = False) -> None:
         total = len(all_memories)
         logger.info(f"Found {total} memories to migrate.")
 
+        success_count = 0
+        failed_count = 0
+        failed_ids = []
+
         for i, memory in enumerate(all_memories):
             if i % 10 == 0 or i == total - 1:
                 logger.info(f"Processing {i + 1}/{total} (ID: {memory.id})")
@@ -92,12 +99,24 @@ async def migrate(force: bool = False) -> None:
                 new_embedding = await embedding_provider.embed(memory.content)
                 # Update in storage (convert memory.id to string to avoid UUID binding error)
                 success = await storage.update_memory(str(memory.id), {"embedding": new_embedding})
-                if not success:
+                if success:
+                    success_count += 1
+                else:
                     logger.warning(f"Failed to update memory {memory.id}")
+                    failed_count += 1
+                    failed_ids.append(str(memory.id))
             except Exception as e:
                 logger.error(f"Error re-embedding memory {memory.id}: {e}")
+                failed_count += 1
+                failed_ids.append(str(memory.id))
 
-        logger.info("Migration finished successfully.")
+        logger.info("Migration finished.")
+        logger.info(f"Total processed: {total}")
+        logger.info(f"Successfully migrated: {success_count}")
+        if failed_count > 0:
+            logger.warning(f"Failed to migrate: {failed_count}")
+            sample_size = min(5, len(failed_ids))
+            logger.warning(f"Sample failed IDs: {failed_ids[:sample_size]}")
 
     finally:
         await storage.dispose()

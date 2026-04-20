@@ -25,7 +25,7 @@ import json
 import os
 import shutil
 import sys
-from typing import Any, get_args
+from typing import Any, Literal, get_args
 
 # src を sys.path に追加して context_store をインポート可能にする
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -34,10 +34,21 @@ try:
     from context_store.config import Settings
 except ImportError:
     # インポート失敗時のフォールバック（スタンドアロン実行用）
-    class Settings:  # type: ignore
-        model_fields = {
-            "embedding_provider": type("obj", (), {"annotation": Any, "default": "local-model"})
-        }
+    class SettingsFallback:  # type: ignore
+        @property
+        def model_fields(self) -> dict[str, Any]:
+            return {
+                "embedding_provider": type(
+                    "obj",
+                    (),
+                    {
+                        "annotation": Literal["openai", "local-model", "litellm", "custom-api"],
+                        "default": "local-model",
+                    },
+                )
+            }
+
+    Settings = SettingsFallback()
 
 
 def str_to_bool(value: str) -> bool:
@@ -80,6 +91,12 @@ def build_start_command(
     if method == "uv":
         command = "uv"
         args = ["run", "--quiet"]
+        if uv_from:
+            args.extend(["--from", uv_from])
+        args.append("context-store")
+    elif method == "uvx":
+        command = "uvx"
+        args = ["--quiet"]
         if uv_from:
             args.extend(["--from", uv_from])
         args.append("context-store")
@@ -171,6 +188,9 @@ def main() -> None:
     # Settings から埋め込みプロバイダーの選択肢を取得
     provider_field = Settings.model_fields["embedding_provider"]
     embedding_choices = list(get_args(provider_field.annotation))
+    if not embedding_choices:
+        # get_args(Any) や Literal が解決できない場合の明示的なフォールバック
+        embedding_choices = ["openai", "local-model", "litellm", "custom-api"]
     default_embedding = provider_field.default
 
     parser = argparse.ArgumentParser(description="ChronosGraph MCP client config generator")
@@ -185,7 +205,7 @@ def main() -> None:
     )
     parser.add_argument("--graph", type=str_to_bool, default=True, help="Enable graph features")
     parser.add_argument(
-        "--method", choices=["python", "uv"], default="python", help="Execution method"
+        "--method", choices=["python", "uv", "uvx"], default="python", help="Execution method"
     )
     parser.add_argument("--uv-from", help="Package to run with uv (e.g. chronos-graph)")
     parser.add_argument(

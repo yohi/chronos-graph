@@ -12,7 +12,8 @@ def test_context_propagation(capsys):
     logger = get_logger("test_context")
     logger.info("context test")
     captured = capsys.readouterr()
-    output = json.loads(captured.out)
+    assert captured.out == ""
+    output = json.loads(captured.err)
     assert output["request_id"] == "req-123"
     assert output["agent_id"] == "agent-456"
     clear_context()
@@ -24,7 +25,8 @@ def test_structured_json_output(capsys):
     logger = get_logger("test_structured")
     logger.info("hello structured logging")
     captured = capsys.readouterr()
-    output = json.loads(captured.out)
+    assert captured.out == ""
+    output = json.loads(captured.err)
     assert output["level"] == "INFO"
     assert output["message"] == "hello structured logging"
     assert output["logger"] == "test_structured"
@@ -50,7 +52,8 @@ def test_context_cannot_override_reserved_fields(capsys):
     logger.info("actual message")
 
     captured = capsys.readouterr()
-    output = json.loads(captured.out)
+    assert captured.out == ""
+    output = json.loads(captured.err)
 
     assert output["level"] == "INFO"
     assert output["logger"] == "test_reserved"
@@ -68,7 +71,8 @@ def test_context_serializes_non_json_values(capsys):
     logger.info("serialized context")
 
     captured = capsys.readouterr()
-    output = json.loads(captured.out)
+    assert captured.out == ""
+    output = json.loads(captured.err)
 
     assert output["event_time"] == "2026-04-01T12:34:56"
     assert output["uid"] == str(uid)

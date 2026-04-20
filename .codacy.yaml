@@ -7,3 +7,5 @@ engines:
     patterns:
       - name: "S5144"
         enabled: false
+exclude_paths:
+  - "src/context_store/storage/migrations/sqlite/**"

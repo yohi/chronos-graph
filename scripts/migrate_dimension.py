@@ -79,7 +79,7 @@ async def migrate(force: bool = False) -> int:
                 await storage.dispose()
                 storage = await _create_storage_adapter(settings)
                 logger.info("Storage adapter re-initialized with new dimension.")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"Failed to update vectors_metadata: {e}")
                 logger.error("Aborting migration to prevent inconsistent state.")
                 sys.exit(1)
@@ -152,7 +152,7 @@ def main() -> None:
     except KeyboardInterrupt:
         logger.info("Migration interrupted by user.")
         sys.exit(1)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.exception(f"Migration failed with error: {e}")
         sys.exit(1)
 

@@ -53,7 +53,7 @@ async def migrate(force: bool = False) -> int:
             logger.info(
                 "Dimensions already match. No migration needed. Use --force to re-embed anyway."
             )
-            return
+            return 0
 
         # Update vectors_metadata for SQLite BEFORE processing memories.
         # This is necessary because update_memory checks the stored dimension.
@@ -81,7 +81,7 @@ async def migrate(force: bool = False) -> int:
 
         if not all_memories:
             logger.info("No memories found in storage.")
-            return
+            return 0
 
         total = len(all_memories)
         logger.info(f"Found {total} memories to migrate.")
@@ -122,6 +122,7 @@ async def migrate(force: bool = False) -> int:
 
     finally:
         await storage.dispose()
+        await embedding_provider.close()
 
 
 def main() -> None:

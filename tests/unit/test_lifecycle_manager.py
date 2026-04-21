@@ -22,6 +22,33 @@ from tests.unit.conftest import make_settings
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.fixture
+async def sqlite_db_with_migrations():
+    """一時的な SQLite DB を作成し、マイグレーションを実行してパスを返す。"""
+    from pathlib import Path
+
+    import aiosqlite
+
+    from context_store.storage.migrations.runner import MigrationRunner
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    try:
+        # テーブルを初期化
+        async with aiosqlite.connect(db_path) as conn:
+            runner = MigrationRunner("sqlite", conn)
+            # 実物の migrations ディレクトリを使用
+            base_dir = Path(__file__).parent.parent.parent
+            m_dir = base_dir / "src" / "context_store" / "storage" / "migrations" / "sqlite"
+            runner.migrations_dir = m_dir
+            await runner.run()
+        yield db_path
+    finally:
+        if os.path.exists(db_path):
+            os.unlink(db_path)
+
+
 async def test_lifecycle_state_fields():
     state = LifecycleState()
     assert hasattr(state, "cleanup_lock_owner")
@@ -653,239 +680,126 @@ class TestWalCheckpoint:
 class TestSQLiteLifecycleStateStore:
     """SQLiteLifecycleStateStore のテスト。"""
 
-    async def test_load_default_state(self):
+    async def test_load_default_state(self, sqlite_db_with_migrations):
         """初期状態が正しく読み込まれること。"""
-        from pathlib import Path
-
-        import aiosqlite
-
         from context_store.lifecycle.manager import SQLiteLifecycleStateStore
-        from context_store.storage.migrations.runner import MigrationRunner
 
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
+        store = SQLiteLifecycleStateStore(db_path=sqlite_db_with_migrations)
+        state = await store.load_state()
+        assert state.save_count == 0
+        assert state.last_cleanup_at is None
+        assert state.cleanup_lock_owner is None
 
-        try:
-            # テーブルを初期化
-            async with aiosqlite.connect(db_path) as conn:
-                runner = MigrationRunner("sqlite", conn)
-                # 実物の migrations ディレクトリを使用
-                base_dir = Path(__file__).parent.parent.parent
-                m_dir = base_dir / "src" / "context_store" / "storage" / "migrations" / "sqlite"
-                runner.migrations_dir = m_dir
-                await runner.run()
-
-            store = SQLiteLifecycleStateStore(db_path=db_path)
-            state = await store.load_state()
-            assert state.save_count == 0
-            assert state.last_cleanup_at is None
-            assert state.cleanup_lock_owner is None
-        finally:
-            os.unlink(db_path)
-
-    async def test_save_and_load_state(self):
+    async def test_save_and_load_state(self, sqlite_db_with_migrations):
         """状態の保存と読み込みが正しく動作すること。"""
-        from pathlib import Path
-
-        import aiosqlite
-
         from context_store.lifecycle.manager import SQLiteLifecycleStateStore
-        from context_store.storage.migrations.runner import MigrationRunner
 
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
+        store = SQLiteLifecycleStateStore(db_path=sqlite_db_with_migrations)
+        now = datetime.now(timezone.utc).replace(microsecond=0)  # マイクロ秒を除外
+        state = LifecycleState(
+            save_count=42,
+            last_cleanup_at=now,
+            cleanup_lock_owner="some_token",
+            updated_at=now,
+        )
+        await store.save_state(state)
 
-        try:
-            # テーブルを初期化
-            async with aiosqlite.connect(db_path) as conn:
-                runner = MigrationRunner("sqlite", conn)
-                # 実物の migrations ディレクトリを使用
-                base_dir = Path(__file__).parent.parent.parent
-                m_dir = base_dir / "src" / "context_store" / "storage" / "migrations" / "sqlite"
-                runner.migrations_dir = m_dir
-                await runner.run()
-            store = SQLiteLifecycleStateStore(db_path=db_path)
-            now = datetime.now(timezone.utc).replace(microsecond=0)  # マイクロ秒を除外
-            state = LifecycleState(
-                save_count=42,
-                last_cleanup_at=now,
-                cleanup_lock_owner="some_token",
-                updated_at=now,
-            )
-            await store.save_state(state)
+        loaded = await store.load_state()
+        assert loaded.save_count == 42
+        # タイムスタンプは秒単位で比較
+        assert loaded.last_cleanup_at is not None
+        assert abs((loaded.last_cleanup_at - now).total_seconds()) < 2
+        assert loaded.cleanup_lock_owner == "some_token"
 
-            loaded = await store.load_state()
-            assert loaded.save_count == 42
-            # タイムスタンプは秒単位で比較
-            assert loaded.last_cleanup_at is not None
-            assert abs((loaded.last_cleanup_at - now).total_seconds()) < 2
-            assert loaded.cleanup_lock_owner == "some_token"
-        finally:
-            os.unlink(db_path)
-
-    async def test_acquire_and_release_lock(self):
+    async def test_acquire_and_release_lock(self, sqlite_db_with_migrations):
         """DB ロックの取得と解放が正しく動作すること。"""
-        from pathlib import Path
-
-        import aiosqlite
-
         from context_store.lifecycle.manager import SQLiteLifecycleStateStore
-        from context_store.storage.migrations.runner import MigrationRunner
 
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
+        store = SQLiteLifecycleStateStore(db_path=sqlite_db_with_migrations)
 
-        try:
-            # テーブルを初期化
-            async with aiosqlite.connect(db_path) as conn:
-                runner = MigrationRunner("sqlite", conn)
-                # 実物の migrations ディレクトリを使用
-                base_dir = Path(__file__).parent.parent.parent
-                m_dir = base_dir / "src" / "context_store" / "storage" / "migrations" / "sqlite"
-                runner.migrations_dir = m_dir
-                await runner.run()
-            store = SQLiteLifecycleStateStore(db_path=db_path)
+        token = "test_token"
+        # ロック取得成功
+        acquired = await store.acquire_cleanup_lock(token)
+        assert acquired is True
 
-            token = "test_token"
-            # ロック取得成功
-            acquired = await store.acquire_cleanup_lock(token)
-            assert acquired is True
+        # 同じロックを再取得しようとすると失敗
+        acquired_again = await store.acquire_cleanup_lock("other_token")
+        assert acquired_again is False
 
-            # 同じロックを再取得しようとすると失敗
-            acquired_again = await store.acquire_cleanup_lock("other_token")
-            assert acquired_again is False
+        # ロック解放
+        await store.release_cleanup_lock(token)
 
-            # ロック解放
-            await store.release_cleanup_lock(token)
+        # 解放後は再取得可能
+        acquired_after_release = await store.acquire_cleanup_lock("new_token")
+        assert acquired_after_release is True
+        await store.release_cleanup_lock("new_token")
 
-            # 解放後は再取得可能
-            acquired_after_release = await store.acquire_cleanup_lock("new_token")
-            assert acquired_after_release is True
-            await store.release_cleanup_lock("new_token")
-        finally:
-            os.unlink(db_path)
-
-    async def test_stale_lock_detection_in_sqlite(self):
+    async def test_stale_lock_detection_in_sqlite(self, sqlite_db_with_migrations):
         """SQLite のスタルロックが検出・解放されること。"""
-        from pathlib import Path
-
         import aiosqlite
 
         from context_store.lifecycle.manager import SQLiteLifecycleStateStore
-        from context_store.storage.migrations.runner import MigrationRunner
 
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
+        db_path = sqlite_db_with_migrations
+        store = SQLiteLifecycleStateStore(db_path=db_path, stale_lock_timeout_seconds=1)
 
-        try:
-            # テーブルを初期化
-            async with aiosqlite.connect(db_path) as conn:
-                runner = MigrationRunner("sqlite", conn)
-                # 実物の migrations ディレクトリを使用
-                base_dir = Path(__file__).parent.parent.parent
-                m_dir = base_dir / "src" / "context_store" / "storage" / "migrations" / "sqlite"
-                runner.migrations_dir = m_dir
-                await runner.run()
-
-            store = SQLiteLifecycleStateStore(db_path=db_path, stale_lock_timeout_seconds=1)
-
-            # 手動でスタルなロック状態を作る
-            import aiosqlite
-
-            old_time = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
-            async with aiosqlite.connect(db_path) as conn:
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS lifecycle_state (
-                        id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-                        save_count INTEGER NOT NULL DEFAULT 0,
-                        last_cleanup_at TIMESTAMP,
-                        cleanup_lock_owner TEXT,
-                        cleanup_lock_touched_at TIMESTAMP,
-                        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                await conn.execute(
-                    "INSERT OR REPLACE INTO lifecycle_state "
-                    "(id, cleanup_lock_owner, cleanup_lock_touched_at, updated_at) "
-                    "VALUES (1, 'old_token', ?, ?)",
-                    (old_time, old_time),
-                )
-                await conn.commit()
-
-            # acquire_cleanup_lock() がスタルロックを検出して取得できること
-            new_token = "new_token"
-            acquired = await store.acquire_cleanup_lock(new_token)
-            assert acquired is True
-            state = await store.load_state()
-            assert state.cleanup_lock_owner == new_token
-        finally:
-            os.unlink(db_path)
-
-    async def test_wal_state_save_and_load(self):
-        """WAL 状態の保存と読み込みが正しく動作すること。"""
-        from pathlib import Path
-
-        import aiosqlite
-
-        from context_store.lifecycle.manager import SQLiteLifecycleStateStore
-        from context_store.storage.migrations.runner import MigrationRunner
-
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
-
-        try:
-            # テーブルを初期化
-            async with aiosqlite.connect(db_path) as conn:
-                runner = MigrationRunner("sqlite", conn)
-                # 実物の migrations ディレクトリを使用
-                base_dir = Path(__file__).parent.parent.parent
-                m_dir = base_dir / "src" / "context_store" / "storage" / "migrations" / "sqlite"
-                runner.migrations_dir = m_dir
-                await runner.run()
-
-            store = SQLiteLifecycleStateStore(db_path=db_path)
-
-            now = datetime.now(timezone.utc).replace(microsecond=0)
-            wal_state = WalState(
-                wal_failure_count=5,
-                wal_last_failure_ts=now,
-                wal_last_checkpoint_result="PASSIVE_FAILED",
-                wal_last_observed_size_bytes=50 * 1024 * 1024,
-                wal_consecutive_passive_failures=3,
-                wal_failure_window=[now],
-            )
-            await store.save_wal_state(wal_state)
-
-            loaded = await store.load_wal_state()
-            assert loaded.wal_failure_count == 5
-            assert loaded.wal_consecutive_passive_failures == 3
-            assert loaded.wal_last_checkpoint_result == "PASSIVE_FAILED"
-            assert loaded.wal_last_observed_size_bytes == 50 * 1024 * 1024
-            assert len(loaded.wal_failure_window) == 1
-        finally:
-            os.unlink(db_path)
-
-    async def test_save_state_requires_correct_token(self, tmp_path):
-        """正しいトークンがないと save_state が失敗することを確認。"""
-        from pathlib import Path
-
-        import aiosqlite
-
-        from context_store.lifecycle.manager import SQLiteLifecycleStateStore
-        from context_store.storage.migrations.runner import MigrationRunner
-
-        db_path = str(tmp_path / "test_cas.db")
-
-        # テーブルを初期化
+        # 手動でスタルなロック状態を作る
+        old_time = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
         async with aiosqlite.connect(db_path) as conn:
-            runner = MigrationRunner("sqlite", conn)
-            # 実物の migrations ディレクトリを使用
-            base_dir = Path(__file__).parent.parent.parent
-            m_dir = base_dir / "src" / "context_store" / "storage" / "migrations" / "sqlite"
-            runner.migrations_dir = m_dir
-            await runner.run()
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS lifecycle_state (
+                    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+                    save_count INTEGER NOT NULL DEFAULT 0,
+                    last_cleanup_at TIMESTAMP,
+                    cleanup_lock_owner TEXT,
+                    cleanup_lock_touched_at TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            await conn.execute(
+                "INSERT OR REPLACE INTO lifecycle_state "
+                "(id, cleanup_lock_owner, cleanup_lock_touched_at, updated_at) "
+                "VALUES (1, 'old_token', ?, ?)",
+                (old_time, old_time),
+            )
+            await conn.commit()
 
-        store = SQLiteLifecycleStateStore(db_path)
+        # acquire_cleanup_lock() がスタルロックを検出して取得できること
+        new_token = "new_token"
+        acquired = await store.acquire_cleanup_lock(new_token)
+        assert acquired is True
+        state = await store.load_state()
+        assert state.cleanup_lock_owner == new_token
+
+    async def test_wal_state_save_and_load(self, sqlite_db_with_migrations):
+        """WAL 状態の保存と読み込みが正しく動作すること。"""
+        from context_store.lifecycle.manager import SQLiteLifecycleStateStore
+
+        store = SQLiteLifecycleStateStore(db_path=sqlite_db_with_migrations)
+
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        wal_state = WalState(
+            wal_failure_count=5,
+            wal_last_failure_ts=now,
+            wal_last_checkpoint_result="PASSIVE_FAILED",
+            wal_last_observed_size_bytes=50 * 1024 * 1024,
+            wal_consecutive_passive_failures=3,
+            wal_failure_window=[now],
+        )
+        await store.save_wal_state(wal_state)
+
+        loaded = await store.load_wal_state()
+        assert loaded.wal_failure_count == 5
+        assert loaded.wal_consecutive_passive_failures == 3
+        assert loaded.wal_last_checkpoint_result == "PASSIVE_FAILED"
+        assert loaded.wal_last_observed_size_bytes == 50 * 1024 * 1024
+        assert len(loaded.wal_failure_window) == 1
+
+    async def test_save_state_requires_correct_token(self, sqlite_db_with_migrations):
+        """正しいトークンがないと save_state が失敗することを確認。"""
+        from context_store.lifecycle.manager import SQLiteLifecycleStateStore
+
+        store = SQLiteLifecycleStateStore(sqlite_db_with_migrations)
 
         token = "owner-token"
         await store.acquire_cleanup_lock(token)

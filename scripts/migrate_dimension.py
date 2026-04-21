@@ -70,6 +70,11 @@ async def migrate(force: bool = False) -> int:
                     )
                     await conn.commit()
                 logger.info("vectors_metadata updated successfully.")
+
+                # Invalidate stale dimension cache in the storage adapter by recreating it.
+                await storage.dispose()
+                storage = await _create_storage_adapter(settings)
+                logger.info("Storage adapter re-initialized with new dimension.")
             except Exception as e:
                 logger.error(f"Failed to update vectors_metadata: {e}")
                 logger.error("Aborting migration to prevent inconsistent state.")

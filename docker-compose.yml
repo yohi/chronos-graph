@@ -11,7 +11,7 @@ services:
     environment:
       - UV_FROZEN=1
       - UV_SYSTEM_PYTHON=1
-    command: ["bash", "-c", "export PATH=/workspaces/chronos-graph/.venv/bin:$PATH && ruff check --no-cache src/ tests/ scripts/ && ruff format --check --no-cache src/ tests/ scripts/ && mypy --cache-dir=/tmp/.mypy_cache src/ tests/ scripts/"]
+    command: ["bash", "-c", "export PATH=/workspaces/chronos-graph/.venv/bin:$PATH && ruff check src/ tests/ scripts/ && ruff format --check src/ tests/ scripts/ && mypy src/ tests/ scripts/"]
     profiles:
       - lint
 

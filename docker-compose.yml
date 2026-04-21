@@ -6,8 +6,12 @@ services:
     user: "1000:1000"
     volumes:
       - .:/workspaces/chronos-graph
+      - /workspaces/chronos-graph/.venv
     working_dir: /workspaces/chronos-graph
-    command: ["bash", "-c", "ruff check --no-cache src/ tests/ && ruff format --no-cache src/ tests/ && mypy --cache-dir=/tmp/.mypy_cache src/"]
+    environment:
+      - UV_FROZEN=1
+      - UV_SYSTEM_PYTHON=1
+    command: ["bash", "-c", "export PATH=/workspaces/chronos-graph/.venv/bin:$PATH && ruff check src/ tests/ scripts/ && ruff format --check src/ tests/ scripts/ && mypy src/ tests/ scripts/"]
     profiles:
       - lint
 

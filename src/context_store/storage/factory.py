@@ -164,19 +164,13 @@ class SQLiteCacheCoherenceChecker:
         try:
             import aiosqlite  # type: ignore[import-not-found]
 
-            # Ensure the table exists (only in write mode)
+            # Ensure the database file and schema are initialized (only in write mode).
+            # Note: Table creation is now primarily handled by MigrationRunner (0000_system.sql),
+            # but we keep a check here to ensure the storage is ready for polling.
             if not self._read_only:
-                async with aiosqlite.connect(self._db_path) as conn:
-                    await conn.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS system_metadata (
-                            key        TEXT PRIMARY KEY,
-                            value      TEXT NOT NULL,
-                            updated_at TEXT NOT NULL
-                        )
-                        """
-                    )
-                    await conn.commit()
+                # TODO(refactor): Verify if this explicit connect/pass is still needed
+                # to trigger file creation or if MigrationRunner guarantees it.
+                pass
 
             while True:
                 await asyncio.sleep(self._poll_interval)

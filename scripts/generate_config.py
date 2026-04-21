@@ -22,8 +22,38 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
+from typing import Any, Literal, get_args
+
+# src を sys.path に追加して context_store をインポート可能にする
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+try:
+    from context_store.config import Settings as RealSettings
+except ImportError:
+    # インポート失敗時のフォールバック(スタンドアロン実行用)
+    class SettingsFallback:
+        @property
+        def model_fields(self) -> dict[str, Any]:
+            """イミュータブルな定義を返すプロパティ。"""
+            return {
+                "embedding_provider": type(
+                    "obj",
+                    (),
+                    {
+                        "annotation": Literal["openai", "local-model", "litellm", "custom-api"],
+                        "default": "local-model",
+                    },
+                )
+            }
+
+    # インスタンス化して使用
+    settings: Any = SettingsFallback()
+else:
+    # Pydantic Settings はインスタンス化しても model_fields にアクセス可能
+    settings = RealSettings()
 
 
 def str_to_bool(value: str) -> bool:
@@ -54,27 +84,29 @@ def get_embedding_envs(provider: str) -> dict[str, str]:
         envs["LITELLM_API_BASE"] = "http://localhost:4000"
         envs["LITELLM_MODEL"] = "openai/text-embedding-3-small"
     elif provider == "custom-api":
-        envs["CUSTOM_API_ENDPOINT"] = "http://localhost:8080/v1/embeddings"
+        envs["CUSTOM_API_ENDPOINT"] = os.environ.get(
+            "CUSTOM_API_ENDPOINT", "http://localhost:8080/embed"
+        )
+        envs["CUSTOM_API_MODEL_NAME"] = os.environ.get("CUSTOM_API_MODEL_NAME", "custom-model")
     return envs
 
 
 def build_start_command(
     method: str, uv_from: str | None, python_path: str
 ) -> tuple[str, list[str]]:
-    """MCP サーバーを起動するためのコマンドと引数を構築する。"""
-    if method == "uvx":
+    """起動コマンドと引数を生成する。"""
+    if method == "uv":
         command = "uv"
-        args = ["tool", "run"]
-        # Use provided uv_from or the default (pinned to a commit hash)
-        actual_uv_from = (
-            uv_from
-            or "git+https://github.com/yohi/chronos-graph.git@4666e27f5486ea86c16d7b5a4ec1c58f20d279d6"
-        )
-        args.extend(["--from", actual_uv_from])
+        args = ["run", "--quiet"]
+        if uv_from:
+            args.extend(["--from", uv_from])
         args.append("context-store")
-    elif method == "uv":
-        command = "uv"
-        args = ["run", "context-store"]
+    elif method == "uvx":
+        command = "uvx"
+        args = ["--quiet"]
+        if uv_from:
+            args.extend(["--from", uv_from])
+        args.append("context-store")
     else:
         command = python_path
         args = ["-m", "context_store"]
@@ -87,7 +119,7 @@ def generate_sqlite_config(
     graph: bool,
     method: str = "python",
     uv_from: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """SQLite ライトウェイトモードの設定を生成する。"""
     env = {
         "STORAGE_BACKEND": "sqlite",
@@ -118,7 +150,7 @@ def generate_postgres_config(
     graph: bool,
     method: str = "python",
     uv_from: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """PostgreSQL + Neo4j + Redis フルモードの設定を生成する。"""
     env = {
         "STORAGE_BACKEND": "postgres",
@@ -152,86 +184,59 @@ def generate_postgres_config(
     }
 
 
-def generate_cursor_config(base_config: dict) -> dict:
+def generate_cursor_config(base_config: dict[str, Any]) -> dict[str, Any]:
     """Cursor 用の設定形式に変換する (mcpServers キーがそのまま使える)。"""
     # Cursor は Claude Desktop と同じ形式
     return base_config
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="ChronosGraph MCP クライアント設定を生成する",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
+    """メインエントリポイント。"""
+    # Settings インスタンスから埋め込みプロバイダーの選択肢を取得
+    provider_field = settings.model_fields["embedding_provider"]
+    embedding_choices = list(get_args(provider_field.annotation))
+    if not embedding_choices:
+        # get_args が解決できない場合の明示的なフォールバック
+        embedding_choices = ["openai", "local-model", "litellm", "custom-api"]
+    default_embedding = provider_field.default
+
+    parser = argparse.ArgumentParser(description="ChronosGraph MCP client config generator")
     parser.add_argument(
-        "--backend",
-        choices=["sqlite", "postgres"],
-        default="sqlite",
-        help="ストレージバックエンド (デフォルト: sqlite)",
-    )
-    parser.add_argument(
-        "--output",
-        choices=["claude", "cursor", "generic"],
-        default="generic",
-        help="出力形式 (デフォルト: generic)",
+        "--backend", choices=["sqlite", "postgres"], default="sqlite", help="Storage backend"
     )
     parser.add_argument(
         "--embedding",
-        choices=["openai", "local-model", "litellm", "custom-api"],
-        default="openai",
-        help="埋め込みプロバイダー (デフォルト: openai)",
+        choices=embedding_choices,
+        default=default_embedding,
+        help=f"Embedding provider (default: {default_embedding})",
     )
+    parser.add_argument("--graph", type=str_to_bool, default=True, help="Enable graph features")
     parser.add_argument(
-        "--graph",
-        type=str_to_bool,
-        default=True,
-        help="グラフ機能を有効にするか (デフォルト: true)",
+        "--method", choices=["python", "uv", "uvx"], default="python", help="Execution method"
     )
+    parser.add_argument("--uv-from", help="Package to run with uv (e.g. chronos-graph)")
     parser.add_argument(
-        "--method",
-        choices=["python", "uv", "uvx"],
-        default="python",
-        help="MCP 起動方法 (デフォルト: python)",
+        "--output", choices=["claude", "cursor"], default="claude", help="Config output format"
     )
-    parser.add_argument(
-        "--uv-from",
-        default=None,
-        help="uvx モード時の --from オプション値 (デフォルト: リポジトリの Git URL)",
-    )
-    parser.add_argument(
-        "--python",
-        default=None,
-        help="使用する Python インタープリタのパス (デフォルト: 自動検出)",
-    )
-    parser.add_argument(
-        "--indent",
-        type=int,
-        default=2,
-        help="JSON インデント幅 (デフォルト: 2)",
-    )
+    parser.add_argument("--indent", type=int, default=2, help="JSON indentation")
+
     args = parser.parse_args()
 
-    # --uv-from requires --method uvx
-    if args.uv_from is not None and args.method != "uvx":
-        parser.error("--uv-from is only supported when --method is set to 'uvx'")
+    python_path = find_python()
 
-    python_path = args.python or find_python()
-    graph_enabled = args.graph
-
-    if args.backend == "postgres":
-        config = generate_postgres_config(
-            python_path, args.embedding, graph_enabled, args.method, args.uv_from
+    if args.backend == "sqlite":
+        config = generate_sqlite_config(
+            python_path, args.embedding, args.graph, args.method, args.uv_from
         )
     else:
-        config = generate_sqlite_config(
-            python_path, args.embedding, graph_enabled, args.method, args.uv_from
+        config = generate_postgres_config(
+            python_path, args.embedding, args.graph, args.method, args.uv_from
         )
 
     if args.output == "cursor":
         config = generate_cursor_config(config)
 
-    print(json.dumps(config, indent=args.indent, ensure_ascii=False))
+    print(json.dumps(config, indent=args.indent))
 
 
 if __name__ == "__main__":

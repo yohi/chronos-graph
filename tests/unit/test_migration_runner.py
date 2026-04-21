@@ -11,6 +11,10 @@ async def test_sqlite_migration_run(tmp_path):
     # 1. Create a migration file for testing
     migrations_dir = tmp_path / "migrations" / "sqlite"
     migrations_dir.mkdir(parents=True)
+    (migrations_dir / "0000_system.sql").write_text(
+        "CREATE TABLE IF NOT EXISTS schema_migrations "
+        "(version TEXT PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
+    )
 
     initial_sql = migrations_dir / "0001_initial.sql"
     initial_sql.write_text("CREATE TABLE test_table (id INTEGER PRIMARY KEY, name TEXT);")
@@ -30,9 +34,12 @@ async def test_sqlite_migration_run(tmp_path):
             assert row is not None
 
         # Check if schema_migrations table exists and has record
-        async with conn.execute("SELECT version FROM schema_migrations") as cursor:
-            row = await cursor.fetchone()
-            assert row[0] == "0001_initial.sql"
+        # Note: 0000_system.sql is applied first, then 0001_initial.sql
+        async with conn.execute("SELECT version FROM schema_migrations ORDER BY version") as cursor:
+            rows = await cursor.fetchall()
+            versions = [r[0] for r in rows]
+            assert "0000_system.sql" in versions
+            assert "0001_initial.sql" in versions
 
 
 @pytest.mark.asyncio
@@ -40,6 +47,10 @@ async def test_migration_idempotency(tmp_path):
     db_path = tmp_path / "test.db"
     migrations_dir = tmp_path / "migrations" / "sqlite"
     migrations_dir.mkdir(parents=True)
+    (migrations_dir / "0000_system.sql").write_text(
+        "CREATE TABLE IF NOT EXISTS schema_migrations "
+        "(version TEXT PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
+    )
 
     initial_sql = migrations_dir / "0001_initial.sql"
     initial_sql.write_text("CREATE TABLE test_table (id INTEGER PRIMARY KEY);")
@@ -80,7 +91,7 @@ async def test_migration_idempotency(tmp_path):
         async with conn.execute(sql) as cursor:
             rows = await cursor.fetchall()
             versions = [r[0] for r in rows]
-            assert versions == ["0001_initial.sql", "0002_second.sql"]
+            assert versions == ["0000_system.sql", "0001_initial.sql", "0002_second.sql"]
 
 
 @pytest.mark.asyncio
@@ -90,6 +101,10 @@ async def test_sqlite_baseline_path(tmp_path):
     # 1. Setup mock migrations directory
     migrations_dir = tmp_path / "migrations_baseline" / "sqlite"
     migrations_dir.mkdir(parents=True)
+    (migrations_dir / "0000_system.sql").write_text(
+        "CREATE TABLE IF NOT EXISTS schema_migrations "
+        "(version TEXT PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
+    )
 
     # Create initial migration files (baseline)
     (migrations_dir / "0001_initial.sql").write_text("CREATE TABLE memories (id TEXT PRIMARY KEY);")
@@ -103,6 +118,12 @@ async def test_sqlite_baseline_path(tmp_path):
     async with aiosqlite.connect(db_path) as conn:
         # 2. Simulate legacy DB: create memories table but NO memory_nodes/edges
         await conn.execute("CREATE TABLE memories (id TEXT PRIMARY KEY, content TEXT);")
+        # Ensure schema_migrations exists for baseline test
+        stmt = (
+            "CREATE TABLE IF NOT EXISTS schema_migrations "
+            "(version TEXT PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
+        )
+        await conn.execute(stmt)
         await conn.commit()
 
         runner = MigrationRunner("sqlite", conn)
@@ -119,7 +140,8 @@ async def test_sqlite_baseline_path(tmp_path):
         async with conn.execute("SELECT version FROM schema_migrations ORDER BY version") as cursor:
             rows = await cursor.fetchall()
             versions = [r[0] for r in rows]
-            # 0001 was baselined, 0002 and 0003 were applied
+            # 0000, 0001 was baselined, 0002 and 0003 were applied
+            assert "0000_system.sql" in versions
             assert "0001_initial.sql" in versions
             assert "0002_graph.sql" in versions
             assert "0003_new.sql" in versions
@@ -143,6 +165,10 @@ async def test_sqlite_full_baseline_path(tmp_path):
     db_path = tmp_path / "test_full_baseline.db"
     migrations_dir = tmp_path / "migrations_full" / "sqlite"
     migrations_dir.mkdir(parents=True)
+    (migrations_dir / "0000_system.sql").write_text(
+        "CREATE TABLE IF NOT EXISTS schema_migrations "
+        "(version TEXT PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
+    )
 
     (migrations_dir / "0001_initial.sql").write_text("CREATE TABLE memories (id TEXT PRIMARY KEY);")
     (migrations_dir / "0002_graph.sql").write_text(
@@ -152,6 +178,11 @@ async def test_sqlite_full_baseline_path(tmp_path):
 
     async with aiosqlite.connect(db_path) as conn:
         # Create all tables beforehand
+        stmt = (
+            "CREATE TABLE IF NOT EXISTS schema_migrations "
+            "(version TEXT PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
+        )
+        await conn.execute(stmt)
         await conn.execute("CREATE TABLE memories (id TEXT PRIMARY KEY);")
         await conn.execute("CREATE TABLE memory_nodes (id TEXT PRIMARY KEY);")
         await conn.execute("CREATE TABLE memory_edges (from_id TEXT);")
@@ -166,4 +197,6 @@ async def test_sqlite_full_baseline_path(tmp_path):
         async with conn.execute("SELECT version FROM schema_migrations ORDER BY version") as cursor:
             rows = await cursor.fetchall()
             versions = [r[0] for r in rows]
-            assert versions == ["0001_initial.sql", "0002_graph.sql"]
+            assert "0000_system.sql" in versions
+            assert "0001_initial.sql" in versions
+            assert "0002_graph.sql" in versions

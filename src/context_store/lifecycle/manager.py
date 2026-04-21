@@ -272,46 +272,9 @@ class SQLiteLifecycleStateStore:
 
     async def _ensure_tables(self, conn: Any) -> None:
         """必要なテーブルを作成する。"""
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS lifecycle_state (
-                id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-                save_count INTEGER NOT NULL DEFAULT 0,
-                last_cleanup_at TIMESTAMP,
-                last_cleanup_cursor_at TIMESTAMP,
-                last_cleanup_id TEXT,
-                cleanup_lock_owner TEXT,
-                cleanup_lock_touched_at TIMESTAMP,
-                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        # カラムが存在しない場合は追加 (移行用)
-        cursor = await conn.execute("PRAGMA table_info('lifecycle_state')")
-        columns = await cursor.fetchall()
-        column_names = [col[1] for col in columns]
-        if "last_cleanup_id" not in column_names:
-            await conn.execute("ALTER TABLE lifecycle_state ADD COLUMN last_cleanup_id TEXT")
-        if "last_cleanup_cursor_at" not in column_names:
-            await conn.execute(
-                "ALTER TABLE lifecycle_state ADD COLUMN last_cleanup_cursor_at TIMESTAMP"
-            )
-        if "cleanup_lock_owner" not in column_names:
-            await conn.execute("ALTER TABLE lifecycle_state ADD COLUMN cleanup_lock_owner TEXT")
-        if "cleanup_lock_touched_at" not in column_names:
-            await conn.execute(
-                "ALTER TABLE lifecycle_state ADD COLUMN cleanup_lock_touched_at TIMESTAMP"
-            )
+        # TODO(refactor): DDL is extracted to 0003_system.sql.
+        # This function should be removed once caller dependencies are updated.
 
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS lifecycle_wal_state (
-                id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-                wal_failure_count INTEGER NOT NULL DEFAULT 0,
-                wal_last_failure_ts TIMESTAMP,
-                wal_last_checkpoint_result TEXT,
-                wal_last_observed_size_bytes INTEGER,
-                wal_consecutive_passive_failures INTEGER NOT NULL DEFAULT 0,
-                wal_failure_window TEXT NOT NULL DEFAULT '[]'
-            )
-        """)
         # 初期レコードが存在しない場合のみ挿入
         await conn.execute("INSERT OR IGNORE INTO lifecycle_state (id) VALUES (1)")
         await conn.execute("INSERT OR IGNORE INTO lifecycle_wal_state (id) VALUES (1)")

@@ -38,6 +38,7 @@ class CustomAPIEmbeddingProvider:
         self,
         endpoint: str,
         dimension: int,
+        model_name: str = "custom-model",
         api_key: str | None = None,
         chunk_size: int = _DEFAULT_CHUNK_SIZE,
         timeout: float = 60.0,
@@ -46,6 +47,7 @@ class CustomAPIEmbeddingProvider:
             raise ValueError("endpoint must be a non-empty string")
         self._endpoint = endpoint
         self._dimension = dimension
+        self._model_name = model_name
         self._api_key = api_key
         self._chunk_size = chunk_size
         self._timeout = timeout
@@ -63,6 +65,11 @@ class CustomAPIEmbeddingProvider:
     def dimension(self) -> int:
         """埋め込みベクトルの次元数を返す。"""
         return self._dimension
+
+    @property
+    def model_name(self) -> str:
+        """モデル名を返す。"""
+        return self._model_name
 
     async def embed(self, text: str) -> list[float]:
         """単一テキストを埋め込みベクトルに変換する。"""
@@ -82,7 +89,7 @@ class CustomAPIEmbeddingProvider:
 
         for chunk_start in range(0, len(texts), self._chunk_size):
             chunk = texts[chunk_start : chunk_start + self._chunk_size]
-            response = await self._post({"texts": chunk})
+            response = await self._post({"texts": chunk, "model": self._model_name})
             if not isinstance(response, Mapping):
                 raise ValueError(
                     'response must be a mapping containing response["embeddings"]; '

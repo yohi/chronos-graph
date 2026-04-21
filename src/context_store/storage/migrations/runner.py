@@ -43,15 +43,19 @@ class MigrationRunner:
         """Check and apply pending migrations."""
         logger.info(f"Checking migrations for {self.db_type}...")
 
-        await self._ensure_migration_table()
-        applied = await self._get_applied_migrations()
+        system_file = self.migrations_dir / "0000_system.sql"
+        if system_file.exists():
+            await self._ensure_system_migration(system_file)
+
+        applied = await self._get_applied_migrations() or set()
 
         # Get all migration files
         files = sorted(self.migrations_dir.glob("*.sql"))
 
-        # Baseline path: if no migrations are applied, check if specific tables exist
-        # to mark corresponding migrations as applied without executing them.
-        if not applied:
+        # Baseline path: if no migrations are applied (other than system),
+        # check if specific tables exist to mark corresponding migrations
+        # as applied without executing them.
+        if not applied or applied == {"0000_system.sql"}:
             await self._handle_baseline(files, applied)
 
         for file_path in files:
@@ -61,6 +65,24 @@ class MigrationRunner:
                 logger.info(f"Applied migration: {version}")
             else:
                 logger.debug(f"Migration already applied: {version}")
+
+    async def _ensure_system_migration(self, file_path: Path) -> None:
+        """Apply system migration if schema_migrations table doesn't exist."""
+        exists = True
+        try:
+            if self.db_type == "sqlite":
+                # For aiosqlite, we must catch the error in __aenter__ of cursor
+                stmt = "SELECT 1 FROM schema_migrations LIMIT 1"
+                async with self.connection.execute(stmt) as cursor:
+                    await cursor.fetchone()
+            else:
+                async with self.connection.acquire() as conn:
+                    await conn.fetch("SELECT 1 FROM schema_migrations LIMIT 1")
+        except Exception:
+            exists = False
+
+        if not exists:
+            await self._apply_migration(file_path)
 
     async def _handle_baseline(self, files: list[Path], applied: set[str]) -> None:
         """Detect existing tables and mark corresponding migrations as applied."""
@@ -121,53 +143,38 @@ class MigrationRunner:
                             "INSERT INTO schema_migrations (version) VALUES ($1)", version
                         )
 
-    async def _ensure_migration_table(self) -> None:
-        """Create schema_migrations table if not exists."""
-        query = """
-        CREATE TABLE IF NOT EXISTS schema_migrations (
-            version TEXT PRIMARY KEY,
-            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
+    async def _get_applied_migrations(self) -> set[str] | None:
+        """Get set of applied migration versions.
+
+        Returns None if schema_migrations table doesn't exist.
         """
-        if self.db_type == "sqlite":
-            await self._ensure_sqlite_table(query)
-        else:
-            await self._ensure_postgres_table(query)
-
-    async def _ensure_sqlite_table(self, query: str) -> None:
-        """Ensure migration table in SQLite."""
-        await self.connection.execute("BEGIN")
-        try:
-            await self.connection.execute(query)
-            await self.connection.commit()
-        except Exception:
-            await self.connection.rollback()
-            raise
-
-    async def _ensure_postgres_table(self, query: str) -> None:
-        """Ensure migration table in PostgreSQL."""
-        async with self.connection.acquire() as conn:
-            await conn.execute(query)
-
-    async def _get_applied_migrations(self) -> set[str]:
-        """Get set of applied migration versions."""
         if self.db_type == "sqlite":
             return await self._get_sqlite_applied()
         return await self._get_postgres_applied()
 
-    async def _get_sqlite_applied(self) -> set[str]:
+    async def _get_sqlite_applied(self) -> set[str] | None:
         """Get applied migrations from SQLite."""
         query = "SELECT version FROM schema_migrations"
-        async with self.connection.execute(query) as cursor:
-            rows = await cursor.fetchall()
-            return {row[0] for row in rows}
+        try:
+            async with self.connection.execute(query) as cursor:
+                rows = await cursor.fetchall()
+                return {row[0] for row in rows}
+        except Exception as e:
+            if "no such table" in str(e).lower():
+                return None
+            raise
 
-    async def _get_postgres_applied(self) -> set[str]:
+    async def _get_postgres_applied(self) -> set[str] | None:
         """Get applied migrations from PostgreSQL."""
         query = "SELECT version FROM schema_migrations"
-        async with self.connection.acquire() as conn:
-            rows = await conn.fetch(query)
-            return {row["version"] for row in rows}
+        try:
+            async with self.connection.acquire() as conn:
+                rows = await conn.fetch(query)
+                return {row["version"] for row in rows}
+        except Exception as e:
+            if "undefined_table" in str(e.__class__).lower() or "does not exist" in str(e).lower():
+                return None
+            raise
 
     async def _apply_migration(self, file_path: Path) -> None:
         """Apply a single migration file in a transaction."""

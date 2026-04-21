@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""
+Migrate vector dimensions by re-embedding all memories.
+Usage: uv run python scripts/migrate_dimension.py [--force]
+"""
+
+import argparse
+import asyncio
+import logging
+import os
+import sys
+
+# Add src to sys.path to ensure we can import context_store
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+try:
+    from context_store.config import Settings
+    from context_store.embedding import create_embedding_provider
+    from context_store.storage.factory import _create_storage_adapter
+    from context_store.storage.protocols import MemoryFilters
+except ImportError as e:
+    print(
+        f"Error: Could not import context_store modules. "
+        f"Make sure you are running from the project root. {e}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", stream=sys.stderr
+)
+logger = logging.getLogger(__name__)
+
+
+async def migrate(force: bool = False) -> int:
+    logger.info("Starting dimension migration...")
+    settings = Settings()
+
+    # Initialize resources to None for safe cleanup in finally block
+    storage = None
+    embedding_provider = None
+
+    try:
+        # We bypass Orchestrator to avoid the dimension check at startup.
+        # We use the private _create_storage_adapter because it's a direct way to
+        # get a storage instance without triggering the system-wide validation
+        # that happens in Orchestrator.initialize().
+        storage = await _create_storage_adapter(settings)
+        embedding_provider = create_embedding_provider(settings)
+
+        stored_dim = await storage.get_vector_dimension()
+        current_dim = embedding_provider.dimension
+        logger.info(f"Storage dimension: {stored_dim}")
+        logger.info(f"Current provider dimension: {current_dim}")
+
+        if stored_dim == current_dim and not force:
+            logger.info(
+                "Dimensions already match. No migration needed. Use --force to re-embed anyway."
+            )
+            return 0
+
+        # Update vectors_metadata for SQLite BEFORE processing memories.
+        # This is necessary because update_memory checks the stored dimension.
+        if settings.storage_backend == "sqlite" and stored_dim != current_dim:
+            logger.info(f"Updating vectors_metadata to dimension {current_dim}...")
+            try:
+                import aiosqlite  # type: ignore
+
+                db_path = os.path.expanduser(settings.sqlite_db_path)
+                async with aiosqlite.connect(db_path) as conn:
+                    await conn.execute("DELETE FROM vectors_metadata")
+                    await conn.execute(
+                        "INSERT INTO vectors_metadata (dimension) VALUES (?)", (current_dim,)
+                    )
+                    await conn.commit()
+                logger.info("vectors_metadata updated successfully.")
+
+                # Invalidate stale dimension cache in the storage adapter by recreating it.
+                await storage.dispose()
+                storage = await _create_storage_adapter(settings)
+                logger.info("Storage adapter re-initialized with new dimension.")
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"Failed to update vectors_metadata: {e}")
+                raise RuntimeError("Aborting migration to prevent inconsistent state.") from e
+
+        logger.info("Fetching memories in batches...")
+
+        success_count = 0
+        failed_count = 0
+        processed_count = 0
+        failed_ids: list[str] = []
+        batch_size = 100
+        offset = 0
+
+        while True:
+            # MemoryFilters(archived=False) returns both active and archived memories.
+            batch = await storage.list_by_filter(
+                MemoryFilters(archived=False, limit=batch_size, offset=offset)
+            )
+
+            if not batch:
+                break
+
+            batch_len = len(batch)
+            logger.info(f"Processing batch: memories {offset + 1} to {offset + batch_len}...")
+
+            for memory in batch:
+                processed_count += 1
+                try:
+                    # Re-embed content
+                    new_embedding = await embedding_provider.embed(memory.content)
+                    # Update in storage (convert memory.id to string to avoid UUID binding error)
+                    success = await storage.update_memory(
+                        str(memory.id), {"embedding": new_embedding}
+                    )
+                    if success:
+                        success_count += 1
+                    else:
+                        logger.warning(f"Failed to update memory {memory.id}")
+                        failed_count += 1
+                        if len(failed_ids) < 5:
+                            failed_ids.append(str(memory.id))
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"Error re-embedding memory {memory.id}: {e}")
+                    failed_count += 1
+                    if len(failed_ids) < 5:
+                        failed_ids.append(str(memory.id))
+
+            if batch_len < batch_size:
+                break
+            offset += batch_size
+
+        if processed_count == 0:
+            logger.info("No memories found in storage.")
+            return 0
+
+        logger.info("Migration finished.")
+        logger.info(f"Total processed: {processed_count}")
+        logger.info(f"Successfully migrated: {success_count}")
+        if failed_count > 0:
+            logger.warning(f"Failed to migrate: {failed_count}")
+            sample_size = min(5, len(failed_ids))
+            logger.warning(f"Sample failed IDs: {failed_ids[:sample_size]}")
+
+        return failed_count
+
+    finally:
+        if storage is not None:
+            await storage.dispose()
+        if embedding_provider is not None:
+            await embedding_provider.close()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Migrate vector dimensions by re-embedding")
+    parser.add_argument(
+        "--force", action="store_true", help="Force re-embedding even if dimensions match"
+    )
+    args = parser.parse_args()
+
+    try:
+        failed_count = asyncio.run(migrate(force=args.force))
+        if failed_count > 0:
+            sys.exit(1)
+    except KeyboardInterrupt:
+        logger.info("Migration interrupted by user.")
+        sys.exit(1)
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"Migration failed with error: {e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

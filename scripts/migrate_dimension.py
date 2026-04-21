@@ -81,48 +81,61 @@ async def migrate(force: bool = False) -> int:
                 logger.info("Storage adapter re-initialized with new dimension.")
             except Exception as e:  # noqa: BLE001
                 logger.error(f"Failed to update vectors_metadata: {e}")
-                logger.error("Aborting migration to prevent inconsistent state.")
-                sys.exit(1)
+                raise RuntimeError("Aborting migration to prevent inconsistent state.") from e
 
-        logger.info("Fetching all memories (active and archived)...")
-        # MemoryFilters(archived=False) returns both active and archived memories.
-        all_memories = await storage.list_by_filter(MemoryFilters(archived=False))
-
-        if not all_memories:
-            logger.info("No memories found in storage.")
-            return 0
-
-        total = len(all_memories)
-        logger.info(f"Found {total} memories to migrate.")
+        logger.info("Fetching memories in batches...")
 
         success_count = 0
         failed_count = 0
+        processed_count = 0
         failed_ids: list[str] = []
+        batch_size = 100
+        offset = 0
 
-        for i, memory in enumerate(all_memories):
-            if i % 10 == 0 or i == total - 1:
-                logger.info(f"Processing {i + 1}/{total} (ID: {memory.id})")
+        while True:
+            # MemoryFilters(archived=False) returns both active and archived memories.
+            batch = await storage.list_by_filter(
+                MemoryFilters(archived=False, limit=batch_size, offset=offset)
+            )
 
-            try:
-                # Re-embed content
-                new_embedding = await embedding_provider.embed(memory.content)
-                # Update in storage (convert memory.id to string to avoid UUID binding error)
-                success = await storage.update_memory(str(memory.id), {"embedding": new_embedding})
-                if success:
-                    success_count += 1
-                else:
-                    logger.warning(f"Failed to update memory {memory.id}")
+            if not batch:
+                break
+
+            batch_len = len(batch)
+            logger.info(f"Processing batch: memories {offset + 1} to {offset + batch_len}...")
+
+            for memory in batch:
+                processed_count += 1
+                try:
+                    # Re-embed content
+                    new_embedding = await embedding_provider.embed(memory.content)
+                    # Update in storage (convert memory.id to string to avoid UUID binding error)
+                    success = await storage.update_memory(
+                        str(memory.id), {"embedding": new_embedding}
+                    )
+                    if success:
+                        success_count += 1
+                    else:
+                        logger.warning(f"Failed to update memory {memory.id}")
+                        failed_count += 1
+                        if len(failed_ids) < 5:
+                            failed_ids.append(str(memory.id))
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"Error re-embedding memory {memory.id}: {e}")
                     failed_count += 1
                     if len(failed_ids) < 5:
                         failed_ids.append(str(memory.id))
-            except Exception as e:  # noqa: BLE001
-                logger.error(f"Error re-embedding memory {memory.id}: {e}")
-                failed_count += 1
-                if len(failed_ids) < 5:
-                    failed_ids.append(str(memory.id))
+
+            if batch_len < batch_size:
+                break
+            offset += batch_size
+
+        if processed_count == 0:
+            logger.info("No memories found in storage.")
+            return 0
 
         logger.info("Migration finished.")
-        logger.info(f"Total processed: {total}")
+        logger.info(f"Total processed: {processed_count}")
         logger.info(f"Successfully migrated: {success_count}")
         if failed_count > 0:
             logger.warning(f"Failed to migrate: {failed_count}")

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import pytest_asyncio
 
 from context_store.ingestion.task_registry import TaskRegistry
 from context_store.lifecycle.manager import (
@@ -22,7 +23,7 @@ from tests.unit.conftest import make_settings
 pytestmark = pytest.mark.asyncio
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def sqlite_db_with_migrations():
     """一時的な SQLite DB を作成し、マイグレーションを実行してパスを返す。"""
     from pathlib import Path
@@ -746,16 +747,6 @@ class TestSQLiteLifecycleStateStore:
         # 手動でスタルなロック状態を作る
         old_time = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
         async with aiosqlite.connect(db_path) as conn:
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS lifecycle_state (
-                    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-                    save_count INTEGER NOT NULL DEFAULT 0,
-                    last_cleanup_at TIMESTAMP,
-                    cleanup_lock_owner TEXT,
-                    cleanup_lock_touched_at TIMESTAMP,
-                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
             await conn.execute(
                 "INSERT OR REPLACE INTO lifecycle_state "
                 "(id, cleanup_lock_owner, cleanup_lock_touched_at, updated_at) "

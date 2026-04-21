@@ -57,7 +57,7 @@ async def migrate(force: bool = False) -> int:
 
         # Update vectors_metadata for SQLite BEFORE processing memories.
         # This is necessary because update_memory checks the stored dimension.
-        if settings.storage_backend == "sqlite":
+        if settings.storage_backend == "sqlite" and stored_dim != current_dim:
             logger.info(f"Updating vectors_metadata to dimension {current_dim}...")
             try:
                 import aiosqlite  # type: ignore
@@ -88,7 +88,7 @@ async def migrate(force: bool = False) -> int:
 
         success_count = 0
         failed_count = 0
-        failed_ids = []
+        failed_ids: list[str] = []
 
         for i, memory in enumerate(all_memories):
             if i % 10 == 0 or i == total - 1:
@@ -104,11 +104,13 @@ async def migrate(force: bool = False) -> int:
                 else:
                     logger.warning(f"Failed to update memory {memory.id}")
                     failed_count += 1
-                    failed_ids.append(str(memory.id))
+                    if len(failed_ids) < 5:
+                        failed_ids.append(str(memory.id))
             except Exception as e:  # noqa: BLE001
                 logger.error(f"Error re-embedding memory {memory.id}: {e}")
                 failed_count += 1
-                failed_ids.append(str(memory.id))
+                if len(failed_ids) < 5:
+                    failed_ids.append(str(memory.id))
 
         logger.info("Migration finished.")
         logger.info(f"Total processed: {total}")

@@ -36,14 +36,18 @@ async def migrate(force: bool = False) -> int:
     logger.info("Starting dimension migration...")
     settings = Settings()
 
-    # We bypass Orchestrator to avoid the dimension check at startup.
-    # We use the private _create_storage_adapter because it's a direct way to
-    # get a storage instance without triggering the system-wide validation
-    # that happens in Orchestrator.initialize().
-    storage = await _create_storage_adapter(settings)
-    embedding_provider = create_embedding_provider(settings)
+    # Initialize resources to None for safe cleanup in finally block
+    storage = None
+    embedding_provider = None
 
     try:
+        # We bypass Orchestrator to avoid the dimension check at startup.
+        # We use the private _create_storage_adapter because it's a direct way to
+        # get a storage instance without triggering the system-wide validation
+        # that happens in Orchestrator.initialize().
+        storage = await _create_storage_adapter(settings)
+        embedding_provider = create_embedding_provider(settings)
+
         stored_dim = await storage.get_vector_dimension()
         current_dim = embedding_provider.dimension
         logger.info(f"Storage dimension: {stored_dim}")
@@ -128,8 +132,10 @@ async def migrate(force: bool = False) -> int:
         return failed_count
 
     finally:
-        await storage.dispose()
-        await embedding_provider.close()
+        if storage is not None:
+            await storage.dispose()
+        if embedding_provider is not None:
+            await embedding_provider.close()
 
 
 def main() -> None:

@@ -34,6 +34,7 @@ When performing tasks, actively invoke the `memory_save` tool according to the f
 </instructions>
 
 <memory_rules>
+<!-- Note: The following tags correspond to MEMORY_TYPE_TAGS in src/context_store/models/memory.py -->
 - **Format for Semantic (Concepts/Knowledge):**
   When saving Semantic information via `memory_save`, follow this structure:
   - Prefix the text with `[🧠 Semantic]`.

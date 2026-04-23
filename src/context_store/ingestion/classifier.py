@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass
 
 from context_store.ingestion.adapters import RawContent
-from context_store.models.memory import MemoryType, SourceType
+from context_store.models.memory import MEMORY_TYPE_TAGS, MemoryType, SourceType
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ _TIMESTAMP_PATTERN = re.compile(
 
 # 明示的なタグ
 _EPISODIC_TAG_PATTERNS = [
-    r"\[📜 Episodic\]",
+    re.escape(MEMORY_TYPE_TAGS[MemoryType.EPISODIC]),
     r"\[Episodic\]",
 ]
 
@@ -93,7 +93,10 @@ _SEMANTIC_PATTERNS = [
 ]
 
 _SEMANTIC_RE = re.compile("|".join(_SEMANTIC_PATTERNS))
-_SEMANTIC_TAG_RE = re.compile(r"\[🧠 Semantic\]|\[Semantic\]", re.IGNORECASE)
+_SEMANTIC_TAG_RE = re.compile(
+    f"{re.escape(MEMORY_TYPE_TAGS[MemoryType.SEMANTIC])}|" + r"\[Semantic\]",
+    re.IGNORECASE,
+)
 
 # ===========================================================================
 # 分類ルール: PROCEDURAL パターン
@@ -114,7 +117,10 @@ _PROCEDURAL_PATTERNS = [
 ]
 
 _PROCEDURAL_RE = re.compile("|".join(_PROCEDURAL_PATTERNS), re.IGNORECASE | re.MULTILINE)
-_PROCEDURAL_TAG_RE = re.compile(r"\[🕒 Procedural\]|\[Procedural\]", re.IGNORECASE)
+_PROCEDURAL_TAG_RE = re.compile(
+    f"{re.escape(MEMORY_TYPE_TAGS[MemoryType.PROCEDURAL])}|" + r"\[Procedural\]",
+    re.IGNORECASE,
+)
 
 # コマンド列の検出(複数のコマンドが連続する)
 _COMMAND_LINE_RE = re.compile(

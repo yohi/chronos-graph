@@ -13,6 +13,14 @@ class MemoryType(str, Enum):
     PROCEDURAL = "procedural"
 
 
+# 記憶種別に対応する明示的なタグのプレフィックス
+MEMORY_TYPE_TAGS = {
+    MemoryType.SEMANTIC: "[🧠 Semantic]",
+    MemoryType.PROCEDURAL: "[🕒 Procedural]",
+    MemoryType.EPISODIC: "[📜 Episodic]",
+}
+
+
 class SourceType(str, Enum):
     CONVERSATION = "conversation"
     MANUAL = "manual"

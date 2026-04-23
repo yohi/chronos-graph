@@ -8,7 +8,7 @@ import pytest
 
 from context_store.ingestion.adapters import RawContent
 from context_store.ingestion.classifier import Classifier
-from context_store.models.memory import MemoryType, SourceType
+from context_store.models.memory import MEMORY_TYPE_TAGS, MemoryType, SourceType
 
 
 def _make_raw(content: str, source_type: SourceType = SourceType.MANUAL) -> RawContent:
@@ -234,8 +234,8 @@ def test_classification_result_non_fallback_normal_score() -> None:
 
 
 def test_classifier_explicit_episodic_tag() -> None:
-    """[📜 Episodic] タグによる分類。"""
-    raw = _make_raw("[📜 Episodic]\n新しい機能を追加しました。")
+    """明示的な [📜 Episodic] タグによる分類。"""
+    raw = _make_raw(f"{MEMORY_TYPE_TAGS[MemoryType.EPISODIC]}\n昨日の会議で決定しました。")
     classifier = Classifier()
     result = classifier.classify(raw)
 
@@ -245,7 +245,7 @@ def test_classifier_explicit_episodic_tag() -> None:
 
 def test_classifier_explicit_semantic_tag() -> None:
     """[🧠 Semantic] タグによる分類。"""
-    raw = _make_raw("[🧠 Semantic]\nこのプロジェクトは Python で書かれています。")
+    raw = _make_raw(f"{MEMORY_TYPE_TAGS[MemoryType.SEMANTIC]}\nこれはシステムの仕様です。")
     classifier = Classifier()
     result = classifier.classify(raw)
 
@@ -255,7 +255,7 @@ def test_classifier_explicit_semantic_tag() -> None:
 
 def test_classifier_explicit_procedural_tag() -> None:
     """[🕒 Procedural] タグによる分類。"""
-    raw = _make_raw("[🕒 Procedural]\nセットアップ方法を説明します。")
+    raw = _make_raw(f"{MEMORY_TYPE_TAGS[MemoryType.PROCEDURAL]}\nセットアップ方法を説明します。")
     classifier = Classifier()
     result = classifier.classify(raw)
 
@@ -266,7 +266,9 @@ def test_classifier_explicit_procedural_tag() -> None:
 def test_classifier_explicit_tag_overrides_other_patterns() -> None:
     """明示的なタグは、中身の内容(例: 過去形)よりも優先される。"""
     # 中身は「した(Episodic)」だが、タグは [🧠 Semantic]
-    raw = _make_raw("[🧠 Semantic]\n過去の設計を分析した結果をまとめました。")
+    raw = _make_raw(
+        f"{MEMORY_TYPE_TAGS[MemoryType.SEMANTIC]}\n過去の設計を分析した結果をまとめました。"
+    )
     classifier = Classifier()
     result = classifier.classify(raw)
 

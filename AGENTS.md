@@ -20,7 +20,7 @@ As an agent, you must utilize the following two tools selectively for saving mem
 
 ### Memory Format (Output Rules)
 
-To ensure clarity and high visibility in long-term memory, always use the following emoji-prefixed tags at the beginning of your `memory_save` content:
+To ensure clarity and high visibility in long-term memory, you should generally use the following emoji-prefixed tags at the beginning of your `memory_save` content (unless specified otherwise):
 
 -   **[📜 Episodic]**: For events, session logs, and chronological experiences.
 -   **[🧠 Semantic]**: For knowledge, concepts, user preferences, and project rules.

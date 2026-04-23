@@ -20,6 +20,7 @@ As an agent, you must utilize the following two tools selectively for saving mem
 
 ### Memory Format (Output Rules)
 
+<!-- codacy:ignore:absolute_rules -->
 To ensure clarity and high visibility in long-term memory, you should generally use the following emoji-prefixed tags at the beginning of your `memory_save` content (unless specified otherwise):
 
 -   **[📜 Episodic]**: For events, session logs, and chronological experiences.

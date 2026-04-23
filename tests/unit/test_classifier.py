@@ -233,33 +233,21 @@ def test_classification_result_non_fallback_normal_score() -> None:
 # ===========================================================================
 
 
-def test_classifier_explicit_episodic_tag() -> None:
-    """明示的な [📜 Episodic] タグによる分類。"""
-    raw = _make_raw(f"{MEMORY_TYPE_TAGS[MemoryType.EPISODIC]}\n昨日の会議で決定しました。")
+@pytest.mark.parametrize(
+    "mem_type, sample_text",
+    [
+        (MemoryType.EPISODIC, "昨日の会議で決定しました。"),
+        (MemoryType.SEMANTIC, "これはシステムの仕様です。"),
+        (MemoryType.PROCEDURAL, "セットアップ方法を説明します。"),
+    ],
+)
+def test_classifier_explicit_tags(mem_type: MemoryType, sample_text: str) -> None:
+    """明示的なタグによる分類（各メモリタイプ）。"""
+    raw = _make_raw(f"{MEMORY_TYPE_TAGS[mem_type]}\n{sample_text}")
     classifier = Classifier()
     result = classifier.classify(raw)
 
-    assert result.memory_type == MemoryType.EPISODIC
-    assert result.confidence == pytest.approx(1.0)
-
-
-def test_classifier_explicit_semantic_tag() -> None:
-    """[🧠 Semantic] タグによる分類。"""
-    raw = _make_raw(f"{MEMORY_TYPE_TAGS[MemoryType.SEMANTIC]}\nこれはシステムの仕様です。")
-    classifier = Classifier()
-    result = classifier.classify(raw)
-
-    assert result.memory_type == MemoryType.SEMANTIC
-    assert result.confidence == pytest.approx(1.0)
-
-
-def test_classifier_explicit_procedural_tag() -> None:
-    """[🕒 Procedural] タグによる分類。"""
-    raw = _make_raw(f"{MEMORY_TYPE_TAGS[MemoryType.PROCEDURAL]}\nセットアップ方法を説明します。")
-    classifier = Classifier()
-    result = classifier.classify(raw)
-
-    assert result.memory_type == MemoryType.PROCEDURAL
+    assert result.memory_type == mem_type
     assert result.confidence == pytest.approx(1.0)
 
 

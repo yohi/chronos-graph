@@ -61,12 +61,21 @@ _TIMESTAMP_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# 明示的なタグ
+_EPISODIC_TAG_PATTERNS = [
+    r"\[📜 Episodic\]",
+    r"\[Episodic\]",
+]
+
 _EPISODIC_VERB_RE = re.compile("|".join(_EPISODIC_VERB_PATTERNS), re.IGNORECASE)
+_EPISODIC_TAG_RE = re.compile("|".join(_EPISODIC_TAG_PATTERNS), re.IGNORECASE)
 
 # ===========================================================================
 # 分類ルール: SEMANTIC パターン
 # ===========================================================================
 _SEMANTIC_PATTERNS = [
+    r"\[🧠 Semantic\]",
+    r"\[Semantic\]",
     r"とは",  # 〜とは
     r"という",  # 〜という概念
     r"の仕様",  # 〜の仕様は
@@ -86,11 +95,14 @@ _SEMANTIC_PATTERNS = [
 ]
 
 _SEMANTIC_RE = re.compile("|".join(_SEMANTIC_PATTERNS))
+_SEMANTIC_TAG_RE = re.compile(r"\[🧠 Semantic\]|\[Semantic\]", re.IGNORECASE)
 
 # ===========================================================================
 # 分類ルール: PROCEDURAL パターン
 # ===========================================================================
 _PROCEDURAL_PATTERNS = [
+    r"\[🕒 Procedural\]",
+    r"\[Procedural\]",
     r"する方法",  # 〜する方法
     r"のやり方",
     r"手順",  # 手順:
@@ -106,6 +118,7 @@ _PROCEDURAL_PATTERNS = [
 ]
 
 _PROCEDURAL_RE = re.compile("|".join(_PROCEDURAL_PATTERNS), re.IGNORECASE | re.MULTILINE)
+_PROCEDURAL_TAG_RE = re.compile(r"\[🕒 Procedural\]|\[Procedural\]", re.IGNORECASE)
 
 # コマンド列の検出(複数のコマンドが連続する)
 _COMMAND_LINE_RE = re.compile(
@@ -128,6 +141,10 @@ def _score_episodic(content: str, source_type: SourceType) -> float:
     """EPISODIC スコアを計算する。"""
     score = 0.0
 
+    # 明示的なタグ
+    if _EPISODIC_TAG_RE.search(content):
+        score += 10.0
+
     # 会話ログ由来
     if source_type == SourceType.CONVERSATION:
         score += 3.0
@@ -147,6 +164,10 @@ def _score_semantic(content: str, source_type: SourceType) -> float:
     """SEMANTIC スコアを計算する。"""
     score = 0.0
 
+    # 明示的なタグ
+    if _SEMANTIC_TAG_RE.search(content):
+        score += 10.0
+
     # URL/ドキュメント由来
     if source_type == SourceType.URL:
         score += 2.0
@@ -161,6 +182,10 @@ def _score_semantic(content: str, source_type: SourceType) -> float:
 def _score_procedural(content: str, source_type: SourceType) -> float:
     """PROCEDURAL スコアを計算する。"""
     score = 0.0
+
+    # 明示的なタグ
+    if _PROCEDURAL_TAG_RE.search(content):
+        score += 10.0
 
     # 手順・ステップパターン
     matches = _PROCEDURAL_RE.findall(content)

@@ -226,3 +226,49 @@ def test_classification_result_non_fallback_normal_score() -> None:
 
     assert result.is_fallback is False
     assert result.importance_score >= 0.5  # ペナルティなし
+
+
+# ===========================================================================
+# 明示的タグ (Emoji) テスト
+# ===========================================================================
+
+
+def test_classifier_explicit_episodic_tag() -> None:
+    """[📜 Episodic] タグによる分類。"""
+    raw = _make_raw("[📜 Episodic]\n新しい機能を追加しました。")
+    classifier = Classifier()
+    result = classifier.classify(raw)
+
+    assert result.memory_type == MemoryType.EPISODIC
+    assert result.confidence == pytest.approx(1.0)
+
+
+def test_classifier_explicit_semantic_tag() -> None:
+    """[🧠 Semantic] タグによる分類。"""
+    raw = _make_raw("[🧠 Semantic]\nこのプロジェクトは Python で書かれています。")
+    classifier = Classifier()
+    result = classifier.classify(raw)
+
+    assert result.memory_type == MemoryType.SEMANTIC
+    assert result.confidence == pytest.approx(1.0)
+
+
+def test_classifier_explicit_procedural_tag() -> None:
+    """[🕒 Procedural] タグによる分類。"""
+    raw = _make_raw("[🕒 Procedural]\nセットアップ方法を説明します。")
+    classifier = Classifier()
+    result = classifier.classify(raw)
+
+    assert result.memory_type == MemoryType.PROCEDURAL
+    assert result.confidence == pytest.approx(1.0)
+
+
+def test_classifier_explicit_tag_overrides_other_patterns() -> None:
+    """明示的なタグは、中身の内容（例：過去形）よりも優先される。"""
+    # 中身は「した（Episodic）」だが、タグは [🧠 Semantic]
+    raw = _make_raw("[🧠 Semantic]\n過去の設計を分析した結果をまとめました。")
+    classifier = Classifier()
+    result = classifier.classify(raw)
+
+    assert result.memory_type == MemoryType.SEMANTIC
+    assert result.is_fallback is False

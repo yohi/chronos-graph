@@ -74,8 +74,6 @@ _EPISODIC_TAG_RE = re.compile("|".join(_EPISODIC_TAG_PATTERNS), re.IGNORECASE)
 # 分類ルール: SEMANTIC パターン
 # ===========================================================================
 _SEMANTIC_PATTERNS = [
-    r"\[🧠 Semantic\]",
-    r"\[Semantic\]",
     r"とは",  # 〜とは
     r"という",  # 〜という概念
     r"の仕様",  # 〜の仕様は
@@ -101,8 +99,6 @@ _SEMANTIC_TAG_RE = re.compile(r"\[🧠 Semantic\]|\[Semantic\]", re.IGNORECASE)
 # 分類ルール: PROCEDURAL パターン
 # ===========================================================================
 _PROCEDURAL_PATTERNS = [
-    r"\[🕒 Procedural\]",
-    r"\[Procedural\]",
     r"する方法",  # 〜する方法
     r"のやり方",
     r"手順",  # 手順:

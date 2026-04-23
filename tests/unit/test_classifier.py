@@ -264,8 +264,8 @@ def test_classifier_explicit_procedural_tag() -> None:
 
 
 def test_classifier_explicit_tag_overrides_other_patterns() -> None:
-    """明示的なタグは、中身の内容（例：過去形）よりも優先される。"""
-    # 中身は「した（Episodic）」だが、タグは [🧠 Semantic]
+    """明示的なタグは、中身の内容(例: 過去形)よりも優先される。"""
+    # 中身は「した(Episodic)」だが、タグは [🧠 Semantic]
     raw = _make_raw("[🧠 Semantic]\n過去の設計を分析した結果をまとめました。")
     classifier = Classifier()
     result = classifier.classify(raw)

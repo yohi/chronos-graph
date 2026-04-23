@@ -46,7 +46,7 @@ When performing tasks, actively invoke the `memory_save` tool according to the f
   - Always include a pair of "Trigger Condition (When to apply)" and "Steps (Specific actions)".
   - Use numbered steps (1. 2. 3. ...) for the procedure.
   - Example: `[🕒 Procedural] When pytest fails with ModuleNotFoundError: 1. Verify execution inside devcontainer 2. Reinstall dependencies via 'uv sync' 3. Ensure 'src' is in PYTHONPATH`
-</memory_rules>
+
 - **No Fear of Duplication:**
   If a previously saved rule or knowledge is updated, simply save the latest state using `memory_save`. The backend Deduplicator (with similarity >= 0.90) will automatically create a `SUPERSEDES` edge to integrate and modernize the memory.
 </memory_rules>

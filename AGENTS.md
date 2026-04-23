@@ -18,6 +18,14 @@ As an agent, you must utilize the following two tools selectively for saving mem
     - Invoke this tool when the conversation becomes long (approx. 8,000 characters) or at logical task boundaries.
     - **Note**: This tool only reports acceptance (Receipt) immediately; the actual saving process occurs asynchronously in the background. Therefore, saved data may not be searchable immediately after the tool returns. If taking actions dependent on saved data, allow sufficient time or wait until explicit completion is confirmed.
 
+### Memory Format (Output Rules)
+
+To ensure clarity and high visibility in long-term memory, apply the following emoji-prefixed tags to your `memory_save` content whenever you are not following a more specific project-mandated format:
+
+-   **[📜 Episodic]**: For events, session logs, and chronological experiences.
+-   **[🧠 Semantic]**: For knowledge, concepts, user preferences, and project rules.
+-   **[🕒 Procedural]**: For step-by-step procedures, troubleshooting guides, and command sequences.
+
 ## Environment
 
 **Package manager**: uv

@@ -8,7 +8,7 @@ import pytest
 
 from context_store.ingestion.adapters import RawContent
 from context_store.ingestion.classifier import Classifier
-from context_store.models.memory import MemoryType, SourceType
+from context_store.models.memory import MEMORY_TYPE_TAGS, MemoryType, SourceType
 
 
 def _make_raw(content: str, source_type: SourceType = SourceType.MANUAL) -> RawContent:
@@ -226,3 +226,39 @@ def test_classification_result_non_fallback_normal_score() -> None:
 
     assert result.is_fallback is False
     assert result.importance_score >= 0.5  # ペナルティなし
+
+
+# ===========================================================================
+# 明示的タグ (Emoji) テスト
+# ===========================================================================
+
+
+@pytest.mark.parametrize(
+    "mem_type, sample_text",
+    [
+        (MemoryType.EPISODIC, "昨日の会議で決定しました。"),
+        (MemoryType.SEMANTIC, "これはシステムの仕様です。"),
+        (MemoryType.PROCEDURAL, "セットアップ方法を説明します。"),
+    ],
+)
+def test_classifier_explicit_tags(mem_type: MemoryType, sample_text: str) -> None:
+    """明示的なタグによる分類（各メモリタイプ）。"""
+    raw = _make_raw(f"{MEMORY_TYPE_TAGS[mem_type]}\n{sample_text}")
+    classifier = Classifier()
+    result = classifier.classify(raw)
+
+    assert result.memory_type == mem_type
+    assert result.confidence == pytest.approx(1.0)
+
+
+def test_classifier_explicit_tag_overrides_other_patterns() -> None:
+    """明示的なタグは、中身の内容(例: 過去形)よりも優先される。"""
+    # 中身は「した(Episodic)」だが、タグは [🧠 Semantic]
+    raw = _make_raw(
+        f"{MEMORY_TYPE_TAGS[MemoryType.SEMANTIC]}\n過去の設計を分析した結果をまとめました。"
+    )
+    classifier = Classifier()
+    result = classifier.classify(raw)
+
+    assert result.memory_type == MemoryType.SEMANTIC
+    assert result.is_fallback is False

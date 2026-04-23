@@ -130,7 +130,7 @@ REDIS_URL=redis://localhost:6379
 ```bash
 # Docker Compose で起動（http://localhost:8000 でアクセス可能）
 docker compose up -d chronos-dashboard
-```bash
+
 # または直接起動
 uv run python -m context_store.dashboard.api_server
 ```

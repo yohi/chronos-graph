@@ -27,6 +27,7 @@ wheels/
 # Type checker and linter caches
 .mypy_cache/
 .ruff_cache/
+.dmypy.json
 
 # Testing
 .pytest_cache/

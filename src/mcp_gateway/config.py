@@ -43,7 +43,7 @@ class GatewaySettings(BaseSettings):
     @classmethod
     def _policy_path_must_exist(cls, v: Path) -> Path:
         """起動時にポリシーファイルの存在を確認する (fail-fast)"""
-        if not v.exists():
+        if not v.is_file():
             raise ValueError(f"policy_path が存在しません: {v}")
         return v
 

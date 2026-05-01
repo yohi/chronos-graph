@@ -50,6 +50,16 @@ class TestSettings:
             GatewaySettings()
         assert "policy_path が存在しません" in str(excinfo.value)
 
+    def test_policy_path_must_be_file_not_dir(self, tmp_path, monkeypatch):
+        a_dir = tmp_path / "subdir"
+        a_dir.mkdir()
+        monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(a_dir))
+        from mcp_gateway.config import GatewaySettings
+
+        with pytest.raises(ValidationError) as excinfo:
+            GatewaySettings()
+        assert "policy_path が存在しません" in str(excinfo.value)
+
     def test_loads_from_env(self, tmp_path, monkeypatch):
         policy = tmp_path / "intents.yaml"
         policy.write_text("version: 1\noutput_filters: {}\nintents: {}\nagents: {}\n")

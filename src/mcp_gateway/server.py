@@ -1,0 +1,33 @@
+import sys
+
+from mcp_gateway.audit import audit_logger
+from mcp_gateway.config import GatewaySettings
+
+
+def run_gateway() -> None:
+    """
+    Main startup routine for the MCP Gateway.
+    In a real implementation, this would start the uvicorn server.
+    """
+    settings = GatewaySettings()
+
+    audit_logger.log("startup", host=settings.host, port=settings.port)
+
+    # 本来はここで FastAPI アプリを uvicorn で起動する
+    # 例:
+    # import uvicorn
+    # from mcp_gateway.app import app
+    # uvicorn.run(app, host=settings.host, port=settings.port)
+
+    print(f"Starting MCP Gateway on {settings.host}:{settings.port}...")
+
+    # 簡易的な待機処理（実働時は uvicorn がブロックする）
+    # asyncio.run(asyncio.sleep(1))
+
+
+if __name__ == "__main__":
+    try:
+        run_gateway()
+    except Exception as e:
+        audit_logger.log("error", message=str(e))
+        sys.exit(1)

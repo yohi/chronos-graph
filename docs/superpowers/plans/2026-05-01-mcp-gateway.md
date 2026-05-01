@@ -349,9 +349,9 @@ Environment variables are prefixed `MCP_GATEWAY_`.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import SecretStr
+from pydantic import SecretStr, model_serializer
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -391,6 +391,22 @@ class GatewaySettings(BaseSettings):
 
     # ── audit ────────────────────────────────────────────────────
     audit_log_level: Literal["INFO", "DEBUG"] = "INFO"
+
+    @model_serializer(mode="wrap")
+    def _mask_secrets(self, handler: Any) -> dict[str, Any]:
+        """Pydantic v2 の model_dump(mode='json') で SecretStr が
+        プレーンテキスト化される問題を防ぐカスタムシリアライザ。
+        SecretStr フィールドは常に '**********' にマスクする。
+        """
+        data: dict[str, Any] = handler(self)
+        for field_name, field_info in self.model_fields.items():
+            if field_info.annotation is SecretStr or (
+                hasattr(field_info.annotation, "__args__")
+                and SecretStr in getattr(field_info.annotation, "__args__", ())
+            ):
+                if data.get(field_name) is not None:
+                    data[field_name] = "**********"
+        return data
 ```
 
 - [ ] **Step 5: テストが PASS することを確認**
@@ -681,12 +697,26 @@ from mcp_gateway.errors import PolicyError
 from mcp_gateway.policy.models import GatewayPolicy
 
 
+_MAX_POLICY_FILE_SIZE = 1 * 1024 * 1024  # 1 MB
+
+
 def load_policy(path: Path) -> GatewayPolicy:
     """Read intents.yaml and return a validated GatewayPolicy.
 
     Any parse / schema / reference error is wrapped in PolicyError so that the
     server entrypoint can fail fast with a single exception type.
     """
+    # Fail-fast: ファイルサイズ上限チェック (DoS 防御)
+    try:
+        file_size = path.stat().st_size
+    except OSError as e:
+        raise PolicyError(f"failed to stat policy file {path}: {e}") from e
+    if file_size > _MAX_POLICY_FILE_SIZE:
+        raise PolicyError(
+            f"policy file {path} exceeds size limit "
+            f"({file_size} bytes > {_MAX_POLICY_FILE_SIZE} bytes)"
+        )
+
     try:
         raw_text = path.read_text(encoding="utf-8")
     except OSError as e:
@@ -2260,10 +2290,17 @@ from typing import Any, Protocol
 from mcp_gateway.errors import PolicyError
 from mcp_gateway.filters.protocol import OutputFilter
 
+# TODO: このリストは主要なシークレット形式のみをカバーしている。
+# 新しいプロバイダが追加された場合はパターンを拡充すること。
+# 将来的には外部定義ファイル化 or detect-secrets 等のライブラリ委譲も検討。
 _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
-    re.compile(r"\bck_[A-Za-z0-9_-]{16,}\b"),
-    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),       # OpenAI
+    re.compile(r"\bck_[A-Za-z0-9_-]{16,}\b"),       # ChronosGraph 内部 API キー
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),             # AWS Access Key ID
+    re.compile(r"\bghp_[A-Za-z0-9]{36,}\b"),         # GitHub PAT (fine-grained)
+    re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b"),    # GitLab PAT
+    re.compile(r"\bhf_[A-Za-z0-9]{20,}\b"),          # HuggingFace token
+    re.compile(r"\bAIza[A-Za-z0-9_-]{35}\b"),        # Google API key
 )
 
 
@@ -2497,6 +2534,13 @@ gh pr create --draft --base feature/phase3_mcp_gateway_integration__base \
 - Modify: `tests/unit/test_mcp_gateway.py` (`TestSseHandshakeEndpoint`, `TestMcpMessagesEndpoint` クラス追加)
 
 - [ ] **Step 1: ブランチ作成 (handshake から派生し、tool_proxy を取り込む)**
+
+> **注意**: ここでは task3 と task2 を直接 task4 に取り込んでいるが、
+> これは task4 が両方のコードを物理的に必要とするための暫定措置である。
+> task2/task3 で後から修正が発生した場合は、Phase 3 完了アクション
+> (Phase Base への順次マージ) の段階で整合性を確保すること。
+> 最終的には Phase Base (`feature/phase3_mcp_gateway_integration__base`) 経由で
+> 全 Task を統合する。
 
 ```bash
 git checkout feature/phase3-task3_handshake
@@ -3203,6 +3247,9 @@ class TestSecretIsolation:
         s = GatewaySettings()
         assert "ck_super_secret" not in repr(s)
         assert "ck_super_secret" not in str(s.model_dump())
+        # Pydantic v2 の mode='json' は SecretStr をプレーンテキスト化するため、
+        # カスタム model_serializer でマスクされていることを検証する。
+        assert "ck_super_secret" not in str(s.model_dump(mode="json"))
 
 
 class TestContextStoreUntouched:

@@ -25,7 +25,7 @@
 
 ### 2.1 全体図
 
-```
+```text
 ┌────────────────┐  GET /sse (接続時のみ:                  ┌──────────────────────────────────┐    MCP over          ┌──────────────────────┐
 │ External AI    │   Authorization: Bearer ck_<api_key>     │   src/mcp_gateway/  (新規)        │ ───stdio (subprocess)─▶ │ src/context_store/   │
 │ Agent (client) │   X-MCP-Intent: <intent_class>) ────────▶│   ZSP / IBAC / 出力フィルタ        │ ◀─────────────────── │ (既存・無変更)        │
@@ -69,7 +69,7 @@
 
 ### 3.1 セッション開始 (SSE 接続時認証 + 内部セッション生成)
 
-```
+```text
 Agent                               mcp_gateway                              context_store
   │ GET /sse                              │                                         │
   │ Authorization: Bearer ck_<api_key>    │                                         │
@@ -107,7 +107,7 @@ Agent                               mcp_gateway                              con
 
 ### 3.2 `tools/list` (Default Deny)
 
-```
+```text
 Agent                               mcp_gateway                              context_store
   │ POST /messages?session_id=<sid>      │                                         │
   │ MCP: tools/list                      │                                         │
@@ -131,7 +131,7 @@ Agent                               mcp_gateway                              con
 
 ### 3.3 `tools/call` (主経路: IBAC + 出力フィルタ)
 
-```
+```text
 Agent                               mcp_gateway                              context_store
   │ POST /messages?session_id=<sid>      │                                         │
   │ MCP: tools/call(name=memory_search,  │                                         │
@@ -176,7 +176,7 @@ Agent                               mcp_gateway                              con
 
 ### 4.1 `src/mcp_gateway/`
 
-```
+```text
 src/mcp_gateway/
 ├── __init__.py                       # パッケージマーカー
 ├── __main__.py                       # `python -m mcp_gateway` エントリ
@@ -230,14 +230,14 @@ src/mcp_gateway/
 
 既存リポジトリ慣習 (`tests/unit/test_*.py` のフラット単一ファイル) に従う。
 
-```
+```text
 tests/unit/
 └── test_mcp_gateway.py        # 全テストクラスを集約
 ```
 
 ### 4.3 モジュール間依存方向
 
-```
+```text
 server.py ──depends on──▶ auth.handshake, auth.session, policy.engine,
                           tools.registry, tools.proxy, filters.factory,
                           upstream.context_store_client, audit.logger
@@ -320,6 +320,9 @@ class GatewaySettings(BaseSettings):
     policy_path: Path                    # 必須: intents.yaml の絶対パス
 
     # ── 上流(context_store) ──
+    # NOTE: デフォルトは devcontainer 内 (uv sync 済み .venv が PATH 上位) を前提。
+    # devcontainer 外で使用する場合は MCP_GATEWAY_UPSTREAM_COMMAND を
+    # ["uv", "run", "python", "-m", "context_store"] 等に明示的に設定すること。
     upstream_command: list[str] = ["python", "-m", "context_store"]
     upstream_env_passthrough: list[str] = [
         "OPENAI_API_KEY", "CONTEXT_STORE_DB_PATH",
@@ -398,6 +401,8 @@ agents:
 class StructuralAllowlistSchema(BaseModel):
     model_config = ConfigDict(extra="allow")
     # キー = フィールド名, 値 = True (スカラ残置) | list[str] (ネストの allowlist)
+    # NOTE: extra="allow" は動的キー構造のため必須。タイポ検出は
+    # GatewayPolicy._verify_references で schemas キーとツール名の整合性を検証する。
 
 class OutputFilterDef(BaseModel):
     type: Literal["none", "structural_allowlist"]
@@ -422,6 +427,8 @@ class GatewayPolicy(BaseModel):
         # intent.output_filter が output_filters に存在
         # agent.allowed_intents が intents に存在
         # type=structural_allowlist のとき schemas 必須
+        # output_filters[*].schemas のキー(ツール名)が、いずれかの
+        #   intents[*].allowed_tools に含まれること (タイポ検出)
         # 不整合は起動失敗 (Fail-fast / Default Deny)
         ...
 ```
@@ -440,10 +447,11 @@ class SessionRecord:
     output_filter_profile: str    # intent.output_filter のキー名
     issued_at: datetime           # 接続確立時刻 (UTC)
     expires_at: datetime          # issued_at + session_ttl_seconds
-    last_active_at: datetime      # POST /messages 受信ごとに更新 (アイドルタイムアウト用)
 ```
 
 `SessionRegistry` プロトコルが TTL 失効・アイドル失効・SSE 切断時の即時削除を担う。リクエストパスでは `lookup(session_id)` のみ → 高速。後付けで Redis 実装に差し替え可能。
+
+**アイドルタイムアウト管理**: `last_active_at` は `SessionRecord` の外部で管理する。`frozen=True` による不変性を維持しつつ TOCTOU 競合を回避するため、`SessionRegistry` が内部 `dict[str, datetime]` (`_last_active`) として保持し、`POST /messages` 受信ごとにアトミックに更新する。`lookup()` 時にアイドル判定を行い、タイムアウト超過時はセッションを失効させる。
 
 ### 5.5 監査ログ形状 (JSON Lines, stderr)
 

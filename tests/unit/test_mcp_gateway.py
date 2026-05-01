@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest  # noqa: F401 - used in later test classes
-
 
 class TestErrors:
     def test_gateway_error_is_exception(self) -> None:

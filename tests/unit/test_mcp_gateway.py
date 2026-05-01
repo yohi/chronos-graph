@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import pytest  # noqa: F401 - used in later test classes
+import pytest
+from pydantic import ValidationError
 
 
 class TestErrors:
@@ -37,8 +38,17 @@ class TestSettings:
         monkeypatch.delenv("MCP_GATEWAY_POLICY_PATH", raising=False)
         from mcp_gateway.config import GatewaySettings
 
-        with pytest.raises(Exception):  # noqa: B017 - pydantic ValidationError
+        with pytest.raises(ValidationError):
             GatewaySettings()
+
+    def test_policy_path_must_exist(self, tmp_path, monkeypatch):
+        non_existent = tmp_path / "missing.yaml"
+        monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(non_existent))
+        from mcp_gateway.config import GatewaySettings
+
+        with pytest.raises(ValidationError) as excinfo:
+            GatewaySettings()
+        assert "policy_path が存在しません" in str(excinfo.value)
 
     def test_loads_from_env(self, tmp_path, monkeypatch):
         policy = tmp_path / "intents.yaml"
@@ -68,3 +78,24 @@ class TestSettings:
 
         s = GatewaySettings()
         assert "ck_secret" not in repr(s)
+
+    def test_api_keys_masked_in_json_but_preserved_in_python(self, tmp_path, monkeypatch):
+        policy = tmp_path / "intents.yaml"
+        policy.write_text("version: 1\noutput_filters: {}\nintents: {}\nagents: {}\n")
+        monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy))
+        raw_key = '{"agent-a":"ck_secret"}'
+        monkeypatch.setenv("MCP_GATEWAY_API_KEYS_JSON", raw_key)
+
+        from mcp_gateway.config import GatewaySettings
+
+        s = GatewaySettings()
+
+        # JSON シリアライズ時はマスクされること (Issue 1)
+        json_data = s.model_dump(mode="json")
+        assert json_data["api_keys_json"] == "**********"
+        assert "ck_secret" not in s.model_dump_json()
+
+        # Python モード (default) では生値が保持されること (インライン指摘対応)
+        # ※ SecretStr オブジェクト自体が返るため、get_secret_value() で確認
+        python_data = s.model_dump()
+        assert python_data["api_keys_json"].get_secret_value() == raw_key

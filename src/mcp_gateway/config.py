@@ -9,7 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import SecretStr, model_serializer
+from pydantic import SecretStr, field_validator, model_serializer
+from pydantic_core.core_schema import SerializationInfo
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,6 +39,14 @@ class GatewaySettings(BaseSettings):
     # ── policy ───────────────────────────────────────────────────
     policy_path: Path
 
+    @field_validator("policy_path")
+    @classmethod
+    def _policy_path_must_exist(cls, v: Path) -> Path:
+        """起動時にポリシーファイルの存在を確認する (fail-fast)"""
+        if not v.exists():
+            raise ValueError(f"policy_path が存在しません: {v}")
+        return v
+
     # ── upstream (context_store) ─────────────────────────────────
     upstream_command: list[str] = ["python", "-m", "context_store"]
     upstream_env_passthrough: list[str] = [
@@ -51,13 +60,16 @@ class GatewaySettings(BaseSettings):
     audit_log_level: Literal["INFO", "DEBUG"] = "INFO"
 
     @model_serializer(mode="wrap")
-    def _mask_secrets(self, handler: Any) -> dict[str, Any]:
+    def _mask_secrets(self, handler: Any, info: SerializationInfo) -> dict[str, Any]:
         """Pydantic v2 の model_dump(mode='json') で SecretStr が
         プレーンテキスト化される問題を防ぐカスタムシリアライザ。
-        SecretStr フィールドは常に '**********' にマスクする。
+        JSON シリアライズ時のみ、SecretStr フィールドを '**********' にマスクする。
         """
         data: dict[str, Any] = handler(self)
-        for field_name, field_info in self.model_fields.items():
+        if info.mode != "json":
+            return data
+
+        for field_name, field_info in self.__class__.model_fields.items():
             if field_info.annotation is SecretStr or (
                 hasattr(field_info.annotation, "__args__")
                 and SecretStr in getattr(field_info.annotation, "__args__", ())

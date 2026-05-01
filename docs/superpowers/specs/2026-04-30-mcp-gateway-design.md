@@ -159,7 +159,7 @@ Agent                               mcp_gateway                              con
 
 - ステップ② が **IBAC 防御の主柱** (ツールの実体呼び出し前)
 - ステップ⑤ が **認可ギャップ防御の主柱** (レスポンス出力時)
-- ステップ③ で「エージェント側 arguments にシークレット風の文字列(例: `sk-...` プレフィックス)が含まれないか」を**サニタイズ検査**(混入防止)
+- ステップ③ で「エージェント側 arguments にシークレット風の文字列(例: `sk-...` / `ghp_...` / `AKIA...` 等)が含まれないか」を**サニタイズ検査**(混入防止)。パターンリストは拡張可能な構造とする
 - 結果は SSE ストリームで `event: message` フレームとして返却される
 
 ### 3.4 エラー応答ポリシー
@@ -333,7 +333,7 @@ class GatewaySettings(BaseSettings):
     audit_log_level: Literal["INFO", "DEBUG"] = "INFO"
 ```
 
-- `api_keys_json` は `SecretStr` で `repr` マスク → ログ汚染防止
+- `api_keys_json` は `SecretStr` で `repr` マスク → ログ汚染防止。加えて `model_serializer(mode="wrap")` で `model_dump(mode="json")` 時もプレーンテキスト展開を防ぐ
 - `upstream_env_passthrough` は **allowlist 方式**(網羅的継承禁止) → シークレット漏出最小化
 - `policy_path` 必須 → ポリシー無しでは起動しない (Default Deny の徹底)
 - 内部 `SessionRecord` はゲートウェイ内に閉じるため署名鍵は不要(SSE接続単位の生存期間 + アイドルタイムアウトで失効)
@@ -613,7 +613,8 @@ uv run ruff check src/mcp_gateway/ && uv run mypy src/mcp_gateway/ && \
 | 上流 subprocess の起動失敗 / 異常終了 | ゲートウェイが「沈黙する」 | ヘルスチェックエンドポイント (`/healthz`) を用意。失敗時は502。再起動戦略はMVP外 |
 | プロセス内セッションストアの再起動消失 | 既存セッションが消え、エージェントは再接続が必要 | TTL を短く保つ (デフォルト900s) + アイドルタイムアウト。Redis 化は後続 PR で `SessionRegistry` プロトコル経由で差し替え |
 | ポリシー誤設定 | 過剰権限 | 起動時 Fail-fast バリデーション + 監査ログで `decision` を全件記録 → 監査で発見可能 |
-| シークレットがレスポンスに混入 | 機密漏洩 | (a) 出力 allowlist で構造的に除去 (b) シークレット風文字列のサニタイズ検査 (c) `SecretStr` で内部表現を保護 |
+| シークレットがレスポンスに混入 | 機密漏洩 | (a) 出力 allowlist で構造的に除去 (b) シークレット風文字列のサニタイズ検査 (c) `SecretStr` + カスタム `model_serializer` で内部表現を保護 (d) `model_dump(mode="json")` でも漏洩しないことをテストで検証 |
+| ポリシーファイルの肥大化 | メモリ/CPU 過負荷 | 起動時に `_MAX_POLICY_FILE_SIZE` (1 MB) でファイルサイズ上限チェック → 超過時は `PolicyError` で fail-fast |
 
 ## 8. 受け入れ基準 (Acceptance Criteria)
 

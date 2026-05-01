@@ -17,6 +17,10 @@ dependencies = [
     "tenacity>=8.0.0",
     "tiktoken>=0.6.0",
     "filelock>=3.13.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "sse-starlette>=2.1.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -30,8 +34,6 @@ embedding-local = [
     "numpy>=1.26.0",
 ]
 dashboard = [
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.30.0",
     "websockets>=12.0",
 ]
 embedding-openai = [
@@ -55,6 +57,7 @@ all = [
 [project.scripts]
 context-store = "context_store.__main__:main"
 chronos-dashboard = "context_store.dashboard.api_server:main"
+chronos-mcp-gateway = "mcp_gateway.__main__:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -131,8 +134,16 @@ ignore_missing_imports = true
 module = "context_store.dashboard.*"
 disallow_untyped_decorators = false
 
+[[tool.mypy.overrides]]
+module = "sse_starlette.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "yaml.*"
+ignore_missing_imports = true
+
 [tool.hatch.build.targets.wheel]
-packages = ["src/context_store"]
+packages = ["src/context_store", "src/mcp_gateway"]
 
 [dependency-groups]
 dev = [

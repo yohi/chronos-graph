@@ -50,9 +50,7 @@ class GatewayPolicy(BaseModel):
         for aname, agent in self.agents.items():
             for iname in agent.allowed_intents:
                 if iname not in self.intents:
-                    raise ValueError(
-                        f"agent {aname!r} references unknown intent {iname!r}"
-                    )
+                    raise ValueError(f"agent {aname!r} references unknown intent {iname!r}")
         # 3. structural_allowlist は schemas 必須
         for fname, fdef in self.output_filters.items():
             if fdef.type == "structural_allowlist" and not fdef.schemas:

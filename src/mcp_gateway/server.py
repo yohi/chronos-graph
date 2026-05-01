@@ -15,12 +15,6 @@ def run_gateway() -> None:
     audit_logger.log("startup", host=settings.host, port=settings.port)
 
     # 本来はここで FastAPI アプリを uvicorn で起動する
-    # 例:
-    # import uvicorn
-    # from mcp_gateway.app import app
-    # uvicorn.run(app, host=settings.host, port=settings.port)
-
-    print(f"Starting MCP Gateway on {settings.host}:{settings.port}...")
 
     # 簡易的な待機処理（実働時は uvicorn がブロックする）
     # asyncio.run(asyncio.sleep(1))

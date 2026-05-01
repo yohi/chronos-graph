@@ -9,8 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import SecretStr, field_validator, model_serializer
-from pydantic_core.core_schema import SerializationInfo
+from pydantic import SecretStr, SerializationInfo, field_validator, model_serializer
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 

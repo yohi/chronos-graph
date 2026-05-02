@@ -281,3 +281,81 @@ class TestPolicyLoader:
         with pytest.raises(PolicyError) as excinfo:
             load_policy(p)
         assert "List should have at least 1 item" in str(excinfo.value)
+
+
+class TestStructuralAllowlistFilter:
+    def _filter(self):
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        return StructuralAllowlistFilter(
+            schemas={
+                "memory_search": {
+                    "results": ["id", "content"],
+                    "total_count": True,
+                },
+            }
+        )
+
+    def test_strips_unlisted_top_level_fields(self):
+        f = self._filter()
+        out = f.apply(
+            tool_name="memory_search",
+            payload={"results": [], "total_count": 0, "secret": "x"},
+        )
+        assert out == {"results": [], "total_count": 0}
+
+    def test_strips_unlisted_nested_fields(self):
+        f = self._filter()
+        out = f.apply(
+            tool_name="memory_search",
+            payload={
+                "results": [
+                    {
+                        "id": "m1",
+                        "content": "hello",
+                        "embedding": [0.1, 0.2],
+                        "internal_score": 0.9,
+                    }
+                ],
+                "total_count": 1,
+            },
+        )
+        assert out["results"][0] == {"id": "m1", "content": "hello"}
+        assert out["total_count"] == 1
+
+    def test_unknown_tool_returns_empty_payload(self):
+        # スキーマがない=露出禁止
+        f = self._filter()
+        out = f.apply(tool_name="memory_save", payload={"x": 1})
+        assert out == {}
+
+
+class TestNoneFilter:
+    def test_passthrough(self):
+        from mcp_gateway.filters.none_filter import NoneFilter
+
+        f = NoneFilter()
+        payload = {"a": 1, "b": [{"c": 2}]}
+        assert f.apply(tool_name="any", payload=payload) == payload
+
+
+class TestFilterFactory:
+    def test_factory_builds_none(self):
+        from mcp_gateway.filters.factory import build_filter
+        from mcp_gateway.policy.models import OutputFilterDef
+
+        f = build_filter(OutputFilterDef(type="none"))
+        assert f.apply(tool_name="x", payload={"a": 1}) == {"a": 1}
+
+    def test_factory_builds_structural_allowlist(self):
+        from mcp_gateway.filters.factory import build_filter
+        from mcp_gateway.policy.models import OutputFilterDef
+
+        f = build_filter(
+            OutputFilterDef(
+                type="structural_allowlist",
+                schemas={"t": {"id": True}},  # type: ignore[arg-type]
+            )
+        )
+        out = f.apply(tool_name="t", payload={"id": 1, "x": 2})
+        assert out == {"id": 1}

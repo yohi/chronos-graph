@@ -8,27 +8,30 @@ from __future__ import annotations
 
 
 def parse_bearer(header_value: str | None) -> str | None:
-    """Return the raw token from `Bearer <token>`. Case-insensitive scheme."""
+    """Return the raw token from `Bearer <token>`. Case-insensitive scheme.
+    Tokens containing spaces are rejected.
+    """
     if not header_value:
         return None
-    parts = header_value.strip().split(None, 1)
+    parts = header_value.strip().split()
     if len(parts) != 2:
         return None
     scheme, token = parts
     if scheme.lower() != "bearer":
         return None
-    token = token.strip()
     return token or None
 
 
 def parse_intent(header_value: str | None) -> str | None:
-    if header_value is None:
+    """Parse the X-MCP-Intent header. Returns trimmed string or None."""
+    if not header_value:
         return None
     v = header_value.strip()
     return v or None
 
 
 def parse_requested_tools(header_value: str | None) -> frozenset[str] | None:
+    """Parse comma-separated X-MCP-Requested-Tools header. Returns frozenset or None."""
     if not header_value:
         return None
     parts = {p.strip() for p in header_value.split(",")}

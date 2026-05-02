@@ -309,6 +309,19 @@ class TestHeaderParsing:
         assert parse_intent("") is None
         assert parse_intent(None) is None
 
+    def test_parse_bearer_rejects_spaces_in_token(self):
+        from mcp_gateway.auth.headers import parse_bearer
+
+        assert parse_bearer("Bearer tok en") is None
+        assert parse_bearer("Bearer token extra") is None
+
+    def test_parse_bearer_rejects_malformed(self):
+        from mcp_gateway.auth.headers import parse_bearer
+
+        assert parse_bearer("Bearer") is None
+        assert parse_bearer("Bearer  ") is None
+        assert parse_bearer("Bearer token extra words") is None
+
     def test_parse_requested_tools(self):
         from mcp_gateway.auth.headers import parse_requested_tools
 

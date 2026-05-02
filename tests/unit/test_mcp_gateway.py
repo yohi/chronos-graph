@@ -281,3 +281,93 @@ class TestPolicyLoader:
         with pytest.raises(PolicyError) as excinfo:
             load_policy(p)
         assert "List should have at least 1 item" in str(excinfo.value)
+
+
+class TestPolicyEngine:
+    def _policy(self):
+        from mcp_gateway.policy.models import (
+            AgentPolicy,
+            GatewayPolicy,
+            IntentPolicy,
+            OutputFilterDef,
+        )
+
+        return GatewayPolicy(
+            version=1,
+            output_filters={
+                "rs": OutputFilterDef(type="none"),
+            },
+            intents={
+                "read_only_recall": IntentPolicy(
+                    description="x",
+                    allowed_tools=["memory_search", "memory_stats"],
+                    output_filter="rs",
+                ),
+            },
+            agents={
+                "agent-a": AgentPolicy(allowed_intents=["read_only_recall"]),
+            },
+        )
+
+    def test_evaluate_grant_allows_subset(self):
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        grant = eng.evaluate_grant(
+            agent_id="agent-a",
+            intent="read_only_recall",
+            requested_tools=frozenset({"memory_search"}),
+        )
+        assert grant.caps == frozenset({"memory_search"})
+        assert grant.output_filter_profile == "rs"
+
+    def test_evaluate_grant_full_when_no_request(self):
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        grant = eng.evaluate_grant(
+            agent_id="agent-a", intent="read_only_recall", requested_tools=None
+        )
+        assert grant.caps == frozenset({"memory_search", "memory_stats"})
+
+    def test_unknown_agent_denied(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        with pytest.raises(PolicyError):
+            eng.evaluate_grant(agent_id="ghost", intent="read_only_recall", requested_tools=None)
+
+    def test_intent_not_allowed_for_agent_denied(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        with pytest.raises(PolicyError):
+            eng.evaluate_grant(agent_id="agent-a", intent="curate_memories", requested_tools=None)
+
+    def test_requested_tools_outside_intent_denied(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        with pytest.raises(PolicyError):
+            eng.evaluate_grant(
+                agent_id="agent-a",
+                intent="read_only_recall",
+                requested_tools=frozenset({"memory_save"}),
+            )
+
+    def test_check_call_allows_in_caps(self):
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        eng.check_call(caps=frozenset({"memory_search"}), tool_name="memory_search")
+
+    def test_check_call_denies_outside_caps(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        with pytest.raises(PolicyError):
+            eng.check_call(caps=frozenset({"memory_search"}), tool_name="memory_save")

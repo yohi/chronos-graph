@@ -108,3 +108,25 @@ class TestSessionManagementFixes:
         assert s2 in reg._records
         assert s1 not in reg._records
         assert s3 not in reg._records
+
+        # Boundary test: exact TTL expiry (t == expires_at)
+        # s4 created at t=130, ttl=100 -> expires at t=230
+        s4 = reg.create(
+            agent_id="s4", intent="i", caps=frozenset(), output_filter_profile="f"
+        ).session_id
+        t230 = now_val + timedelta(seconds=230)
+        monkeypatch.setattr(sess, "_utcnow", lambda: t230)
+        with pytest.raises(SessionError, match=r"session expired \(ttl\)"):
+            reg.lookup(s4)
+        assert s4 not in reg._records
+
+        # Boundary test: exact idle expiry (idle_age == idle_timeout)
+        # s5 created at t=230, idle=50 -> expires at t=280
+        s5 = reg.create(
+            agent_id="s5", intent="i", caps=frozenset(), output_filter_profile="f"
+        ).session_id
+        t280 = now_val + timedelta(seconds=280)
+        monkeypatch.setattr(sess, "_utcnow", lambda: t280)
+        with pytest.raises(SessionError, match=r"session expired \(idle\)"):
+            reg.lookup(s5)
+        assert s5 not in reg._records

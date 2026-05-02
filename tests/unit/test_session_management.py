@@ -48,10 +48,26 @@ class TestSessionManagementFixes:
         # Advance beyond TTL
         monkeypatch.setattr(sess, "_utcnow", lambda: start_time + timedelta(seconds=15))
 
-        # touch should not update anything for an expired session
+        # touch should detect TTL expiry and remove the session
         reg.touch(rec.session_id)
 
-        with pytest.raises(SessionError, match=r"session expired \(ttl\)"):
+        # Verify it's gone (unknown session_id because touch() purged it)
+        with pytest.raises(SessionError, match="unknown session_id"):
+            reg.lookup(rec.session_id)
+
+    def test_touch_does_not_resurrect_idle_session(self, monkeypatch):
+        reg = self._make_registry(ttl=600, idle=10)
+        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="f")
+
+        start_time = sess._utcnow()
+        # Advance beyond Idle but within TTL
+        monkeypatch.setattr(sess, "_utcnow", lambda: start_time + timedelta(seconds=15))
+
+        # touch should detect idle expiry and remove the session
+        reg.touch(rec.session_id)
+
+        # Verify it's gone
+        with pytest.raises(SessionError, match="unknown session_id"):
             reg.lookup(rec.session_id)
 
     def test_purge_logic_detailed(self, monkeypatch):

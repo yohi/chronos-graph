@@ -73,18 +73,18 @@ class InMemorySessionRegistry:
         caps: frozenset[str],
         output_filter_profile: str,
     ) -> SessionRecord:
-        now = _utcnow()
-        sid = uuid.uuid4().hex
-        rec = SessionRecord(
-            session_id=sid,
-            agent_id=agent_id,
-            intent=intent,
-            caps=caps,
-            output_filter_profile=output_filter_profile,
-            issued_at=now,
-            expires_at=now + self._ttl,
-        )
         with self._lock:
+            now = _utcnow()
+            sid = uuid.uuid4().hex
+            rec = SessionRecord(
+                session_id=sid,
+                agent_id=agent_id,
+                intent=intent,
+                caps=caps,
+                output_filter_profile=output_filter_profile,
+                issued_at=now,
+                expires_at=now + self._ttl,
+            )
             self._records[sid] = rec
             self._last_active[sid] = now
         return rec
@@ -115,9 +115,23 @@ class InMemorySessionRegistry:
         with self._lock:
             now = _utcnow()
             rec = self._records.get(session_id)
-            # Only update if session exists and is NOT expired by TTL
-            if rec is not None and now < rec.expires_at:
-                self._last_active[session_id] = now
+            if rec is None:
+                return
+
+            # Check TTL
+            if now >= rec.expires_at:
+                self._records.pop(session_id, None)
+                self._last_active.pop(session_id, None)
+                return
+
+            # Check Idle
+            last = self._last_active.get(session_id, rec.issued_at)
+            if now - last >= self._idle:
+                self._records.pop(session_id, None)
+                self._last_active.pop(session_id, None)
+                return
+
+            self._last_active[session_id] = now
 
     def purge(self) -> None:
         """Remove all expired or idle sessions from the registry."""

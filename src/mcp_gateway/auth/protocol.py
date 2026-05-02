@@ -6,9 +6,10 @@ implementations may be added later by satisfying this protocol.
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 
+@runtime_checkable
 class AgentAuthenticator(Protocol):
     """Resolve a raw bearer credential → agent_id, raising AuthError on failure."""
 

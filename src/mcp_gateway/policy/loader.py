@@ -33,7 +33,7 @@ def load_policy(path: Path) -> GatewayPolicy:
 
     try:
         raw_text = path.read_text(encoding="utf-8")
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         raise PolicyError(f"failed to read policy file {path}: {e}") from e
 
     try:

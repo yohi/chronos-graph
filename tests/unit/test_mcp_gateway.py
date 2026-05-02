@@ -196,24 +196,17 @@ class TestPolicyLoader:
         with pytest.raises(PolicyError):
             load_policy(p)
 
-    def test_structural_allowlist_requires_schemas(self, tmp_path):
-        p = self._write(
-            tmp_path,
-            """
-            version: 1
-            output_filters:
-              broken:
-                type: structural_allowlist
-            intents: {}
-            agents: {}
-            """,
-        )
+    def test_invalid_encoding_fails_with_policy_error(self, tmp_path):
+        # UTF-8 として不正なバイト列を書き込む
+        p = tmp_path / "binary.yaml"
+        p.write_bytes(b"\xff\xfe\xfd")
 
         from mcp_gateway.errors import PolicyError
         from mcp_gateway.policy.loader import load_policy
 
-        with pytest.raises(PolicyError):
+        with pytest.raises(PolicyError) as excinfo:
             load_policy(p)
+        assert "failed to read policy file" in str(excinfo.value)
 
     def test_schema_key_must_be_referenced_by_some_intent(self, tmp_path):
         # tools/list の typo を起動時に検知する

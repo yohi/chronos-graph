@@ -295,7 +295,7 @@ class TestApiKeyAuthenticator:
         from mcp_gateway.errors import AuthError
 
         a = ApiKeyAuthenticator({"summarizer-bot": "ck_xxx"})
-        with pytest.raises(AuthError):
+        with pytest.raises(AuthError, match="unknown api key"):
             a.authenticate("ck_wrong")
 
     def test_empty_key_raises_auth_error(self):
@@ -303,19 +303,18 @@ class TestApiKeyAuthenticator:
         from mcp_gateway.errors import AuthError
 
         a = ApiKeyAuthenticator({"summarizer-bot": "ck_xxx"})
-        with pytest.raises(AuthError):
+        with pytest.raises(AuthError, match="empty credential"):
             a.authenticate("")
 
-    def test_constant_time_comparison(self):
-        # ck_aaa == ck_aaa は True、ck_aaa != ck_aab は False。実装が hmac.compare_digest を使うこと
+    def test_authenticate_returns_identifier_for_matching_key(self):
+        # Verify that ApiKeyAuthenticator returns the correct identifier for a matching key.
         from mcp_gateway.auth.api_key import ApiKeyAuthenticator
 
         a = ApiKeyAuthenticator({"x": "ck_aaa"})
         assert a.authenticate("ck_aaa") == "x"
 
-    def test_duplicate_keys_raises_value_error(self):
+    def test_duplicate_keys_raise_value_error(self):
         from mcp_gateway.auth.api_key import ApiKeyAuthenticator
 
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ValueError, match="Duplicate API key found"):
             ApiKeyAuthenticator({"agent1": "key1", "agent2": "key1"})
-        assert "Duplicate API key found for agent: agent2" in str(excinfo.value)

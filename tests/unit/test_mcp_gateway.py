@@ -281,3 +281,38 @@ class TestPolicyLoader:
         with pytest.raises(PolicyError) as excinfo:
             load_policy(p)
         assert "List should have at least 1 item" in str(excinfo.value)
+
+
+class TestToolRegistry:
+    def test_filter_by_caps_default_deny(self):
+        from mcp_gateway.tools.registry import ToolRegistry
+
+        reg = ToolRegistry(
+            all_tools=[
+                {"name": "memory_search", "description": "...", "inputSchema": {}},
+                {"name": "memory_save", "description": "...", "inputSchema": {}},
+                {"name": "memory_delete", "description": "...", "inputSchema": {}},
+            ]
+        )
+        out = reg.filter_by_caps(caps=frozenset({"memory_search"}))
+        names = [t["name"] for t in out]
+        assert names == ["memory_search"]
+
+    def test_filter_by_caps_empty_when_none_match(self):
+        from mcp_gateway.tools.registry import ToolRegistry
+
+        reg = ToolRegistry(all_tools=[{"name": "memory_search"}])
+        assert reg.filter_by_caps(caps=frozenset()) == []
+
+    def test_filter_preserves_order(self):
+        from mcp_gateway.tools.registry import ToolRegistry
+
+        reg = ToolRegistry(
+            all_tools=[
+                {"name": "a"},
+                {"name": "b"},
+                {"name": "c"},
+            ]
+        )
+        out = reg.filter_by_caps(caps=frozenset({"a", "c"}))
+        assert [t["name"] for t in out] == ["a", "c"]

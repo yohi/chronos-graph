@@ -17,8 +17,6 @@ dependencies = [
     "tenacity>=8.0.0",
     "tiktoken>=0.6.0",
     "filelock>=3.13.0",
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.30.0",
     "sse-starlette>=2.1.0",
     "pyyaml>=6.0",
 ]
@@ -35,6 +33,8 @@ embedding-local = [
 ]
 dashboard = [
     "websockets>=12.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
 ]
 embedding-openai = [
     "openai>=1.0.0",

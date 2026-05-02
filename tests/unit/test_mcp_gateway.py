@@ -235,6 +235,8 @@ class TestPolicyLoader:
                 schemas:
                   other_tool:   # intent_a は memory_search しか持っていないのでエラーになるべき
                     results: [id]
+              none_f:
+                type: none
             intents:
               intent_a:
                 description: "x"
@@ -244,14 +246,6 @@ class TestPolicyLoader:
                 description: "y"
                 allowed_tools: [other_tool]
                 output_filter: none_f
-            output_filters:
-              rs:
-                type: structural_allowlist
-                schemas:
-                  other_tool:
-                    results: [id]
-              none_f:
-                type: none
             agents: {}
             """,
         )
@@ -269,12 +263,14 @@ class TestPolicyLoader:
             tmp_path,
             """
             version: 1
-            output_filters: {}
+            output_filters:
+              default:
+                type: none
             intents:
               empty_intent:
                 description: "empty"
                 allowed_tools: []
-                output_filter: none
+                output_filter: default
             agents: {}
             """,
         )

@@ -21,17 +21,22 @@ def load_policy(path: Path) -> GatewayPolicy:
     server entrypoint can fail fast with a single exception type.
     """
     try:
-        raw_text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as e:
+        bytes_data = path.read_bytes()
+    except OSError as e:
         raise PolicyError(f"failed to read policy file {path}: {e}") from e
 
-    # Fail-fast: 読み込み後のサイズチェック (DoS 防御 / TOCTOU 対策)
-    raw_bytes_len = len(raw_text.encode("utf-8"))
+    # Fail-fast: check size before decoding
+    raw_bytes_len = len(bytes_data)
     if raw_bytes_len > _MAX_POLICY_FILE_SIZE:
         raise PolicyError(
             f"policy file {path} exceeds size limit "
             f"({raw_bytes_len} bytes > {_MAX_POLICY_FILE_SIZE} bytes)"
         )
+
+    try:
+        raw_text = bytes_data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise PolicyError(f"failed to read policy file {path}: {e}") from e
 
     try:
         data: Any = yaml.safe_load(raw_text)

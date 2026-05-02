@@ -45,6 +45,8 @@ class SessionRegistry(Protocol):
 
     def touch(self, session_id: str) -> None: ...
 
+    def purge(self) -> None: ...
+
     def remove(self, session_id: str) -> None: ...
 
 
@@ -52,6 +54,11 @@ class InMemorySessionRegistry:
     """Process-local registry. Replaceable later with a Redis-backed implementation."""
 
     def __init__(self, ttl_seconds: int, idle_timeout_seconds: int) -> None:
+        if ttl_seconds <= 0:
+            raise ValueError(f"ttl_seconds must be positive, got {ttl_seconds}")
+        if idle_timeout_seconds <= 0:
+            raise ValueError(f"idle_timeout_seconds must be positive, got {idle_timeout_seconds}")
+
         self._ttl = timedelta(seconds=ttl_seconds)
         self._idle = timedelta(seconds=idle_timeout_seconds)
         self._records: dict[str, SessionRecord] = {}
@@ -83,26 +90,51 @@ class InMemorySessionRegistry:
         return rec
 
     def lookup(self, session_id: str) -> SessionRecord:
-        now = _utcnow()
         with self._lock:
+            now = _utcnow()
             rec = self._records.get(session_id)
             if rec is None:
                 raise SessionError(f"unknown session_id {session_id!r}")
+
             if now >= rec.expires_at:
                 self._records.pop(session_id, None)
                 self._last_active.pop(session_id, None)
                 raise SessionError("session expired (ttl)")
+
             last = self._last_active.get(session_id, rec.issued_at)
             if now - last >= self._idle:
                 self._records.pop(session_id, None)
                 self._last_active.pop(session_id, None)
                 raise SessionError("session expired (idle)")
-        return rec
+
+            # Update idle timer on successful lookup
+            self._last_active[session_id] = now
+            return rec
 
     def touch(self, session_id: str) -> None:
         with self._lock:
-            if session_id in self._records:
-                self._last_active[session_id] = _utcnow()
+            now = _utcnow()
+            rec = self._records.get(session_id)
+            # Only update if session exists and is NOT expired by TTL
+            if rec is not None and now < rec.expires_at:
+                self._last_active[session_id] = now
+
+    def purge(self) -> None:
+        """Remove all expired or idle sessions from the registry."""
+        now = _utcnow()
+        with self._lock:
+            expired_ids = []
+            for sid, rec in self._records.items():
+                if now >= rec.expires_at:
+                    expired_ids.append(sid)
+                    continue
+                last = self._last_active.get(sid, rec.issued_at)
+                if now - last >= self._idle:
+                    expired_ids.append(sid)
+
+            for sid in expired_ids:
+                self._records.pop(sid, None)
+                self._last_active.pop(sid, None)
 
     def remove(self, session_id: str) -> None:
         with self._lock:

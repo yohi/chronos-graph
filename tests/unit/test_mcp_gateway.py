@@ -312,3 +312,10 @@ class TestApiKeyAuthenticator:
 
         a = ApiKeyAuthenticator({"x": "ck_aaa"})
         assert a.authenticate("ck_aaa") == "x"
+
+    def test_duplicate_keys_raises_value_error(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+
+        with pytest.raises(ValueError) as excinfo:
+            ApiKeyAuthenticator({"agent1": "key1", "agent2": "key1"})
+        assert "Duplicate API key found for agent: agent2" in str(excinfo.value)

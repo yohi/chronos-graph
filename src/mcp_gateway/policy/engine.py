@@ -31,6 +31,9 @@ class PolicyEngine:
         intent: str,
         requested_tools: frozenset[str] | None,
     ) -> Grant:
+        if requested_tools is not None and len(requested_tools) == 0:
+            raise PolicyError("requested_tools must be None (all) or a non-empty set")
+
         agent = self._policy.agents.get(agent_id)
         if agent is None:
             raise PolicyError(f"agent {agent_id!r} is not registered")
@@ -51,6 +54,7 @@ class PolicyEngine:
             caps = requested_tools
         return Grant(intent=intent, caps=caps, output_filter_profile=intent_pol.output_filter)
 
-    def check_call(self, *, caps: frozenset[str], tool_name: str) -> None:
+    @staticmethod
+    def check_call(*, caps: frozenset[str], tool_name: str) -> None:
         if tool_name not in caps:
             raise PolicyError(f"tool {tool_name!r} is not in session capabilities")

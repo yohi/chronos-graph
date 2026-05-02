@@ -358,6 +358,24 @@ class TestPolicyEngine:
                 requested_tools=frozenset({"memory_save"}),
             )
 
+    def test_evaluate_grant_empty_requested_tools_denied(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        with pytest.raises(PolicyError, match="requested_tools must be None"):
+            eng.evaluate_grant(
+                agent_id="agent-a",
+                intent="read_only_recall",
+                requested_tools=frozenset(),
+            )
+
+    def test_check_call_is_staticmethod(self):
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        # インスタンス化せずにクラスから直接呼び出せることを確認
+        PolicyEngine.check_call(caps=frozenset({"memory_search"}), tool_name="memory_search")
+
     def test_check_call_allows_in_caps(self):
         from mcp_gateway.policy.engine import PolicyEngine
 

@@ -121,8 +121,8 @@ class InMemorySessionRegistry:
 
     def purge(self) -> None:
         """Remove all expired or idle sessions from the registry."""
-        now = _utcnow()
         with self._lock:
+            now = _utcnow()
             expired_ids = []
             for sid, rec in self._records.items():
                 if now >= rec.expires_at:

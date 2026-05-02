@@ -15,12 +15,25 @@ class ApiKeyAuthenticator:
     """
 
     def __init__(self, agent_keys: dict[str, str]) -> None:
+        # Validate no duplicate API key values
+        seen_keys = set()
+        for agent_id, key in agent_keys.items():
+            if key in seen_keys:
+                raise ValueError(f"Duplicate API key found for agent: {agent_id}")
+            seen_keys.add(key)
+
         self._agent_keys = dict(agent_keys)
 
     def authenticate(self, raw_credential: str) -> str:
         if not raw_credential:
             raise AuthError("empty credential")
+
+        matched_agent = None
         for agent_id, expected in self._agent_keys.items():
             if hmac.compare_digest(raw_credential, expected):
-                return agent_id
+                matched_agent = agent_id
+
+        if matched_agent is not None:
+            return matched_agent
+
         raise AuthError("unknown api key")

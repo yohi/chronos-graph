@@ -20,21 +20,18 @@ def load_policy(path: Path) -> GatewayPolicy:
     Any parse / schema / reference error is wrapped in PolicyError so that the
     server entrypoint can fail fast with a single exception type.
     """
-    # Fail-fast: ファイルサイズ上限チェック (DoS 防御)
-    try:
-        file_size = path.stat().st_size
-    except OSError as e:
-        raise PolicyError(f"failed to stat policy file {path}: {e}") from e
-    if file_size > _MAX_POLICY_FILE_SIZE:
-        raise PolicyError(
-            f"policy file {path} exceeds size limit "
-            f"({file_size} bytes > {_MAX_POLICY_FILE_SIZE} bytes)"
-        )
-
     try:
         raw_text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as e:
         raise PolicyError(f"failed to read policy file {path}: {e}") from e
+
+    # Fail-fast: 読み込み後のサイズチェック (DoS 防御 / TOCTOU 対策)
+    raw_bytes_len = len(raw_text.encode("utf-8"))
+    if raw_bytes_len > _MAX_POLICY_FILE_SIZE:
+        raise PolicyError(
+            f"policy file {path} exceeds size limit "
+            f"({raw_bytes_len} bytes > {_MAX_POLICY_FILE_SIZE} bytes)"
+        )
 
     try:
         data: Any = yaml.safe_load(raw_text)

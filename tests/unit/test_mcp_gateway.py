@@ -208,8 +208,23 @@ class TestPolicyLoader:
             load_policy(p)
         assert "failed to read policy file" in str(excinfo.value)
 
+    def test_policy_file_size_limit(self, tmp_path, monkeypatch):
+        # Issue 2: サイズ制限のチェック
+        from mcp_gateway.policy import loader
+
+        monkeypatch.setattr(loader, "_MAX_POLICY_FILE_SIZE", 10)
+        p = tmp_path / "large.yaml"
+        p.write_text("a" * 11)
+
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.loader import load_policy
+
+        with pytest.raises(PolicyError) as excinfo:
+            load_policy(p)
+        assert "exceeds size limit" in str(excinfo.value)
+
     def test_schema_key_must_be_referenced_by_some_intent(self, tmp_path):
-        # tools/list の typo を起動時に検知する
+        # Issue 1: そのフィルターを使っているインテントがそのツールを許可している必要がある
         p = self._write(
             tmp_path,
             """
@@ -218,13 +233,25 @@ class TestPolicyLoader:
               rs:
                 type: structural_allowlist
                 schemas:
-                  memory_searchhh:   # typo
+                  other_tool:   # intent_a は memory_search しか持っていないのでエラーになるべき
                     results: [id]
             intents:
-              i:
+              intent_a:
                 description: "x"
                 allowed_tools: [memory_search]
                 output_filter: rs
+              intent_b:
+                description: "y"
+                allowed_tools: [other_tool]
+                output_filter: none_f
+            output_filters:
+              rs:
+                type: structural_allowlist
+                schemas:
+                  other_tool:
+                    results: [id]
+              none_f:
+                type: none
             agents: {}
             """,
         )
@@ -232,5 +259,29 @@ class TestPolicyLoader:
         from mcp_gateway.errors import PolicyError
         from mcp_gateway.policy.loader import load_policy
 
-        with pytest.raises(PolicyError):
+        with pytest.raises(PolicyError) as excinfo:
             load_policy(p)
+        assert "is not referenced by any intent that uses this filter" in str(excinfo.value)
+
+    def test_empty_allowed_tools_fails(self, tmp_path):
+        # Issue 3: allowed_tools は空リストを許可しない
+        p = self._write(
+            tmp_path,
+            """
+            version: 1
+            output_filters: {}
+            intents:
+              empty_intent:
+                description: "empty"
+                allowed_tools: []
+                output_filter: none
+            agents: {}
+            """,
+        )
+
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.loader import load_policy
+
+        with pytest.raises(PolicyError) as excinfo:
+            load_policy(p)
+        assert "List should have at least 1 item" in str(excinfo.value)

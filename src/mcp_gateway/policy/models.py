@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class StructuralAllowlistSchema(BaseModel):
@@ -24,7 +24,7 @@ class OutputFilterDef(BaseModel):
 
 class IntentPolicy(BaseModel):
     description: str
-    allowed_tools: list[str]
+    allowed_tools: list[str] = Field(..., min_length=1)
     output_filter: str
 
 
@@ -57,17 +57,22 @@ class GatewayPolicy(BaseModel):
                 raise ValueError(
                     f"output_filter {fname!r} type=structural_allowlist requires schemas"
                 )
-        # 4. structural_allowlist の schema キーは、いずれかの intent.allowed_tools に含まれる
-        all_allowed_tools: set[str] = {
-            t for intent in self.intents.values() for t in intent.allowed_tools
-        }
+        # 4. structural_allowlist の schema キーは、
+        # そのフィルターを使用している intent.allowed_tools に含まれる
         for fname, fdef in self.output_filters.items():
             if fdef.type != "structural_allowlist" or fdef.schemas is None:
                 continue
+            # そのフィルターを参照しているインテントが許可しているツールの集合
+            referencing_tools: set[str] = {
+                t
+                for intent in self.intents.values()
+                if intent.output_filter == fname
+                for t in intent.allowed_tools
+            }
             for tool_name in fdef.schemas:
-                if tool_name not in all_allowed_tools:
+                if tool_name not in referencing_tools:
                     raise ValueError(
                         f"output_filter {fname!r} schema key {tool_name!r} is not "
-                        "referenced by any intent.allowed_tools (typo?)"
+                        "referenced by any intent that uses this filter (typo?)"
                     )
         return self

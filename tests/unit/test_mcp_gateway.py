@@ -281,3 +281,34 @@ class TestPolicyLoader:
         with pytest.raises(PolicyError) as excinfo:
             load_policy(p)
         assert "List should have at least 1 item" in str(excinfo.value)
+
+
+class TestApiKeyAuthenticator:
+    def test_resolves_known_agent(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+
+        a = ApiKeyAuthenticator({"summarizer-bot": "ck_xxx"})
+        assert a.authenticate("ck_xxx") == "summarizer-bot"
+
+    def test_unknown_key_raises_auth_error(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+        from mcp_gateway.errors import AuthError
+
+        a = ApiKeyAuthenticator({"summarizer-bot": "ck_xxx"})
+        with pytest.raises(AuthError):
+            a.authenticate("ck_wrong")
+
+    def test_empty_key_raises_auth_error(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+        from mcp_gateway.errors import AuthError
+
+        a = ApiKeyAuthenticator({"summarizer-bot": "ck_xxx"})
+        with pytest.raises(AuthError):
+            a.authenticate("")
+
+    def test_constant_time_comparison(self):
+        # ck_aaa == ck_aaa は True、ck_aaa != ck_aab は False。実装が hmac.compare_digest を使うこと
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+
+        a = ApiKeyAuthenticator({"x": "ck_aaa"})
+        assert a.authenticate("ck_aaa") == "x"

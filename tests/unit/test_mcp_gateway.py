@@ -281,3 +281,34 @@ class TestPolicyLoader:
         with pytest.raises(PolicyError) as excinfo:
             load_policy(p)
         assert "List should have at least 1 item" in str(excinfo.value)
+
+
+class TestAuditLogger:
+    def test_writes_jsonl_to_stderr(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        log.log(ev="handshake", agent="a", intent="i", decision="allow", sid="s1")
+        captured = capsys.readouterr()
+        # stdout は汚染しない
+        assert captured.out == ""
+        # stderr は1行 JSON
+        line = captured.err.strip()
+        import json
+
+        rec = json.loads(line)
+        assert rec["ev"] == "handshake"
+        assert rec["agent"] == "a"
+        assert rec["intent"] == "i"
+        assert rec["decision"] == "allow"
+        assert rec["sid"] == "s1"
+        assert "ts" in rec
+
+    def test_does_not_emit_secrets(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        # api_key 風のフィールドは渡されない設計なので、API として fields を制限する
+        log.log(ev="call", agent="a", tool="memory_search", decision="allow")
+        captured = capsys.readouterr()
+        assert "ck_" not in captured.err

@@ -21,16 +21,17 @@ def load_policy(path: Path) -> GatewayPolicy:
     server entrypoint can fail fast with a single exception type.
     """
     try:
-        bytes_data = path.read_bytes()
+        with path.open("rb") as f:
+            bytes_data = f.read(_MAX_POLICY_FILE_SIZE + 1)
     except OSError as e:
         raise PolicyError(f"failed to read policy file {path}: {e}") from e
 
-    # Fail-fast: check size before decoding
+    # Fail-fast: check size based on bounded read
     raw_bytes_len = len(bytes_data)
     if raw_bytes_len > _MAX_POLICY_FILE_SIZE:
         raise PolicyError(
             f"policy file {path} exceeds size limit "
-            f"({raw_bytes_len} bytes > {_MAX_POLICY_FILE_SIZE} bytes)"
+            f"(read {raw_bytes_len} bytes, which is > {_MAX_POLICY_FILE_SIZE} bytes)"
         )
 
     try:

@@ -321,3 +321,40 @@ class TestHeaderParsing:
         assert parse_requested_tools("memory_search,memory_search") == frozenset({"memory_search"})
         assert parse_requested_tools("") is None
         assert parse_requested_tools(None) is None
+
+
+class TestApiKeyAuthenticator:
+    def test_resolves_known_agent(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+
+        a = ApiKeyAuthenticator({"summarizer-bot": "ck_xxx"})
+        assert a.authenticate("ck_xxx") == "summarizer-bot"
+
+    def test_unknown_key_raises_auth_error(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+        from mcp_gateway.errors import AuthError
+
+        a = ApiKeyAuthenticator({"summarizer-bot": "ck_xxx"})
+        with pytest.raises(AuthError, match="unknown api key"):
+            a.authenticate("ck_wrong")
+
+    def test_empty_key_raises_auth_error(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+        from mcp_gateway.errors import AuthError
+
+        a = ApiKeyAuthenticator({"summarizer-bot": "ck_xxx"})
+        with pytest.raises(AuthError, match="empty credential"):
+            a.authenticate("")
+
+    def test_authenticate_returns_identifier_for_matching_key(self):
+        # Verify that ApiKeyAuthenticator returns the correct identifier for a matching key.
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+
+        a = ApiKeyAuthenticator({"x": "ck_aaa"})
+        assert a.authenticate("ck_aaa") == "x"
+
+    def test_duplicate_keys_raise_value_error(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+
+        with pytest.raises(ValueError, match="Duplicate API key found"):
+            ApiKeyAuthenticator({"agent1": "key1", "agent2": "key1"})

@@ -281,3 +281,43 @@ class TestPolicyLoader:
         with pytest.raises(PolicyError) as excinfo:
             load_policy(p)
         assert "List should have at least 1 item" in str(excinfo.value)
+
+
+class TestHeaderParsing:
+    def test_parse_bearer_token(self):
+        from mcp_gateway.auth.headers import parse_bearer
+
+        assert parse_bearer("Bearer ck_abc") == "ck_abc"
+
+    def test_parse_bearer_case_insensitive_scheme(self):
+        from mcp_gateway.auth.headers import parse_bearer
+
+        assert parse_bearer("bearer ck_abc") == "ck_abc"
+
+    def test_parse_bearer_missing_returns_none(self):
+        from mcp_gateway.auth.headers import parse_bearer
+
+        assert parse_bearer(None) is None
+        assert parse_bearer("") is None
+        assert parse_bearer("Basic xxx") is None
+
+    def test_parse_intent(self):
+        from mcp_gateway.auth.headers import parse_intent
+
+        assert parse_intent("read_only_recall") == "read_only_recall"
+        assert parse_intent("  read_only_recall  ") == "read_only_recall"
+        assert parse_intent("") is None
+        assert parse_intent(None) is None
+
+    def test_parse_requested_tools(self):
+        from mcp_gateway.auth.headers import parse_requested_tools
+
+        assert parse_requested_tools("memory_search,memory_save") == frozenset(
+            {"memory_search", "memory_save"}
+        )
+        assert parse_requested_tools("memory_search , memory_save ") == frozenset(
+            {"memory_search", "memory_save"}
+        )
+        assert parse_requested_tools("memory_search,memory_search") == frozenset({"memory_search"})
+        assert parse_requested_tools("") is None
+        assert parse_requested_tools(None) is None

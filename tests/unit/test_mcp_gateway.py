@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import textwrap
+
 import pytest
 from pydantic import ValidationError
 
@@ -109,3 +111,177 @@ class TestSettings:
         # ※ SecretStr オブジェクト自体が返るため、get_secret_value() で確認
         python_data = s.model_dump()
         assert python_data["api_keys_json"].get_secret_value() == raw_key
+
+
+class TestPolicyLoader:
+    def _write(self, tmp_path, body: str):
+        p = tmp_path / "intents.yaml"
+        p.write_text(textwrap.dedent(body).lstrip())
+        return p
+
+    def test_loads_minimal_policy(self, tmp_path):
+        p = self._write(
+            tmp_path,
+            """
+            version: 1
+            output_filters:
+              recall_safe:
+                type: structural_allowlist
+                schemas:
+                  memory_search:
+                    results: [id, content]
+                    total_count: true
+            intents:
+              read_only_recall:
+                description: "test"
+                allowed_tools: [memory_search]
+                output_filter: recall_safe
+            agents:
+              test-agent:
+                allowed_intents: [read_only_recall]
+            """,
+        )
+
+        from mcp_gateway.policy.loader import load_policy
+
+        pol = load_policy(p)
+        assert pol.version == 1
+        assert "read_only_recall" in pol.intents
+        assert pol.intents["read_only_recall"].allowed_tools == ["memory_search"]
+        assert pol.agents["test-agent"].allowed_intents == ["read_only_recall"]
+
+    def test_unknown_output_filter_reference_fails_fast(self, tmp_path):
+        p = self._write(
+            tmp_path,
+            """
+            version: 1
+            output_filters: {}
+            intents:
+              read_only_recall:
+                description: "test"
+                allowed_tools: [memory_search]
+                output_filter: nonexistent
+            agents: {}
+            """,
+        )
+
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.loader import load_policy
+
+        with pytest.raises(PolicyError):
+            load_policy(p)
+
+    def test_unknown_intent_reference_fails_fast(self, tmp_path):
+        p = self._write(
+            tmp_path,
+            """
+            version: 1
+            output_filters:
+              none_f:
+                type: none
+            intents:
+              ok_intent:
+                description: "x"
+                allowed_tools: [memory_search]
+                output_filter: none_f
+            agents:
+              bad-agent:
+                allowed_intents: [ghost_intent]
+            """,
+        )
+
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.loader import load_policy
+
+        with pytest.raises(PolicyError):
+            load_policy(p)
+
+    def test_invalid_encoding_fails_with_policy_error(self, tmp_path):
+        # UTF-8 として不正なバイト列を書き込む
+        p = tmp_path / "binary.yaml"
+        p.write_bytes(b"\xff\xfe\xfd")
+
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.loader import load_policy
+
+        with pytest.raises(PolicyError) as excinfo:
+            load_policy(p)
+        assert "failed to read policy file" in str(excinfo.value)
+
+    def test_policy_file_size_limit(self, tmp_path, monkeypatch):
+        # Issue 2: サイズ制限のチェック
+        from mcp_gateway.policy import loader
+
+        monkeypatch.setattr(loader, "_MAX_POLICY_FILE_SIZE", 10)
+        p = tmp_path / "large.yaml"
+        p.write_text("a" * 11)
+
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.loader import load_policy
+
+        with pytest.raises(PolicyError) as excinfo:
+            load_policy(p)
+        assert "exceeds size limit" in str(excinfo.value)
+
+    def test_schema_key_must_be_referenced_by_some_intent(self, tmp_path):
+        # Issue 1: そのフィルターを使っているインテントがそのツールを許可している必要がある
+        p = self._write(
+            tmp_path,
+            """
+            version: 1
+            output_filters:
+              rs:
+                type: structural_allowlist
+                schemas:
+                  other_tool:   # intent_a は memory_search しか持っていないのでエラーになるべき
+                    results: [id]
+            intents:
+              intent_a:
+                description: "x"
+                allowed_tools: [memory_search]
+                output_filter: rs
+              intent_b:
+                description: "y"
+                allowed_tools: [other_tool]
+                output_filter: none_f
+            output_filters:
+              rs:
+                type: structural_allowlist
+                schemas:
+                  other_tool:
+                    results: [id]
+              none_f:
+                type: none
+            agents: {}
+            """,
+        )
+
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.loader import load_policy
+
+        with pytest.raises(PolicyError) as excinfo:
+            load_policy(p)
+        assert "is not referenced by any intent that uses this filter" in str(excinfo.value)
+
+    def test_empty_allowed_tools_fails(self, tmp_path):
+        # Issue 3: allowed_tools は空リストを許可しない
+        p = self._write(
+            tmp_path,
+            """
+            version: 1
+            output_filters: {}
+            intents:
+              empty_intent:
+                description: "empty"
+                allowed_tools: []
+                output_filter: none
+            agents: {}
+            """,
+        )
+
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.loader import load_policy
+
+        with pytest.raises(PolicyError) as excinfo:
+            load_policy(p)
+        assert "List should have at least 1 item" in str(excinfo.value)

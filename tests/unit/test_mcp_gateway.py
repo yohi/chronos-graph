@@ -283,6 +283,96 @@ class TestPolicyLoader:
         assert "List should have at least 1 item" in str(excinfo.value)
 
 
+class TestHeaderParsing:
+    def test_parse_bearer_token(self):
+        from mcp_gateway.auth.headers import parse_bearer
+
+        assert parse_bearer("Bearer ck_abc") == "ck_abc"
+
+    def test_parse_bearer_case_insensitive_scheme(self):
+        from mcp_gateway.auth.headers import parse_bearer
+
+        assert parse_bearer("bearer ck_abc") == "ck_abc"
+
+    def test_parse_bearer_missing_returns_none(self):
+        from mcp_gateway.auth.headers import parse_bearer
+
+        assert parse_bearer(None) is None
+        assert parse_bearer("") is None
+        assert parse_bearer("Basic xxx") is None
+
+    def test_parse_intent(self):
+        from mcp_gateway.auth.headers import parse_intent
+
+        assert parse_intent("read_only_recall") == "read_only_recall"
+        assert parse_intent("  read_only_recall  ") == "read_only_recall"
+        assert parse_intent("") is None
+        assert parse_intent(None) is None
+
+    def test_parse_bearer_rejects_spaces_in_token(self):
+        from mcp_gateway.auth.headers import parse_bearer
+
+        assert parse_bearer("Bearer tok en") is None
+        assert parse_bearer("Bearer token extra") is None
+
+    def test_parse_bearer_rejects_malformed(self):
+        from mcp_gateway.auth.headers import parse_bearer
+
+        assert parse_bearer("Bearer") is None
+        assert parse_bearer("Bearer  ") is None
+        assert parse_bearer("Bearer token extra words") is None
+
+    def test_parse_requested_tools(self):
+        from mcp_gateway.auth.headers import parse_requested_tools
+
+        assert parse_requested_tools("memory_search,memory_save") == frozenset(
+            {"memory_search", "memory_save"}
+        )
+        assert parse_requested_tools("memory_search , memory_save ") == frozenset(
+            {"memory_search", "memory_save"}
+        )
+        assert parse_requested_tools("memory_search,memory_search") == frozenset({"memory_search"})
+        assert parse_requested_tools("") is None
+        assert parse_requested_tools(None) is None
+
+
+class TestApiKeyAuthenticator:
+    def test_resolves_known_agent(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+
+        a = ApiKeyAuthenticator({"summarizer-bot": "ck_xxx"})
+        assert a.authenticate("ck_xxx") == "summarizer-bot"
+
+    def test_unknown_key_raises_auth_error(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+        from mcp_gateway.errors import AuthError
+
+        a = ApiKeyAuthenticator({"summarizer-bot": "ck_xxx"})
+        with pytest.raises(AuthError, match="unknown api key"):
+            a.authenticate("ck_wrong")
+
+    def test_empty_key_raises_auth_error(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+        from mcp_gateway.errors import AuthError
+
+        a = ApiKeyAuthenticator({"summarizer-bot": "ck_xxx"})
+        with pytest.raises(AuthError, match="empty credential"):
+            a.authenticate("")
+
+    def test_authenticate_returns_identifier_for_matching_key(self):
+        # Verify that ApiKeyAuthenticator returns the correct identifier for a matching key.
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+
+        a = ApiKeyAuthenticator({"x": "ck_aaa"})
+        assert a.authenticate("ck_aaa") == "x"
+
+    def test_duplicate_keys_raise_value_error(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+
+        with pytest.raises(ValueError, match="Duplicate API key found"):
+            ApiKeyAuthenticator({"agent1": "key1", "agent2": "key1"})
+
+
 class TestSessionLifecycle:
     def _make_registry(self, ttl: int = 60, idle: int = 30):
         from mcp_gateway.auth.session import InMemorySessionRegistry

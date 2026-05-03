@@ -348,6 +348,26 @@ class TestToolRegistry:
         out = reg.filter_by_caps(caps=frozenset({"a", "c"}))
         assert [t["name"] for t in out] == ["a", "c"]
 
+    def test_defensive_copying(self):
+        from mcp_gateway.tools.registry import ToolRegistry
+
+        tools = [{"name": "tool1", "description": "desc1"}]
+        registry = ToolRegistry(tools)
+
+        # Verify __init__ deepcopies
+        tools[0]["description"] = "modified"
+        assert registry.all_tools[0]["description"] == "desc1"
+
+        # Verify all_tools property deepcopies
+        retrieved = registry.all_tools
+        retrieved[0]["description"] = "modified again"
+        assert registry.all_tools[0]["description"] == "desc1"
+
+        # Verify filter_by_caps deepcopies
+        filtered = registry.filter_by_caps(caps=frozenset(["tool1"]))
+        filtered[0]["description"] = "modified filtered"
+        assert registry.all_tools[0]["description"] == "desc1"
+
 
 class TestStructuralAllowlistFilter:
     def _filter(self):
@@ -418,6 +438,17 @@ class TestStructuralAllowlistFilter:
 
         with pytest.raises(PolicyError, match="Invalid schema value for 'field'"):
             StructuralAllowlistFilter(schemas={"t": {"field": 123}})  # type: ignore[arg-type]
+
+    def test_raises_error_on_non_string_list_elements_at_init(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        # List with non-string elements should raise PolicyError
+        with pytest.raises(
+            PolicyError,
+            match="Invalid schema: all elements in list for 'field1' in 'tool1' must be strings",
+        ):
+            StructuralAllowlistFilter({"tool1": {"field1": ["a", 1]}})
 
     def test_raises_policy_error_on_unsupported_schema_type(self):
         from mcp_gateway.errors import PolicyError
@@ -728,6 +759,17 @@ class TestApiKeyAuthenticator:
         with pytest.raises(ValueError, match="Duplicate API key found"):
             ApiKeyAuthenticator({"agent1": "key1", "agent2": "key1"})
 
+    def test_empty_keys_raise_value_error(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+
+        # Should raise ValueError for empty key
+        with pytest.raises(ValueError, match="Empty API key for agent: agent-empty"):
+            ApiKeyAuthenticator({"agent-empty": ""})
+
+        # Should raise ValueError for whitespace key
+        with pytest.raises(ValueError, match="Empty API key for agent: agent-space"):
+            ApiKeyAuthenticator({"agent-space": "   "})
+
 
 class TestSessionLifecycle:
     def _make_registry(self, ttl: int = 60, idle: int = 30):
@@ -775,9 +817,7 @@ class TestSessionLifecycle:
         import mcp_gateway.auth.session as sess
 
         reg = self._make_registry(ttl=600, idle=5)
-        rec = rec = reg.create(
-            agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f"
-        )
+        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
         original = sess._utcnow()
         monkeypatch.setattr(sess, "_utcnow", lambda: original + timedelta(seconds=10))
         from mcp_gateway.errors import SessionError

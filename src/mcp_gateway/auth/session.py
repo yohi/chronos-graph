@@ -11,7 +11,7 @@ import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import Iterable, Protocol
 
 from mcp_gateway.errors import SessionError
 
@@ -37,7 +37,7 @@ class SessionRegistry(Protocol):
         *,
         agent_id: str,
         intent: str,
-        caps: frozenset[str],
+        caps: Iterable[str],
         output_filter_profile: str,
     ) -> SessionRecord: ...
 
@@ -70,7 +70,7 @@ class InMemorySessionRegistry:
         *,
         agent_id: str,
         intent: str,
-        caps: frozenset[str],
+        caps: Iterable[str],
         output_filter_profile: str,
     ) -> SessionRecord:
         with self._lock:
@@ -80,7 +80,7 @@ class InMemorySessionRegistry:
                 session_id=sid,
                 agent_id=agent_id,
                 intent=intent,
-                caps=caps,
+                caps=frozenset(caps),
                 output_filter_profile=output_filter_profile,
                 issued_at=now,
                 expires_at=now + self._ttl,

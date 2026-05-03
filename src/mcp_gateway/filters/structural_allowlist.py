@@ -8,15 +8,20 @@ A schema entry can be:
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from mcp_gateway.errors import PolicyError
 
+logger = logging.getLogger(__name__)
+
 
 def _coerce_schema(schema_obj: Any) -> dict[str, Any]:
-    if hasattr(schema_obj, "model_dump"):
-        result: dict[str, Any] = schema_obj.model_dump()
-        return result
+    if callable(getattr(schema_obj, "model_dump", None)):
+        try:
+            return dict(schema_obj.model_dump())
+        except Exception as e:
+            raise PolicyError(f"Error dumping schema model: {e}") from e
     if isinstance(schema_obj, dict):
         return dict(schema_obj)
     raise PolicyError(
@@ -41,6 +46,10 @@ def _filter_value(value: Any, allowed_subkeys: Any) -> Any:
                 for item in value
                 if isinstance(item, dict)
             ]
+        logger.warning(
+            "Structural filter mismatch: expected dict/list for subkey filtering, got %s",
+            type(value).__name__,
+        )
     return _DENY
 
 
@@ -50,8 +59,17 @@ class StructuralAllowlistFilter:
         for name, s in schemas.items():
             coerced = _coerce_schema(s)
             for key, val in coerced.items():
-                if val is not True and not isinstance(val, list):
-                    raise PolicyError(f"Invalid schema value for {key!r} in {name!r}: {val!r}")
+                if val is True:
+                    continue
+                if isinstance(val, list):
+                    if not all(isinstance(item, str) for item in val):
+                        raise PolicyError(
+                            f"Invalid schema: all elements in list for {key!r} "
+                            f"in {name!r} must be strings"
+                        )
+                    continue
+
+                raise PolicyError(f"Invalid schema value for {key!r} in {name!r}: {val!r}")
             self._schemas[name] = coerced
 
     def apply(self, *, tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:

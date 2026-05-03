@@ -373,6 +373,31 @@ class TestAuditLogger:
         assert rec["authorization"] == "**********"
         assert rec["PASSWORD"] == "**********"
 
+    def test_audit_log_value_redaction(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        # 値の中に機密パターンが含まれる場合にマスクされることを検証
+        log.log(
+            ev="error_event",
+            error="Failed with Authorization: Bearer secret-token-123",
+            message="Internal error: sk-987654321",
+            details="long-hex-value: 1234567890abcdef1234567890abcdef",
+            normal_field="this is a safe message",
+        )
+        captured = capsys.readouterr()
+        import json
+
+        rec = json.loads(captured.err)
+        assert rec["error"] == "**********"
+        assert rec["message"] == "**********"
+        assert rec["details"] == "**********"
+        assert rec["normal_field"] == "this is a safe message"
+        # 生のシークレットが露出していないことを念のため確認
+        assert "secret-token-123" not in captured.err
+        assert "sk-987654321" not in captured.err
+        assert "1234567890abcdef1234567890abcdef" not in captured.err
+
     def test_level_validation(self):
         from mcp_gateway.audit.logger import AuditLogger
 

@@ -333,9 +333,9 @@ class TestStructuralAllowlistFilter:
         from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
 
         # invalid schema value: False (should be True or list[str])
-        f = StructuralAllowlistFilter(schemas={"t": {"secret": False}})  # type: ignore[arg-type]
-        out = f.apply(tool_name="t", payload={"secret": "password"})
-        assert "secret" not in out
+        # Now raises ValueError at construction time (Issue 3 Task 3)
+        with pytest.raises(ValueError, match="Invalid schema value"):
+            StructuralAllowlistFilter(schemas={"t": {"secret": False}})  # type: ignore[arg-type]
 
     def test_preserves_none_value_if_allowed(self):
         from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
@@ -344,6 +344,13 @@ class TestStructuralAllowlistFilter:
         out = f.apply(tool_name="t", payload={"nullable": None})
         assert "nullable" in out
         assert out["nullable"] is None
+
+    def test_raises_error_on_invalid_schema_type_at_init(self):
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        with pytest.raises(ValueError) as excinfo:
+            StructuralAllowlistFilter(schemas={"t": {"field": 123}})  # type: ignore[arg-type]
+        assert "Invalid schema value for 'field'" in str(excinfo.value)
 
 
 class TestNoneFilter:

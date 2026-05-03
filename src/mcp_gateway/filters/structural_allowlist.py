@@ -40,7 +40,13 @@ def _filter_value(value: Any, allowed_subkeys: Any) -> Any:
 
 class StructuralAllowlistFilter:
     def __init__(self, schemas: dict[str, Any]) -> None:
-        self._schemas = {name: _coerce_schema(s) for name, s in schemas.items()}
+        self._schemas = {}
+        for name, s in schemas.items():
+            coerced = _coerce_schema(s)
+            for key, val in coerced.items():
+                if val is not True and not isinstance(val, list):
+                    raise ValueError(f"Invalid schema value for {key!r} in {name!r}: {val!r}")
+            self._schemas[name] = coerced
 
     def apply(self, *, tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
         schema = self._schemas.get(tool_name)

@@ -744,9 +744,7 @@ class TestSessionLifecycle:
         import mcp_gateway.auth.session as sess
 
         reg = self._make_registry(ttl=600, idle=5)
-        rec = rec = reg.create(
-            agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f"
-        )
+        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
         original = sess._utcnow()
         monkeypatch.setattr(sess, "_utcnow", lambda: original + timedelta(seconds=10))
         from mcp_gateway.errors import SessionError

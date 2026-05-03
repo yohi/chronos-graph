@@ -8,15 +8,17 @@ A schema entry can be:
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from mcp_gateway.errors import PolicyError
 
+logger = logging.getLogger(__name__)
+
 
 def _coerce_schema(schema_obj: Any) -> dict[str, Any]:
     if hasattr(schema_obj, "model_dump"):
-        result: dict[str, Any] = schema_obj.model_dump()
-        return result
+        return dict(schema_obj.model_dump())
     if isinstance(schema_obj, dict):
         return dict(schema_obj)
     raise PolicyError(
@@ -41,6 +43,10 @@ def _filter_value(value: Any, allowed_subkeys: Any) -> Any:
                 for item in value
                 if isinstance(item, dict)
             ]
+        logger.warning(
+            "Structural filter mismatch: expected dict/list for subkey filtering, got %s",
+            type(value).__name__,
+        )
     return _DENY
 
 

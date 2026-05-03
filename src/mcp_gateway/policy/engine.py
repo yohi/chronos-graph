@@ -51,7 +51,8 @@ class PolicyEngine:
                 raise PolicyError(
                     f"requested tools {sorted(extra)!r} are outside intent {intent!r}"
                 )
-            caps = requested_tools
+            # Ensure caps is always an immutable frozenset even if a mutable set was passed
+            caps = frozenset(requested_tools)
         return Grant(intent=intent, caps=caps, output_filter_profile=intent_pol.output_filter)
 
     @staticmethod

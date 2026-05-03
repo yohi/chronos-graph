@@ -17,4 +17,5 @@ def run_gateway() -> None:
     """
     settings = GatewaySettings()  # type: ignore[call-arg]
     audit = AuditLogger()
+    audit.set_level(settings.audit_log_level)
     audit.log(ev="startup", host=settings.host, port=settings.port)

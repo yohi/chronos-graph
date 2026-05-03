@@ -298,20 +298,50 @@ class TestAuditLogger:
 
         rec = json.loads(line)
         assert rec["ev"] == "handshake"
+        assert rec["level"] == "INFO"
         assert rec["agent"] == "a"
         assert rec["intent"] == "i"
         assert rec["decision"] == "allow"
         assert rec["sid"] == "s1"
         assert "ts" in rec
+        # タイムスタンプの精度（マイクロ秒を含む ISO 8601 形式: YYYY-MM-DDTHH:MM:SS.mmmmmmZ）
+        assert rec["ts"].endswith("Z")
+        assert "." in rec["ts"]
+
+    def test_audit_log_level_filtering(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        # INFO レベル設定
+        log = AuditLogger(level="INFO")
+        log.log(ev="info_event", level="INFO")
+        log.log(ev="debug_event", level="DEBUG")
+        captured = capsys.readouterr()
+        assert "info_event" in captured.err
+        assert "debug_event" not in captured.err
+
+        # DEBUG レベル設定
+        log.set_level("DEBUG")
+        log.log(ev="debug_event_2", level="DEBUG")
+        captured = capsys.readouterr()
+        assert "debug_event_2" in captured.err
 
     def test_does_not_emit_secrets(self, capsys):
         from mcp_gateway.audit.logger import AuditLogger
 
         log = AuditLogger()
-        # api_key 風のフィールドは渡されない設計なので、API として fields を制限する
-        log.log(ev="call", agent="a", tool="memory_search", decision="allow")
+        # シークレットがマスクされることを検証
+        log.log(
+            ev="call",
+            agent="a",
+            api_key="sk-hidden",
+            ck_token="secret",
+            normal_field="visible",
+        )
         captured = capsys.readouterr()
-        assert "ck_" not in captured.err
+        assert "sk-hidden" not in captured.err
+        assert "secret" not in captured.err
+        assert "**********" in captured.err
+        assert "visible" in captured.err
 
 
 class TestToolRegistry:

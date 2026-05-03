@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sys
 
+from mcp_gateway.audit.logger import AuditLogger
 from mcp_gateway.server import run_gateway
 
 
@@ -16,9 +17,8 @@ def main() -> None:
     try:
         run_gateway()
     except Exception as e:
-        import sys as _sys
-
-        _sys.stderr.write(f"startup failure: {e}\n")
+        audit = AuditLogger()
+        audit.log(ev="startup_failure", level="INFO", error=str(e))
         sys.exit(1)
 
 

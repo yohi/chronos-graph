@@ -359,3 +359,317 @@ class TestFilterFactory:
         )
         out = f.apply(tool_name="t", payload={"id": 1, "x": 2})
         assert out == {"id": 1}
+
+
+class TestPolicyEngine:
+    def _policy(self):
+        from mcp_gateway.policy.models import (
+            AgentPolicy,
+            GatewayPolicy,
+            IntentPolicy,
+            OutputFilterDef,
+        )
+
+        return GatewayPolicy(
+            version=1,
+            output_filters={
+                "rs": OutputFilterDef(type="none"),
+            },
+            intents={
+                "read_only_recall": IntentPolicy(
+                    description="x",
+                    allowed_tools=["memory_search", "memory_stats"],
+                    output_filter="rs",
+                ),
+                "curate_memories": IntentPolicy(
+                    description="y",
+                    allowed_tools=["memory_save"],
+                    output_filter="rs",
+                ),
+            },
+            agents={
+                "agent-a": AgentPolicy(allowed_intents=["read_only_recall"]),
+            },
+        )
+
+    def test_evaluate_grant_allows_subset(self):
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        grant = eng.evaluate_grant(
+            agent_id="agent-a",
+            intent="read_only_recall",
+            requested_tools=frozenset({"memory_search"}),
+        )
+        assert grant.caps == frozenset({"memory_search"})
+        assert grant.output_filter_profile == "rs"
+
+    def test_evaluate_grant_full_when_no_request(self):
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        grant = eng.evaluate_grant(
+            agent_id="agent-a", intent="read_only_recall", requested_tools=None
+        )
+        assert grant.caps == frozenset({"memory_search", "memory_stats"})
+
+    def test_unknown_agent_denied(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        with pytest.raises(PolicyError):
+            eng.evaluate_grant(agent_id="ghost", intent="read_only_recall", requested_tools=None)
+
+    def test_intent_not_allowed_for_agent_denied(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        with pytest.raises(PolicyError, match="cannot use intent"):
+            eng.evaluate_grant(agent_id="agent-a", intent="curate_memories", requested_tools=None)
+
+    def test_unknown_intent_message_priority(self):
+        # Even if the intent is not in agent.allowed_intents,
+        # "unknown intent" should be raised first if the intent is not in the policy.
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        with pytest.raises(PolicyError, match="unknown intent"):
+            eng.evaluate_grant(agent_id="agent-a", intent="ghost_intent", requested_tools=None)
+
+    def test_requested_tools_outside_intent_narrowed(self):
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        # intent 'read_only_recall' allows ["memory_search", "memory_stats"]
+        # requesting "memory_save" (not allowed) and "memory_search" (allowed)
+        grant = eng.evaluate_grant(
+            agent_id="agent-a",
+            intent="read_only_recall",
+            requested_tools=frozenset({"memory_search", "memory_save"}),
+        )
+        assert grant.caps == frozenset({"memory_search"})
+        assert "memory_save" not in grant.caps
+
+    def test_evaluate_grant_empty_requested_tools_denied(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        with pytest.raises(PolicyError, match="requested_tools must be None"):
+            eng.evaluate_grant(
+                agent_id="agent-a",
+                intent="read_only_recall",
+                requested_tools=frozenset(),
+            )
+
+    def test_evaluate_grant_normalizes_to_frozenset(self):
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        # Pass a mutable set despite type hinting
+        grant = eng.evaluate_grant(
+            agent_id="agent-a",
+            intent="read_only_recall",
+            requested_tools={"memory_search"},  # type: ignore
+        )
+        assert isinstance(grant.caps, frozenset)
+        assert grant.caps == frozenset({"memory_search"})
+
+    def test_check_call_is_staticmethod(self):
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        # インスタンス化せずにクラスから直接呼び出せることを確認
+        PolicyEngine.check_call(caps=frozenset({"memory_search"}), tool_name="memory_search")
+
+    def test_check_call_allows_in_caps(self):
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        eng.check_call(caps=frozenset({"memory_search"}), tool_name="memory_search")
+
+    def test_check_call_denies_outside_caps(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        with pytest.raises(PolicyError):
+            eng.check_call(caps=frozenset({"memory_search"}), tool_name="memory_save")
+
+
+class TestHeaderParsing:
+    def test_parse_bearer_token(self):
+        from mcp_gateway.auth.headers import parse_bearer
+
+        assert parse_bearer("Bearer ck_abc") == "ck_abc"
+
+    def test_parse_bearer_case_insensitive_scheme(self):
+        from mcp_gateway.auth.headers import parse_bearer
+
+        assert parse_bearer("bearer ck_abc") == "ck_abc"
+
+    def test_parse_bearer_missing_returns_none(self):
+        from mcp_gateway.auth.headers import parse_bearer
+
+        assert parse_bearer(None) is None
+        assert parse_bearer("") is None
+        assert parse_bearer("Basic xxx") is None
+
+    def test_parse_intent(self):
+        from mcp_gateway.auth.headers import parse_intent
+
+        assert parse_intent("read_only_recall") == "read_only_recall"
+        assert parse_intent("  read_only_recall  ") == "read_only_recall"
+        assert parse_intent("") is None
+        assert parse_intent(None) is None
+
+    def test_parse_bearer_rejects_spaces_in_token(self):
+        from mcp_gateway.auth.headers import parse_bearer
+
+        assert parse_bearer("Bearer tok en") is None
+        assert parse_bearer("Bearer token extra") is None
+
+    def test_parse_bearer_rejects_malformed(self):
+        from mcp_gateway.auth.headers import parse_bearer
+
+        assert parse_bearer("Bearer") is None
+        assert parse_bearer("Bearer  ") is None
+        assert parse_bearer("Bearer token extra words") is None
+
+    def test_parse_requested_tools(self):
+        from mcp_gateway.auth.headers import parse_requested_tools
+
+        assert parse_requested_tools("memory_search,memory_save") == frozenset(
+            {"memory_search", "memory_save"}
+        )
+        assert parse_requested_tools("memory_search , memory_save ") == frozenset(
+            {"memory_search", "memory_save"}
+        )
+        assert parse_requested_tools("memory_search,memory_search") == frozenset({"memory_search"})
+        assert parse_requested_tools("") is None
+        assert parse_requested_tools(None) is None
+
+
+class TestApiKeyAuthenticator:
+    def test_resolves_known_agent(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+
+        a = ApiKeyAuthenticator({"summarizer-bot": "ck_xxx"})
+        assert a.authenticate("ck_xxx") == "summarizer-bot"
+
+    def test_unknown_key_raises_auth_error(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+        from mcp_gateway.errors import AuthError
+
+        a = ApiKeyAuthenticator({"summarizer-bot": "ck_xxx"})
+        with pytest.raises(AuthError, match="unknown api key"):
+            a.authenticate("ck_wrong")
+
+    def test_empty_key_raises_auth_error(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+        from mcp_gateway.errors import AuthError
+
+        a = ApiKeyAuthenticator({"summarizer-bot": "ck_xxx"})
+        with pytest.raises(AuthError, match="empty credential"):
+            a.authenticate("")
+
+    def test_authenticate_returns_identifier_for_matching_key(self):
+        # Verify that ApiKeyAuthenticator returns the correct identifier for a matching key.
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+
+        a = ApiKeyAuthenticator({"x": "ck_aaa"})
+        assert a.authenticate("ck_aaa") == "x"
+
+    def test_duplicate_keys_raise_value_error(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+
+        with pytest.raises(ValueError, match="Duplicate API key found"):
+            ApiKeyAuthenticator({"agent1": "key1", "agent2": "key1"})
+
+
+class TestSessionLifecycle:
+    def _make_registry(self, ttl: int = 60, idle: int = 30):
+        from mcp_gateway.auth.session import InMemorySessionRegistry
+
+        return InMemorySessionRegistry(ttl_seconds=ttl, idle_timeout_seconds=idle)
+
+    def test_create_and_lookup(self):
+        from mcp_gateway.auth.session import SessionRecord
+
+        reg = self._make_registry()
+        rec = reg.create(
+            agent_id="a",
+            intent="read_only_recall",
+            caps=frozenset({"memory_search"}),
+            output_filter_profile="recall_safe",
+        )
+        assert isinstance(rec, SessionRecord)
+        assert reg.lookup(rec.session_id) is rec
+
+    def test_lookup_unknown_raises(self):
+        from mcp_gateway.errors import SessionError
+
+        reg = self._make_registry()
+        with pytest.raises(SessionError):
+            reg.lookup("nonexistent")
+
+    def test_ttl_expiry(self, monkeypatch):
+        from datetime import timedelta
+
+        import mcp_gateway.auth.session as sess
+
+        reg = self._make_registry(ttl=10)
+        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
+        future = rec.expires_at + timedelta(seconds=1)
+        monkeypatch.setattr(sess, "_utcnow", lambda: future)
+        from mcp_gateway.errors import SessionError
+
+        with pytest.raises(SessionError):
+            reg.lookup(rec.session_id)
+
+    def test_idle_timeout(self, monkeypatch):
+        from datetime import timedelta
+
+        import mcp_gateway.auth.session as sess
+
+        reg = self._make_registry(ttl=600, idle=5)
+        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
+        original = sess._utcnow()
+        monkeypatch.setattr(sess, "_utcnow", lambda: original + timedelta(seconds=10))
+        from mcp_gateway.errors import SessionError
+
+        with pytest.raises(SessionError):
+            reg.lookup(rec.session_id)
+
+    def test_touch_resets_idle(self, monkeypatch):
+        from datetime import timedelta
+
+        import mcp_gateway.auth.session as sess
+
+        reg = self._make_registry(ttl=600, idle=5)
+        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
+        original = sess._utcnow()
+        monkeypatch.setattr(sess, "_utcnow", lambda: original + timedelta(seconds=3))
+        reg.touch(rec.session_id)
+        monkeypatch.setattr(sess, "_utcnow", lambda: original + timedelta(seconds=7))
+        # 3秒時にtouch → 7秒時はtouchから4秒経過 → idle=5秒未満なので有効
+        assert reg.lookup(rec.session_id).session_id == rec.session_id
+
+    def test_remove(self):
+        from mcp_gateway.errors import SessionError
+
+        reg = self._make_registry()
+        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
+        reg.remove(rec.session_id)
+        with pytest.raises(SessionError):
+            reg.lookup(rec.session_id)
+
+    def test_session_record_is_frozen(self):
+        from dataclasses import FrozenInstanceError
+
+        reg = self._make_registry()
+        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
+        with pytest.raises(FrozenInstanceError):
+            rec.agent_id = "other"  # type: ignore[misc]

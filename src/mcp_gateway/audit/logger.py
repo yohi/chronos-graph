@@ -33,6 +33,10 @@ class AuditLogger:
         self.level = level
 
     def log(self, *, ev: str, level: Literal["INFO", "DEBUG"] = "INFO", **fields: Any) -> None:
+        # 実行時レベルバリデーション
+        if level not in ("INFO", "DEBUG"):
+            raise ValueError(f"Invalid log level: {level}. Expected 'INFO' or 'DEBUG'.")
+
         # ログレベルによるフィルタリング
         if self.level == "INFO" and level == "DEBUG":
             return
@@ -43,8 +47,8 @@ class AuditLogger:
         if conflicted:
             raise ValueError(f"reserved audit field(s): {', '.join(sorted(conflicted))}")
 
-        # タイムスタンプ（マイクロ秒精度）
-        ts = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        # タイムスタンプ（マイクロ秒精度を強制）
+        ts = datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
         record: dict[str, Any] = {
             "ts": ts,

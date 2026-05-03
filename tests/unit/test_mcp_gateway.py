@@ -416,6 +416,11 @@ class TestAuditLogger:
             logger.set_level("ERROR")
         assert "Invalid log level: ERROR" in str(excinfo.value)
 
+        # Invalid level in log should raise ValueError
+        with pytest.raises(ValueError) as excinfo:
+            logger.log(ev="test", level="WARN")  # type: ignore[arg-type]
+        assert "Invalid log level: WARN" in str(excinfo.value)
+
 
 class TestToolRegistry:
     def test_filter_by_caps_default_deny(self):

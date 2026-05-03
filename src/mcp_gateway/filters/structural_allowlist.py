@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def _coerce_schema(schema_obj: Any) -> dict[str, Any]:
-    if hasattr(schema_obj, "model_dump"):
+    if callable(getattr(schema_obj, "model_dump", None)):
         return dict(schema_obj.model_dump())
     if isinstance(schema_obj, dict):
         return dict(schema_obj)

@@ -16,17 +16,23 @@ class ApiKeyAuthenticator:
 
     def __init__(self, agent_keys: dict[str, str]) -> None:
         # Validate no duplicate or empty API key values
+        self._agent_keys: dict[str, str] = {}
         seen_keys = set()
         for agent_id, key in agent_keys.items():
+            if not isinstance(agent_id, str) or agent_id.strip() == "":
+                raise ValueError(f"Invalid agent_id: {agent_id!r}. Must be a non-empty string.")
             if not isinstance(key, str) or key.strip() == "":
                 raise ValueError(f"Empty API key for agent: {agent_id}")
             if key in seen_keys:
                 raise ValueError(f"Duplicate API key found for agent: {agent_id}")
+
+            clean_id = agent_id.strip()
+            self._agent_keys[clean_id] = key
             seen_keys.add(key)
 
-        self._agent_keys = dict(agent_keys)
-
     def authenticate(self, raw_credential: str) -> str:
+        if not isinstance(raw_credential, str):
+            raise AuthError("invalid credential type")
         if not raw_credential:
             raise AuthError("empty credential")
 

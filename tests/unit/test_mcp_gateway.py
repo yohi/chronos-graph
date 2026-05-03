@@ -304,7 +304,7 @@ class TestAuditLogger:
         assert rec["decision"] == "allow"
         assert rec["sid"] == "s1"
         assert "ts" in rec
-        # タイムスタンプの精度（マイクロ秒を含む ISO 8601 形式: YYYY-MM-DDTHH:MM:SS.mmmmmmZ）
+        # タイムスタンプの精度 (マイクロ秒を含む ISO 8601 形式: YYYY-MM-DDTHH:MM:SS.mmmmmmZ)
         assert rec["ts"].endswith("Z")
         assert "." in rec["ts"]
 
@@ -437,6 +437,7 @@ class TestAuditLogger:
         # Valid levels should pass
         AuditLogger(level="INFO")
         AuditLogger(level="DEBUG")
+        AuditLogger(level="ERROR")
 
         # Invalid level in init should raise ValueError
         with pytest.raises(ValueError) as excinfo:
@@ -446,13 +447,70 @@ class TestAuditLogger:
         # Invalid level in set_level should raise ValueError
         logger = AuditLogger()
         with pytest.raises(ValueError) as excinfo:
-            logger.set_level("ERROR")
-        assert "Invalid log level: ERROR" in str(excinfo.value)
+            logger.set_level("FATAL")
+        assert "Invalid log level: FATAL" in str(excinfo.value)
 
         # Invalid level in log should raise ValueError
         with pytest.raises(ValueError) as excinfo:
             logger.log(ev="test", level="WARN")  # type: ignore[arg-type]
         assert "Invalid log level: WARN" in str(excinfo.value)
+
+    def test_token_variants_not_masked(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        log.log(
+            ev="token_stats",
+            token_count=100,
+            total_tokens=500,
+            token="secret-token",
+        )
+        captured = capsys.readouterr()
+        import json
+
+        rec = json.loads(captured.err)
+        # 完全一致の token はマスクされるが、token_count などは維持されるべき
+        assert rec["token"] == "**********"
+        assert rec["token_count"] == 100
+        assert rec["total_tokens"] == 500
+
+    def test_error_level_always_emitted(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        # ERROR レベル設定のロガー
+        log = AuditLogger(level="ERROR")
+        log.log(ev="info_ev", level="INFO")
+        log.log(ev="error_ev", level="ERROR")
+        captured = capsys.readouterr()
+        assert "info_ev" not in captured.err
+        assert "error_ev" in captured.err
+
+    def test_startup_failure_log_content(self, capsys):
+        import traceback
+
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        try:
+            raise RuntimeError("test failure")
+        except Exception as e:
+            log.log(
+                ev="startup_failure",
+                level="ERROR",
+                error_type=e.__class__.__name__,
+                error=str(e),
+                stacktrace=traceback.format_exc(),
+            )
+
+        captured = capsys.readouterr()
+        import json
+
+        rec = json.loads(captured.err)
+        assert rec["ev"] == "startup_failure"
+        assert rec["level"] == "ERROR"
+        assert rec["error_type"] == "RuntimeError"
+        assert rec["error"] == "test failure"
+        assert "traceback" in rec["stacktrace"].lower()
 
 
 class TestToolRegistry:
@@ -725,6 +783,21 @@ class TestPolicyEngine:
         )
         assert grant.caps == frozenset({"memory_search", "memory_stats"})
 
+    def test_empty_intersection_denied(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        # intent 'read_only_recall' allows ['memory_search', 'memory_stats']
+        # requesting 'memory_save' results in an empty intersection
+        with pytest.raises(PolicyError) as excinfo:
+            eng.evaluate_grant(
+                agent_id="agent-a",
+                intent="read_only_recall",
+                requested_tools=frozenset({"memory_save"}),
+            )
+        assert "none of the requested tools are allowed" in str(excinfo.value)
+
     def test_unknown_agent_denied(self):
         from mcp_gateway.errors import PolicyError
         from mcp_gateway.policy.engine import PolicyEngine
@@ -910,6 +983,22 @@ class TestApiKeyAuthenticator:
         # Should raise ValueError for whitespace key
         with pytest.raises(ValueError, match="Empty API key for agent: agent-space"):
             ApiKeyAuthenticator({"agent-space": "   "})
+
+    def test_invalid_agent_id_fails(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+
+        with pytest.raises(ValueError, match="Invalid agent_id"):
+            ApiKeyAuthenticator({"": "key1"})  # type: ignore[dict-item]
+        with pytest.raises(ValueError, match="Invalid agent_id"):
+            ApiKeyAuthenticator({None: "key1"})  # type: ignore[dict-item]
+
+    def test_invalid_credential_type_fails(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+        from mcp_gateway.errors import AuthError
+
+        a = ApiKeyAuthenticator({"a": "k"})
+        with pytest.raises(AuthError, match="invalid credential type"):
+            a.authenticate(None)  # type: ignore[arg-type]
 
 
 class TestSessionLifecycle:

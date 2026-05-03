@@ -12,8 +12,9 @@ import sys
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-# シークレットと判定するキー名のプレフィックス/完全一致リスト
-_SENSITIVE_KEYS = ("api_key", "token", "secret", "authorization", "password", "ck_")
+# シークレット判定用
+_SENSITIVE_KEYS_FULL = {"api_key", "token", "secret", "authorization", "password"}
+_SENSITIVE_KEYS_PREFIX = ("ck_",)
 
 # 値に含まれるシークレットを検知する正規表現
 # Bearer トークン、APIキー(sk-, ck-, ghp_等)、32文字以上の16進数（nonce/hash等）
@@ -24,20 +25,25 @@ _SENSITIVE_VALUE_RE = re.compile(
 
 
 class AuditLogger:
-    def __init__(self, level: Literal["INFO", "DEBUG"] = "INFO") -> None:
+    def __init__(self, level: Literal["INFO", "DEBUG", "ERROR"] = "INFO") -> None:
         self.set_level(level)
 
-    def set_level(self, level: Literal["INFO", "DEBUG"]) -> None:
-        if level not in ("INFO", "DEBUG"):
-            raise ValueError(f"Invalid log level: {level}. Expected 'INFO' or 'DEBUG'.")
+    def set_level(self, level: Literal["INFO", "DEBUG", "ERROR"]) -> None:
+        if level not in ("INFO", "DEBUG", "ERROR"):
+            raise ValueError(f"Invalid log level: {level}. Expected 'INFO', 'DEBUG', or 'ERROR'.")
         self.level = level
 
-    def log(self, *, ev: str, level: Literal["INFO", "DEBUG"] = "INFO", **fields: Any) -> None:
+    def log(
+        self, *, ev: str, level: Literal["INFO", "DEBUG", "ERROR"] = "INFO", **fields: Any
+    ) -> None:
         # 実行時レベルバリデーション
-        if level not in ("INFO", "DEBUG"):
-            raise ValueError(f"Invalid log level: {level}. Expected 'INFO' or 'DEBUG'.")
+        if level not in ("INFO", "DEBUG", "ERROR"):
+            raise ValueError(f"Invalid log level: {level}. Expected 'INFO', 'DEBUG', or 'ERROR'.")
 
         # ログレベルによるフィルタリング
+        # ERROR は常に通す、INFO は INFO 以上を通す、DEBUG はすべて通す
+        if self.level == "ERROR" and level != "ERROR":
+            return
         if self.level == "INFO" and level == "DEBUG":
             return
 
@@ -66,7 +72,11 @@ class AuditLogger:
         # キー名によるチェック（親が辞書の場合）
         if key_name:
             k_lower = key_name.lower()
-            if any(k_lower == s or k_lower.startswith(s) for s in _SENSITIVE_KEYS):
+            # 完全一致チェック
+            if k_lower in _SENSITIVE_KEYS_FULL:
+                return "**********"
+            # 接頭辞一致チェック
+            if any(k_lower.startswith(s) for s in _SENSITIVE_KEYS_PREFIX):
                 return "**********"
 
         if isinstance(value, str):

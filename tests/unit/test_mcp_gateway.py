@@ -364,6 +364,60 @@ class TestStructuralAllowlistFilter:
         out = f.apply(tool_name="memory_save", payload={"x": 1})
         assert out == {}
 
+    def test_denies_by_default_on_unknown_schema_value(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        # invalid schema value: False (should be True or list[str])
+        # Now raises PolicyError at construction time
+        with pytest.raises(PolicyError, match="Invalid schema value"):
+            StructuralAllowlistFilter(schemas={"t": {"secret": False}})  # type: ignore[arg-type]
+
+    def test_preserves_none_value_if_allowed(self):
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        f = StructuralAllowlistFilter(schemas={"t": {"nullable": True}})
+        out = f.apply(tool_name="t", payload={"nullable": None})
+        assert "nullable" in out
+        assert out["nullable"] is None
+
+    def test_raises_error_on_invalid_schema_type_at_init(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        with pytest.raises(PolicyError, match="Invalid schema value for 'field'"):
+            StructuralAllowlistFilter(schemas={"t": {"field": 123}})  # type: ignore[arg-type]
+
+    def test_raises_policy_error_on_unsupported_schema_type(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        # None is unsupported type for schema
+        with pytest.raises(PolicyError, match="Invalid schema object type: NoneType"):
+            StructuralAllowlistFilter(schemas={"t": None})  # type: ignore[arg-type]
+
+    def test_rejects_non_dict_list_elements(self):
+        """リスト内の非 dict 要素がドロップされることを確認 (Issue 1)"""
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        f = StructuralAllowlistFilter(
+            schemas={
+                "memory_search": {
+                    "results": ["id", "content"],
+                    "total_count": True,
+                },
+            }
+        )
+        payload = {
+            "results": ["bad_string", 123, {"id": "m1", "content": "ok", "secret": "x"}],
+            "total_count": 1,
+        }
+        out = f.apply(tool_name="memory_search", payload=payload)
+
+        # 非 dict 要素が削除され、正当な要素のみがフィルタリングされて残る
+        assert out["results"] == [{"id": "m1", "content": "ok"}]
+        assert out["total_count"] == 1
+
 
 class TestNoneFilter:
     def test_passthrough(self):
@@ -372,6 +426,26 @@ class TestNoneFilter:
         f = NoneFilter()
         payload = {"a": 1, "b": [{"c": 2}]}
         assert f.apply(tool_name="any", payload=payload) == payload
+
+    def test_returns_copy(self):
+        from mcp_gateway.filters.none_filter import NoneFilter
+
+        f = NoneFilter()
+        payload = {"a": 1}
+        out = f.apply(tool_name="any", payload=payload)
+        assert out is not payload
+        out["a"] = 2
+        assert payload["a"] == 1
+
+    def test_returns_deep_copy(self):
+        from mcp_gateway.filters.none_filter import NoneFilter
+
+        f = NoneFilter()
+        payload = {"a": {"b": 1}}
+        out = f.apply(tool_name="any", payload=payload)
+
+        out["a"]["b"] = 2
+        assert payload["a"]["b"] == 1, "Original payload should not be affected deep down"
 
 
 class TestFilterFactory:
@@ -670,7 +744,9 @@ class TestSessionLifecycle:
         import mcp_gateway.auth.session as sess
 
         reg = self._make_registry(ttl=600, idle=5)
-        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
+        rec = rec = reg.create(
+            agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f"
+        )
         original = sess._utcnow()
         monkeypatch.setattr(sess, "_utcnow", lambda: original + timedelta(seconds=10))
         from mcp_gateway.errors import SessionError

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 
 class NoneFilter:
     def apply(self, *, tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
-        return payload
+        return copy.deepcopy(payload)

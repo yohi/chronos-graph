@@ -20,6 +20,9 @@ def _coerce_schema(schema_obj: Any) -> dict[str, Any]:
     return {}
 
 
+_DENY = object()
+
+
 def _filter_value(value: Any, allowed_subkeys: Any) -> Any:
     if allowed_subkeys is True:
         return value
@@ -32,7 +35,7 @@ def _filter_value(value: Any, allowed_subkeys: Any) -> Any:
                 {k: v for k, v in item.items() if k in keys} if isinstance(item, dict) else item
                 for item in value
             ]
-    return None
+    return _DENY
 
 
 class StructuralAllowlistFilter:
@@ -48,6 +51,6 @@ class StructuralAllowlistFilter:
             if key not in payload:
                 continue
             filtered = _filter_value(payload[key], allowed)
-            if filtered is not None:
+            if filtered is not _DENY:
                 result[key] = filtered
         return result

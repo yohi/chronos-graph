@@ -337,6 +337,14 @@ class TestStructuralAllowlistFilter:
         out = f.apply(tool_name="t", payload={"secret": "password"})
         assert "secret" not in out
 
+    def test_preserves_none_value_if_allowed(self):
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        f = StructuralAllowlistFilter(schemas={"t": {"nullable": True}})
+        out = f.apply(tool_name="t", payload={"nullable": None})
+        assert "nullable" in out
+        assert out["nullable"] is None
+
 
 class TestNoneFilter:
     def test_passthrough(self):

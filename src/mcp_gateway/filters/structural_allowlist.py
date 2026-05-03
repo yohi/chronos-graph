@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from mcp_gateway.errors import PolicyError
+
 
 def _coerce_schema(schema_obj: Any) -> dict[str, Any]:
     if hasattr(schema_obj, "model_dump"):
@@ -17,7 +19,10 @@ def _coerce_schema(schema_obj: Any) -> dict[str, Any]:
         return result
     if isinstance(schema_obj, dict):
         return dict(schema_obj)
-    return {}
+    raise PolicyError(
+        f"Invalid schema object type: {type(schema_obj).__name__}. "
+        "Expected dict or model with model_dump()."
+    )
 
 
 _DENY = object()
@@ -46,7 +51,7 @@ class StructuralAllowlistFilter:
             coerced = _coerce_schema(s)
             for key, val in coerced.items():
                 if val is not True and not isinstance(val, list):
-                    raise ValueError(f"Invalid schema value for {key!r} in {name!r}: {val!r}")
+                    raise PolicyError(f"Invalid schema value for {key!r} in {name!r}: {val!r}")
             self._schemas[name] = coerced
 
     def apply(self, *, tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:

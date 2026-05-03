@@ -330,11 +330,12 @@ class TestStructuralAllowlistFilter:
         assert out == {}
 
     def test_denies_by_default_on_unknown_schema_value(self):
+        from mcp_gateway.errors import PolicyError
         from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
 
         # invalid schema value: False (should be True or list[str])
-        # Now raises ValueError at construction time (Issue 3 Task 3)
-        with pytest.raises(ValueError, match="Invalid schema value"):
+        # Now raises PolicyError at construction time
+        with pytest.raises(PolicyError, match="Invalid schema value"):
             StructuralAllowlistFilter(schemas={"t": {"secret": False}})  # type: ignore[arg-type]
 
     def test_preserves_none_value_if_allowed(self):
@@ -346,11 +347,19 @@ class TestStructuralAllowlistFilter:
         assert out["nullable"] is None
 
     def test_raises_error_on_invalid_schema_type_at_init(self):
+        from mcp_gateway.errors import PolicyError
         from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
 
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(PolicyError, match="Invalid schema value for 'field'"):
             StructuralAllowlistFilter(schemas={"t": {"field": 123}})  # type: ignore[arg-type]
-        assert "Invalid schema value for 'field'" in str(excinfo.value)
+
+    def test_raises_policy_error_on_unsupported_schema_type(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        # None is unsupported type for schema
+        with pytest.raises(PolicyError, match="Invalid schema object type: NoneType"):
+            StructuralAllowlistFilter(schemas={"t": None})  # type: ignore[arg-type]
 
     def test_rejects_non_dict_list_elements(self):
         """リスト内の非 dict 要素がドロップされることを確認 (Issue 1)"""

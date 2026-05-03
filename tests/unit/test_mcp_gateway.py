@@ -338,6 +338,16 @@ class TestNoneFilter:
         payload = {"a": 1, "b": [{"c": 2}]}
         assert f.apply(tool_name="any", payload=payload) == payload
 
+    def test_returns_copy(self):
+        from mcp_gateway.filters.none_filter import NoneFilter
+
+        f = NoneFilter()
+        payload = {"a": 1}
+        out = f.apply(tool_name="any", payload=payload)
+        assert out is not payload
+        out["a"] = 2
+        assert payload["a"] == 1
+
 
 class TestFilterFactory:
     def test_factory_builds_none(self):

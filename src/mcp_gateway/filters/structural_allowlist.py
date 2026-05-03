@@ -32,7 +32,7 @@ def _filter_value(value: Any, allowed_subkeys: Any) -> Any:
                 {k: v for k, v in item.items() if k in keys} if isinstance(item, dict) else item
                 for item in value
             ]
-    return value
+    return None
 
 
 class StructuralAllowlistFilter:
@@ -47,5 +47,7 @@ class StructuralAllowlistFilter:
         for key, allowed in schema.items():
             if key not in payload:
                 continue
-            result[key] = _filter_value(payload[key], allowed)
+            filtered = _filter_value(payload[key], allowed)
+            if filtered is not None:
+                result[key] = filtered
         return result

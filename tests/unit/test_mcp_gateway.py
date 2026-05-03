@@ -329,6 +329,14 @@ class TestStructuralAllowlistFilter:
         out = f.apply(tool_name="memory_save", payload={"x": 1})
         assert out == {}
 
+    def test_denies_by_default_on_unknown_schema_value(self):
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        # invalid schema value: False (should be True or list[str])
+        f = StructuralAllowlistFilter(schemas={"t": {"secret": False}})  # type: ignore[arg-type]
+        out = f.apply(tool_name="t", payload={"secret": "password"})
+        assert "secret" not in out
+
 
 class TestNoneFilter:
     def test_passthrough(self):

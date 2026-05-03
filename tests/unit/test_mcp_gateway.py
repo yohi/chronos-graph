@@ -281,3 +281,838 @@ class TestPolicyLoader:
         with pytest.raises(PolicyError) as excinfo:
             load_policy(p)
         assert "List should have at least 1 item" in str(excinfo.value)
+
+
+class TestAuditLogger:
+    def test_writes_jsonl_to_stderr(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        log.log(ev="handshake", agent="a", intent="i", decision="allow", sid="s1")
+        captured = capsys.readouterr()
+        # stdout は汚染しない
+        assert captured.out == ""
+        # stderr は1行 JSON
+        line = captured.err.strip()
+        import json
+
+        rec = json.loads(line)
+        assert rec["ev"] == "handshake"
+        assert rec["level"] == "INFO"
+        assert rec["agent"] == "a"
+        assert rec["intent"] == "i"
+        assert rec["decision"] == "allow"
+        assert rec["sid"] == "s1"
+        assert "ts" in rec
+        # タイムスタンプの精度 (マイクロ秒を含む ISO 8601 形式: YYYY-MM-DDTHH:MM:SS.mmmmmmZ)
+        assert rec["ts"].endswith("Z")
+        assert "." in rec["ts"]
+
+    def test_audit_log_level_filtering(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        # INFO レベル設定
+        log = AuditLogger(level="INFO")
+        log.log(ev="info_event", level="INFO")
+        log.log(ev="debug_event", level="DEBUG")
+        captured = capsys.readouterr()
+        assert "info_event" in captured.err
+        assert "debug_event" not in captured.err
+
+        # DEBUG レベル設定
+        log.set_level("DEBUG")
+        log.log(ev="debug_event_2", level="DEBUG")
+        captured = capsys.readouterr()
+        assert "debug_event_2" in captured.err
+
+    def test_does_not_emit_secrets(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        # シークレットがマスクされることを検証
+        log.log(
+            ev="call",
+            agent="a",
+            api_key="sk-hidden",
+            ck_token="secret",
+            normal_field="visible",
+        )
+        captured = capsys.readouterr()
+        assert "sk-hidden" not in captured.err
+        assert "secret" not in captured.err
+        assert "**********" in captured.err
+        assert "visible" in captured.err
+
+    def test_prevents_reserved_key_overwrite(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        import pytest
+
+        with pytest.raises(ValueError) as excinfo:
+            log.log(ev="test", ts="2000-01-01T00:00:00Z")
+        assert "reserved audit field(s): ts" in str(excinfo.value)
+
+    def test_expanded_sensitive_field_masking(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        log.log(
+            ev="auth",
+            token="secret-token",
+            secret="my-secret",
+            authorization="Bearer token",
+            PASSWORD="should-be-masked",
+        )
+        captured = capsys.readouterr()
+        import json
+
+        rec = json.loads(captured.err)
+        assert rec["token"] == "**********"
+        assert rec["secret"] == "**********"
+        assert rec["authorization"] == "**********"
+        assert rec["PASSWORD"] == "**********"
+
+    def test_audit_log_value_redaction(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        # 値の中に機密パターンが含まれる場合にマスクされることを検証
+        log.log(
+            ev="error_event",
+            error="Failed with Authorization: Bearer secret-token-123",
+            message="Internal error: sk-987654321",
+            details="long-hex-value: 1234567890abcdef1234567890abcdef",
+            normal_field="this is a safe message",
+        )
+        captured = capsys.readouterr()
+        import json
+
+        rec = json.loads(captured.err)
+        assert rec["error"] == "**********"
+        assert rec["message"] == "**********"
+        assert rec["details"] == "**********"
+        assert rec["normal_field"] == "this is a safe message"
+        # 生のシークレットが露出していないことを念のため確認
+        assert "secret-token-123" not in captured.err
+        assert "sk-987654321" not in captured.err
+        assert "1234567890abcdef1234567890abcdef" not in captured.err
+
+    def test_recursive_sensitive_field_masking(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        # ネストした構造のサニタイズを検証
+        log.log(
+            ev="nested_test",
+            details={
+                "authorization": "Bearer secret-token",
+                "meta": ["sk-api-key", "safe-value"],
+                "nested": {
+                    "password": "hidden-password",
+                    "id": "1234567890abcdef1234567890abcdef",  # 値の内容によるマスク
+                },
+            },
+            tags=["normal", "sk-another-key"],
+        )
+        captured = capsys.readouterr()
+        import json
+
+        rec = json.loads(captured.err)
+        # 辞書内のキー名によるマスク
+        assert rec["details"]["authorization"] == "**********"
+        assert rec["details"]["nested"]["password"] == "**********"
+        # リスト内の値の内容によるマスク
+        assert rec["details"]["meta"][0] == "**********"
+        assert rec["details"]["meta"][1] == "safe-value"
+        # 辞書内の値の内容によるマスク
+        assert rec["details"]["nested"]["id"] == "**********"
+        # トップレベルのリスト内の値の内容によるマスク
+        assert rec["tags"][0] == "normal"
+        assert rec["tags"][1] == "**********"
+
+    def test_level_validation(self):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        # Valid levels should pass
+        AuditLogger(level="INFO")
+        AuditLogger(level="DEBUG")
+        AuditLogger(level="ERROR")
+
+        # Invalid level in init should raise ValueError
+        with pytest.raises(ValueError) as excinfo:
+            AuditLogger(level="INVALID")
+        assert "Invalid log level: INVALID" in str(excinfo.value)
+
+        # Invalid level in set_level should raise ValueError
+        logger = AuditLogger()
+        with pytest.raises(ValueError) as excinfo:
+            logger.set_level("FATAL")
+        assert "Invalid log level: FATAL" in str(excinfo.value)
+
+        # Invalid level in log should raise ValueError
+        with pytest.raises(ValueError) as excinfo:
+            logger.log(ev="test", level="WARN")  # type: ignore[arg-type]
+        assert "Invalid log level: WARN" in str(excinfo.value)
+
+    def test_token_variants_not_masked(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        log.log(
+            ev="token_stats",
+            token_count=100,
+            total_tokens=500,
+            token="secret-token",
+        )
+        captured = capsys.readouterr()
+        import json
+
+        rec = json.loads(captured.err)
+        # 完全一致の token はマスクされるが、token_count などは維持されるべき
+        assert rec["token"] == "**********"
+        assert rec["token_count"] == 100
+        assert rec["total_tokens"] == 500
+
+    def test_error_level_always_emitted(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        # ERROR レベル設定のロガー
+        log = AuditLogger(level="ERROR")
+        log.log(ev="info_ev", level="INFO")
+        log.log(ev="error_ev", level="ERROR")
+        captured = capsys.readouterr()
+        assert "info_ev" not in captured.err
+        assert "error_ev" in captured.err
+
+    def test_startup_failure_log_content(self, capsys):
+        import traceback
+
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        try:
+            raise RuntimeError("test failure")
+        except Exception as e:
+            log.log(
+                ev="startup_failure",
+                level="ERROR",
+                error_type=e.__class__.__name__,
+                error=str(e),
+                stacktrace=traceback.format_exc(),
+            )
+
+        captured = capsys.readouterr()
+        import json
+
+        rec = json.loads(captured.err)
+        assert rec["ev"] == "startup_failure"
+        assert rec["level"] == "ERROR"
+        assert rec["error_type"] == "RuntimeError"
+        assert rec["error"] == "test failure"
+        assert "traceback" in rec["stacktrace"].lower()
+
+    def test_handles_non_serializable_types(self, capsys):
+        from datetime import datetime
+
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+
+        class Custom:
+            def __str__(self):
+                return "custom-data"
+
+        class SensitiveCustom:
+            def __str__(self):
+                return "sk-sensitive-data"
+
+        now = datetime.now()
+        log.log(
+            ev="type_test",
+            dt=now,
+            obj=Custom(),
+            secret_obj=SensitiveCustom(),
+        )
+
+        captured = capsys.readouterr()
+        import json
+
+        rec = json.loads(captured.err)
+        assert rec["dt"] == str(now)
+        assert rec["obj"] == "custom-data"
+        assert rec["secret_obj"] == "**********"
+
+
+class TestToolRegistry:
+    def test_filter_by_caps_default_deny(self):
+        from mcp_gateway.tools.registry import ToolRegistry
+
+        reg = ToolRegistry(
+            all_tools=[
+                {"name": "memory_search", "description": "...", "inputSchema": {}},
+                {"name": "memory_save", "description": "...", "inputSchema": {}},
+                {"name": "memory_delete", "description": "...", "inputSchema": {}},
+            ]
+        )
+        out = reg.filter_by_caps(caps=frozenset({"memory_search"}))
+        names = [t["name"] for t in out]
+        assert names == ["memory_search"]
+
+    def test_filter_by_caps_empty_when_none_match(self):
+        from mcp_gateway.tools.registry import ToolRegistry
+
+        reg = ToolRegistry(all_tools=[{"name": "memory_search"}])
+        assert reg.filter_by_caps(caps=frozenset()) == []
+
+    def test_filter_preserves_order(self):
+        from mcp_gateway.tools.registry import ToolRegistry
+
+        reg = ToolRegistry(
+            all_tools=[
+                {"name": "a"},
+                {"name": "b"},
+                {"name": "c"},
+            ]
+        )
+        out = reg.filter_by_caps(caps=frozenset({"a", "c"}))
+        assert [t["name"] for t in out] == ["a", "c"]
+
+    def test_defensive_copying(self):
+        from mcp_gateway.tools.registry import ToolRegistry
+
+        tools = [{"name": "tool1", "description": "desc1"}]
+        registry = ToolRegistry(tools)
+
+        # Verify __init__ deepcopies
+        tools[0]["description"] = "modified"
+        assert registry.all_tools[0]["description"] == "desc1"
+
+        # Verify all_tools property deepcopies
+        retrieved = registry.all_tools
+        retrieved[0]["description"] = "modified again"
+        assert registry.all_tools[0]["description"] == "desc1"
+
+        # Verify filter_by_caps deepcopies
+        filtered = registry.filter_by_caps(caps=frozenset(["tool1"]))
+        filtered[0]["description"] = "modified filtered"
+        assert registry.all_tools[0]["description"] == "desc1"
+
+
+class TestStructuralAllowlistFilter:
+    def _filter(self):
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        return StructuralAllowlistFilter(
+            schemas={
+                "memory_search": {
+                    "results": ["id", "content"],
+                    "total_count": True,
+                },
+            }
+        )
+
+    def test_strips_unlisted_top_level_fields(self):
+        f = self._filter()
+        out = f.apply(
+            tool_name="memory_search",
+            payload={"results": [], "total_count": 0, "secret": "x"},
+        )
+        assert out == {"results": [], "total_count": 0}
+
+    def test_strips_unlisted_nested_fields(self):
+        f = self._filter()
+        out = f.apply(
+            tool_name="memory_search",
+            payload={
+                "results": [
+                    {
+                        "id": "m1",
+                        "content": "hello",
+                        "embedding": [0.1, 0.2],
+                        "internal_score": 0.9,
+                    }
+                ],
+                "total_count": 1,
+            },
+        )
+        assert out["results"][0] == {"id": "m1", "content": "hello"}
+        assert out["total_count"] == 1
+
+    def test_unknown_tool_returns_empty_payload(self):
+        # スキーマがない=露出禁止
+        f = self._filter()
+        out = f.apply(tool_name="memory_save", payload={"x": 1})
+        assert out == {}
+
+    def test_denies_by_default_on_unknown_schema_value(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        # invalid schema value: False (should be True or list[str])
+        # Now raises PolicyError at construction time
+        with pytest.raises(PolicyError, match="Invalid schema value"):
+            StructuralAllowlistFilter(schemas={"t": {"secret": False}})  # type: ignore[arg-type]
+
+    def test_preserves_none_value_if_allowed(self):
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        f = StructuralAllowlistFilter(schemas={"t": {"nullable": True}})
+        out = f.apply(tool_name="t", payload={"nullable": None})
+        assert "nullable" in out
+        assert out["nullable"] is None
+
+    def test_raises_error_on_invalid_schema_type_at_init(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        with pytest.raises(PolicyError, match="Invalid schema value for 'field'"):
+            StructuralAllowlistFilter(schemas={"t": {"field": 123}})  # type: ignore[arg-type]
+
+    def test_raises_error_on_non_string_list_elements_at_init(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        # List with non-string elements should raise PolicyError
+        with pytest.raises(
+            PolicyError,
+            match="Invalid schema: all elements in list for 'field1' in 'tool1' must be strings",
+        ):
+            StructuralAllowlistFilter({"tool1": {"field1": ["a", 1]}})
+
+    def test_raises_policy_error_on_unsupported_schema_type(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        # None is unsupported type for schema
+        with pytest.raises(PolicyError, match="Invalid schema object type: NoneType"):
+            StructuralAllowlistFilter(schemas={"t": None})  # type: ignore[arg-type]
+
+    def test_rejects_non_dict_list_elements(self):
+        """リスト内の非 dict 要素がドロップされることを確認 (Issue 1)"""
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        f = StructuralAllowlistFilter(
+            schemas={
+                "memory_search": {
+                    "results": ["id", "content"],
+                    "total_count": True,
+                },
+            }
+        )
+        payload = {
+            "results": ["bad_string", 123, {"id": "m1", "content": "ok", "secret": "x"}],
+            "total_count": 1,
+        }
+        out = f.apply(tool_name="memory_search", payload=payload)
+
+        # 非 dict 要素が削除され、正当な要素のみがフィルタリングされて残る
+        assert out["results"] == [{"id": "m1", "content": "ok"}]
+        assert out["total_count"] == 1
+
+
+class TestNoneFilter:
+    def test_passthrough(self):
+        from mcp_gateway.filters.none_filter import NoneFilter
+
+        f = NoneFilter()
+        payload = {"a": 1, "b": [{"c": 2}]}
+        assert f.apply(tool_name="any", payload=payload) == payload
+
+    def test_returns_copy(self):
+        from mcp_gateway.filters.none_filter import NoneFilter
+
+        f = NoneFilter()
+        payload = {"a": 1}
+        out = f.apply(tool_name="any", payload=payload)
+        assert out is not payload
+        out["a"] = 2
+        assert payload["a"] == 1
+
+    def test_returns_deep_copy(self):
+        from mcp_gateway.filters.none_filter import NoneFilter
+
+        f = NoneFilter()
+        payload = {"a": {"b": 1}}
+        out = f.apply(tool_name="any", payload=payload)
+
+        out["a"]["b"] = 2
+        assert payload["a"]["b"] == 1, "Original payload should not be affected deep down"
+
+
+class TestFilterFactory:
+    def test_factory_builds_none(self):
+        from mcp_gateway.filters.factory import build_filter
+        from mcp_gateway.policy.models import OutputFilterDef
+
+        f = build_filter(OutputFilterDef(type="none"))
+        assert f.apply(tool_name="x", payload={"a": 1}) == {"a": 1}
+
+    def test_factory_builds_structural_allowlist(self):
+        from mcp_gateway.filters.factory import build_filter
+        from mcp_gateway.policy.models import OutputFilterDef
+
+        f = build_filter(
+            OutputFilterDef(
+                type="structural_allowlist",
+                schemas={"t": {"id": True}},  # type: ignore[arg-type]
+            )
+        )
+        out = f.apply(tool_name="t", payload={"id": 1, "x": 2})
+        assert out == {"id": 1}
+
+
+class TestPolicyEngine:
+    def _policy(self):
+        from mcp_gateway.policy.models import (
+            AgentPolicy,
+            GatewayPolicy,
+            IntentPolicy,
+            OutputFilterDef,
+        )
+
+        return GatewayPolicy(
+            version=1,
+            output_filters={
+                "rs": OutputFilterDef(type="none"),
+            },
+            intents={
+                "read_only_recall": IntentPolicy(
+                    description="x",
+                    allowed_tools=["memory_search", "memory_stats"],
+                    output_filter="rs",
+                ),
+                "curate_memories": IntentPolicy(
+                    description="y",
+                    allowed_tools=["memory_save"],
+                    output_filter="rs",
+                ),
+            },
+            agents={
+                "agent-a": AgentPolicy(allowed_intents=["read_only_recall"]),
+            },
+        )
+
+    def test_evaluate_grant_allows_subset(self):
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        grant = eng.evaluate_grant(
+            agent_id="agent-a",
+            intent="read_only_recall",
+            requested_tools=frozenset({"memory_search"}),
+        )
+        assert grant.caps == frozenset({"memory_search"})
+        assert grant.output_filter_profile == "rs"
+
+    def test_evaluate_grant_full_when_no_request(self):
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        grant = eng.evaluate_grant(
+            agent_id="agent-a", intent="read_only_recall", requested_tools=None
+        )
+        assert grant.caps == frozenset({"memory_search", "memory_stats"})
+
+    def test_empty_intersection_denied(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        # intent 'read_only_recall' allows ['memory_search', 'memory_stats']
+        # requesting 'memory_save' results in an empty intersection
+        with pytest.raises(PolicyError) as excinfo:
+            eng.evaluate_grant(
+                agent_id="agent-a",
+                intent="read_only_recall",
+                requested_tools=frozenset({"memory_save"}),
+            )
+        assert "none of the requested tools are allowed" in str(excinfo.value)
+
+    def test_unknown_agent_denied(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        with pytest.raises(PolicyError):
+            eng.evaluate_grant(agent_id="ghost", intent="read_only_recall", requested_tools=None)
+
+    def test_intent_not_allowed_for_agent_denied(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        with pytest.raises(PolicyError, match="cannot use intent"):
+            eng.evaluate_grant(agent_id="agent-a", intent="curate_memories", requested_tools=None)
+
+    def test_unknown_intent_message_priority(self):
+        # Even if the intent is not in agent.allowed_intents,
+        # "unknown intent" should be raised first if the intent is not in the policy.
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        with pytest.raises(PolicyError, match="unknown intent"):
+            eng.evaluate_grant(agent_id="agent-a", intent="ghost_intent", requested_tools=None)
+
+    def test_requested_tools_outside_intent_narrowed(self):
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        # intent 'read_only_recall' allows ["memory_search", "memory_stats"]
+        # requesting "memory_save" (not allowed) and "memory_search" (allowed)
+        grant = eng.evaluate_grant(
+            agent_id="agent-a",
+            intent="read_only_recall",
+            requested_tools=frozenset({"memory_search", "memory_save"}),
+        )
+        assert grant.caps == frozenset({"memory_search"})
+        assert "memory_save" not in grant.caps
+
+    def test_evaluate_grant_empty_requested_tools_denied(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        with pytest.raises(PolicyError, match="requested_tools must be None"):
+            eng.evaluate_grant(
+                agent_id="agent-a",
+                intent="read_only_recall",
+                requested_tools=frozenset(),
+            )
+
+    def test_evaluate_grant_normalizes_to_frozenset(self):
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        # Pass a mutable set despite type hinting
+        grant = eng.evaluate_grant(
+            agent_id="agent-a",
+            intent="read_only_recall",
+            requested_tools={"memory_search"},  # type: ignore
+        )
+        assert isinstance(grant.caps, frozenset)
+        assert grant.caps == frozenset({"memory_search"})
+
+    def test_check_call_is_staticmethod(self):
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        # インスタンス化せずにクラスから直接呼び出せることを確認
+        PolicyEngine.check_call(caps=frozenset({"memory_search"}), tool_name="memory_search")
+
+    def test_check_call_allows_in_caps(self):
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        eng.check_call(caps=frozenset({"memory_search"}), tool_name="memory_search")
+
+    def test_check_call_denies_outside_caps(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        with pytest.raises(PolicyError):
+            eng.check_call(caps=frozenset({"memory_search"}), tool_name="memory_save")
+
+
+class TestHeaderParsing:
+    def test_parse_bearer_token(self):
+        from mcp_gateway.auth.headers import parse_bearer
+
+        assert parse_bearer("Bearer ck_abc") == "ck_abc"
+
+    def test_parse_bearer_case_insensitive_scheme(self):
+        from mcp_gateway.auth.headers import parse_bearer
+
+        assert parse_bearer("bearer ck_abc") == "ck_abc"
+
+    def test_parse_bearer_missing_returns_none(self):
+        from mcp_gateway.auth.headers import parse_bearer
+
+        assert parse_bearer(None) is None
+        assert parse_bearer("") is None
+        assert parse_bearer("Basic xxx") is None
+
+    def test_parse_intent(self):
+        from mcp_gateway.auth.headers import parse_intent
+
+        assert parse_intent("read_only_recall") == "read_only_recall"
+        assert parse_intent("  read_only_recall  ") == "read_only_recall"
+        assert parse_intent("") is None
+        assert parse_intent(None) is None
+
+    def test_parse_bearer_rejects_spaces_in_token(self):
+        from mcp_gateway.auth.headers import parse_bearer
+
+        assert parse_bearer("Bearer tok en") is None
+        assert parse_bearer("Bearer token extra") is None
+
+    def test_parse_bearer_rejects_malformed(self):
+        from mcp_gateway.auth.headers import parse_bearer
+
+        assert parse_bearer("Bearer") is None
+        assert parse_bearer("Bearer  ") is None
+        assert parse_bearer("Bearer token extra words") is None
+
+    def test_parse_requested_tools(self):
+        from mcp_gateway.auth.headers import parse_requested_tools
+
+        assert parse_requested_tools("memory_search,memory_save") == frozenset(
+            {"memory_search", "memory_save"}
+        )
+        assert parse_requested_tools("memory_search , memory_save ") == frozenset(
+            {"memory_search", "memory_save"}
+        )
+        assert parse_requested_tools("memory_search,memory_search") == frozenset({"memory_search"})
+        assert parse_requested_tools("") is None
+        assert parse_requested_tools(None) is None
+
+
+class TestApiKeyAuthenticator:
+    def test_resolves_known_agent(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+
+        a = ApiKeyAuthenticator({"summarizer-bot": "ck_xxx"})
+        assert a.authenticate("ck_xxx") == "summarizer-bot"
+
+    def test_unknown_key_raises_auth_error(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+        from mcp_gateway.errors import AuthError
+
+        a = ApiKeyAuthenticator({"summarizer-bot": "ck_xxx"})
+        with pytest.raises(AuthError, match="unknown api key"):
+            a.authenticate("ck_wrong")
+
+    def test_empty_key_raises_auth_error(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+        from mcp_gateway.errors import AuthError
+
+        a = ApiKeyAuthenticator({"summarizer-bot": "ck_xxx"})
+        with pytest.raises(AuthError, match="empty credential"):
+            a.authenticate("")
+
+    def test_authenticate_returns_identifier_for_matching_key(self):
+        # Verify that ApiKeyAuthenticator returns the correct identifier for a matching key.
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+
+        a = ApiKeyAuthenticator({"x": "ck_aaa"})
+        assert a.authenticate("ck_aaa") == "x"
+
+    def test_duplicate_keys_raise_value_error(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+
+        with pytest.raises(ValueError, match="Duplicate API key found"):
+            ApiKeyAuthenticator({"agent1": "key1", "agent2": "key1"})
+
+    def test_empty_keys_raise_value_error(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+
+        # Should raise ValueError for empty key
+        with pytest.raises(ValueError, match="Empty API key for agent: agent-empty"):
+            ApiKeyAuthenticator({"agent-empty": ""})
+
+        # Should raise ValueError for whitespace key
+        with pytest.raises(ValueError, match="Empty API key for agent: agent-space"):
+            ApiKeyAuthenticator({"agent-space": "   "})
+
+    def test_invalid_agent_id_fails(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+
+        with pytest.raises(ValueError, match="Invalid agent_id"):
+            ApiKeyAuthenticator({"": "key1"})  # type: ignore[dict-item]
+        with pytest.raises(ValueError, match="Invalid agent_id"):
+            ApiKeyAuthenticator({None: "key1"})  # type: ignore[dict-item]
+
+    def test_invalid_credential_type_fails(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+        from mcp_gateway.errors import AuthError
+
+        a = ApiKeyAuthenticator({"a": "k"})
+        with pytest.raises(AuthError, match="invalid credential type"):
+            a.authenticate(None)  # type: ignore[arg-type]
+
+
+class TestSessionLifecycle:
+    def _make_registry(self, ttl: int = 60, idle: int = 30):
+        from mcp_gateway.auth.session import InMemorySessionRegistry
+
+        return InMemorySessionRegistry(ttl_seconds=ttl, idle_timeout_seconds=idle)
+
+    def test_create_and_lookup(self):
+        from mcp_gateway.auth.session import SessionRecord
+
+        reg = self._make_registry()
+        rec = reg.create(
+            agent_id="a",
+            intent="read_only_recall",
+            caps=frozenset({"memory_search"}),
+            output_filter_profile="recall_safe",
+        )
+        assert isinstance(rec, SessionRecord)
+        assert reg.lookup(rec.session_id) is rec
+
+    def test_lookup_unknown_raises(self):
+        from mcp_gateway.errors import SessionError
+
+        reg = self._make_registry()
+        with pytest.raises(SessionError):
+            reg.lookup("nonexistent")
+
+    def test_ttl_expiry(self, monkeypatch):
+        from datetime import timedelta
+
+        import mcp_gateway.auth.session as sess
+
+        reg = self._make_registry(ttl=10)
+        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
+        future = rec.expires_at + timedelta(seconds=1)
+        monkeypatch.setattr(sess, "_utcnow", lambda: future)
+        from mcp_gateway.errors import SessionError
+
+        with pytest.raises(SessionError):
+            reg.lookup(rec.session_id)
+
+    def test_idle_timeout(self, monkeypatch):
+        from datetime import timedelta
+
+        import mcp_gateway.auth.session as sess
+
+        reg = self._make_registry(ttl=600, idle=5)
+        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
+        original = sess._utcnow()
+        monkeypatch.setattr(sess, "_utcnow", lambda: original + timedelta(seconds=10))
+        from mcp_gateway.errors import SessionError
+
+        with pytest.raises(SessionError):
+            reg.lookup(rec.session_id)
+
+    def test_touch_resets_idle(self, monkeypatch):
+        from datetime import timedelta
+
+        import mcp_gateway.auth.session as sess
+
+        reg = self._make_registry(ttl=600, idle=5)
+        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
+        original = sess._utcnow()
+        monkeypatch.setattr(sess, "_utcnow", lambda: original + timedelta(seconds=3))
+        reg.touch(rec.session_id)
+        monkeypatch.setattr(sess, "_utcnow", lambda: original + timedelta(seconds=7))
+        # 3秒時にtouch → 7秒時はtouchから4秒経過 → idle=5秒未満なので有効
+        assert reg.lookup(rec.session_id).session_id == rec.session_id
+
+    def test_remove(self):
+        from mcp_gateway.errors import SessionError
+
+        reg = self._make_registry()
+        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
+        reg.remove(rec.session_id)
+        with pytest.raises(SessionError):
+            reg.lookup(rec.session_id)
+
+    def test_session_record_is_frozen(self):
+        from dataclasses import FrozenInstanceError
+
+        reg = self._make_registry()
+        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
+        with pytest.raises(FrozenInstanceError):
+            rec.agent_id = "other"  # type: ignore[misc]

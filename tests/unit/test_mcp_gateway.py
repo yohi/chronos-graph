@@ -343,6 +343,54 @@ class TestAuditLogger:
         assert "**********" in captured.err
         assert "visible" in captured.err
 
+    def test_prevents_reserved_key_overwrite(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        import pytest
+
+        with pytest.raises(ValueError) as excinfo:
+            log.log(ev="test", ts="2000-01-01T00:00:00Z")
+        assert "reserved audit field(s): ts" in str(excinfo.value)
+
+    def test_expanded_sensitive_field_masking(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        log.log(
+            ev="auth",
+            token="secret-token",
+            secret="my-secret",
+            authorization="Bearer token",
+            PASSWORD="should-be-masked",
+        )
+        captured = capsys.readouterr()
+        import json
+
+        rec = json.loads(captured.err)
+        assert rec["token"] == "**********"
+        assert rec["secret"] == "**********"
+        assert rec["authorization"] == "**********"
+        assert rec["PASSWORD"] == "**********"
+
+    def test_level_validation(self):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        # Valid levels should pass
+        AuditLogger(level="INFO")
+        AuditLogger(level="DEBUG")
+
+        # Invalid level in init should raise ValueError
+        with pytest.raises(ValueError) as excinfo:
+            AuditLogger(level="INVALID")
+        assert "Invalid log level: INVALID" in str(excinfo.value)
+
+        # Invalid level in set_level should raise ValueError
+        logger = AuditLogger()
+        with pytest.raises(ValueError) as excinfo:
+            logger.set_level("ERROR")
+        assert "Invalid log level: ERROR" in str(excinfo.value)
+
 
 class TestToolRegistry:
     def test_filter_by_caps_default_deny(self):

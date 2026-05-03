@@ -27,6 +27,9 @@ class ApiKeyAuthenticator:
         self._agent_keys = dict(agent_keys)
 
     def authenticate(self, raw_credential: str) -> str:
+        if not raw_credential:
+            raise AuthError("empty credential")
+
         matched_agent = None
         for agent_id, expected in self._agent_keys.items():
             if hmac.compare_digest(raw_credential, expected):
@@ -34,8 +37,5 @@ class ApiKeyAuthenticator:
 
         if matched_agent is not None:
             return matched_agent
-
-        if not raw_credential:
-            raise AuthError("empty credential")
 
         raise AuthError("unknown api key")

@@ -48,8 +48,6 @@ class PolicyEngine:
         else:
             # Narrow requested_tools to the intersection with allowed_tools (IBAC hybrid narrowing)
             caps = requested_tools & allowed
-            if not caps:
-                raise PolicyError(f"none of the requested tools are allowed for intent {intent!r}")
             # Ensure caps is always an immutable frozenset even if a mutable set was passed
             caps = frozenset(caps)
         return Grant(intent=intent, caps=caps, output_filter_profile=intent_pol.output_filter)

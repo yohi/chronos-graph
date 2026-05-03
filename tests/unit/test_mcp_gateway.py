@@ -283,6 +283,158 @@ class TestPolicyLoader:
         assert "List should have at least 1 item" in str(excinfo.value)
 
 
+class TestStructuralAllowlistFilter:
+    def _filter(self):
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        return StructuralAllowlistFilter(
+            schemas={
+                "memory_search": {
+                    "results": ["id", "content"],
+                    "total_count": True,
+                },
+            }
+        )
+
+    def test_strips_unlisted_top_level_fields(self):
+        f = self._filter()
+        out = f.apply(
+            tool_name="memory_search",
+            payload={"results": [], "total_count": 0, "secret": "x"},
+        )
+        assert out == {"results": [], "total_count": 0}
+
+    def test_strips_unlisted_nested_fields(self):
+        f = self._filter()
+        out = f.apply(
+            tool_name="memory_search",
+            payload={
+                "results": [
+                    {
+                        "id": "m1",
+                        "content": "hello",
+                        "embedding": [0.1, 0.2],
+                        "internal_score": 0.9,
+                    }
+                ],
+                "total_count": 1,
+            },
+        )
+        assert out["results"][0] == {"id": "m1", "content": "hello"}
+        assert out["total_count"] == 1
+
+    def test_unknown_tool_returns_empty_payload(self):
+        # スキーマがない=露出禁止
+        f = self._filter()
+        out = f.apply(tool_name="memory_save", payload={"x": 1})
+        assert out == {}
+
+    def test_denies_by_default_on_unknown_schema_value(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        # invalid schema value: False (should be True or list[str])
+        # Now raises PolicyError at construction time
+        with pytest.raises(PolicyError, match="Invalid schema value"):
+            StructuralAllowlistFilter(schemas={"t": {"secret": False}})  # type: ignore[arg-type]
+
+    def test_preserves_none_value_if_allowed(self):
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        f = StructuralAllowlistFilter(schemas={"t": {"nullable": True}})
+        out = f.apply(tool_name="t", payload={"nullable": None})
+        assert "nullable" in out
+        assert out["nullable"] is None
+
+    def test_raises_error_on_invalid_schema_type_at_init(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        with pytest.raises(PolicyError, match="Invalid schema value for 'field'"):
+            StructuralAllowlistFilter(schemas={"t": {"field": 123}})  # type: ignore[arg-type]
+
+    def test_raises_policy_error_on_unsupported_schema_type(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        # None is unsupported type for schema
+        with pytest.raises(PolicyError, match="Invalid schema object type: NoneType"):
+            StructuralAllowlistFilter(schemas={"t": None})  # type: ignore[arg-type]
+
+    def test_rejects_non_dict_list_elements(self):
+        """リスト内の非 dict 要素がドロップされることを確認 (Issue 1)"""
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        f = StructuralAllowlistFilter(
+            schemas={
+                "memory_search": {
+                    "results": ["id", "content"],
+                    "total_count": True,
+                },
+            }
+        )
+        payload = {
+            "results": ["bad_string", 123, {"id": "m1", "content": "ok", "secret": "x"}],
+            "total_count": 1,
+        }
+        out = f.apply(tool_name="memory_search", payload=payload)
+
+        # 非 dict 要素が削除され、正当な要素のみがフィルタリングされて残る
+        assert out["results"] == [{"id": "m1", "content": "ok"}]
+        assert out["total_count"] == 1
+
+
+class TestNoneFilter:
+    def test_passthrough(self):
+        from mcp_gateway.filters.none_filter import NoneFilter
+
+        f = NoneFilter()
+        payload = {"a": 1, "b": [{"c": 2}]}
+        assert f.apply(tool_name="any", payload=payload) == payload
+
+    def test_returns_copy(self):
+        from mcp_gateway.filters.none_filter import NoneFilter
+
+        f = NoneFilter()
+        payload = {"a": 1}
+        out = f.apply(tool_name="any", payload=payload)
+        assert out is not payload
+        out["a"] = 2
+        assert payload["a"] == 1
+
+    def test_returns_deep_copy(self):
+        from mcp_gateway.filters.none_filter import NoneFilter
+
+        f = NoneFilter()
+        payload = {"a": {"b": 1}}
+        out = f.apply(tool_name="any", payload=payload)
+
+        out["a"]["b"] = 2
+        assert payload["a"]["b"] == 1, "Original payload should not be affected deep down"
+
+
+class TestFilterFactory:
+    def test_factory_builds_none(self):
+        from mcp_gateway.filters.factory import build_filter
+        from mcp_gateway.policy.models import OutputFilterDef
+
+        f = build_filter(OutputFilterDef(type="none"))
+        assert f.apply(tool_name="x", payload={"a": 1}) == {"a": 1}
+
+    def test_factory_builds_structural_allowlist(self):
+        from mcp_gateway.filters.factory import build_filter
+        from mcp_gateway.policy.models import OutputFilterDef
+
+        f = build_filter(
+            OutputFilterDef(
+                type="structural_allowlist",
+                schemas={"t": {"id": True}},  # type: ignore[arg-type]
+            )
+        )
+        out = f.apply(tool_name="t", payload={"id": 1, "x": 2})
+        assert out == {"id": 1}
+
+
 class TestPolicyEngine:
     def _policy(self):
         from mcp_gateway.policy.models import (

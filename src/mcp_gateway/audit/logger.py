@@ -91,4 +91,10 @@ class AuditLogger:
         if isinstance(value, (list, tuple)):
             return [self._sanitize_value(item) for item in value]
 
-        return value
+        if isinstance(value, (int, float, bool)) or value is None:
+            return value
+
+        text = str(value)
+        if _SENSITIVE_VALUE_RE.search(text):
+            return "**********"
+        return text

@@ -512,6 +512,37 @@ class TestAuditLogger:
         assert rec["error"] == "test failure"
         assert "traceback" in rec["stacktrace"].lower()
 
+    def test_handles_non_serializable_types(self, capsys):
+        from datetime import datetime
+
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+
+        class Custom:
+            def __str__(self):
+                return "custom-data"
+
+        class SensitiveCustom:
+            def __str__(self):
+                return "sk-sensitive-data"
+
+        now = datetime.now()
+        log.log(
+            ev="type_test",
+            dt=now,
+            obj=Custom(),
+            secret_obj=SensitiveCustom(),
+        )
+
+        captured = capsys.readouterr()
+        import json
+
+        rec = json.loads(captured.err)
+        assert rec["dt"] == str(now)
+        assert rec["obj"] == "custom-data"
+        assert rec["secret_obj"] == "**********"
+
 
 class TestToolRegistry:
     def test_filter_by_caps_default_deny(self):

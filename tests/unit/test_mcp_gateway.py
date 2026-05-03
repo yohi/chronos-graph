@@ -283,6 +283,178 @@ class TestPolicyLoader:
         assert "List should have at least 1 item" in str(excinfo.value)
 
 
+class TestAuditLogger:
+    def test_writes_jsonl_to_stderr(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        log.log(ev="handshake", agent="a", intent="i", decision="allow", sid="s1")
+        captured = capsys.readouterr()
+        # stdout は汚染しない
+        assert captured.out == ""
+        # stderr は1行 JSON
+        line = captured.err.strip()
+        import json
+
+        rec = json.loads(line)
+        assert rec["ev"] == "handshake"
+        assert rec["level"] == "INFO"
+        assert rec["agent"] == "a"
+        assert rec["intent"] == "i"
+        assert rec["decision"] == "allow"
+        assert rec["sid"] == "s1"
+        assert "ts" in rec
+        # タイムスタンプの精度（マイクロ秒を含む ISO 8601 形式: YYYY-MM-DDTHH:MM:SS.mmmmmmZ）
+        assert rec["ts"].endswith("Z")
+        assert "." in rec["ts"]
+
+    def test_audit_log_level_filtering(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        # INFO レベル設定
+        log = AuditLogger(level="INFO")
+        log.log(ev="info_event", level="INFO")
+        log.log(ev="debug_event", level="DEBUG")
+        captured = capsys.readouterr()
+        assert "info_event" in captured.err
+        assert "debug_event" not in captured.err
+
+        # DEBUG レベル設定
+        log.set_level("DEBUG")
+        log.log(ev="debug_event_2", level="DEBUG")
+        captured = capsys.readouterr()
+        assert "debug_event_2" in captured.err
+
+    def test_does_not_emit_secrets(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        # シークレットがマスクされることを検証
+        log.log(
+            ev="call",
+            agent="a",
+            api_key="sk-hidden",
+            ck_token="secret",
+            normal_field="visible",
+        )
+        captured = capsys.readouterr()
+        assert "sk-hidden" not in captured.err
+        assert "secret" not in captured.err
+        assert "**********" in captured.err
+        assert "visible" in captured.err
+
+    def test_prevents_reserved_key_overwrite(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        import pytest
+
+        with pytest.raises(ValueError) as excinfo:
+            log.log(ev="test", ts="2000-01-01T00:00:00Z")
+        assert "reserved audit field(s): ts" in str(excinfo.value)
+
+    def test_expanded_sensitive_field_masking(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        log.log(
+            ev="auth",
+            token="secret-token",
+            secret="my-secret",
+            authorization="Bearer token",
+            PASSWORD="should-be-masked",
+        )
+        captured = capsys.readouterr()
+        import json
+
+        rec = json.loads(captured.err)
+        assert rec["token"] == "**********"
+        assert rec["secret"] == "**********"
+        assert rec["authorization"] == "**********"
+        assert rec["PASSWORD"] == "**********"
+
+    def test_audit_log_value_redaction(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        # 値の中に機密パターンが含まれる場合にマスクされることを検証
+        log.log(
+            ev="error_event",
+            error="Failed with Authorization: Bearer secret-token-123",
+            message="Internal error: sk-987654321",
+            details="long-hex-value: 1234567890abcdef1234567890abcdef",
+            normal_field="this is a safe message",
+        )
+        captured = capsys.readouterr()
+        import json
+
+        rec = json.loads(captured.err)
+        assert rec["error"] == "**********"
+        assert rec["message"] == "**********"
+        assert rec["details"] == "**********"
+        assert rec["normal_field"] == "this is a safe message"
+        # 生のシークレットが露出していないことを念のため確認
+        assert "secret-token-123" not in captured.err
+        assert "sk-987654321" not in captured.err
+        assert "1234567890abcdef1234567890abcdef" not in captured.err
+
+    def test_recursive_sensitive_field_masking(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        # ネストした構造のサニタイズを検証
+        log.log(
+            ev="nested_test",
+            details={
+                "authorization": "Bearer secret-token",
+                "meta": ["sk-api-key", "safe-value"],
+                "nested": {
+                    "password": "hidden-password",
+                    "id": "1234567890abcdef1234567890abcdef",  # 値の内容によるマスク
+                },
+            },
+            tags=["normal", "sk-another-key"],
+        )
+        captured = capsys.readouterr()
+        import json
+
+        rec = json.loads(captured.err)
+        # 辞書内のキー名によるマスク
+        assert rec["details"]["authorization"] == "**********"
+        assert rec["details"]["nested"]["password"] == "**********"
+        # リスト内の値の内容によるマスク
+        assert rec["details"]["meta"][0] == "**********"
+        assert rec["details"]["meta"][1] == "safe-value"
+        # 辞書内の値の内容によるマスク
+        assert rec["details"]["nested"]["id"] == "**********"
+        # トップレベルのリスト内の値の内容によるマスク
+        assert rec["tags"][0] == "normal"
+        assert rec["tags"][1] == "**********"
+
+    def test_level_validation(self):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        # Valid levels should pass
+        AuditLogger(level="INFO")
+        AuditLogger(level="DEBUG")
+
+        # Invalid level in init should raise ValueError
+        with pytest.raises(ValueError) as excinfo:
+            AuditLogger(level="INVALID")
+        assert "Invalid log level: INVALID" in str(excinfo.value)
+
+        # Invalid level in set_level should raise ValueError
+        logger = AuditLogger()
+        with pytest.raises(ValueError) as excinfo:
+            logger.set_level("ERROR")
+        assert "Invalid log level: ERROR" in str(excinfo.value)
+
+        # Invalid level in log should raise ValueError
+        with pytest.raises(ValueError) as excinfo:
+            logger.log(ev="test", level="WARN")  # type: ignore[arg-type]
+        assert "Invalid log level: WARN" in str(excinfo.value)
+
+
 class TestToolRegistry:
     def test_filter_by_caps_default_deny(self):
         from mcp_gateway.tools.registry import ToolRegistry

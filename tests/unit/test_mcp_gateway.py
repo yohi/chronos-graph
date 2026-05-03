@@ -398,6 +398,39 @@ class TestAuditLogger:
         assert "sk-987654321" not in captured.err
         assert "1234567890abcdef1234567890abcdef" not in captured.err
 
+    def test_recursive_sensitive_field_masking(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        # ネストした構造のサニタイズを検証
+        log.log(
+            ev="nested_test",
+            details={
+                "authorization": "Bearer secret-token",
+                "meta": ["sk-api-key", "safe-value"],
+                "nested": {
+                    "password": "hidden-password",
+                    "id": "1234567890abcdef1234567890abcdef",  # 値の内容によるマスク
+                },
+            },
+            tags=["normal", "sk-another-key"],
+        )
+        captured = capsys.readouterr()
+        import json
+
+        rec = json.loads(captured.err)
+        # 辞書内のキー名によるマスク
+        assert rec["details"]["authorization"] == "**********"
+        assert rec["details"]["nested"]["password"] == "**********"
+        # リスト内の値の内容によるマスク
+        assert rec["details"]["meta"][0] == "**********"
+        assert rec["details"]["meta"][1] == "safe-value"
+        # 辞書内の値の内容によるマスク
+        assert rec["details"]["nested"]["id"] == "**********"
+        # トップレベルのリスト内の値の内容によるマスク
+        assert rec["tags"][0] == "normal"
+        assert rec["tags"][1] == "**********"
+
     def test_level_validation(self):
         from mcp_gateway.audit.logger import AuditLogger
 

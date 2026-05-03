@@ -56,23 +56,29 @@ class AuditLogger:
             "level": level,
         }
 
-        # シークレットフィールドのフィルタリング
-        filtered_fields = {}
-        for k, v in fields.items():
-            k_lower = k.lower()
-            # キー名によるチェック
-            is_sensitive = any(k_lower == s or k_lower.startswith(s) for s in _SENSITIVE_KEYS)
-
-            if not is_sensitive and isinstance(v, str):
-                # 値の内容によるチェック
-                if _SENSITIVE_VALUE_RE.search(v):
-                    is_sensitive = True
-
-            if is_sensitive:
-                filtered_fields[k] = "**********"
-            else:
-                filtered_fields[k] = v
-
-        record.update(filtered_fields)
+        # シークレットフィールドの再帰的フィルタリング
+        record.update(self._sanitize_value(fields))
         sys.stderr.write(json.dumps(record, separators=(",", ":")) + "\n")
         sys.stderr.flush()
+
+    def _sanitize_value(self, value: Any, key_name: str | None = None) -> Any:
+        """再帰的に機密情報をマスクする。"""
+        # キー名によるチェック（親が辞書の場合）
+        if key_name:
+            k_lower = key_name.lower()
+            if any(k_lower == s or k_lower.startswith(s) for s in _SENSITIVE_KEYS):
+                return "**********"
+
+        if isinstance(value, str):
+            # 値の内容によるチェック
+            if _SENSITIVE_VALUE_RE.search(value):
+                return "**********"
+            return value
+
+        if isinstance(value, dict):
+            return {str(k): self._sanitize_value(v, key_name=str(k)) for k, v in value.items()}
+
+        if isinstance(value, (list, tuple)):
+            return [self._sanitize_value(item) for item in value]
+
+        return value

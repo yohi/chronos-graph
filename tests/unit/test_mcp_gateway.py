@@ -402,6 +402,16 @@ class TestNoneFilter:
         out["a"] = 2
         assert payload["a"] == 1
 
+    def test_returns_deep_copy(self):
+        from mcp_gateway.filters.none_filter import NoneFilter
+
+        f = NoneFilter()
+        payload = {"a": {"b": 1}}
+        out = f.apply(tool_name="any", payload=payload)
+
+        out["a"]["b"] = 2
+        assert payload["a"]["b"] == 1, "Original payload should not be affected deep down"
+
 
 class TestFilterFactory:
     def test_factory_builds_none(self):

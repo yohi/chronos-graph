@@ -37,11 +37,11 @@ class PolicyEngine:
         agent = self._policy.agents.get(agent_id)
         if agent is None:
             raise PolicyError(f"agent {agent_id!r} is not registered")
-        if intent not in agent.allowed_intents:
-            raise PolicyError(f"agent {agent_id!r} cannot use intent {intent!r}")
         intent_pol = self._policy.intents.get(intent)
         if intent_pol is None:
             raise PolicyError(f"unknown intent {intent!r}")
+        if intent not in agent.allowed_intents:
+            raise PolicyError(f"agent {agent_id!r} cannot use intent {intent!r}")
         allowed = frozenset(intent_pol.allowed_tools)
         if requested_tools is None:
             caps = allowed

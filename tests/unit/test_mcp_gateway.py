@@ -303,6 +303,11 @@ class TestPolicyEngine:
                     allowed_tools=["memory_search", "memory_stats"],
                     output_filter="rs",
                 ),
+                "curate_memories": IntentPolicy(
+                    description="y",
+                    allowed_tools=["memory_save"],
+                    output_filter="rs",
+                ),
             },
             agents={
                 "agent-a": AgentPolicy(allowed_intents=["read_only_recall"]),
@@ -343,8 +348,18 @@ class TestPolicyEngine:
         from mcp_gateway.policy.engine import PolicyEngine
 
         eng = PolicyEngine(self._policy())
-        with pytest.raises(PolicyError):
+        with pytest.raises(PolicyError, match="cannot use intent"):
             eng.evaluate_grant(agent_id="agent-a", intent="curate_memories", requested_tools=None)
+
+    def test_unknown_intent_message_priority(self):
+        # Even if the intent is not in agent.allowed_intents,
+        # "unknown intent" should be raised first if the intent is not in the policy.
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+
+        eng = PolicyEngine(self._policy())
+        with pytest.raises(PolicyError, match="unknown intent"):
+            eng.evaluate_grant(agent_id="agent-a", intent="ghost_intent", requested_tools=None)
 
     def test_requested_tools_outside_intent_narrowed(self):
         from mcp_gateway.policy.engine import PolicyEngine

@@ -32,8 +32,9 @@ def _filter_value(value: Any, allowed_subkeys: Any) -> Any:
             return {k: v for k, v in value.items() if k in keys}
         if isinstance(value, list):
             return [
-                {k: v for k, v in item.items() if k in keys} if isinstance(item, dict) else item
+                {k: v for k, v in item.items() if k in keys}
                 for item in value
+                if isinstance(item, dict)
             ]
     return _DENY
 

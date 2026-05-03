@@ -352,6 +352,28 @@ class TestStructuralAllowlistFilter:
             StructuralAllowlistFilter(schemas={"t": {"field": 123}})  # type: ignore[arg-type]
         assert "Invalid schema value for 'field'" in str(excinfo.value)
 
+    def test_rejects_non_dict_list_elements(self):
+        """リスト内の非 dict 要素がドロップされることを確認 (Issue 1)"""
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+
+        f = StructuralAllowlistFilter(
+            schemas={
+                "memory_search": {
+                    "results": ["id", "content"],
+                    "total_count": True,
+                },
+            }
+        )
+        payload = {
+            "results": ["bad_string", 123, {"id": "m1", "content": "ok", "secret": "x"}],
+            "total_count": 1,
+        }
+        out = f.apply(tool_name="memory_search", payload=payload)
+
+        # 非 dict 要素が削除され、正当な要素のみがフィルタリングされて残る
+        assert out["results"] == [{"id": "m1", "content": "ok"}]
+        assert out["total_count"] == 1
+
 
 class TestNoneFilter:
     def test_passthrough(self):

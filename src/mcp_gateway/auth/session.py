@@ -80,7 +80,7 @@ class InMemorySessionRegistry:
                 session_id=sid,
                 agent_id=agent_id,
                 intent=intent,
-                caps=caps,
+                caps=frozenset(caps),
                 output_filter_profile=output_filter_profile,
                 issued_at=now,
                 expires_at=now + self._ttl,

@@ -15,9 +15,11 @@ class ApiKeyAuthenticator:
     """
 
     def __init__(self, agent_keys: dict[str, str]) -> None:
-        # Validate no duplicate API key values
+        # Validate no duplicate or empty API key values
         seen_keys = set()
         for agent_id, key in agent_keys.items():
+            if not key or key.strip() == "":
+                raise ValueError(f"Empty API key for agent: {agent_id}")
             if key in seen_keys:
                 raise ValueError(f"Duplicate API key found for agent: {agent_id}")
             seen_keys.add(key)

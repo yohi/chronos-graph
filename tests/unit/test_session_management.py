@@ -130,3 +130,21 @@ class TestSessionManagementFixes:
         with pytest.raises(SessionError, match=r"session expired \(idle\)"):
             reg.lookup(s5)
         assert s5 not in reg._records
+
+    def test_caps_frozenset_conversion(self):
+        reg = self._make_registry()
+        # Passing a mutable set
+        mutable_caps = {"cap1", "cap2"}
+        rec = reg.create(
+            agent_id="agent1",
+            intent="intent1",
+            caps=mutable_caps,  # type: ignore
+            output_filter_profile="profile1",
+        )
+
+        assert isinstance(rec.caps, frozenset)
+        assert rec.caps == frozenset(["cap1", "cap2"])
+
+        # Verify it's a copy/converted so changing mutable_caps doesn't affect it
+        mutable_caps.add("cap3")
+        assert "cap3" not in rec.caps

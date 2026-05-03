@@ -18,7 +18,10 @@ logger = logging.getLogger(__name__)
 
 def _coerce_schema(schema_obj: Any) -> dict[str, Any]:
     if callable(getattr(schema_obj, "model_dump", None)):
-        return dict(schema_obj.model_dump())
+        try:
+            return dict(schema_obj.model_dump())
+        except Exception as e:
+            raise PolicyError(f"Error dumping schema model: {e}") from e
     if isinstance(schema_obj, dict):
         return dict(schema_obj)
     raise PolicyError(

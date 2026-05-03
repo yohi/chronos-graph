@@ -346,17 +346,19 @@ class TestPolicyEngine:
         with pytest.raises(PolicyError):
             eng.evaluate_grant(agent_id="agent-a", intent="curate_memories", requested_tools=None)
 
-    def test_requested_tools_outside_intent_denied(self):
-        from mcp_gateway.errors import PolicyError
+    def test_requested_tools_outside_intent_narrowed(self):
         from mcp_gateway.policy.engine import PolicyEngine
 
         eng = PolicyEngine(self._policy())
-        with pytest.raises(PolicyError):
-            eng.evaluate_grant(
-                agent_id="agent-a",
-                intent="read_only_recall",
-                requested_tools=frozenset({"memory_save"}),
-            )
+        # intent 'read_only_recall' allows ["memory_search", "memory_stats"]
+        # requesting "memory_save" (not allowed) and "memory_search" (allowed)
+        grant = eng.evaluate_grant(
+            agent_id="agent-a",
+            intent="read_only_recall",
+            requested_tools=frozenset({"memory_search", "memory_save"}),
+        )
+        assert grant.caps == frozenset({"memory_search"})
+        assert "memory_save" not in grant.caps
 
     def test_evaluate_grant_empty_requested_tools_denied(self):
         from mcp_gateway.errors import PolicyError

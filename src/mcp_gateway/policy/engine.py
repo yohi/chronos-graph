@@ -46,13 +46,10 @@ class PolicyEngine:
         if requested_tools is None:
             caps = allowed
         else:
-            extra = requested_tools - allowed
-            if extra:
-                raise PolicyError(
-                    f"requested tools {sorted(extra)!r} are outside intent {intent!r}"
-                )
+            # Narrow requested_tools to the intersection with allowed_tools (IBAC hybrid narrowing)
+            caps = requested_tools & allowed
             # Ensure caps is always an immutable frozenset even if a mutable set was passed
-            caps = frozenset(requested_tools)
+            caps = frozenset(caps)
         return Grant(intent=intent, caps=caps, output_filter_profile=intent_pol.output_filter)
 
     @staticmethod

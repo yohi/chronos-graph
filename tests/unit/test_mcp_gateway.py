@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import textwrap
 
 import pytest
+import pytest_asyncio
 from pydantic import ValidationError
 
 
@@ -1116,3 +1118,831 @@ class TestSessionLifecycle:
         rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
         with pytest.raises(FrozenInstanceError):
             rec.agent_id = "other"  # type: ignore[misc]
+
+
+class TestHandshake:
+    def _stack(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+        from mcp_gateway.auth.handshake import HandshakeService
+        from mcp_gateway.auth.session import InMemorySessionRegistry
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.models import (
+            AgentPolicy,
+            GatewayPolicy,
+            IntentPolicy,
+            OutputFilterDef,
+        )
+
+        policy = GatewayPolicy(
+            version=1,
+            output_filters={"rs": OutputFilterDef(type="none")},
+            intents={
+                "ro": IntentPolicy(
+                    description="x",
+                    allowed_tools=["memory_search", "memory_save"],
+                    output_filter="rs",
+                )
+            },
+            agents={"agent-a": AgentPolicy(allowed_intents=["ro"])},
+        )
+        return HandshakeService(
+            authenticator=ApiKeyAuthenticator({"agent-a": "ck_x"}),
+            policy_engine=PolicyEngine(policy),
+            session_registry=InMemorySessionRegistry(ttl_seconds=60, idle_timeout_seconds=30),
+        )
+
+    def test_happy_path(self):
+        svc = self._stack()
+        rec = svc.handshake(
+            authorization_header="Bearer ck_x",
+            intent_header="ro",
+            requested_tools_header=None,
+        )
+        assert rec.agent_id == "agent-a"
+        assert rec.intent == "ro"
+        assert rec.caps == frozenset({"memory_search", "memory_save"})
+        assert rec.output_filter_profile == "rs"
+
+    def test_missing_intent_header_denied(self):
+        from mcp_gateway.errors import PolicyError
+
+        svc = self._stack()
+        with pytest.raises(PolicyError, match="missing X-MCP-Intent header"):
+            svc.handshake(
+                authorization_header="Bearer ck_x",
+                intent_header=None,
+                requested_tools_header=None,
+            )
+
+    def test_invalid_intent_header_denied(self):
+        from mcp_gateway.errors import PolicyError
+
+        svc = self._stack()
+        with pytest.raises(PolicyError, match="invalid X-MCP-Intent header"):
+            svc.handshake(
+                authorization_header="Bearer ck_x",
+                intent_header="   ",
+                requested_tools_header=None,
+            )
+
+    def test_bad_token_denied(self):
+        from mcp_gateway.errors import AuthError
+
+        svc = self._stack()
+        with pytest.raises(AuthError):
+            svc.handshake(
+                authorization_header="Bearer wrong",
+                intent_header="ro",
+                requested_tools_header=None,
+            )
+
+    @pytest.mark.parametrize("bad_header", ["Basic xyz", "Malformed"])
+    def test_malformed_auth_header_denied(self, bad_header):
+        from mcp_gateway.errors import AuthError
+
+        svc = self._stack()
+        with pytest.raises(AuthError, match="missing or malformed Authorization header"):
+            svc.handshake(
+                authorization_header=bad_header,
+                intent_header="ro",
+                requested_tools_header=None,
+            )
+
+    def test_requested_tools_intersection_narrowed(self):
+        svc = self._stack()
+        # Policy allows [memory_search, memory_save]
+        # Requesting [memory_search, admin_tool] -> should result in [memory_search] only
+        rec = svc.handshake(
+            authorization_header="Bearer ck_x",
+            intent_header="ro",
+            requested_tools_header="memory_search,admin_tool",
+        )
+        assert rec.caps == frozenset({"memory_search"})
+
+    def test_no_overlap_tools_denied(self):
+        from mcp_gateway.errors import PolicyError
+
+        svc = self._stack()
+        with pytest.raises(PolicyError, match="none of the requested tools are allowed"):
+            svc.handshake(
+                authorization_header="Bearer ck_x",
+                intent_header="ro",
+                requested_tools_header="admin_tool",
+            )
+
+    def test_intent_not_allowed_for_agent_denied(self):
+        # We need a stack with another intent that is NOT allowed for agent-a
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+        from mcp_gateway.auth.handshake import HandshakeService
+        from mcp_gateway.auth.session import InMemorySessionRegistry
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.models import (
+            AgentPolicy,
+            GatewayPolicy,
+            IntentPolicy,
+            OutputFilterDef,
+        )
+
+        policy = GatewayPolicy(
+            version=1,
+            output_filters={"rs": OutputFilterDef(type="none")},
+            intents={
+                "ro": IntentPolicy(
+                    description="x", allowed_tools=["memory_search"], output_filter="rs"
+                ),
+                "admin": IntentPolicy(
+                    description="y", allowed_tools=["admin_tool"], output_filter="rs"
+                ),
+            },
+            agents={"agent-a": AgentPolicy(allowed_intents=["ro"])},
+        )
+        svc = HandshakeService(
+            authenticator=ApiKeyAuthenticator({"agent-a": "ck_x"}),
+            policy_engine=PolicyEngine(policy),
+            session_registry=InMemorySessionRegistry(ttl_seconds=60, idle_timeout_seconds=30),
+        )
+
+        with pytest.raises(PolicyError, match="cannot use intent"):
+            svc.handshake(
+                authorization_header="Bearer ck_x",
+                intent_header="admin",
+                requested_tools_header=None,
+            )
+
+
+class TestUpstreamClient:
+    def test_build_env_passthrough_allowlist_only(self):
+        from mcp_gateway.upstream.context_store_client import build_upstream_env
+
+        env = build_upstream_env(
+            passthrough=["OPENAI_API_KEY", "CONTEXT_STORE_DB_PATH"],
+            base_env={
+                "OPENAI_API_KEY": "sk-allowed",
+                "AWS_SECRET_ACCESS_KEY": "should-not-leak",
+                "CONTEXT_STORE_DB_PATH": "/tmp/x",  # noqa: S108
+                "PATH": "/usr/bin",
+            },
+        )
+        assert env.get("OPENAI_API_KEY") == "sk-allowed"
+        assert env.get("CONTEXT_STORE_DB_PATH") == "/tmp/x"  # noqa: S108
+        assert "AWS_SECRET_ACCESS_KEY" not in env
+        # PATH は明示的に含める(allowlist と別軸でユーティリティで継承)
+        assert "PATH" in env
+
+    @pytest.mark.asyncio
+    async def test_call_tool_delegates_to_session(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.upstream.context_store_client import UpstreamClient
+
+        fake_session = AsyncMock()
+        fake_session.list_tools.return_value = type(
+            "R", (), {"tools": [type("T", (), {"model_dump": lambda self: {"name": "t"}})()]}
+        )()
+        fake_session.call_tool.return_value = type(
+            "R", (), {"content": [{"type": "text", "text": '{"a":1}'}], "isError": False}
+        )()
+        client = UpstreamClient.__new__(UpstreamClient)  # type: ignore[call-arg]
+        client._session = fake_session  # type: ignore[attr-defined]
+        client._tools_cache = None  # type: ignore[attr-defined]
+
+        tools = await client.list_tools()
+        assert tools == [{"name": "t"}]
+
+        payload = await client.call_tool("t", {"q": 1})
+        assert payload == {"a": 1}
+        fake_session.call_tool.assert_awaited_once_with("t", {"q": 1})
+
+    @pytest.mark.asyncio
+    async def test_list_tools_wraps_exception(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.errors import UpstreamError
+        from mcp_gateway.upstream.context_store_client import UpstreamClient
+
+        fake_session = AsyncMock()
+        fake_session.list_tools.side_effect = Exception("network error")
+        client = UpstreamClient.__new__(UpstreamClient)  # type: ignore[call-arg]
+        client._session = fake_session  # type: ignore[attr-defined]
+        client._tools_cache = None  # type: ignore[attr-defined]
+
+        with pytest.raises(UpstreamError) as excinfo:
+            await client.list_tools()
+        assert "upstream list tools failed" in str(excinfo.value)
+        assert "network error" in str(excinfo.value.__cause__)
+
+    @pytest.mark.asyncio
+    async def test_call_tool_wraps_non_dict_json_payload(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.upstream.context_store_client import UpstreamClient
+
+        fake_session = AsyncMock()
+        fake_session.call_tool.return_value = type(
+            "R", (), {"content": [{"type": "text", "text": '[{"id": 1}]'}], "isError": False}
+        )()
+
+        client = UpstreamClient.__new__(UpstreamClient)  # type: ignore[call-arg]
+        client._session = fake_session  # type: ignore[attr-defined]
+
+        payload = await client.call_tool("t", {})
+
+        assert payload == {"result": [{"id": 1}]}
+
+    @pytest.mark.asyncio
+    async def test_call_tool_wraps_upstream_exception_in_upstream_error(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.errors import UpstreamError
+        from mcp_gateway.upstream.context_store_client import UpstreamClient
+
+        fake_session = AsyncMock()
+        fake_session.call_tool.side_effect = RuntimeError("connection lost")
+
+        client = UpstreamClient.__new__(UpstreamClient)  # type: ignore[call-arg]
+        client._session = fake_session  # type: ignore[attr-defined]
+
+        with pytest.raises(UpstreamError, match="upstream tool call 't' failed") as excinfo:
+            await client.call_tool("t", {})
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert str(excinfo.value.__cause__) == "connection lost"
+
+    @pytest.mark.asyncio
+    async def test_stop_clears_tools_cache(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.upstream.context_store_client import UpstreamClient
+
+        client = UpstreamClient.__new__(UpstreamClient)  # type: ignore[call-arg]
+        client._session = AsyncMock()  # type: ignore[attr-defined]
+        client._stdio_ctx = AsyncMock()  # type: ignore[attr-defined]
+        client._tools_cache = [{"name": "stale"}]  # type: ignore[attr-defined]
+
+        await client.stop()
+
+        assert client._tools_cache is None
+
+    @pytest.mark.asyncio
+    async def test_start_rolls_back_stdio_when_initialize_fails(self, monkeypatch):
+        from mcp_gateway.upstream import context_store_client as module
+
+        events: list[str] = []
+
+        class FakeStdioCtx:
+            async def __aenter__(self):
+                events.append("stdio-enter")
+                return object(), object()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                events.append("stdio-exit")
+
+        class FakeSession:
+            def __init__(self, read, write):
+                self.read = read
+                self.write = write
+
+            async def __aenter__(self):
+                events.append("session-enter")
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                events.append("session-exit")
+
+            async def initialize(self):
+                events.append("initialize")
+                raise RuntimeError("boom")
+
+        monkeypatch.setattr(module, "stdio_client", lambda params: FakeStdioCtx())
+        monkeypatch.setattr(module, "ClientSession", FakeSession)
+
+        client = module.UpstreamClient(command=["context-store"], env={})
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await client.start()
+
+        assert events == [
+            "stdio-enter",
+            "session-enter",
+            "initialize",
+            "session-exit",
+            "stdio-exit",
+        ]
+        assert client._session is None
+        assert client._stdio_ctx is None
+
+
+class TestToolProxy:
+    @pytest.mark.asyncio
+    async def test_call_through_applies_filter(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+        from mcp_gateway.tools.proxy import ToolProxy
+
+        upstream = AsyncMock()
+        upstream.call_tool.return_value = {
+            "results": [
+                {
+                    "id": "m1",
+                    "content": "hello",
+                    "embedding": [0.1],
+                    "internal_score": 0.9,
+                }
+            ],
+            "total_count": 1,
+        }
+        filt = StructuralAllowlistFilter(
+            schemas={"memory_search": {"results": ["id", "content"], "total_count": True}}
+        )
+        proxy = ToolProxy(upstream=upstream, filter_=filt)
+
+        out = await proxy.call_through(tool_name="memory_search", arguments={"query": "hi"})
+        assert out["results"][0] == {"id": "m1", "content": "hello"}
+        assert "embedding" not in out["results"][0]
+        assert out["total_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_call_through_rejects_secret_like_arguments(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.none_filter import NoneFilter
+        from mcp_gateway.tools.proxy import ToolProxy
+
+        upstream = AsyncMock()
+        proxy = ToolProxy(upstream=upstream, filter_=NoneFilter())
+        with pytest.raises(PolicyError, match="arguments contain secret-like content"):
+            await proxy.call_through(
+                tool_name="t",
+                arguments={"q": "use sk-1234567890abcdef as a key"},
+            )
+        upstream.call_tool.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_call_through_rejects_secret_in_dict_keys(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.none_filter import NoneFilter
+        from mcp_gateway.tools.proxy import ToolProxy
+
+        upstream = AsyncMock()
+        proxy = ToolProxy(upstream=upstream, filter_=NoneFilter())
+        with pytest.raises(PolicyError, match="arguments contain secret-like content"):
+            await proxy.call_through(
+                tool_name="t",
+                arguments={"sk-1234567890abcdef": "some_value"},
+            )
+        upstream.call_tool.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_call_through_rejects_secret_in_upstream_response(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.none_filter import NoneFilter
+        from mcp_gateway.tools.proxy import ToolProxy
+
+        upstream = AsyncMock()
+        upstream.call_tool.return_value = {"output": "here is a secret: sk-1234567890abcdef"}
+        proxy = ToolProxy(upstream=upstream, filter_=NoneFilter())
+        with pytest.raises(PolicyError, match="upstream response contains secret-like content"):
+            await proxy.call_through(tool_name="t", arguments={"q": "safe query"})
+
+    @pytest.mark.asyncio
+    async def test_call_through_rejects_aws_asia_prefix(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.none_filter import NoneFilter
+        from mcp_gateway.tools.proxy import ToolProxy
+
+        upstream = AsyncMock()
+        proxy = ToolProxy(upstream=upstream, filter_=NoneFilter())
+        with pytest.raises(PolicyError, match="arguments contain secret-like content"):
+            await proxy.call_through(
+                tool_name="t",
+                arguments={"key": "ASIA1234567890ABCDEF"},
+            )
+        upstream.call_tool.assert_not_awaited()
+
+
+@pytest.fixture(autouse=True)
+def mock_sse_keep_alive(monkeypatch):
+    """Mock the SSE keep-alive loop to prevent hanging in unit tests."""
+    from unittest.mock import AsyncMock
+
+    import mcp_gateway.server as server_module
+
+    # By raising CancelledError, we terminate the loop in event_stream immediately
+    # after the first yield (the 'endpoint' event).
+    monkeypatch.setattr(server_module, "_keep_alive", AsyncMock(side_effect=asyncio.CancelledError))
+
+
+@pytest.fixture
+def gateway_app(tmp_path, monkeypatch):
+    """Boot the FastAPI app with a mocked upstream and a sample policy."""
+    policy = tmp_path / "intents.yaml"
+    policy.write_text(
+        textwrap.dedent(
+            """
+            version: 1
+            output_filters:
+              rs:
+                type: structural_allowlist
+                schemas:
+                  memory_search:
+                    results: [id, content]
+                    total_count: true
+            intents:
+              ro:
+                description: "x"
+                allowed_tools: [memory_search]
+                output_filter: rs
+            agents:
+              agent-a:
+                allowed_intents: [ro]
+            """
+        ).lstrip()
+    )
+    monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy))
+    monkeypatch.setenv("MCP_GATEWAY_API_KEYS_JSON", '{"agent-a":"ck_x"}')
+
+    from unittest.mock import AsyncMock
+
+    from mcp_gateway.app import build_app
+
+    upstream = AsyncMock()
+    upstream.list_tools.return_value = [
+        {"name": "memory_search"},
+        {"name": "memory_save"},
+    ]
+    upstream.call_tool.return_value = {
+        "results": [{"id": "m1", "content": "hello", "embedding": [0.1], "internal_score": 0.9}],
+        "total_count": 1,
+    }
+    app = build_app(upstream_override=upstream, initial_tools=upstream.list_tools.return_value)
+    return app, upstream
+
+
+@pytest_asyncio.fixture
+async def app_client(gateway_app):
+    import httpx
+    from httpx import ASGITransport
+
+    app, _ = gateway_app
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        yield client
+
+
+class TestSseHandshakeEndpoint:
+    @pytest.mark.asyncio
+    async def test_missing_auth_returns_401(self, app_client):
+        resp = await app_client.get("/sse")
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_missing_intent_returns_403(self, app_client):
+        resp = await app_client.get("/sse", headers={"Authorization": "Bearer ck_x"})
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_handshake_emits_endpoint_event(self, app_client):
+        async with app_client.stream(
+            "GET",
+            "/sse",
+            headers={"Authorization": "Bearer ck_x", "X-MCP-Intent": "ro"},
+        ) as resp:
+            assert resp.status_code == 200
+            sid = None
+            async for line in resp.aiter_lines():
+                if line.startswith("data:") and "session_id=" in line:
+                    sid = line.split("session_id=", 1)[1].strip()
+                    break
+            assert sid is not None and len(sid) > 0
+
+
+class TestMcpMessagesEndpoint:
+    @pytest.mark.asyncio
+    async def _open_session(self, app_client) -> str:
+        async with app_client.stream(
+            "GET",
+            "/sse",
+            headers={"Authorization": "Bearer ck_x", "X-MCP-Intent": "ro"},
+        ) as resp:
+            async for line in resp.aiter_lines():
+                if line.startswith("data:") and "session_id=" in line:
+                    return line.split("session_id=", 1)[1].strip()
+        raise AssertionError("no session_id received")
+
+    @pytest.mark.asyncio
+    async def test_tools_list_filters_by_caps(self, app_client):
+        sid = await self._open_session(app_client)
+        body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+        resp = await app_client.post(f"/messages?session_id={sid}", json=body)
+        assert resp.status_code == 200
+        envelope = resp.json()
+        names = [tool["name"] for tool in envelope["result"]["tools"]]
+        assert names == ["memory_search"]
+        assert "memory_save" not in names
+
+    @pytest.mark.asyncio
+    async def test_unknown_session_id_returns_404(self, app_client):
+        resp = await app_client.post(
+            "/messages?session_id=nonexistent",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_tools_call_filters_output(self, app_client):
+        sid = await self._open_session(app_client)
+        resp = await app_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "memory_search", "arguments": {"query": "hi"}},
+            },
+        )
+        assert resp.status_code == 200
+        result = resp.json()["result"]
+        assert "embedding" not in result["results"][0]
+        assert "internal_score" not in result["results"][0]
+        assert result["results"][0]["content"] == "hello"
+
+    @pytest.mark.asyncio
+    async def test_tools_call_unauthorized_tool_denied(self, app_client):
+        sid = await self._open_session(app_client)
+        resp = await app_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "memory_save", "arguments": {}},
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "error" in body
+        assert "not found" in body["error"]["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_call_tool_with_invalid_falsy_arguments(self, app_client):
+        # [] is falsy but not a dict
+        sid = await self._open_session(app_client)
+        resp = await app_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "memory_search", "arguments": []},
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["error"]["code"] == -32602
+        assert "arguments' must be an object" in resp.json()["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_call_tool_missing_name(self, app_client):
+        sid = await self._open_session(app_client)
+        resp = await app_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"arguments": {}},
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32602
+        assert "missing required parameter: name" in body["error"]["message"]
+
+
+class TestEntrypoint:
+    def test_main_callable(self, monkeypatch):
+        from unittest.mock import patch
+
+        import mcp_gateway.__main__ as entry
+
+        # Ensure environment variables don't interfere with the test
+        monkeypatch.delenv("MCP_GATEWAY_HOST", raising=False)
+        monkeypatch.delenv("MCP_GATEWAY_PORT", raising=False)
+
+        with patch("uvicorn.run") as run:
+            entry.main()
+        run.assert_called_once_with(
+            "mcp_gateway.app:build_app",
+            factory=True,
+            host="127.0.0.1",
+            port=9100,
+            log_level="info",
+        )
+
+    def test_build_app_uses_as_file_for_packaged_sample_policy(self, monkeypatch, tmp_path):
+        from contextlib import contextmanager
+        from unittest.mock import AsyncMock
+
+        import mcp_gateway.app as app_module
+
+        policy = tmp_path / "intents.example.yaml"
+        policy.write_text(
+            "\n".join(
+                [
+                    "version: 1",
+                    "output_filters: {none: {type: none}}",
+                    (
+                        "intents: {read_only_recall: {description: x, "
+                        "allowed_tools: [memory_search], output_filter: none}}"
+                    ),
+                    "agents: {summarizer-bot: {allowed_intents: [read_only_recall]}}",
+                    "",
+                ]
+            )
+        )
+
+        class FakePackage:
+            def __init__(self, resource):
+                self._resource = resource
+
+            def joinpath(self, path):
+                assert path == "policies/intents.example.yaml"
+                return self._resource
+
+        resource = object()
+        used_as_file = False
+
+        @contextmanager
+        def fake_as_file(traversable):
+            nonlocal used_as_file
+            assert traversable is resource
+            used_as_file = True
+            yield policy
+
+        monkeypatch.delenv("MCP_GATEWAY_POLICY_PATH", raising=False)
+        monkeypatch.setattr(app_module, "files", lambda package: FakePackage(resource))
+        monkeypatch.setattr(app_module, "as_file", fake_as_file, raising=False)
+
+        upstream = AsyncMock()
+        upstream.list_tools.return_value = []
+
+        app = app_module.build_app(upstream_override=upstream, initial_tools=[])
+
+        assert app is not None
+        assert used_as_file is True
+
+    def test_build_app_prefers_env_file_policy_path_with_upstream_override(
+        self, monkeypatch, tmp_path
+    ):
+        from unittest.mock import AsyncMock
+
+        policy = tmp_path / "env-policy.yaml"
+        policy.write_text(
+            "\n".join(
+                [
+                    "version: 1",
+                    "output_filters: {none: {type: none}}",
+                    (
+                        "intents: {read_only_recall: {description: x, "
+                        "allowed_tools: [memory_search], output_filter: none}}"
+                    ),
+                    "agents: {summarizer-bot: {allowed_intents: [read_only_recall]}}",
+                    "",
+                ]
+            )
+        )
+        (tmp_path / ".env").write_text(f"MCP_GATEWAY_POLICY_PATH={policy}\n")
+
+        # Move chdir before import
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("MCP_GATEWAY_POLICY_PATH", raising=False)
+
+        import mcp_gateway.app as app_module
+
+        monkeypatch.setattr(
+            app_module,
+            "as_file",
+            lambda traversable: (_ for _ in ()).throw(
+                AssertionError("sample policy should not be used")
+            ),
+            raising=False,
+        )
+
+        upstream = AsyncMock()
+        upstream.list_tools.return_value = []
+
+        app = app_module.build_app(upstream_override=upstream, initial_tools=[])
+
+        assert app is not None
+
+
+class TestSamplePolicy:
+    def test_sample_policy_is_valid(self):
+        from importlib.resources import files
+
+        from mcp_gateway.policy.loader import load_policy
+
+        path = files("mcp_gateway").joinpath("policies/intents.example.yaml")
+        policy = load_policy(path)  # type: ignore[arg-type]
+        assert policy.version == 1
+        assert "read_only_recall" in policy.intents
+        assert "summarizer-bot" in policy.agents
+        assert "read_only_recall" in policy.intents
+
+
+class TestSecretIsolation:
+    def test_upstream_env_filters_unlisted_keys(self):
+        from mcp_gateway.upstream.context_store_client import build_upstream_env
+
+        env = build_upstream_env(
+            passthrough=["OPENAI_API_KEY"],
+            base_env={
+                "OPENAI_API_KEY": "sk-allowed",
+                "AWS_SECRET_ACCESS_KEY": "should-not-leak",
+                "GITHUB_TOKEN": "should-not-leak",
+                "PATH": "/usr/bin",
+            },
+        )
+        assert "AWS_SECRET_ACCESS_KEY" not in env
+        assert "GITHUB_TOKEN" not in env
+        assert env["OPENAI_API_KEY"] == "sk-allowed"
+        assert "PATH" in env
+
+    def test_settings_repr_does_not_leak_api_keys(self, tmp_path, monkeypatch):
+        policy = tmp_path / "intents.yaml"
+        policy.write_text("version: 1\noutput_filters: {}\nintents: {}\nagents: {}\n")
+        monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy))
+        monkeypatch.setenv("MCP_GATEWAY_API_KEYS_JSON", '{"a":"ck_super_secret"}')
+
+        from mcp_gateway.config import GatewaySettings
+
+        settings = GatewaySettings()
+        assert "ck_super_secret" not in repr(settings)
+        assert "ck_super_secret" not in str(settings.model_dump())
+        assert "ck_super_secret" not in str(settings.model_dump(mode="json"))
+
+
+class TestContextStoreUntouched:
+    """Phase 3 acceptance: src/context_store/ must be diff-free vs master."""
+
+    def test_no_imports_from_context_store_in_mcp_gateway(self):
+        import importlib.util
+        import pkgutil
+
+        import mcp_gateway
+
+        bad: list[str] = []
+        for mod_info in pkgutil.walk_packages(mcp_gateway.__path__, prefix="mcp_gateway."):
+            spec = importlib.util.find_spec(mod_info.name)
+            if spec is None:
+                continue
+
+            src = spec.origin
+            if src is None and spec.loader is not None and hasattr(spec.loader, "get_filename"):
+                try:
+                    src = spec.loader.get_filename(mod_info.name)
+                except (ImportError, OSError):
+                    continue
+
+            if src in {None, "built-in", "frozen"}:
+                continue
+
+            import ast
+
+            with open(src, encoding="utf-8") as handle:
+                text = handle.read()
+            try:
+                # Pass filename for better error reporting in AST
+                tree = ast.parse(text, filename=src)
+            except SyntaxError:
+                continue
+
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name == "context_store" or alias.name.startswith("context_store."):
+                            bad.append(f"{mod_info.name}: import {alias.name}")
+                elif isinstance(node, ast.ImportFrom):
+                    # Check module name
+                    is_bad = node.module == "context_store" or (
+                        node.module and node.module.startswith("context_store.")
+                    )
+                    # Check aliases (e.g., from x import context_store)
+                    if not is_bad:
+                        for alias in node.names:
+                            if alias.name == "context_store" or alias.name.startswith(
+                                "context_store."
+                            ):
+                                is_bad = True
+                                break
+                    if is_bad:
+                        bad.append(f"{mod_info.name}: from {node.module or ''} import ...")
+        assert bad == [], f"mcp_gateway imports context_store directly: {bad}"

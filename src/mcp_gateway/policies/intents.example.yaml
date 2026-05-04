@@ -1,0 +1,46 @@
+version: 1
+
+output_filters:
+  recall_safe:
+    type: structural_allowlist
+    schemas:
+      memory_search:
+        results: [id, content, created_at]
+        total_count: true
+      memory_search_graph:
+        nodes: [id, label, timestamp]
+        edges: [source, target, relation]
+
+  curator_full:
+    type: none
+
+  url_ingestion:
+    type: structural_allowlist
+    schemas:
+      memory_save_url:
+        memory_id: true
+        title: true
+
+intents:
+  read_only_recall:
+    description: "Search and summarize past memories. Cannot write or send out."
+    allowed_tools: [memory_search, memory_search_graph, memory_stats]
+    output_filter: recall_safe
+
+  curate_memories:
+    description: "Curate own working memory. Search/save/delete; no external URL."
+    allowed_tools: [memory_search, memory_save, memory_delete, memory_prune]
+    output_filter: curator_full
+
+  ingest_external_url:
+    description: "External URL ingestion only."
+    allowed_tools: [memory_save_url]
+    output_filter: url_ingestion
+
+agents:
+  summarizer-bot:
+    allowed_intents: [read_only_recall]
+  curator-bot:
+    allowed_intents: [read_only_recall, curate_memories]
+  ingestion-bot:
+    allowed_intents: [ingest_external_url]

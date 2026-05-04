@@ -1192,12 +1192,8 @@ class TestHandshake:
 
 
 class TestUpstreamClient:
-    def test_build_env_passthrough_allowlist_only(self, monkeypatch):
+    def test_build_env_passthrough_allowlist_only(self):
         from mcp_gateway.upstream.context_store_client import build_upstream_env
-
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-allowed")
-        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "should-not-leak")
-        monkeypatch.setenv("CONTEXT_STORE_DB_PATH", "/tmp/x")  # noqa: S108
 
         env = build_upstream_env(
             passthrough=["OPENAI_API_KEY", "CONTEXT_STORE_DB_PATH"],
@@ -1237,6 +1233,87 @@ class TestUpstreamClient:
         payload = await client.call_tool("t", {"q": 1})
         assert payload == {"a": 1}
         fake_session.call_tool.assert_awaited_once_with("t", {"q": 1})
+
+    @pytest.mark.asyncio
+    async def test_call_tool_wraps_non_dict_json_payload(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.upstream.context_store_client import UpstreamClient
+
+        fake_session = AsyncMock()
+        fake_session.call_tool.return_value = type(
+            "R", (), {"content": [{"type": "text", "text": '[{"id": 1}]'}], "isError": False}
+        )()
+
+        client = UpstreamClient.__new__(UpstreamClient)  # type: ignore[call-arg]
+        client._session = fake_session  # type: ignore[attr-defined]
+
+        payload = await client.call_tool("t", {})
+
+        assert payload == {"result": [{"id": 1}]}
+
+    @pytest.mark.asyncio
+    async def test_stop_clears_tools_cache(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.upstream.context_store_client import UpstreamClient
+
+        client = UpstreamClient.__new__(UpstreamClient)  # type: ignore[call-arg]
+        client._session = AsyncMock()  # type: ignore[attr-defined]
+        client._stdio_ctx = AsyncMock()  # type: ignore[attr-defined]
+        client._tools_cache = [{"name": "stale"}]  # type: ignore[attr-defined]
+
+        await client.stop()
+
+        assert client._tools_cache is None
+
+    @pytest.mark.asyncio
+    async def test_start_rolls_back_stdio_when_initialize_fails(self, monkeypatch):
+        from mcp_gateway.upstream import context_store_client as module
+
+        events: list[str] = []
+
+        class FakeStdioCtx:
+            async def __aenter__(self):
+                events.append("stdio-enter")
+                return object(), object()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                events.append("stdio-exit")
+
+        class FakeSession:
+            def __init__(self, read, write):
+                self.read = read
+                self.write = write
+
+            async def __aenter__(self):
+                events.append("session-enter")
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                events.append("session-exit")
+
+            async def initialize(self):
+                events.append("initialize")
+                raise RuntimeError("boom")
+
+        monkeypatch.setattr(module, "stdio_client", lambda params: FakeStdioCtx())
+        monkeypatch.setattr(module, "ClientSession", FakeSession)
+
+        client = module.UpstreamClient(command=["context-store"], env={})
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await client.start()
+
+        assert events == [
+            "stdio-enter",
+            "session-enter",
+            "initialize",
+            "session-exit",
+            "stdio-exit",
+        ]
+        assert client._session is None
+        assert client._stdio_ctx is None
 
 
 class TestToolProxy:

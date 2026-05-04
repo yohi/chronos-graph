@@ -10,7 +10,9 @@ are propagated into the subprocess (allowlist) so secrets cannot leak via
 
 from __future__ import annotations
 
+import copy
 import json
+import logging
 from typing import Any
 
 from mcp import ClientSession, StdioServerParameters
@@ -38,32 +40,62 @@ class UpstreamClient:
         self._tools_cache: list[dict[str, Any]] | None = None
 
     async def start(self) -> None:
+        if not self._command:
+            raise UpstreamError("empty command for context store client")
+
         params = StdioServerParameters(
             command=self._command[0], args=self._command[1:], env=self._env
         )
-        self._stdio_ctx = stdio_client(params)
-        read, write = await self._stdio_ctx.__aenter__()
-        self._session = ClientSession(read, write)
-        await self._session.__aenter__()
-        await self._session.initialize()
+        stdio_ctx = stdio_client(params)
+        session: ClientSession | None = None
+        stdio_entered = False
+        session_entered = False
+        try:
+            read, write = await stdio_ctx.__aenter__()
+            stdio_entered = True
+            session = ClientSession(read, write)
+            await session.__aenter__()
+            session_entered = True
+            await session.initialize()
+        except Exception:
+            if session_entered and session is not None:
+                await session.__aexit__(None, None, None)
+            if stdio_entered:
+                await stdio_ctx.__aexit__(None, None, None)
+            self._session = None
+            self._stdio_ctx = None
+            raise
+
+        self._stdio_ctx = stdio_ctx
+        self._session = session
 
     async def stop(self) -> None:
-        if self._session is not None:
-            await self._session.__aexit__(None, None, None)
-            self._session = None
-        if self._stdio_ctx is not None:
-            await self._stdio_ctx.__aexit__(None, None, None)
-            self._stdio_ctx = None
+        session = self._session
+        stdio_ctx = self._stdio_ctx
+        self._session = None
+        self._stdio_ctx = None
+        self._tools_cache = None
+
+        if session is not None:
+            try:
+                await session.__aexit__(None, None, None)
+            except Exception:
+                logging.exception("Error closing MCP session")
+        if stdio_ctx is not None:
+            try:
+                await stdio_ctx.__aexit__(None, None, None)
+            except Exception:
+                logging.exception("Error closing stdio transport")
 
     async def list_tools(self) -> list[dict[str, Any]]:
         if self._tools_cache is not None:
-            return list(self._tools_cache)
+            return copy.deepcopy(self._tools_cache)
         if self._session is None:
             raise UpstreamError("upstream session not started")
         result = await self._session.list_tools()
         tools = [t.model_dump() if hasattr(t, "model_dump") else dict(t) for t in result.tools]
         self._tools_cache = tools
-        return list(tools)
+        return copy.deepcopy(tools)
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if self._session is None:
@@ -81,6 +113,7 @@ class UpstreamClient:
                     parsed = json.loads(text)
                     if isinstance(parsed, dict):
                         return parsed
+                    return {"result": parsed}
                 except json.JSONDecodeError:
                     return {"text": text}
         return {}

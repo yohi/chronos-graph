@@ -49,6 +49,7 @@ def build_app(
 ) -> FastAPI:
     try:
         settings = GatewaySettings()
+        policy = load_policy(settings.policy_path)
     except ValidationError as exc:
         missing_policy_path = any(
             error.get("loc") == ("policy_path",) and error.get("type") == "missing"
@@ -60,8 +61,7 @@ def build_app(
         resource = files("mcp_gateway").joinpath("policies/intents.example.yaml")
         with as_file(resource) as sample_policy:
             settings = GatewaySettings(policy_path=sample_policy)
-
-    policy = load_policy(settings.policy_path)
+            policy = load_policy(settings.policy_path)
 
     audit = AuditLogger(level=settings.audit_log_level)
     auth = ApiKeyAuthenticator(_decode_keys(settings))

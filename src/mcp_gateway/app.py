@@ -91,19 +91,22 @@ def build_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-        # Start upstream only if not overridden
-        if upstream_override is None:
-            await upstream.start()
+        started = False
+        try:
+            # Start upstream only if not overridden
+            if upstream_override is None:
+                await upstream.start()
+                started = True
 
-        # Initialize or update tool registry on startup
-        if hasattr(upstream, "list_tools"):
-            all_tools = await upstream.list_tools()
-            registry.replace_tools(all_tools)
+            # Initialize or update tool registry on startup
+            if hasattr(upstream, "list_tools"):
+                all_tools = await upstream.list_tools()
+                registry.replace_tools(all_tools)
 
-        yield
-
-        if upstream_override is None and hasattr(upstream, "stop"):
-            await upstream.stop()
+            yield
+        finally:
+            if upstream_override is None and started and hasattr(upstream, "stop"):
+                await upstream.stop()
 
     app = FastAPI(title="ChronosGraph MCP Gateway", lifespan=lifespan)
     registry = ToolRegistry(initial_tools or [])

@@ -12,6 +12,7 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
     re.compile(r"\bck_[A-Za-z0-9_-]{16,}\b"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bASIA[0-9A-Z]{16}\b"),
     re.compile(r"\bghp_[A-Za-z0-9]{36,}\b"),
     re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"\bhf_[A-Za-z0-9]{20,}\b"),
@@ -27,6 +28,7 @@ def _contains_secret(value: Any) -> bool:
     if isinstance(value, str):
         return any(pattern.search(value) for pattern in _SECRET_PATTERNS)
     if isinstance(value, dict):
+        return any(_contains_secret(str(k)) or _contains_secret(v) for k, v in value.items())
         return any(_contains_secret(inner) for inner in value.values())
     if isinstance(value, list):
         return any(_contains_secret(inner) for inner in value)
@@ -42,4 +44,7 @@ class ToolProxy:
         if _contains_secret(arguments):
             raise PolicyError("arguments contain secret-like content")
         payload = await self._upstream.call_tool(tool_name, arguments)
+        if _contains_secret(payload):
+            raise PolicyError("upstream response contains secret-like content")
+        return self._filter.apply(tool_name=tool_name, payload=payload)
         return self._filter.apply(tool_name=tool_name, payload=payload)

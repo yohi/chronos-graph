@@ -1641,3 +1641,38 @@ class TestMcpMessagesEndpoint:
         body = resp.json()
         assert "error" in body
         assert "not found" in body["error"]["message"].lower()
+
+
+class TestEntrypoint:
+    def test_main_callable(self, monkeypatch):
+        from unittest.mock import patch
+
+        import mcp_gateway.__main__ as entry
+
+        # Ensure environment variables don't interfere with the test
+        monkeypatch.delenv("MCP_GATEWAY_HOST", raising=False)
+        monkeypatch.delenv("MCP_GATEWAY_PORT", raising=False)
+
+        with patch("uvicorn.run") as run:
+            entry.main()
+        run.assert_called_once_with(
+            "mcp_gateway.app:build_app",
+            factory=True,
+            host="127.0.0.1",
+            port=9100,
+            log_level="info",
+        )
+
+
+class TestSamplePolicy:
+    def test_sample_policy_is_valid(self):
+        from importlib.resources import files
+
+        from mcp_gateway.policy.loader import load_policy
+
+        path = files("mcp_gateway").joinpath("policies/intents.example.yaml")
+        policy = load_policy(path)  # type: ignore[arg-type]
+        assert policy.version == 1
+        assert "read_only_recall" in policy.intents
+        assert "summarizer-bot" in policy.agents
+        assert "read_only_recall" in policy.intents

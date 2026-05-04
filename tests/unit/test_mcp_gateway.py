@@ -1116,3 +1116,76 @@ class TestSessionLifecycle:
         rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
         with pytest.raises(FrozenInstanceError):
             rec.agent_id = "other"  # type: ignore[misc]
+
+
+class TestHandshake:
+    def _stack(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+        from mcp_gateway.auth.handshake import HandshakeService
+        from mcp_gateway.auth.session import InMemorySessionRegistry
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.models import (
+            AgentPolicy,
+            GatewayPolicy,
+            IntentPolicy,
+            OutputFilterDef,
+        )
+
+        policy = GatewayPolicy(
+            version=1,
+            output_filters={"rs": OutputFilterDef(type="none")},
+            intents={
+                "ro": IntentPolicy(
+                    description="x", allowed_tools=["memory_search"], output_filter="rs"
+                )
+            },
+            agents={"agent-a": AgentPolicy(allowed_intents=["ro"])},
+        )
+        return HandshakeService(
+            authenticator=ApiKeyAuthenticator({"agent-a": "ck_x"}),
+            policy_engine=PolicyEngine(policy),
+            session_registry=InMemorySessionRegistry(ttl_seconds=60, idle_timeout_seconds=30),
+        )
+
+    def test_happy_path(self):
+        svc = self._stack()
+        rec = svc.handshake(
+            authorization_header="Bearer ck_x",
+            intent_header="ro",
+            requested_tools_header=None,
+        )
+        assert rec.agent_id == "agent-a"
+        assert rec.intent == "ro"
+        assert rec.caps == frozenset({"memory_search"})
+        assert rec.output_filter_profile == "rs"
+
+    def test_missing_intent_denied(self):
+        from mcp_gateway.errors import PolicyError
+
+        svc = self._stack()
+        with pytest.raises(PolicyError):
+            svc.handshake(
+                authorization_header="Bearer ck_x",
+                intent_header=None,
+                requested_tools_header=None,
+            )
+
+    def test_bad_token_denied(self):
+        from mcp_gateway.errors import AuthError
+
+        svc = self._stack()
+        with pytest.raises(AuthError):
+            svc.handshake(
+                authorization_header="Bearer wrong",
+                intent_header="ro",
+                requested_tools_header=None,
+            )
+
+    def test_requested_tools_intersection(self):
+        svc = self._stack()
+        rec = svc.handshake(
+            authorization_header="Bearer ck_x",
+            intent_header="ro",
+            requested_tools_header="memory_search",
+        )
+        assert rec.caps == frozenset({"memory_search"})

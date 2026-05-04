@@ -1241,3 +1241,99 @@ class TestUpstreamClient:
         ]
         assert client._session is None
         assert client._stdio_ctx is None
+
+
+class TestToolProxy:
+    @pytest.mark.asyncio
+    async def test_call_through_applies_filter(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+        from mcp_gateway.tools.proxy import ToolProxy
+
+        upstream = AsyncMock()
+        upstream.call_tool.return_value = {
+            "results": [
+                {
+                    "id": "m1",
+                    "content": "hello",
+                    "embedding": [0.1],
+                    "internal_score": 0.9,
+                }
+            ],
+            "total_count": 1,
+        }
+        filt = StructuralAllowlistFilter(
+            schemas={"memory_search": {"results": ["id", "content"], "total_count": True}}
+        )
+        proxy = ToolProxy(upstream=upstream, filter_=filt)
+
+        out = await proxy.call_through(tool_name="memory_search", arguments={"query": "hi"})
+        assert out["results"][0] == {"id": "m1", "content": "hello"}
+        assert "embedding" not in out["results"][0]
+        assert out["total_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_call_through_rejects_secret_like_arguments(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.none_filter import NoneFilter
+        from mcp_gateway.tools.proxy import ToolProxy
+
+        upstream = AsyncMock()
+        proxy = ToolProxy(upstream=upstream, filter_=NoneFilter())
+        with pytest.raises(PolicyError, match="arguments contain secret-like content"):
+            await proxy.call_through(
+                tool_name="t",
+                arguments={"q": "use sk-1234567890abcdef as a key"},
+            )
+        upstream.call_tool.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_call_through_rejects_secret_in_dict_keys(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.none_filter import NoneFilter
+        from mcp_gateway.tools.proxy import ToolProxy
+
+        upstream = AsyncMock()
+        proxy = ToolProxy(upstream=upstream, filter_=NoneFilter())
+        with pytest.raises(PolicyError, match="arguments contain secret-like content"):
+            await proxy.call_through(
+                tool_name="t",
+                arguments={"sk-1234567890abcdef": "some_value"},
+            )
+        upstream.call_tool.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_call_through_rejects_secret_in_upstream_response(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.none_filter import NoneFilter
+        from mcp_gateway.tools.proxy import ToolProxy
+
+        upstream = AsyncMock()
+        upstream.call_tool.return_value = {"output": "here is a secret: sk-1234567890abcdef"}
+        proxy = ToolProxy(upstream=upstream, filter_=NoneFilter())
+        with pytest.raises(PolicyError, match="upstream response contains secret-like content"):
+            await proxy.call_through(tool_name="t", arguments={"q": "safe query"})
+
+    @pytest.mark.asyncio
+    async def test_call_through_rejects_aws_asia_prefix(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.none_filter import NoneFilter
+        from mcp_gateway.tools.proxy import ToolProxy
+
+        upstream = AsyncMock()
+        proxy = ToolProxy(upstream=upstream, filter_=NoneFilter())
+        with pytest.raises(PolicyError, match="arguments contain secret-like content"):
+            await proxy.call_through(
+                tool_name="t",
+                arguments={"key": "ASIA1234567890ABCDEF"},
+            )
+        upstream.call_tool.assert_not_awaited()

@@ -144,7 +144,7 @@ uv run python -m context_store.dashboard.api_server
 エージェントへの「権限の危機」（過剰権限・機密漏洩）のリスクを低減するため、HTTP/SSE 経由で接続可能な MCP Gateway を搭載しています。Gateway が通信をインフラレベルでフック（傍受）し、意図(Intent)に基づくアクセス制御（IBAC）と構造的な出力フィルタリングの適用を支援します。
 
 #### 1. 宣言的な権限管理 (`intents.yaml`)
-「AIエージェントに対する権限設定の最大効率」を図るため、コードを修正することなく YAML ファイルのみで権限を一元管理できます。Gateway はこの設定に基づき、未許可リクエストを拒否し、許可済み出力をフィルタリングすることができます。
+「AIエージェントに対する権限設定の最大効率」を図るため、コードを修正することなく YAML ファイルのみで権限を一元管理できます。Gateway はこの設定に基づき、未許可リクエストを拒否し、許可済み出力をフィルタリングすることを支援します。
 
 ```yaml
 version: 1
@@ -157,7 +157,7 @@ output_filters:
 
 intents:
   read_only_recall:
-    description: "検索専用の権限"
+    description: "検索専用の権限" # 非実行メタ情報（認可ロジックには影響しません）
     allowed_tools: [memory_search]
     output_filter: recall_safe
 ```

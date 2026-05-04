@@ -40,4 +40,4 @@ When developing or using this server, apply these tools selectively:
   - **Other Tools:** 各 CLI/エージェントの設定に合わせて、同様のステップで設定と検証を行ってください。
 
 ## 📁 Architecture & Specs
-設計の詳細やデータモデル、パイプラインのロジックについては、仕様書（**`SPEC.md`**: Software/Service SPECification）を参照することを強く推奨します。設計上の意思決定における信頼できる唯一の情報源（Single Source of Truth）として `SPEC.md` を活用してください。
+設計の詳細やデータモデル、パイプラインのロジックについては、ソフトウェア仕様書（Software/Service SPECification, **SPEC.md**）を参照することを強く推奨します。設計上の意思決定における信頼できる唯一の情報源（Single Source of Truth）として仕様書を活用してください。

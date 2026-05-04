@@ -1164,3 +1164,49 @@ class TestUpstreamClient:
         payload = await client.call_tool("t", {"q": 1})
         assert payload == {"a": 1}
         fake_session.call_tool.assert_awaited_once_with("t", {"q": 1})
+
+
+class TestToolProxy:
+    @pytest.mark.asyncio
+    async def test_call_through_applies_filter(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.filters.structural_allowlist import StructuralAllowlistFilter
+        from mcp_gateway.tools.proxy import ToolProxy
+
+        upstream = AsyncMock()
+        upstream.call_tool.return_value = {
+            "results": [
+                {
+                    "id": "m1",
+                    "content": "hello",
+                    "embedding": [0.1],
+                    "internal_score": 0.9,
+                }
+            ],
+            "total_count": 1,
+        }
+        filt = StructuralAllowlistFilter(
+            schemas={"memory_search": {"results": ["id", "content"], "total_count": True}}
+        )
+        proxy = ToolProxy(upstream=upstream, filter_=filt)
+
+        out = await proxy.call_through(tool_name="memory_search", arguments={"query": "hi"})
+        assert out["results"][0] == {"id": "m1", "content": "hello"}
+        assert "embedding" not in out["results"][0]
+        assert out["total_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_call_through_rejects_secret_like_arguments(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.none_filter import NoneFilter
+        from mcp_gateway.tools.proxy import ToolProxy
+
+        proxy = ToolProxy(upstream=AsyncMock(), filter_=NoneFilter())
+        with pytest.raises(PolicyError):
+            await proxy.call_through(
+                tool_name="t",
+                arguments={"q": "use sk-1234567890abcdef as a key"},
+            )

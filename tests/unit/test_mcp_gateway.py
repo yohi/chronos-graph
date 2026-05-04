@@ -1651,7 +1651,13 @@ class TestEntrypoint:
 
         with patch("uvicorn.run") as run:
             entry.main()
-        run.assert_called_once()
+        run.assert_called_once_with(
+            "mcp_gateway.app:build_app",
+            factory=True,
+            host="127.0.0.1",
+            port=9100,
+            log_level="info",
+        )
 
 
 class TestSamplePolicy:
@@ -1663,4 +1669,6 @@ class TestSamplePolicy:
         path = files("mcp_gateway").joinpath("policies/intents.example.yaml")
         policy = load_policy(path)  # type: ignore[arg-type]
         assert policy.version == 1
+        assert "read_only_recall" in policy.intents
+        assert "summarizer-bot" in policy.agents
         assert "read_only_recall" in policy.intents

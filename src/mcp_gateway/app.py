@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from importlib.resources import files
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
@@ -31,7 +33,11 @@ def _decode_keys(settings: GatewaySettings) -> dict[str, str]:
 
 
 def build_app(*, upstream_override: Any | None = None) -> FastAPI:
-    settings = GatewaySettings()
+    if upstream_override is not None and "MCP_GATEWAY_POLICY_PATH" not in os.environ:
+        sample_policy = Path(str(files("mcp_gateway").joinpath("policies/intents.example.yaml")))
+        settings = GatewaySettings(policy_path=sample_policy)
+    else:
+        settings = GatewaySettings()
     policy = load_policy(settings.policy_path)
 
     audit = AuditLogger(level=settings.audit_log_level)

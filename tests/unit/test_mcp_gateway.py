@@ -1458,3 +1458,61 @@ class TestSamplePolicy:
         policy = load_policy(path)  # type: ignore[arg-type]
         assert policy.version == 1
         assert "read_only_recall" in policy.intents
+
+
+class TestSecretIsolation:
+    def test_upstream_env_filters_unlisted_keys(self):
+        from mcp_gateway.upstream.context_store_client import build_upstream_env
+
+        env = build_upstream_env(
+            passthrough=["OPENAI_API_KEY"],
+            base_env={
+                "OPENAI_API_KEY": "sk-allowed",
+                "AWS_SECRET_ACCESS_KEY": "should-not-leak",
+                "GITHUB_TOKEN": "should-not-leak",
+                "PATH": "/usr/bin",
+            },
+        )
+        assert "AWS_SECRET_ACCESS_KEY" not in env
+        assert "GITHUB_TOKEN" not in env
+        assert env["OPENAI_API_KEY"] == "sk-allowed"
+        assert "PATH" in env
+
+    def test_settings_repr_does_not_leak_api_keys(self, tmp_path, monkeypatch):
+        policy = tmp_path / "intents.yaml"
+        policy.write_text("version: 1\noutput_filters: {}\nintents: {}\nagents: {}\n")
+        monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy))
+        monkeypatch.setenv("MCP_GATEWAY_API_KEYS_JSON", '{"a":"ck_super_secret"}')
+
+        from mcp_gateway.config import GatewaySettings
+
+        settings = GatewaySettings()
+        assert "ck_super_secret" not in repr(settings)
+        assert "ck_super_secret" not in str(settings.model_dump())
+        assert "ck_super_secret" not in str(settings.model_dump(mode="json"))
+
+
+class TestContextStoreUntouched:
+    """Phase 3 acceptance: src/context_store/ must be diff-free vs master."""
+
+    def test_no_imports_from_context_store_in_mcp_gateway(self):
+        import pkgutil
+        from importlib import import_module
+
+        import mcp_gateway
+
+        bad: list[str] = []
+        for mod_info in pkgutil.walk_packages(mcp_gateway.__path__, prefix="mcp_gateway."):
+            module = import_module(mod_info.name)
+            src = getattr(module, "__file__", None)
+            if src is None:
+                continue
+            with open(src, encoding="utf-8") as handle:
+                text = handle.read()
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    continue
+                if "from context_store" in stripped or "import context_store" in stripped:
+                    bad.append(f"{mod_info.name}: {stripped}")
+        assert bad == [], f"mcp_gateway imports context_store directly: {bad}"

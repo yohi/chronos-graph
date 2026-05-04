@@ -9,6 +9,7 @@ from importlib.resources import as_file, files
 from typing import Any, AsyncGenerator
 
 from fastapi import FastAPI
+from pydantic import ValidationError
 
 from mcp_gateway.audit.logger import AuditLogger
 from mcp_gateway.auth.api_key import ApiKeyAuthenticator
@@ -46,14 +47,21 @@ def _decode_keys(settings: GatewaySettings) -> dict[str, str]:
 def build_app(
     *, upstream_override: Any | None = None, initial_tools: list[dict[str, Any]] | None = None
 ) -> FastAPI:
-    if upstream_override is not None and "MCP_GATEWAY_POLICY_PATH" not in os.environ:
+    try:
+        settings = GatewaySettings()
+    except ValidationError as exc:
+        missing_policy_path = any(
+            error.get("loc") == ("policy_path",) and error.get("type") == "missing"
+            for error in exc.errors()
+        )
+        if upstream_override is None or not missing_policy_path:
+            raise
+
         resource = files("mcp_gateway").joinpath("policies/intents.example.yaml")
         with as_file(resource) as sample_policy:
             settings = GatewaySettings(policy_path=sample_policy)
-            policy = load_policy(settings.policy_path)
-    else:
-        settings = GatewaySettings()
-        policy = load_policy(settings.policy_path)
+
+    policy = load_policy(settings.policy_path)
 
     audit = AuditLogger(level=settings.audit_log_level)
     auth = ApiKeyAuthenticator(_decode_keys(settings))

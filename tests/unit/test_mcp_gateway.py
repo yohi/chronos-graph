@@ -1715,6 +1715,48 @@ class TestEntrypoint:
         assert app is not None
         assert used_as_file is True
 
+    def test_build_app_prefers_env_file_policy_path_with_upstream_override(
+        self, monkeypatch, tmp_path
+    ):
+        from unittest.mock import AsyncMock
+
+        import mcp_gateway.app as app_module
+
+        policy = tmp_path / "env-policy.yaml"
+        policy.write_text(
+            "\n".join(
+                [
+                    "version: 1",
+                    "output_filters: {none: {type: none}}",
+                    (
+                        "intents: {read_only_recall: {description: x, "
+                        "allowed_tools: [memory_search], output_filter: none}}"
+                    ),
+                    "agents: {summarizer-bot: {allowed_intents: [read_only_recall]}}",
+                    "",
+                ]
+            )
+        )
+        (tmp_path / ".env").write_text(f"MCP_GATEWAY_POLICY_PATH={policy}\n")
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("MCP_GATEWAY_POLICY_PATH", raising=False)
+        monkeypatch.setattr(
+            app_module,
+            "as_file",
+            lambda traversable: (_ for _ in ()).throw(
+                AssertionError("sample policy should not be used")
+            ),
+            raising=False,
+        )
+
+        upstream = AsyncMock()
+        upstream.list_tools.return_value = []
+
+        app = app_module.build_app(upstream_override=upstream, initial_tools=[])
+
+        assert app is not None
+
 
 class TestSamplePolicy:
     def test_sample_policy_is_valid(self):

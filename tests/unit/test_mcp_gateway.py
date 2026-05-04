@@ -1663,6 +1663,100 @@ class TestEntrypoint:
             log_level="info",
         )
 
+    def test_build_app_uses_as_file_for_packaged_sample_policy(self, monkeypatch, tmp_path):
+        from contextlib import contextmanager
+        from unittest.mock import AsyncMock
+
+        import mcp_gateway.app as app_module
+
+        policy = tmp_path / "intents.example.yaml"
+        policy.write_text(
+            "\n".join(
+                [
+                    "version: 1",
+                    "output_filters: {none: {type: none}}",
+                    (
+                        "intents: {read_only_recall: {description: x, "
+                        "allowed_tools: [memory_search], output_filter: none}}"
+                    ),
+                    "agents: {summarizer-bot: {allowed_intents: [read_only_recall]}}",
+                    "",
+                ]
+            )
+        )
+
+        class FakePackage:
+            def __init__(self, resource):
+                self._resource = resource
+
+            def joinpath(self, path):
+                assert path == "policies/intents.example.yaml"
+                return self._resource
+
+        resource = object()
+        used_as_file = False
+
+        @contextmanager
+        def fake_as_file(traversable):
+            nonlocal used_as_file
+            assert traversable is resource
+            used_as_file = True
+            yield policy
+
+        monkeypatch.delenv("MCP_GATEWAY_POLICY_PATH", raising=False)
+        monkeypatch.setattr(app_module, "files", lambda package: FakePackage(resource))
+        monkeypatch.setattr(app_module, "as_file", fake_as_file, raising=False)
+
+        upstream = AsyncMock()
+        upstream.list_tools.return_value = []
+
+        app = app_module.build_app(upstream_override=upstream, initial_tools=[])
+
+        assert app is not None
+        assert used_as_file is True
+
+    def test_build_app_prefers_env_file_policy_path_with_upstream_override(
+        self, monkeypatch, tmp_path
+    ):
+        from unittest.mock import AsyncMock
+
+        import mcp_gateway.app as app_module
+
+        policy = tmp_path / "env-policy.yaml"
+        policy.write_text(
+            "\n".join(
+                [
+                    "version: 1",
+                    "output_filters: {none: {type: none}}",
+                    (
+                        "intents: {read_only_recall: {description: x, "
+                        "allowed_tools: [memory_search], output_filter: none}}"
+                    ),
+                    "agents: {summarizer-bot: {allowed_intents: [read_only_recall]}}",
+                    "",
+                ]
+            )
+        )
+        (tmp_path / ".env").write_text(f"MCP_GATEWAY_POLICY_PATH={policy}\n")
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("MCP_GATEWAY_POLICY_PATH", raising=False)
+        monkeypatch.setattr(
+            app_module,
+            "as_file",
+            lambda traversable: (_ for _ in ()).throw(
+                AssertionError("sample policy should not be used")
+            ),
+            raising=False,
+        )
+
+        upstream = AsyncMock()
+        upstream.list_tools.return_value = []
+
+        app = app_module.build_app(upstream_override=upstream, initial_tools=[])
+
+        assert app is not None
+
 
 class TestSamplePolicy:
     def test_sample_policy_is_valid(self):
@@ -1676,3 +1770,71 @@ class TestSamplePolicy:
         assert "read_only_recall" in policy.intents
         assert "summarizer-bot" in policy.agents
         assert "read_only_recall" in policy.intents
+
+
+class TestSecretIsolation:
+    def test_upstream_env_filters_unlisted_keys(self):
+        from mcp_gateway.upstream.context_store_client import build_upstream_env
+
+        env = build_upstream_env(
+            passthrough=["OPENAI_API_KEY"],
+            base_env={
+                "OPENAI_API_KEY": "sk-allowed",
+                "AWS_SECRET_ACCESS_KEY": "should-not-leak",
+                "GITHUB_TOKEN": "should-not-leak",
+                "PATH": "/usr/bin",
+            },
+        )
+        assert "AWS_SECRET_ACCESS_KEY" not in env
+        assert "GITHUB_TOKEN" not in env
+        assert env["OPENAI_API_KEY"] == "sk-allowed"
+        assert "PATH" in env
+
+    def test_settings_repr_does_not_leak_api_keys(self, tmp_path, monkeypatch):
+        policy = tmp_path / "intents.yaml"
+        policy.write_text("version: 1\noutput_filters: {}\nintents: {}\nagents: {}\n")
+        monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy))
+        monkeypatch.setenv("MCP_GATEWAY_API_KEYS_JSON", '{"a":"ck_super_secret"}')
+
+        from mcp_gateway.config import GatewaySettings
+
+        settings = GatewaySettings()
+        assert "ck_super_secret" not in repr(settings)
+        assert "ck_super_secret" not in str(settings.model_dump())
+        assert "ck_super_secret" not in str(settings.model_dump(mode="json"))
+
+
+class TestContextStoreUntouched:
+    """Phase 3 acceptance: src/context_store/ must be diff-free vs master."""
+
+    def test_no_imports_from_context_store_in_mcp_gateway(self):
+        import importlib.util
+        import pkgutil
+
+        import mcp_gateway
+
+        bad: list[str] = []
+        for mod_info in pkgutil.walk_packages(mcp_gateway.__path__, prefix="mcp_gateway."):
+            spec = importlib.util.find_spec(mod_info.name)
+            if spec is None:
+                continue
+
+            src = spec.origin
+            if src is None and spec.loader is not None and hasattr(spec.loader, "get_filename"):
+                try:
+                    src = spec.loader.get_filename(mod_info.name)
+                except (ImportError, OSError):
+                    continue
+
+            if src in {None, "built-in", "frozen"}:
+                continue
+
+            with open(src, encoding="utf-8") as handle:
+                text = handle.read()
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    continue
+                if "from context_store" in stripped or "import context_store" in stripped:
+                    bad.append(f"{mod_info.name}: {stripped}")
+        assert bad == [], f"mcp_gateway imports context_store directly: {bad}"

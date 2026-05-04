@@ -1116,3 +1116,51 @@ class TestSessionLifecycle:
         rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
         with pytest.raises(FrozenInstanceError):
             rec.agent_id = "other"  # type: ignore[misc]
+
+
+class TestUpstreamClient:
+    def test_build_env_passthrough_allowlist_only(self, monkeypatch):
+        from mcp_gateway.upstream.context_store_client import build_upstream_env
+
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-allowed")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "should-not-leak")
+        monkeypatch.setenv("CONTEXT_STORE_DB_PATH", "/tmp/x")  # noqa: S108
+
+        env = build_upstream_env(
+            passthrough=["OPENAI_API_KEY", "CONTEXT_STORE_DB_PATH"],
+            base_env={
+                "OPENAI_API_KEY": "sk-allowed",
+                "AWS_SECRET_ACCESS_KEY": "should-not-leak",
+                "CONTEXT_STORE_DB_PATH": "/tmp/x",  # noqa: S108
+                "PATH": "/usr/bin",
+            },
+        )
+        assert env.get("OPENAI_API_KEY") == "sk-allowed"
+        assert env.get("CONTEXT_STORE_DB_PATH") == "/tmp/x"  # noqa: S108
+        assert "AWS_SECRET_ACCESS_KEY" not in env
+        # PATH は明示的に含める(allowlist と別軸でユーティリティで継承)
+        assert "PATH" in env
+
+    @pytest.mark.asyncio
+    async def test_call_tool_delegates_to_session(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.upstream.context_store_client import UpstreamClient
+
+        fake_session = AsyncMock()
+        fake_session.list_tools.return_value = type(
+            "R", (), {"tools": [type("T", (), {"model_dump": lambda self: {"name": "t"}})()]}
+        )()
+        fake_session.call_tool.return_value = type(
+            "R", (), {"content": [{"type": "text", "text": '{"a":1}'}], "isError": False}
+        )()
+        client = UpstreamClient.__new__(UpstreamClient)  # type: ignore[call-arg]
+        client._session = fake_session  # type: ignore[attr-defined]
+        client._tools_cache = None  # type: ignore[attr-defined]
+
+        tools = await client.list_tools()
+        assert tools == [{"name": "t"}]
+
+        payload = await client.call_tool("t", {"q": 1})
+        assert payload == {"a": 1}
+        fake_session.call_tool.assert_awaited_once_with("t", {"q": 1})

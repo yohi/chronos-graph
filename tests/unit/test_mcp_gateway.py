@@ -1642,6 +1642,23 @@ class TestMcpMessagesEndpoint:
         assert "error" in body
         assert "not found" in body["error"]["message"].lower()
 
+    @pytest.mark.asyncio
+    async def test_call_tool_with_invalid_falsy_arguments(self, app_client):
+        # [] is falsy but not a dict
+        sid = await self._open_session(app_client)
+        resp = await app_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "memory_search", "arguments": []},
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["error"]["code"] == -32602
+        assert "arguments' must be an object" in resp.json()["error"]["message"]
+
 
 class TestEntrypoint:
     def test_main_callable(self, monkeypatch):

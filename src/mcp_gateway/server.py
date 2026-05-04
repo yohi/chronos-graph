@@ -137,18 +137,23 @@ def build_router(
                     }
                 )
             tool_name = params.get("name", "")
-            arguments = params.get("arguments") or {}
-            if not isinstance(arguments, dict):
-                return JSONResponse(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": rpc_id,
-                        "error": {
-                            "code": -32602,
-                            "message": "Invalid params: 'arguments' must be an object",
-                        },
-                    }
-                )
+            # Use explicit check to allow empty dict but reject other falsy values
+            if "arguments" in params:
+                arguments = params["arguments"]
+                if not isinstance(arguments, dict):
+                    return JSONResponse(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": rpc_id,
+                            "error": {
+                                "code": -32602,
+                                "message": "Invalid params: 'arguments' must be an object",
+                            },
+                        }
+                    )
+            else:
+                arguments = {}
+
             if tool_name not in record.caps:
                 audit.log(
                     ev="call",

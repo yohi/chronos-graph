@@ -137,7 +137,19 @@ def build_router(
                         },
                     }
                 )
-            tool_name = params.get("name", "")
+            tool_name = params.get("name")
+            if not tool_name:
+                return JSONResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": rpc_id,
+                        "error": {
+                            "code": -32602,
+                            "message": "Invalid params: missing required parameter: name",
+                        },
+                    }
+                )
+
             # Use explicit check to allow empty dict but reject other falsy values
             if "arguments" in params:
                 arguments = params["arguments"]

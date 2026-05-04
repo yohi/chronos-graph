@@ -1315,6 +1315,24 @@ class TestUpstreamClient:
         fake_session.call_tool.assert_awaited_once_with("t", {"q": 1})
 
     @pytest.mark.asyncio
+    async def test_list_tools_wraps_exception(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.errors import UpstreamError
+        from mcp_gateway.upstream.context_store_client import UpstreamClient
+
+        fake_session = AsyncMock()
+        fake_session.list_tools.side_effect = Exception("network error")
+        client = UpstreamClient.__new__(UpstreamClient)  # type: ignore[call-arg]
+        client._session = fake_session  # type: ignore[attr-defined]
+        client._tools_cache = None  # type: ignore[attr-defined]
+
+        with pytest.raises(UpstreamError) as excinfo:
+            await client.list_tools()
+        assert "upstream list tools failed" in str(excinfo.value)
+        assert "network error" in str(excinfo.value.__cause__)
+
+    @pytest.mark.asyncio
     async def test_call_tool_wraps_non_dict_json_payload(self):
         from unittest.mock import AsyncMock
 
@@ -1690,6 +1708,23 @@ class TestMcpMessagesEndpoint:
         assert resp.status_code == 200
         assert resp.json()["error"]["code"] == -32602
         assert "arguments' must be an object" in resp.json()["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_call_tool_missing_name(self, app_client):
+        sid = await self._open_session(app_client)
+        resp = await app_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"arguments": {}},
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32602
+        assert "missing required parameter: name" in body["error"]["message"]
 
 
 class TestEntrypoint:

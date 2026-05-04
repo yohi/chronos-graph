@@ -62,11 +62,6 @@ class UpstreamClient:
             session_entered = True
             await session.initialize()
         except Exception:
-            # Capture the original exception to re-raise it later
-            import sys
-
-            exc_info = sys.exc_info()
-
             if session_entered and session is not None:
                 try:
                     await session.__aexit__(None, None, None)
@@ -80,8 +75,6 @@ class UpstreamClient:
 
             self._session = None
             self._stdio_ctx = None
-            if exc_info[1]:
-                raise exc_info[1] from None
             raise
 
         self._stdio_ctx = stdio_ctx
@@ -112,7 +105,11 @@ class UpstreamClient:
             return copy.deepcopy(self._tools_cache)
         if self._session is None:
             raise UpstreamError("upstream session not started")
-        result = await self._session.list_tools()
+        try:
+            result = await self._session.list_tools()
+        except Exception as e:
+            raise UpstreamError("upstream list tools failed") from e
+
         tools = [t.model_dump() if hasattr(t, "model_dump") else dict(t) for t in result.tools]
         self._tools_cache = tools
         return copy.deepcopy(tools)

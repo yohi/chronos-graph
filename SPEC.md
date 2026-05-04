@@ -909,7 +909,7 @@ SELECT DISTINCT to_id, edge_type, depth FROM graph;
 aiosqlite を用いた非同期実行において、FastMCP 側で大量の並行リクエストが発生した場合、スレッド枯渇やメモリ上のタスク滞留を防ぐため、以下のバックプレッシャー機構を実装すること：
 
 1.  **同時接続制限**: `SQLiteStorageAdapter` 初期化時に `asyncio.Semaphore(sqlite_max_concurrent_connections)` を設定し、セマフォ (`self._semaphore`) は並行 DB 操作のために `asyncio.wait_for` と `try/finally` を使用し て取得・解放する。
-2.  **待ち行列数制限 (Bounded Queueing)**: 待機リクエスト数を制限する機構を実装する。実装者は実装計画書 (docs/plans/...) に詳述されている通り、キュー・ワーカーパターン (例: `request_queue` と `maxsize=sqlite_max_queued_requests`) や明示的なカウンタ (例: `SQLiteStorageAdapter._pending_count` と `_pending_lock`) のいずれかを使用し、`asyncio.Semaphore` の内部状態への依存を避けること。制限を超過した場合は即座に `StorageError(code="STORAGE_BUSY", recoverable=True)` を送出してフェイルファストさせること。
+2.  **待ち行列数制限 (Bounded Queueing)**: 待機リクエスト数を制限する機構を実装する。キュー・ワーカーパターン (例: `request_queue` と `maxsize=sqlite_max_queued_requests`) や明示的なカウンタ (例: `SQLiteStorageAdapter._pending_count` と `_pending_lock`) のいずれかを使用し、`asyncio.Semaphore` の内部状態への依存を避けること。制限を超過した場合は即座に `StorageError(code="STORAGE_BUSY", recoverable=True)` を送出してフェイルファストさせること。
 3.  **取得タイムアウトと確実な解放**:  
     - すべての DB 操作を `asyncio.wait_for(self._semaphore.acquire(), timeout=Settings.sqlite_acquire_timeout)` でラップすること。
     - セマフォの確実な解放を保証するため、`try/finally` ブロックまたは `async with` コンテキストマネージャを必ず使用すること。

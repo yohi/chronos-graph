@@ -141,16 +141,56 @@ uv run python -m context_store.dashboard.api_server
 
 ### MCP Gateway の起動 (SSE Transport)
 
-エージェントへの「権限の危機」（過剰権限・機密漏洩）を防ぐため、HTTP/SSE 経由で接続可能な MCP Gateway を搭載しています。意図(Intent)に基づくアクセス制御（IBAC）と構造的な出力フィルタリングを提供します。
+エージェントへの「権限の危機」（過剰権限・機密漏洩）を防ぐため、HTTP/SSE 経由で接続可能な MCP Gateway を搭載しています。Gateway が通信をインフラレベルでフック（傍受）し、意図(Intent)に基づくアクセス制御（IBAC）と構造的な出力フィルタリングを提供します。
+
+#### 1. 宣言的な権限管理 (`intents.yaml`)
+「AIエージェントに対する権限設定の最大効率」を図るため、コードを修正することなく YAML ファイルのみで権限を一元管理できます。Gateway はこの設定に基づき、不正なリクエストを物理的にブロック・サニタイズします。
+
+```yaml
+version: 1
+output_filters:
+  recall_safe:
+    type: structural_allowlist
+    schemas:
+      memory_search:
+        results: [id, content, created_at] # embedding や internal_score などの機密フィールドは自動的にフック・除去される
+
+intents:
+  read_only_recall:
+    description: "検索専用の権限"
+    allowed_tools: [memory_search]
+    output_filter: recall_safe
+```
+
+#### 2. クライアント側の接続設定
+エージェント側の設定（`mcp.json` や `claude_desktop_config.json` 等）には、環境変数ではなくヘッダを付与してエンドポイントを指定するだけです。これにより、エージェントごとに役割とアクセス権を安全に切り替えることができます。
+
+```json
+{
+  "mcpServers": {
+    "chronos-readonly": {
+      "type": "sse",
+      "url": "http://localhost:9100/sse",
+      "headers": {
+        "Authorization": "Bearer ck_super_secret_key",
+        "X-MCP-Intent": "read_only_recall"
+      }
+    }
+  }
+}
+```
+
+#### 3. プロンプトの最大効率化
+Gateway がツールの露出とペイロードを物理的にインターセプトするため、エージェントのシステムプロンプト（`AGENTS.md` 等）に「〇〇のツールは使わないで」「このフィールドは隠して」といった複雑な禁止事項を書く必要がなくなります。シンプルなプロンプトと Gateway の組み合わせにより、命令予算の浪費や LLM のハルシネーションを完全に防ぐことができます。
+
+*(※ 今後のロードマップとして、Gateway が MCP の `prompts` 機能をフックし、接続時にエージェントへ役割や制約を自動注入する機能の実装を予定しています。)*
 
 ```bash
-# ポリシーファイルを指定して起動
+# サーバーの起動例
 MCP_GATEWAY_POLICY_PATH=src/mcp_gateway/policies/intents.example.yaml \
 MCP_GATEWAY_API_KEYS_JSON='{"my-agent":"ck_super_secret_key"}' \
 uv run python -m mcp_gateway
 ```
-
-> **注意**: 起動には必ずポリシーファイル（YAML）の指定が必要です。クライアントは `GET /sse` エンドポイントに対し `Authorization: Bearer <key>` および `X-MCP-Intent: <intent>` ヘッダを付与して接続します。
 
 ---
 

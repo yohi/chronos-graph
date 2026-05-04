@@ -29,7 +29,6 @@ def _contains_secret(value: Any) -> bool:
         return any(pattern.search(value) for pattern in _SECRET_PATTERNS)
     if isinstance(value, dict):
         return any(_contains_secret(str(k)) or _contains_secret(v) for k, v in value.items())
-        return any(_contains_secret(inner) for inner in value.values())
     if isinstance(value, list):
         return any(_contains_secret(inner) for inner in value)
     return False
@@ -46,5 +45,4 @@ class ToolProxy:
         payload = await self._upstream.call_tool(tool_name, arguments)
         if _contains_secret(payload):
             raise PolicyError("upstream response contains secret-like content")
-        return self._filter.apply(tool_name=tool_name, payload=payload)
         return self._filter.apply(tool_name=tool_name, payload=payload)

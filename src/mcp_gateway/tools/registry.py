@@ -16,3 +16,6 @@ class ToolRegistry:
 
     def filter_by_caps(self, *, caps: AbstractSet[str]) -> list[dict[str, Any]]:
         return [copy.deepcopy(t) for t in self._all if t.get("name") in caps]
+
+    def replace_tools(self, all_tools: list[dict[str, Any]]) -> None:
+        self._all = copy.deepcopy(all_tools)

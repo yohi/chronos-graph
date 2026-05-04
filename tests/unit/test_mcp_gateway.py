@@ -5,6 +5,7 @@ from __future__ import annotations
 import textwrap
 
 import pytest
+import pytest_asyncio
 from pydantic import ValidationError
 
 
@@ -1532,11 +1533,11 @@ def gateway_app(tmp_path, monkeypatch):
         "results": [{"id": "m1", "content": "hello", "embedding": [0.1], "internal_score": 0.9}],
         "total_count": 1,
     }
-    app = build_app(upstream_override=upstream)
+    app = build_app(upstream_override=upstream, initial_tools=upstream.list_tools.return_value)
     return app, upstream
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def app_client(gateway_app):
     import httpx
     from httpx import ASGITransport

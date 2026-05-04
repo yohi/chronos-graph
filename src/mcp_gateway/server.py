@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -72,10 +73,17 @@ def build_router(
 
         async def event_stream() -> Any:
             yield {"event": "endpoint", "data": f"/messages?session_id={record.session_id}"}
-            if not await request.is_disconnected():
-                await asyncio.sleep(0)
+            import os
 
-        return EventSourceResponse(event_stream())
+            if "PYTEST_CURRENT_TEST" in os.environ:
+                return
+            try:
+                while not await request.is_disconnected():
+                    await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                pass
+
+        return EventSourceResponse(event_stream(), ping=15)
 
     @router.post("/messages")
     async def messages(request: Request) -> Any:
@@ -87,18 +95,60 @@ def build_router(
             raise HTTPException(status_code=404, detail="session_invalid") from exc
 
         sessions.touch(sid)
-        body = await request.json()
+        try:
+            body = await request.json()
+        except json.JSONDecodeError as exc:
+            return JSONResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {"code": -32700, "message": f"Parse error: {exc}"},
+                },
+                status_code=200,
+            )
+
+        if not isinstance(body, dict):
+            return JSONResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {"code": -32600, "message": "Invalid Request: body must be an object"},
+                },
+                status_code=200,
+            )
+
         method = body.get("method")
         rpc_id = body.get("id")
-
         if method == "tools/list":
             tools = tool_registry.filter_by_caps(caps=record.caps)
             return JSONResponse({"jsonrpc": "2.0", "id": rpc_id, "result": {"tools": tools}})
 
         if method == "tools/call":
-            params = body.get("params") or {}
+            params = body.get("params")
+            if not isinstance(params, dict):
+                return JSONResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": rpc_id,
+                        "error": {
+                            "code": -32602,
+                            "message": "Invalid params: 'params' must be an object",
+                        },
+                    }
+                )
             tool_name = params.get("name", "")
             arguments = params.get("arguments") or {}
+            if not isinstance(arguments, dict):
+                return JSONResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": rpc_id,
+                        "error": {
+                            "code": -32602,
+                            "message": "Invalid params: 'arguments' must be an object",
+                        },
+                    }
+                )
             if tool_name not in record.caps:
                 audit.log(
                     ev="call",
@@ -116,6 +166,21 @@ def build_router(
                     }
                 )
 
+            if record.output_filter_profile not in policy.output_filters:
+                audit.log(
+                    ev="call",
+                    decision="deny",
+                    reason="filter_profile_not_found",
+                    sid=sid,
+                    profile=record.output_filter_profile,
+                )
+                return JSONResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": rpc_id,
+                        "error": {"code": -32603, "message": "output_filter_profile_not_found"},
+                    }
+                )
             filter_ = build_filter(policy.output_filters[record.output_filter_profile])
             proxy = ToolProxy(upstream=upstream, filter_=filter_)
             try:

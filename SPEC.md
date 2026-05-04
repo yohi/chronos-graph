@@ -1033,68 +1033,105 @@ context-store-mcp/
 ├── SPEC.md                        # 本ドキュメント
 │
 ├── src/
-│   └── context_store/
+│   ├── context_store/
+│   │   ├── __init__.py
+│   │   ├── server.py              # FastMCP サーバー（エントリーポイント）
+│   │   ├── orchestrator.py        # パイプラインの統合・調整
+│   │   ├── config.py              # pydantic-settings 設定
+│   │   │
+│   │   ├── ingestion/             # Ingestion Pipeline
+│   │   │   ├── __init__.py
+│   │   │   ├── pipeline.py
+│   │   │   ├── adapters.py        # ConversationAdapter / ManualAdapter / URLAdapter
+│   │   │   ├── chunker.py
+│   │   │   ├── classifier.py      # 記憶種別の自動分類
+│   │   │   ├── deduplicator.py
+│   │   │   └── graph_linker.py
+│   │   │
+│   │   ├── retrieval/             # Retrieval Pipeline
+│   │   │   ├── __init__.py
+│   │   │   ├── pipeline.py
+│   │   │   ├── query_analyzer.py
+│   │   │   ├── vector_search.py
+│   │   │   ├── keyword_search.py
+│   │   │   ├── graph_traversal.py
+│   │   │   ├── result_fusion.py
+│   │   │   └── post_processor.py
+│   │   │
+│   │   ├── lifecycle/             # Lifecycle Manager
+│   │   │   ├── __init__.py
+│   │   │   ├── manager.py
+│   │   │   ├── decay_scorer.py
+│   │   │   ├── archiver.py
+│   │   │   ├── consolidator.py
+│   │   │   └── purger.py
+│   │   │
+│   │   ├── storage/               # Storage Layer
+│   │   │   ├── __init__.py
+│   │   │   ├── protocols.py
+│   │   │   ├── factory.py            # ストレージ選択ファクトリ
+│   │   │   ├── postgres.py
+│   │   │   ├── sqlite.py             # ライトウェイト版 (sqlite-vec + FTS5)
+│   │   │   ├── sqlite_graph.py       # SQLite ローカルグラフ (再帰的 CTE)
+│   │   │   ├── neo4j.py
+│   │   │   ├── redis.py
+│   │   │   └── inmemory.py           # InMemory Cache Adapter
+│   │   │
+│   │   ├── embedding/             # Embedding Provider
+│   │   │   ├── __init__.py
+│   │   │   ├── protocols.py
+│   │   │   ├── openai.py
+│   │   │   ├── local_model.py
+│   │   │   ├── litellm.py
+│   │   │   └── custom_api.py
+│   │   │
+│   │   ├── models/                # データモデル
+│   │   │   ├── __init__.py
+│   │   │   ├── memory.py
+│   │   │   ├── search.py
+│   │   │   └── graph.py
+│   │   │
+│   │   └── extensions/            # RL 拡張ポイント
+│   │       ├── __init__.py
+│   │       ├── protocols.py
+│   │       └── noop.py
+│   │
+│   └── mcp_gateway/               # MCP Gateway (ZSP / IBAC / OutputFilter)
 │       ├── __init__.py
-│       ├── server.py              # FastMCP サーバー（エントリーポイント）
-│       ├── orchestrator.py        # パイプラインの統合・調整
-│       ├── config.py              # pydantic-settings 設定
+│       ├── __main__.py            # `python -m mcp_gateway` エントリ
+│       ├── app.py                 # FastAPI アプリ生成 + ルート登録
+│       ├── server.py              # MCP SSE トランスポートハンドラ
+│       ├── config.py              # Pydantic Settings
+│       ├── errors.py              # GatewayError 階層
 │       │
-│       ├── ingestion/             # Ingestion Pipeline
-│       │   ├── __init__.py
-│       │   ├── pipeline.py
-│       │   ├── adapters.py        # ConversationAdapter / ManualAdapter / URLAdapter
-│       │   ├── chunker.py
-│       │   ├── classifier.py      # 記憶種別の自動分類
-│       │   ├── deduplicator.py
-│       │   └── graph_linker.py
+│       ├── auth/                  # 認証・セッション層
+│       │   ├── api_key.py
+│       │   ├── handshake.py
+│       │   ├── headers.py
+│       │   └── session.py
 │       │
-│       ├── retrieval/             # Retrieval Pipeline
-│       │   ├── __init__.py
-│       │   ├── pipeline.py
-│       │   ├── query_analyzer.py
-│       │   ├── vector_search.py
-│       │   ├── keyword_search.py
-│       │   ├── graph_traversal.py
-│       │   ├── result_fusion.py
-│       │   └── post_processor.py
+│       ├── policy/                # 認可層 (IBAC / intents.yaml 評価)
+│       │   ├── engine.py
+│       │   ├── loader.py
+│       │   └── models.py
 │       │
-│       ├── lifecycle/             # Lifecycle Manager
-│       │   ├── __init__.py
-│       │   ├── manager.py
-│       │   ├── decay_scorer.py
-│       │   ├── archiver.py
-│       │   ├── consolidator.py
-│       │   └── purger.py
+│       ├── tools/                 # ツール公開・プロキシ層
+│       │   ├── proxy.py
+│       │   └── registry.py
 │       │
-│       ├── storage/               # Storage Layer
-│       │   ├── __init__.py
-│       │   ├── protocols.py
-│       │   ├── factory.py            # ストレージ選択ファクトリ
-│       │   ├── postgres.py
-│       │   ├── sqlite.py             # ライトウェイト版 (sqlite-vec + FTS5)
-│       │   ├── sqlite_graph.py       # SQLite ローカルグラフ (再帰的 CTE)
-│       │   ├── neo4j.py
-│       │   ├── redis.py
-│       │   └── inmemory.py           # InMemory Cache Adapter
+│       ├── filters/               # 出力フィルタ層 (認可ギャップ防御)
+│       │   ├── factory.py
+│       │   ├── none_filter.py
+│       │   └── structural_allowlist.py
 │       │
-│       ├── embedding/             # Embedding Provider
-│       │   ├── __init__.py
-│       │   ├── protocols.py
-│       │   ├── openai.py
-│       │   ├── local_model.py
-│       │   ├── litellm.py
-│       │   └── custom_api.py
+│       ├── upstream/              # 上流 MCP クライアント層 (subprocess)
+│       │   └── context_store_client.py
 │       │
-│       ├── models/                # データモデル
-│       │   ├── __init__.py
-│       │   ├── memory.py
-│       │   ├── search.py
-│       │   └── graph.py
+│       ├── audit/                 # 監査ロガ (JSON Lines / stderr)
+│       │   └── logger.py
 │       │
-│       └── extensions/            # RL 拡張ポイント
-│           ├── __init__.py
-│           ├── protocols.py
-│           └── noop.py
+│       └── policies/              # ポリシー設定ファイル
+│           └── intents.example.yaml
 │
 ├── frontend/                      # Dashboard Web UI (React + Vite)
 │   ├── src/

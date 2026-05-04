@@ -1756,8 +1756,6 @@ class TestEntrypoint:
     ):
         from unittest.mock import AsyncMock
 
-        import mcp_gateway.app as app_module
-
         policy = tmp_path / "env-policy.yaml"
         policy.write_text(
             "\n".join(
@@ -1775,8 +1773,12 @@ class TestEntrypoint:
         )
         (tmp_path / ".env").write_text(f"MCP_GATEWAY_POLICY_PATH={policy}\n")
 
+        # Move chdir before import
         monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("MCP_GATEWAY_POLICY_PATH", raising=False)
+
+        import mcp_gateway.app as app_module
+
         monkeypatch.setattr(
             app_module,
             "as_file",

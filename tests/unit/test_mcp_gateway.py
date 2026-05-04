@@ -1644,10 +1644,14 @@ class TestMcpMessagesEndpoint:
 
 
 class TestEntrypoint:
-    def test_main_callable(self):
+    def test_main_callable(self, monkeypatch):
         from unittest.mock import patch
 
         import mcp_gateway.__main__ as entry
+
+        # Ensure environment variables don't interfere with the test
+        monkeypatch.delenv("MCP_GATEWAY_HOST", raising=False)
+        monkeypatch.delenv("MCP_GATEWAY_PORT", raising=False)
 
         with patch("uvicorn.run") as run:
             entry.main()

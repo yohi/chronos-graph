@@ -5,8 +5,7 @@ from __future__ import annotations
 import json
 import os
 from contextlib import asynccontextmanager
-from importlib.resources import files
-from pathlib import Path
+from importlib.resources import as_file, files
 from typing import Any, AsyncGenerator
 
 from fastapi import FastAPI
@@ -48,11 +47,13 @@ def build_app(
     *, upstream_override: Any | None = None, initial_tools: list[dict[str, Any]] | None = None
 ) -> FastAPI:
     if upstream_override is not None and "MCP_GATEWAY_POLICY_PATH" not in os.environ:
-        sample_policy = Path(str(files("mcp_gateway").joinpath("policies/intents.example.yaml")))
-        settings = GatewaySettings(policy_path=sample_policy)
+        resource = files("mcp_gateway").joinpath("policies/intents.example.yaml")
+        with as_file(resource) as sample_policy:
+            settings = GatewaySettings(policy_path=sample_policy)
+            policy = load_policy(settings.policy_path)
     else:
         settings = GatewaySettings()
-    policy = load_policy(settings.policy_path)
+        policy = load_policy(settings.policy_path)
 
     audit = AuditLogger(level=settings.audit_log_level)
     auth = ApiKeyAuthenticator(_decode_keys(settings))

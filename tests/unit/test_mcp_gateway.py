@@ -1663,6 +1663,58 @@ class TestEntrypoint:
             log_level="info",
         )
 
+    def test_build_app_uses_as_file_for_packaged_sample_policy(self, monkeypatch, tmp_path):
+        from contextlib import contextmanager
+        from unittest.mock import AsyncMock
+
+        import mcp_gateway.app as app_module
+
+        policy = tmp_path / "intents.example.yaml"
+        policy.write_text(
+            "\n".join(
+                [
+                    "version: 1",
+                    "output_filters: {none: {type: none}}",
+                    (
+                        "intents: {read_only_recall: {description: x, "
+                        "allowed_tools: [memory_search], output_filter: none}}"
+                    ),
+                    "agents: {summarizer-bot: {allowed_intents: [read_only_recall]}}",
+                    "",
+                ]
+            )
+        )
+
+        class FakePackage:
+            def __init__(self, resource):
+                self._resource = resource
+
+            def joinpath(self, path):
+                assert path == "policies/intents.example.yaml"
+                return self._resource
+
+        resource = object()
+        used_as_file = False
+
+        @contextmanager
+        def fake_as_file(traversable):
+            nonlocal used_as_file
+            assert traversable is resource
+            used_as_file = True
+            yield policy
+
+        monkeypatch.delenv("MCP_GATEWAY_POLICY_PATH", raising=False)
+        monkeypatch.setattr(app_module, "files", lambda package: FakePackage(resource))
+        monkeypatch.setattr(app_module, "as_file", fake_as_file, raising=False)
+
+        upstream = AsyncMock()
+        upstream.list_tools.return_value = []
+
+        app = app_module.build_app(upstream_override=upstream, initial_tools=[])
+
+        assert app is not None
+        assert used_as_file is True
+
 
 class TestSamplePolicy:
     def test_sample_policy_is_valid(self):
@@ -1714,17 +1766,27 @@ class TestContextStoreUntouched:
     """Phase 3 acceptance: src/context_store/ must be diff-free vs master."""
 
     def test_no_imports_from_context_store_in_mcp_gateway(self):
+        import importlib.util
         import pkgutil
-        from importlib import import_module
 
         import mcp_gateway
 
         bad: list[str] = []
         for mod_info in pkgutil.walk_packages(mcp_gateway.__path__, prefix="mcp_gateway."):
-            module = import_module(mod_info.name)
-            src = getattr(module, "__file__", None)
-            if src is None:
+            spec = importlib.util.find_spec(mod_info.name)
+            if spec is None:
                 continue
+
+            src = spec.origin
+            if src is None and spec.loader is not None and hasattr(spec.loader, "get_filename"):
+                try:
+                    src = spec.loader.get_filename(mod_info.name)
+                except (ImportError, OSError):
+                    continue
+
+            if src in {None, "built-in", "frozen"}:
+                continue
+
             with open(src, encoding="utf-8") as handle:
                 text = handle.read()
             for line in text.splitlines():

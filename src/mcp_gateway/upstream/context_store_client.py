@@ -41,19 +41,40 @@ class UpstreamClient:
         params = StdioServerParameters(
             command=self._command[0], args=self._command[1:], env=self._env
         )
-        self._stdio_ctx = stdio_client(params)
-        read, write = await self._stdio_ctx.__aenter__()
-        self._session = ClientSession(read, write)
-        await self._session.__aenter__()
-        await self._session.initialize()
+        stdio_ctx = stdio_client(params)
+        session: ClientSession | None = None
+        stdio_entered = False
+        session_entered = False
+        try:
+            read, write = await stdio_ctx.__aenter__()
+            stdio_entered = True
+            session = ClientSession(read, write)
+            await session.__aenter__()
+            session_entered = True
+            await session.initialize()
+        except Exception:
+            if session_entered and session is not None:
+                await session.__aexit__(None, None, None)
+            if stdio_entered:
+                await stdio_ctx.__aexit__(None, None, None)
+            self._session = None
+            self._stdio_ctx = None
+            raise
+
+        self._stdio_ctx = stdio_ctx
+        self._session = session
 
     async def stop(self) -> None:
-        if self._session is not None:
-            await self._session.__aexit__(None, None, None)
-            self._session = None
-        if self._stdio_ctx is not None:
-            await self._stdio_ctx.__aexit__(None, None, None)
-            self._stdio_ctx = None
+        session = self._session
+        stdio_ctx = self._stdio_ctx
+        self._session = None
+        self._stdio_ctx = None
+        self._tools_cache = None
+
+        if session is not None:
+            await session.__aexit__(None, None, None)
+        if stdio_ctx is not None:
+            await stdio_ctx.__aexit__(None, None, None)
 
     async def list_tools(self) -> list[dict[str, Any]]:
         if self._tools_cache is not None:
@@ -81,6 +102,7 @@ class UpstreamClient:
                     parsed = json.loads(text)
                     if isinstance(parsed, dict):
                         return parsed
+                    return {"result": parsed}
                 except json.JSONDecodeError:
                     return {"text": text}
         return {}

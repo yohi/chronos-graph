@@ -5,6 +5,7 @@ from __future__ import annotations
 import textwrap
 
 import pytest
+import pytest_asyncio
 from pydantic import ValidationError
 
 
@@ -1488,3 +1489,155 @@ class TestToolProxy:
                 arguments={"key": "ASIA1234567890ABCDEF"},
             )
         upstream.call_tool.assert_not_awaited()
+
+
+@pytest.fixture
+def gateway_app(tmp_path, monkeypatch):
+    """Boot the FastAPI app with a mocked upstream and a sample policy."""
+    policy = tmp_path / "intents.yaml"
+    policy.write_text(
+        textwrap.dedent(
+            """
+            version: 1
+            output_filters:
+              rs:
+                type: structural_allowlist
+                schemas:
+                  memory_search:
+                    results: [id, content]
+                    total_count: true
+            intents:
+              ro:
+                description: "x"
+                allowed_tools: [memory_search]
+                output_filter: rs
+            agents:
+              agent-a:
+                allowed_intents: [ro]
+            """
+        ).lstrip()
+    )
+    monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy))
+    monkeypatch.setenv("MCP_GATEWAY_API_KEYS_JSON", '{"agent-a":"ck_x"}')
+
+    from unittest.mock import AsyncMock
+
+    from mcp_gateway.app import build_app
+
+    upstream = AsyncMock()
+    upstream.list_tools.return_value = [
+        {"name": "memory_search"},
+        {"name": "memory_save"},
+    ]
+    upstream.call_tool.return_value = {
+        "results": [{"id": "m1", "content": "hello", "embedding": [0.1], "internal_score": 0.9}],
+        "total_count": 1,
+    }
+    app = build_app(upstream_override=upstream, initial_tools=upstream.list_tools.return_value)
+    return app, upstream
+
+
+@pytest_asyncio.fixture
+async def app_client(gateway_app):
+    import httpx
+    from httpx import ASGITransport
+
+    app, _ = gateway_app
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        yield client
+
+
+class TestSseHandshakeEndpoint:
+    @pytest.mark.asyncio
+    async def test_missing_auth_returns_401(self, app_client):
+        resp = await app_client.get("/sse")
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_missing_intent_returns_403(self, app_client):
+        resp = await app_client.get("/sse", headers={"Authorization": "Bearer ck_x"})
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_handshake_emits_endpoint_event(self, app_client):
+        async with app_client.stream(
+            "GET",
+            "/sse",
+            headers={"Authorization": "Bearer ck_x", "X-MCP-Intent": "ro"},
+        ) as resp:
+            assert resp.status_code == 200
+            sid = None
+            async for line in resp.aiter_lines():
+                if line.startswith("data:") and "session_id=" in line:
+                    sid = line.split("session_id=", 1)[1].strip()
+                    break
+            assert sid is not None and len(sid) > 0
+
+
+class TestMcpMessagesEndpoint:
+    @pytest.mark.asyncio
+    async def _open_session(self, app_client) -> str:
+        async with app_client.stream(
+            "GET",
+            "/sse",
+            headers={"Authorization": "Bearer ck_x", "X-MCP-Intent": "ro"},
+        ) as resp:
+            async for line in resp.aiter_lines():
+                if line.startswith("data:") and "session_id=" in line:
+                    return line.split("session_id=", 1)[1].strip()
+        raise AssertionError("no session_id received")
+
+    @pytest.mark.asyncio
+    async def test_tools_list_filters_by_caps(self, app_client):
+        sid = await self._open_session(app_client)
+        body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+        resp = await app_client.post(f"/messages?session_id={sid}", json=body)
+        assert resp.status_code == 200
+        envelope = resp.json()
+        names = [tool["name"] for tool in envelope["result"]["tools"]]
+        assert names == ["memory_search"]
+        assert "memory_save" not in names
+
+    @pytest.mark.asyncio
+    async def test_unknown_session_id_returns_404(self, app_client):
+        resp = await app_client.post(
+            "/messages?session_id=nonexistent",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_tools_call_filters_output(self, app_client):
+        sid = await self._open_session(app_client)
+        resp = await app_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "memory_search", "arguments": {"query": "hi"}},
+            },
+        )
+        assert resp.status_code == 200
+        result = resp.json()["result"]
+        assert "embedding" not in result["results"][0]
+        assert "internal_score" not in result["results"][0]
+        assert result["results"][0]["content"] == "hello"
+
+    @pytest.mark.asyncio
+    async def test_tools_call_unauthorized_tool_denied(self, app_client):
+        sid = await self._open_session(app_client)
+        resp = await app_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "memory_save", "arguments": {}},
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "error" in body
+        assert "not found" in body["error"]["message"].lower()

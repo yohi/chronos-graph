@@ -1194,6 +1194,18 @@ class TestHandshake:
                 requested_tools_header=None,
             )
 
+    @pytest.mark.parametrize("bad_header", ["Basic xyz", "Malformed"])
+    def test_malformed_auth_header_denied(self, bad_header):
+        from mcp_gateway.errors import AuthError
+
+        svc = self._stack()
+        with pytest.raises(AuthError, match="missing or malformed Authorization header"):
+            svc.handshake(
+                authorization_header=bad_header,
+                intent_header="ro",
+                requested_tools_header=None,
+            )
+
     def test_requested_tools_intersection_narrowed(self):
         svc = self._stack()
         # Policy allows [memory_search, memory_save]

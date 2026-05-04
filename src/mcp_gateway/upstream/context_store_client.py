@@ -10,7 +10,9 @@ are propagated into the subprocess (allowlist) so secrets cannot leak via
 
 from __future__ import annotations
 
+import copy
 import json
+import logging
 from typing import Any
 
 from mcp import ClientSession, StdioServerParameters
@@ -38,6 +40,9 @@ class UpstreamClient:
         self._tools_cache: list[dict[str, Any]] | None = None
 
     async def start(self) -> None:
+        if not self._command:
+            raise UpstreamError("empty command for context store client")
+
         params = StdioServerParameters(
             command=self._command[0], args=self._command[1:], env=self._env
         )
@@ -72,19 +77,25 @@ class UpstreamClient:
         self._tools_cache = None
 
         if session is not None:
-            await session.__aexit__(None, None, None)
+            try:
+                await session.__aexit__(None, None, None)
+            except Exception:
+                logging.exception("Error closing MCP session")
         if stdio_ctx is not None:
-            await stdio_ctx.__aexit__(None, None, None)
+            try:
+                await stdio_ctx.__aexit__(None, None, None)
+            except Exception:
+                logging.exception("Error closing stdio transport")
 
     async def list_tools(self) -> list[dict[str, Any]]:
         if self._tools_cache is not None:
-            return list(self._tools_cache)
+            return copy.deepcopy(self._tools_cache)
         if self._session is None:
             raise UpstreamError("upstream session not started")
         result = await self._session.list_tools()
         tools = [t.model_dump() if hasattr(t, "model_dump") else dict(t) for t in result.tools]
         self._tools_cache = tools
-        return list(tools)
+        return copy.deepcopy(tools)
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if self._session is None:

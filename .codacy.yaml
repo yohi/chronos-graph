@@ -1,8 +1,9 @@
 ---
-# Global exclusion for dialect-specific SQL files that cause false positives
+# Global exclusion for dialect-specific SQL files and agent guidelines that cause false positives
 exclude_paths:
   - "src/context_store/storage/migrations/sqlite/*.sql"
   - "src/context_store/storage/migrations/postgres/*.sql"
+  - "AGENTS.md"
 
 engines:
   bandit:
@@ -11,4 +12,8 @@ engines:
   sonarjs:
     patterns:
       - name: "S5144"
+        enabled: false
+  remark-lint:
+    patterns:
+      - name: "undefined-acronym"
         enabled: false

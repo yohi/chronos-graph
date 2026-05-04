@@ -1332,6 +1332,25 @@ class TestUpstreamClient:
         assert payload == {"result": [{"id": 1}]}
 
     @pytest.mark.asyncio
+    async def test_call_tool_wraps_upstream_exception_in_upstream_error(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.errors import UpstreamError
+        from mcp_gateway.upstream.context_store_client import UpstreamClient
+
+        fake_session = AsyncMock()
+        fake_session.call_tool.side_effect = RuntimeError("connection lost")
+
+        client = UpstreamClient.__new__(UpstreamClient)  # type: ignore[call-arg]
+        client._session = fake_session  # type: ignore[attr-defined]
+
+        with pytest.raises(UpstreamError, match="upstream tool call 't' failed") as excinfo:
+            await client.call_tool("t", {})
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert str(excinfo.value.__cause__) == "connection lost"
+
+    @pytest.mark.asyncio
     async def test_stop_clears_tools_cache(self):
         from unittest.mock import AsyncMock
 

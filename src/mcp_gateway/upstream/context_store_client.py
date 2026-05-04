@@ -100,7 +100,11 @@ class UpstreamClient:
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if self._session is None:
             raise UpstreamError("upstream session not started")
-        result = await self._session.call_tool(name, arguments)
+        try:
+            result = await self._session.call_tool(name, arguments)
+        except Exception as e:
+            raise UpstreamError(f"upstream tool call {name!r} failed") from e
+
         if getattr(result, "isError", False):
             raise UpstreamError(f"upstream returned error for tool {name!r}")
         # MCP returns content list; unify to a JSON dict if the first content is JSON-text.

@@ -1870,7 +1870,8 @@ class TestContextStoreUntouched:
             with open(src, encoding="utf-8") as handle:
                 text = handle.read()
             try:
-                tree = ast.parse(text)
+                # Pass filename for better error reporting in AST
+                tree = ast.parse(text, filename=src)
             except SyntaxError:
                 continue
 
@@ -1880,8 +1881,18 @@ class TestContextStoreUntouched:
                         if alias.name == "context_store" or alias.name.startswith("context_store."):
                             bad.append(f"{mod_info.name}: import {alias.name}")
                 elif isinstance(node, ast.ImportFrom):
-                    if node.module == "context_store" or (
+                    # Check module name
+                    is_bad = node.module == "context_store" or (
                         node.module and node.module.startswith("context_store.")
-                    ):
-                        bad.append(f"{mod_info.name}: from {node.module} import ...")
+                    )
+                    # Check aliases (e.g., from x import context_store)
+                    if not is_bad:
+                        for alias in node.names:
+                            if alias.name == "context_store" or alias.name.startswith(
+                                "context_store."
+                            ):
+                                is_bad = True
+                                break
+                    if is_bad:
+                        bad.append(f"{mod_info.name}: from {node.module or ''} import ...")
         assert bad == [], f"mcp_gateway imports context_store directly: {bad}"

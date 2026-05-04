@@ -33,9 +33,11 @@ class HandshakeService:
             raise AuthError("missing or malformed Authorization header")
         agent_id = self._auth.authenticate(token)
 
+        if intent_header is None:
+            raise PolicyError("missing X-MCP-Intent header")
         intent = parse_intent(intent_header)
         if intent is None:
-            raise PolicyError("missing X-MCP-Intent header")
+            raise PolicyError("invalid X-MCP-Intent header")
 
         requested = parse_requested_tools(requested_tools_header)
         grant = self._engine.evaluate_grant(

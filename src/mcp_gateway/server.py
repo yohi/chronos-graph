@@ -31,6 +31,11 @@ def run_gateway() -> None:
     uvicorn.run(build_app(), host=settings.host, port=settings.port, log_level="info")
 
 
+async def _keep_alive() -> None:
+    """Helper to keep the SSE connection alive. Monkeypatched in tests."""
+    await asyncio.sleep(1)
+
+
 def build_router(
     *,
     handshake: HandshakeService,
@@ -73,13 +78,9 @@ def build_router(
 
         async def event_stream() -> Any:
             yield {"event": "endpoint", "data": f"/messages?session_id={record.session_id}"}
-            import os
-
-            if "PYTEST_CURRENT_TEST" in os.environ:
-                return
             try:
                 while not await request.is_disconnected():
-                    await asyncio.sleep(1)
+                    await _keep_alive()
             except asyncio.CancelledError:
                 pass
 

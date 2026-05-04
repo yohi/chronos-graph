@@ -89,6 +89,8 @@ def build_app(
             ),
         )
 
+    registry = ToolRegistry(initial_tools or [])
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         started = False
@@ -109,7 +111,6 @@ def build_app(
                 await upstream.stop()
 
     app = FastAPI(title="ChronosGraph MCP Gateway", lifespan=lifespan)
-    registry = ToolRegistry(initial_tools or [])
     app.state.tool_registry = registry
     app.include_router(
         build_router(

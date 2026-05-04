@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import textwrap
 
 import pytest
@@ -1508,6 +1509,18 @@ class TestToolProxy:
                 arguments={"key": "ASIA1234567890ABCDEF"},
             )
         upstream.call_tool.assert_not_awaited()
+
+
+@pytest.fixture(autouse=True)
+def mock_sse_keep_alive(monkeypatch):
+    """Mock the SSE keep-alive loop to prevent hanging in unit tests."""
+    from unittest.mock import AsyncMock
+
+    import mcp_gateway.server as server_module
+
+    # By raising CancelledError, we terminate the loop in event_stream immediately
+    # after the first yield (the 'endpoint' event).
+    monkeypatch.setattr(server_module, "_keep_alive", AsyncMock(side_effect=asyncio.CancelledError))
 
 
 @pytest.fixture

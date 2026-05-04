@@ -38,11 +38,15 @@ class UpstreamClient:
         self._session: ClientSession | None = None
         self._stdio_ctx: Any = None
         self._tools_cache: list[dict[str, Any]] | None = None
+        self._started = False
 
     async def start(self) -> None:
+        if self._started:
+            return
         if not self._command:
             raise UpstreamError("empty command for context store client")
 
+        self._tools_cache = None
         params = StdioServerParameters(
             command=self._command[0], args=self._command[1:], env=self._env
         )
@@ -58,16 +62,31 @@ class UpstreamClient:
             session_entered = True
             await session.initialize()
         except Exception:
+            # Capture the original exception to re-raise it later
+            import sys
+
+            exc_info = sys.exc_info()
+
             if session_entered and session is not None:
-                await session.__aexit__(None, None, None)
+                try:
+                    await session.__aexit__(None, None, None)
+                except Exception:
+                    logging.exception("Error during session rollback")
             if stdio_entered:
-                await stdio_ctx.__aexit__(None, None, None)
+                try:
+                    await stdio_ctx.__aexit__(None, None, None)
+                except Exception:
+                    logging.exception("Error during stdio rollback")
+
             self._session = None
             self._stdio_ctx = None
+            if exc_info[1]:
+                raise exc_info[1] from None
             raise
 
         self._stdio_ctx = stdio_ctx
         self._session = session
+        self._started = True
 
     async def stop(self) -> None:
         session = self._session
@@ -75,6 +94,7 @@ class UpstreamClient:
         self._session = None
         self._stdio_ctx = None
         self._tools_cache = None
+        self._started = False
 
         if session is not None:
             try:

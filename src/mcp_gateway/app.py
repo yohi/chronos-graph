@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, AsyncGenerator
 
 from fastapi import FastAPI
 
@@ -75,7 +75,7 @@ def build_app(
         )
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI):
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # Start upstream only if not overridden
         if upstream_override is None:
             await upstream.start()

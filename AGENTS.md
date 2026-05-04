@@ -23,7 +23,7 @@ ChronosGraph is a Model Context Protocol (MCP) server providing persistent long-
   1. ディレクトリ移動: `cd frontend`
   2. 依存関係のインストール: `npm install`
   3. ビルド: `npm run build`
-  4. E2Eテストの実行: `npx playwright test` （※事前にアプリを起動しておくこと。必要な環境変数やポート設定を確認してください。）
+  4. E2Eテストの実行: `npx playwright test` （※`playwright.config.ts` の `webServer` 設定により、テスト実行時に開発サーバーは自動起動されます。）
 
 ## 🧠 Memory Strategy (Crucial for Agents)
 When developing or using this server, apply these tools selectively:

@@ -1118,6 +1118,157 @@ class TestSessionLifecycle:
             rec.agent_id = "other"  # type: ignore[misc]
 
 
+class TestHandshake:
+    def _stack(self):
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+        from mcp_gateway.auth.handshake import HandshakeService
+        from mcp_gateway.auth.session import InMemorySessionRegistry
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.models import (
+            AgentPolicy,
+            GatewayPolicy,
+            IntentPolicy,
+            OutputFilterDef,
+        )
+
+        policy = GatewayPolicy(
+            version=1,
+            output_filters={"rs": OutputFilterDef(type="none")},
+            intents={
+                "ro": IntentPolicy(
+                    description="x",
+                    allowed_tools=["memory_search", "memory_save"],
+                    output_filter="rs",
+                )
+            },
+            agents={"agent-a": AgentPolicy(allowed_intents=["ro"])},
+        )
+        return HandshakeService(
+            authenticator=ApiKeyAuthenticator({"agent-a": "ck_x"}),
+            policy_engine=PolicyEngine(policy),
+            session_registry=InMemorySessionRegistry(ttl_seconds=60, idle_timeout_seconds=30),
+        )
+
+    def test_happy_path(self):
+        svc = self._stack()
+        rec = svc.handshake(
+            authorization_header="Bearer ck_x",
+            intent_header="ro",
+            requested_tools_header=None,
+        )
+        assert rec.agent_id == "agent-a"
+        assert rec.intent == "ro"
+        assert rec.caps == frozenset({"memory_search", "memory_save"})
+        assert rec.output_filter_profile == "rs"
+
+    def test_missing_intent_header_denied(self):
+        from mcp_gateway.errors import PolicyError
+
+        svc = self._stack()
+        with pytest.raises(PolicyError, match="missing X-MCP-Intent header"):
+            svc.handshake(
+                authorization_header="Bearer ck_x",
+                intent_header=None,
+                requested_tools_header=None,
+            )
+
+    def test_invalid_intent_header_denied(self):
+        from mcp_gateway.errors import PolicyError
+
+        svc = self._stack()
+        with pytest.raises(PolicyError, match="invalid X-MCP-Intent header"):
+            svc.handshake(
+                authorization_header="Bearer ck_x",
+                intent_header="   ",
+                requested_tools_header=None,
+            )
+
+    def test_bad_token_denied(self):
+        from mcp_gateway.errors import AuthError
+
+        svc = self._stack()
+        with pytest.raises(AuthError):
+            svc.handshake(
+                authorization_header="Bearer wrong",
+                intent_header="ro",
+                requested_tools_header=None,
+            )
+
+    @pytest.mark.parametrize("bad_header", ["Basic xyz", "Malformed"])
+    def test_malformed_auth_header_denied(self, bad_header):
+        from mcp_gateway.errors import AuthError
+
+        svc = self._stack()
+        with pytest.raises(AuthError, match="missing or malformed Authorization header"):
+            svc.handshake(
+                authorization_header=bad_header,
+                intent_header="ro",
+                requested_tools_header=None,
+            )
+
+    def test_requested_tools_intersection_narrowed(self):
+        svc = self._stack()
+        # Policy allows [memory_search, memory_save]
+        # Requesting [memory_search, admin_tool] -> should result in [memory_search] only
+        rec = svc.handshake(
+            authorization_header="Bearer ck_x",
+            intent_header="ro",
+            requested_tools_header="memory_search,admin_tool",
+        )
+        assert rec.caps == frozenset({"memory_search"})
+
+    def test_no_overlap_tools_denied(self):
+        from mcp_gateway.errors import PolicyError
+
+        svc = self._stack()
+        with pytest.raises(PolicyError, match="none of the requested tools are allowed"):
+            svc.handshake(
+                authorization_header="Bearer ck_x",
+                intent_header="ro",
+                requested_tools_header="admin_tool",
+            )
+
+    def test_intent_not_allowed_for_agent_denied(self):
+        # We need a stack with another intent that is NOT allowed for agent-a
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+        from mcp_gateway.auth.handshake import HandshakeService
+        from mcp_gateway.auth.session import InMemorySessionRegistry
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.models import (
+            AgentPolicy,
+            GatewayPolicy,
+            IntentPolicy,
+            OutputFilterDef,
+        )
+
+        policy = GatewayPolicy(
+            version=1,
+            output_filters={"rs": OutputFilterDef(type="none")},
+            intents={
+                "ro": IntentPolicy(
+                    description="x", allowed_tools=["memory_search"], output_filter="rs"
+                ),
+                "admin": IntentPolicy(
+                    description="y", allowed_tools=["admin_tool"], output_filter="rs"
+                ),
+            },
+            agents={"agent-a": AgentPolicy(allowed_intents=["ro"])},
+        )
+        svc = HandshakeService(
+            authenticator=ApiKeyAuthenticator({"agent-a": "ck_x"}),
+            policy_engine=PolicyEngine(policy),
+            session_registry=InMemorySessionRegistry(ttl_seconds=60, idle_timeout_seconds=30),
+        )
+
+        with pytest.raises(PolicyError, match="cannot use intent"):
+            svc.handshake(
+                authorization_header="Bearer ck_x",
+                intent_header="admin",
+                requested_tools_header=None,
+            )
+
+
 class TestUpstreamClient:
     def test_build_env_passthrough_allowlist_only(self):
         from mcp_gateway.upstream.context_store_client import build_upstream_env

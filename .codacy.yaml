@@ -12,3 +12,7 @@ engines:
     patterns:
       - name: "S5144"
         enabled: false
+  remark-lint:
+    patterns:
+      - name: "undefined-acronym"
+        enabled: false

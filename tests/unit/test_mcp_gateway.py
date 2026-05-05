@@ -2257,7 +2257,7 @@ class TestRuntimeValidation:
         from mcp_gateway.policy.models import ParamConstraint, ToolGuardrail
 
         guardrail = ToolGuardrail(
-            params={"id": ParamConstraint(type="string", pattern="^ID-[0-9]+$")}
+            params={"id": ParamConstraint(type="string", pattern="^ID-[0-9]+$", max_length=10)}
         )
         # Valid
         PolicyEngine.validate_call(

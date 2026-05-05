@@ -88,7 +88,7 @@ class PolicyEngine:
 
             val = arguments[param_name]
 
-            # Type check
+            # 1. Type check
             if constraint.type is not None:
                 types_map: dict[str, type | tuple[type, ...]] = {
                     "string": str,
@@ -103,7 +103,7 @@ class PolicyEngine:
                         f"got {type(val).__name__}"
                     )
 
-            # Allowed values
+            # 2. Allowed values
             if constraint.allowed_values is not None:
                 if val not in constraint.allowed_values:
                     raise PolicyError(
@@ -111,13 +111,16 @@ class PolicyEngine:
                         f"allowed: {constraint.allowed_values}"
                     )
 
-            # String specific constraints
+            # 3. String-specific constraints
             if isinstance(val, str):
                 if constraint.max_length is not None and len(val) > constraint.max_length:
                     raise PolicyError(
                         f"parameter {param_name!r} exceeds max_length ({constraint.max_length})"
                     )
                 if constraint.pattern is not None:
+                    # Note: We rely on the fact that pattern was validated at load time.
+                    # For absolute ReDoS safety, one could use a library with timeouts,
+                    # but here we ensure pattern length and max_length are capped.
                     if not re.match(constraint.pattern, val):
                         raise PolicyError(
                             f"parameter {param_name!r} does not match required pattern"

@@ -24,6 +24,8 @@ class OutputFilterDef(BaseModel):
 
 
 MAX_PARAM_LENGTH = 1048576  # 1MB
+MAX_PATTERN_LENGTH = 200
+RE_DOS_MAX_LENGTH = 4096
 
 
 class ParamConstraint(BaseModel):
@@ -49,6 +51,9 @@ class ParamConstraint(BaseModel):
 
         # 2. Type-specific validation for allowed_values
         if self.allowed_values is not None:
+            if not self.allowed_values:
+                raise ValueError("allowed_values cannot be empty if specified")
+
             if self.type is not None:
                 types_map: dict[str, type | tuple[type, ...]] = {
                     "string": str,
@@ -65,10 +70,6 @@ class ParamConstraint(BaseModel):
             else:
                 # If type is None, ensure all elements in allowed_values are the same type
                 first_type = type(self.allowed_values[0])
-                # For "number" convenience, treat int and float as compatible if the
-                # first is one of them?
-                # But the requirement said "homogeneous", so let's stick to strict
-                # type(val) == first_type unless we want to be fancy.
                 for val in self.allowed_values:
                     if type(val) is not first_type:
                         raise ValueError(
@@ -76,11 +77,24 @@ class ParamConstraint(BaseModel):
                             f"got mixture of {first_type.__name__} and {type(val).__name__}"
                         )
 
-        # 3. ReDoS mitigation: Cap max_length at 4096
-        if self.max_length is not None and self.max_length > 4096:
-            raise ValueError("max_length exceeds ReDoS mitigation limit (4096)")
+        # 3. String-specific validation: pattern and max_length
+        if self.pattern is not None:
+            if self.max_length is None:
+                raise ValueError("pattern requires max_length to be set (ReDoS mitigation)")
+            if len(self.pattern) > MAX_PATTERN_LENGTH:
+                raise ValueError(f"pattern exceeds {MAX_PATTERN_LENGTH} chars (ReDoS mitigation)")
+            try:
+                re.compile(self.pattern)
+            except re.error as exc:
+                raise ValueError(f"invalid regex pattern: {exc}") from exc
 
-        # (System limit check removed or replaced by the tighter 4096 limit)
+        # 4. Limit max_length to MAX_PARAM_LENGTH and enforce ReDoS mitigation cap
+        if self.max_length is not None:
+            if self.max_length > MAX_PARAM_LENGTH:
+                raise ValueError(f"max_length exceeds system limit ({MAX_PARAM_LENGTH})")
+            if self.max_length > RE_DOS_MAX_LENGTH:
+                raise ValueError(f"max_length exceeds ReDoS mitigation limit ({RE_DOS_MAX_LENGTH})")
+
         return self
 
 
@@ -110,7 +124,7 @@ class GatewayPolicy(BaseModel):
     @model_validator(mode="after")
     def _verify_references(self) -> Self:
         # 1. intent.output_filter は output_filters に存在
-        # 5. guardrail keys exist in allowed_tools & param constraints validation
+        # 5. guardrail keys exist in allowed_tools
         for iname, intent in self.intents.items():
             if intent.output_filter not in self.output_filters:
                 raise ValueError(
@@ -118,29 +132,9 @@ class GatewayPolicy(BaseModel):
                 )
 
             allowed_set = set(intent.allowed_tools)
-            for tname, guardrail in intent.guardrails.items():
+            for tname in intent.guardrails:
                 if tname not in allowed_set:
                     raise ValueError(f"intent {iname!r} guardrail {tname!r} not in allowed_tools")
-
-                for pname, constraint in guardrail.params.items():
-                    if constraint.pattern is not None:
-                        if constraint.max_length is None:
-                            raise ValueError(
-                                f"intent {iname!r} tool {tname!r} param {pname!r}: "
-                                "pattern requires max_length to be set (ReDoS mitigation)"
-                            )
-                        if len(constraint.pattern) > 200:
-                            raise ValueError(
-                                f"intent {iname!r} tool {tname!r} param {pname!r}: "
-                                "pattern exceeds 200 chars (ReDoS mitigation)"
-                            )
-                        try:
-                            re.compile(constraint.pattern)
-                        except re.error as exc:
-                            raise ValueError(
-                                f"intent {iname!r} tool {tname!r} param {pname!r}: "
-                                f"invalid regex pattern: {exc}"
-                            ) from exc
 
         # 2. agent.allowed_intents は intents に存在
         for aname, agent in self.agents.items():

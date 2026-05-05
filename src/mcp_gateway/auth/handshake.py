@@ -47,5 +47,6 @@ class HandshakeService:
             agent_id=agent_id,
             intent=grant.intent,
             caps=grant.caps,
+            guardrails=grant.guardrails,
             output_filter_profile=grant.output_filter_profile,
         )

@@ -27,7 +27,9 @@ class TestSessionManagementFixes:
 
     def test_lookup_automatic_touch(self, monkeypatch):
         reg = self._make_registry(ttl=600, idle=10)
-        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="f")
+        rec = reg.create(
+            agent_id="a", intent="i", caps=frozenset(), guardrails={}, output_filter_profile="f"
+        )
 
         start_time = sess._utcnow()
         monkeypatch.setattr(sess, "_utcnow", lambda: start_time + timedelta(seconds=5))
@@ -42,7 +44,9 @@ class TestSessionManagementFixes:
 
     def test_touch_respects_ttl(self, monkeypatch):
         reg = self._make_registry(ttl=10, idle=60)
-        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="f")
+        rec = reg.create(
+            agent_id="a", intent="i", caps=frozenset(), guardrails={}, output_filter_profile="f"
+        )
 
         start_time = sess._utcnow()
         # Advance beyond TTL
@@ -57,7 +61,9 @@ class TestSessionManagementFixes:
 
     def test_touch_does_not_resurrect_idle_session(self, monkeypatch):
         reg = self._make_registry(ttl=600, idle=10)
-        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="f")
+        rec = reg.create(
+            agent_id="a", intent="i", caps=frozenset(), guardrails={}, output_filter_profile="f"
+        )
 
         start_time = sess._utcnow()
         # Advance beyond Idle but within TTL
@@ -77,7 +83,11 @@ class TestSessionManagementFixes:
         reg = self._make_registry(ttl=100, idle=50)
 
         s1 = reg.create(
-            agent_id="s1", intent="i", caps=frozenset(), output_filter_profile="f"
+            agent_id="s1",
+            intent="i",
+            caps=frozenset(),
+            guardrails={},
+            output_filter_profile="f",
         ).session_id
 
         # Move time to t=70
@@ -86,7 +96,11 @@ class TestSessionManagementFixes:
 
         # Create s3 at t=70 (so its last_active is t=70)
         s3 = reg.create(
-            agent_id="s3", intent="i", caps=frozenset(), output_filter_profile="f"
+            agent_id="s3",
+            intent="i",
+            caps=frozenset(),
+            guardrails={},
+            output_filter_profile="f",
         ).session_id
 
         # Move time to t=130
@@ -100,7 +114,11 @@ class TestSessionManagementFixes:
         # Let's add s2 that remains valid
         # s2: issued at t=130, expires at t=230, last_active at t=130. Valid.
         s2 = reg.create(
-            agent_id="s2", intent="i", caps=frozenset(), output_filter_profile="f"
+            agent_id="s2",
+            intent="i",
+            caps=frozenset(),
+            guardrails={},
+            output_filter_profile="f",
         ).session_id
 
         reg.purge()
@@ -112,7 +130,11 @@ class TestSessionManagementFixes:
         # Boundary test: exact TTL expiry (t == expires_at)
         # s4 created at t=130, ttl=100 -> expires at t=230
         s4 = reg.create(
-            agent_id="s4", intent="i", caps=frozenset(), output_filter_profile="f"
+            agent_id="s4",
+            intent="i",
+            caps=frozenset(),
+            guardrails={},
+            output_filter_profile="f",
         ).session_id
         t230 = now_val + timedelta(seconds=230)
         monkeypatch.setattr(sess, "_utcnow", lambda: t230)
@@ -123,7 +145,11 @@ class TestSessionManagementFixes:
         # Boundary test: exact idle expiry (idle_age == idle_timeout)
         # s5 created at t=230, idle=50 -> expires at t=280
         s5 = reg.create(
-            agent_id="s5", intent="i", caps=frozenset(), output_filter_profile="f"
+            agent_id="s5",
+            intent="i",
+            caps=frozenset(),
+            guardrails={},
+            output_filter_profile="f",
         ).session_id
         t280 = now_val + timedelta(seconds=280)
         monkeypatch.setattr(sess, "_utcnow", lambda: t280)
@@ -139,6 +165,7 @@ class TestSessionManagementFixes:
             agent_id="agent1",
             intent="intent1",
             caps=mutable_caps,  # type: ignore
+            guardrails={},
             output_filter_profile="profile1",
         )
 
@@ -148,3 +175,23 @@ class TestSessionManagementFixes:
         # Verify it's a copy/converted so changing mutable_caps doesn't affect it
         mutable_caps.add("cap3")
         assert "cap3" not in rec.caps
+
+    def test_guardrails_copy(self):
+        from mcp_gateway.policy.models import ToolGuardrail
+
+        reg = self._make_registry()
+        guardrails = {"tool1": ToolGuardrail(requires_approval=True)}
+        rec = reg.create(
+            agent_id="a",
+            intent="i",
+            caps=frozenset(["tool1"]),
+            guardrails=guardrails,
+            output_filter_profile="p",
+        )
+
+        # Modify the original dict
+        guardrails["tool2"] = ToolGuardrail(requires_approval=False)
+
+        # The session record should not be affected
+        assert "tool2" not in rec.guardrails
+        assert "tool1" in rec.guardrails

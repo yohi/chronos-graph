@@ -908,7 +908,7 @@ class TestPolicyEngine:
 
         guardrails = {
             "tool_a": ToolGuardrail(
-                params={"p": ParamConstraint(max_length=10)}, requires_approval=True
+                params={"p": ParamConstraint(type="string", max_length=10)}, requires_approval=True
             )
         }
         policy = GatewayPolicy(
@@ -1089,6 +1089,7 @@ class TestSessionLifecycle:
             agent_id="a",
             intent="read_only_recall",
             caps=frozenset({"memory_search"}),
+            guardrails={},
             output_filter_profile="recall_safe",
         )
         assert isinstance(rec, SessionRecord)
@@ -1107,7 +1108,13 @@ class TestSessionLifecycle:
         import mcp_gateway.auth.session as sess
 
         reg = self._make_registry(ttl=10)
-        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
+        rec = reg.create(
+            agent_id="a",
+            intent="i",
+            caps=frozenset(),
+            guardrails={},
+            output_filter_profile="none_f",
+        )
         future = rec.expires_at + timedelta(seconds=1)
         monkeypatch.setattr(sess, "_utcnow", lambda: future)
         from mcp_gateway.errors import SessionError
@@ -1121,7 +1128,13 @@ class TestSessionLifecycle:
         import mcp_gateway.auth.session as sess
 
         reg = self._make_registry(ttl=600, idle=5)
-        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
+        rec = reg.create(
+            agent_id="a",
+            intent="i",
+            caps=frozenset(),
+            guardrails={},
+            output_filter_profile="none_f",
+        )
         original = sess._utcnow()
         monkeypatch.setattr(sess, "_utcnow", lambda: original + timedelta(seconds=10))
         from mcp_gateway.errors import SessionError
@@ -1135,7 +1148,13 @@ class TestSessionLifecycle:
         import mcp_gateway.auth.session as sess
 
         reg = self._make_registry(ttl=600, idle=5)
-        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
+        rec = reg.create(
+            agent_id="a",
+            intent="i",
+            caps=frozenset(),
+            guardrails={},
+            output_filter_profile="none_f",
+        )
         original = sess._utcnow()
         monkeypatch.setattr(sess, "_utcnow", lambda: original + timedelta(seconds=3))
         reg.touch(rec.session_id)
@@ -1147,7 +1166,13 @@ class TestSessionLifecycle:
         from mcp_gateway.errors import SessionError
 
         reg = self._make_registry()
-        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
+        rec = reg.create(
+            agent_id="a",
+            intent="i",
+            caps=frozenset(),
+            guardrails={},
+            output_filter_profile="none_f",
+        )
         reg.remove(rec.session_id)
         with pytest.raises(SessionError):
             reg.lookup(rec.session_id)
@@ -1156,7 +1181,13 @@ class TestSessionLifecycle:
         from dataclasses import FrozenInstanceError
 
         reg = self._make_registry()
-        rec = reg.create(agent_id="a", intent="i", caps=frozenset(), output_filter_profile="none_f")
+        rec = reg.create(
+            agent_id="a",
+            intent="i",
+            caps=frozenset(),
+            guardrails={},
+            output_filter_profile="none_f",
+        )
         with pytest.raises(FrozenInstanceError):
             rec.agent_id = "other"  # type: ignore[misc]
 
@@ -2029,7 +2060,7 @@ class TestIBACModels:
             output_filter="f",
             guardrails={
                 "tool_a": ToolGuardrail(
-                    params={"q": ParamConstraint(max_length=512)},
+                    params={"q": ParamConstraint(type="string", max_length=512)},
                     requires_approval=False,
                 )
             },
@@ -2060,7 +2091,7 @@ class TestIBACModels:
     def test_verify_references_pattern_without_max_length_raises(self):
         from mcp_gateway.policy.models import GatewayPolicy
 
-        with pytest.raises(ValidationError, match="missing max_length"):
+        with pytest.raises(ValidationError, match="pattern requires max_length"):
             GatewayPolicy.model_validate(
                 {
                     "version": 1,
@@ -2071,7 +2102,9 @@ class TestIBACModels:
                             "allowed_tools": ["tool_a"],
                             "output_filter": "f",
                             "guardrails": {
-                                "tool_a": {"params": {"query": {"pattern": "^[a-z]+$"}}}
+                                "tool_a": {
+                                    "params": {"query": {"type": "string", "pattern": "^[a-z]+$"}}
+                                }
                             },
                         }
                     },
@@ -2082,7 +2115,7 @@ class TestIBACModels:
     def test_verify_references_pattern_too_long_raises(self):
         from mcp_gateway.policy.models import GatewayPolicy
 
-        with pytest.raises(ValidationError, match="pattern is too long"):
+        with pytest.raises(ValidationError, match="pattern exceeds 200 chars"):
             GatewayPolicy.model_validate(
                 {
                     "version": 1,
@@ -2096,6 +2129,7 @@ class TestIBACModels:
                                 "tool_a": {
                                     "params": {
                                         "query": {
+                                            "type": "string",
                                             "pattern": "a" * 201,
                                             "max_length": 512,
                                         }
@@ -2111,7 +2145,7 @@ class TestIBACModels:
     def test_verify_references_pattern_empty_string_requires_max_length(self):
         from mcp_gateway.policy.models import GatewayPolicy
 
-        with pytest.raises(ValidationError, match="missing max_length"):
+        with pytest.raises(ValidationError, match="pattern requires max_length"):
             GatewayPolicy.model_validate(
                 {
                     "version": 1,
@@ -2121,7 +2155,9 @@ class TestIBACModels:
                             "description": "x",
                             "allowed_tools": ["tool_a"],
                             "output_filter": "f",
-                            "guardrails": {"tool_a": {"params": {"query": {"pattern": ""}}}},
+                            "guardrails": {
+                                "tool_a": {"params": {"query": {"type": "string", "pattern": ""}}}
+                            },
                         }
                     },
                     "agents": {},
@@ -2158,3 +2194,107 @@ class TestIBACModels:
             }
         )
         assert "tool_a" in policy.intents["intent_a"].guardrails
+
+
+class TestRuntimeValidation:
+    def test_validate_call_forbidden(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.models import ParamConstraint, ToolGuardrail
+
+        guardrail = ToolGuardrail(params={"secret": ParamConstraint(forbidden=True)})
+        with pytest.raises(PolicyError, match="parameter 'secret' is forbidden"):
+            PolicyEngine.validate_call(
+                tool_name="test", arguments={"secret": "val"}, guardrail=guardrail
+            )
+
+    def test_validate_call_type_mismatch(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.models import ParamConstraint, ToolGuardrail
+
+        guardrail = ToolGuardrail(params={"count": ParamConstraint(type="integer")})
+        with pytest.raises(PolicyError, match="must be integer"):
+            PolicyEngine.validate_call(
+                tool_name="test", arguments={"count": "not_int"}, guardrail=guardrail
+            )
+
+    def test_validate_call_allowed_values(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.models import ParamConstraint, ToolGuardrail
+
+        guardrail = ToolGuardrail(
+            params={"color": ParamConstraint(type="string", allowed_values=["red", "blue"])}
+        )
+        # Valid
+        PolicyEngine.validate_call(
+            tool_name="test", arguments={"color": "red"}, guardrail=guardrail
+        )
+        # Invalid
+        with pytest.raises(PolicyError, match="has invalid value 'green'"):
+            PolicyEngine.validate_call(
+                tool_name="test", arguments={"color": "green"}, guardrail=guardrail
+            )
+
+    def test_validate_call_max_length(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.models import ParamConstraint, ToolGuardrail
+
+        guardrail = ToolGuardrail(params={"name": ParamConstraint(type="string", max_length=5)})
+        # Valid
+        PolicyEngine.validate_call(tool_name="test", arguments={"name": "abc"}, guardrail=guardrail)
+        # Invalid
+        with pytest.raises(PolicyError, match="exceeds max_length"):
+            PolicyEngine.validate_call(
+                tool_name="test", arguments={"name": "abcdef"}, guardrail=guardrail
+            )
+
+    def test_validate_call_pattern(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.models import ParamConstraint, ToolGuardrail
+
+        guardrail = ToolGuardrail(
+            params={"id": ParamConstraint(type="string", pattern="^ID-[0-9]+$", max_length=10)}
+        )
+        # Valid
+        PolicyEngine.validate_call(
+            tool_name="test", arguments={"id": "ID-123"}, guardrail=guardrail
+        )
+        # Invalid
+        with pytest.raises(PolicyError, match="does not match required pattern"):
+            PolicyEngine.validate_call(
+                tool_name="test", arguments={"id": "abc"}, guardrail=guardrail
+            )
+
+    def test_validate_call_requires_approval(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.models import ToolGuardrail
+
+        guardrail = ToolGuardrail(requires_approval=True)
+        with pytest.raises(PolicyError, match="requires manual approval"):
+            PolicyEngine.validate_call(
+                tool_name="restricted_tool", arguments={}, guardrail=guardrail
+            )
+
+    def test_validate_call_numeric_bool_rejection(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.models import ParamConstraint, ToolGuardrail
+
+        # Integer constraint
+        guardrail_int = ToolGuardrail(params={"age": ParamConstraint(type="integer")})
+        with pytest.raises(PolicyError, match="must be integer, got boolean"):
+            PolicyEngine.validate_call(
+                tool_name="test", arguments={"age": True}, guardrail=guardrail_int
+            )
+
+        # Number constraint
+        guardrail_num = ToolGuardrail(params={"price": ParamConstraint(type="number")})
+        with pytest.raises(PolicyError, match="must be number, got boolean"):
+            PolicyEngine.validate_call(
+                tool_name="test", arguments={"price": False}, guardrail=guardrail_num
+            )

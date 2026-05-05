@@ -7,10 +7,14 @@ to the upstream subprocess.
 
 from __future__ import annotations
 
+import re
+from copy import deepcopy
 from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any
 
 from mcp_gateway.errors import PolicyError
-from mcp_gateway.policy.models import GatewayPolicy
+from mcp_gateway.policy.models import GatewayPolicy, ToolGuardrail
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +22,7 @@ class Grant:
     intent: str
     caps: frozenset[str]
     output_filter_profile: str
+    guardrails: MappingProxyType[str, ToolGuardrail]
 
 
 class PolicyEngine:
@@ -53,9 +58,85 @@ class PolicyEngine:
                     f"none of the requested tools are allowed for intent {intent!r}. "
                     f"requested: {sorted(requested_tools)}, allowed: {sorted(allowed)}"
                 )
-        return Grant(intent=intent, caps=caps, output_filter_profile=intent_pol.output_filter)
+        return Grant(
+            intent=intent,
+            caps=caps,
+            output_filter_profile=intent_pol.output_filter,
+            guardrails=MappingProxyType(deepcopy(intent_pol.guardrails)),
+        )
 
     @staticmethod
     def check_call(*, caps: frozenset[str], tool_name: str) -> None:
         if tool_name not in caps:
             raise PolicyError(f"tool {tool_name!r} is not in session capabilities")
+
+    @staticmethod
+    def validate_call(
+        *,
+        tool_name: str,
+        arguments: dict[str, Any],
+        guardrail: ToolGuardrail | None,
+    ) -> None:
+        if guardrail is None:
+            return
+
+        if guardrail.requires_approval:
+            # Until approval flow is implemented, we must fail closed.
+            raise PolicyError(
+                f"tool {tool_name!r} requires manual approval which is not yet implemented"
+            )
+
+        for param_name, constraint in guardrail.params.items():
+            if constraint.forbidden and param_name in arguments:
+                raise PolicyError(f"parameter {param_name!r} is forbidden for tool {tool_name!r}")
+
+            if param_name not in arguments:
+                continue
+
+            val = arguments[param_name]
+
+            # 1. Type check
+            if constraint.type is not None:
+                # Booleans are subclasses of int in Python, but for policy enforcement
+                # we treat them as distinct types.
+                if constraint.type in ("integer", "number") and isinstance(val, bool):
+                    raise PolicyError(
+                        f"parameter {param_name!r} must be {constraint.type}, got boolean"
+                    )
+
+                types_map: dict[str, type | tuple[type, ...]] = {
+                    "string": str,
+                    "integer": int,
+                    "number": (int, float),
+                    "boolean": bool,
+                }
+                expected_type = types_map[constraint.type]
+                if not isinstance(val, expected_type):
+                    raise PolicyError(
+                        f"parameter {param_name!r} must be {constraint.type}, "
+                        f"got {type(val).__name__}"
+                    )
+
+            # 2. Allowed values
+            if constraint.allowed_values is not None:
+                # Use strict type comparison because True == 1 in Python.
+                if not any(v == val and type(v) is type(val) for v in constraint.allowed_values):
+                    raise PolicyError(
+                        f"parameter {param_name!r} has invalid value {val!r}. "
+                        f"allowed: {constraint.allowed_values}"
+                    )
+
+            # 3. String-specific constraints
+            if isinstance(val, str):
+                if constraint.max_length is not None and len(val) > constraint.max_length:
+                    raise PolicyError(
+                        f"parameter {param_name!r} exceeds max_length ({constraint.max_length})"
+                    )
+                if constraint.pattern is not None:
+                    # Note: We rely on the fact that pattern was validated at load time.
+                    # For absolute ReDoS safety, one could use a library with timeouts,
+                    # but here we ensure pattern length and max_length are capped.
+                    if not re.fullmatch(constraint.pattern, val):
+                        raise PolicyError(
+                            f"parameter {param_name!r} does not match required pattern"
+                        )

@@ -1940,8 +1940,139 @@ class TestServerRequiresApproval:
                     "params": {"name": "memory_delete", "arguments": {}},
                 },
             )
+            await asyncio.sleep(0)
         assert resp.status_code == 200
         assert any("approval_required" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_requires_approval_notifier_failure_is_isolated(
+        self, approval_client, monkeypatch, capfd
+    ):
+        from mcp_gateway.approval.notifier import LogOnlyApprovalNotifier
+
+        started = asyncio.Event()
+
+        async def raise_error(self, request):
+            started.set()
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(LogOnlyApprovalNotifier, "request_approval", raise_error)
+
+        sid = await self._get_session_id(approval_client)
+        resp = await approval_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 99,
+                "method": "tools/call",
+                "params": {"name": "memory_delete", "arguments": {}},
+            },
+        )
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32001
+        assert body["error"]["message"] == "approval_required"
+
+        _, err = capfd.readouterr()
+        assert '"ev":"notification_failed"' in err
+        assert '"detail":"Approval notification failed"' in err
+        assert '"error_type":"RuntimeError"' in err
+        assert "boom" not in err
+
+    @pytest.mark.asyncio
+    async def test_requires_approval_notification_is_fire_and_forget(
+        self, approval_client, monkeypatch
+    ):
+        import mcp_gateway.server as server_module
+        from mcp_gateway.approval.notifier import LogOnlyApprovalNotifier
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+        created_tasks: list[asyncio.Task] = []
+        original_schedule = server_module._schedule_approval_request
+
+        async def block_until_released(self, request):
+            started.set()
+            await release.wait()
+
+        def capture_task(*, approval_notifier, request, audit, sid, timeout=5.0):
+            task = original_schedule(
+                approval_notifier=approval_notifier,
+                request=request,
+                audit=audit,
+                sid=sid,
+                timeout=timeout,
+            )
+            created_tasks.append(task)
+            return task
+
+        monkeypatch.setattr(LogOnlyApprovalNotifier, "request_approval", block_until_released)
+        monkeypatch.setattr(server_module, "_schedule_approval_request", capture_task)
+
+        sid = await self._get_session_id(approval_client)
+        resp = await approval_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 100,
+                "method": "tools/call",
+                "params": {"name": "memory_delete", "arguments": {}},
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["error"]["message"] == "approval_required"
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        assert created_tasks
+
+        release.set()
+        await asyncio.gather(*created_tasks, return_exceptions=True)
+
+    @pytest.mark.asyncio
+    async def test_requires_approval_secret_args_denied_without_notifier_calls(
+        self, approval_client, monkeypatch
+    ):
+        import mcp_gateway.server as server_module
+        from mcp_gateway.approval.notifier import LogOnlyApprovalNotifier
+
+        notifier_called = False
+        schedule_called = False
+
+        async def fail_if_called(self, request):
+            nonlocal notifier_called
+            notifier_called = True
+            raise AssertionError("request_approval should not be called")
+
+        def fail_if_scheduled(*, approval_notifier, request, audit, sid, timeout=5.0):
+            nonlocal schedule_called
+            schedule_called = True
+            raise AssertionError("_schedule_approval_request should not be called")
+
+        monkeypatch.setattr(LogOnlyApprovalNotifier, "request_approval", fail_if_called)
+        monkeypatch.setattr(server_module, "_schedule_approval_request", fail_if_scheduled)
+
+        sid = await self._get_session_id(approval_client)
+        resp = await approval_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 101,
+                "method": "tools/call",
+                "params": {
+                    "name": "memory_delete",
+                    "arguments": {"token": "sk-1234567890abcdef"},
+                },
+            },
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32601
+        assert body["error"]["message"] == "tool not found"
+        assert notifier_called is False
+        assert schedule_called is False
 
     @pytest.mark.asyncio
     async def test_caps_denied_returns_32601(self, approval_client):
@@ -1959,6 +2090,109 @@ class TestServerRequiresApproval:
         body = resp.json()
         assert body["error"]["code"] == -32601
         assert body["error"]["message"] == "tool not found"
+
+
+class TestServerValidationDeny:
+    @pytest.fixture
+    def validation_app(self, tmp_path, monkeypatch):
+        policy = tmp_path / "intents.yaml"
+        policy.write_text(
+            textwrap.dedent(
+                """
+                version: 1
+                output_filters:
+                  f:
+                    type: none
+                intents:
+                  ro:
+                    description: "x"
+                    allowed_tools: [memory_search]
+                    output_filter: f
+                    guardrails:
+                      memory_search:
+                        params:
+                          query:
+                            type: string
+                            max_length: 3
+                          secret:
+                            forbidden: true
+                agents:
+                  agent-a:
+                    allowed_intents: [ro]
+                """
+            ).lstrip()
+        )
+        monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy))
+        monkeypatch.setenv("MCP_GATEWAY_API_KEYS_JSON", '{"agent-a":"ck_x"}')
+
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.app import build_app
+
+        upstream = AsyncMock()
+        upstream.list_tools.return_value = [{"name": "memory_search"}]
+        return build_app(
+            upstream_override=upstream,
+            initial_tools=upstream.list_tools.return_value,
+        )
+
+    @pytest_asyncio.fixture
+    async def validation_client(self, validation_app):
+        import httpx
+        from httpx import ASGITransport
+
+        transport = ASGITransport(app=validation_app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+            yield client
+
+    async def _get_session_id(self, client) -> str:
+        async with client.stream(
+            "GET",
+            "/sse",
+            headers={"Authorization": "Bearer ck_x", "X-MCP-Intent": "ro"},
+        ) as resp:
+            assert resp.status_code == 200
+            async for line in resp.aiter_lines():
+                if line.startswith("data:") and "session_id=" in line:
+                    data = line[len("data:") :].strip()
+                    return data.split("session_id=", 1)[1]
+        raise AssertionError("SSE endpoint event did not return session_id")
+
+    @pytest.mark.asyncio
+    async def test_param_validation_denied_returns_32602(self, validation_client):
+        sid = await self._get_session_id(validation_client)
+        resp = await validation_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 10,
+                "method": "tools/call",
+                "params": {"name": "memory_search", "arguments": {"query": "abcd"}},
+            },
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32602
+        assert body["error"]["message"] == "param_too_long:query"
+
+    @pytest.mark.asyncio
+    async def test_forbidden_param_validation_denied_returns_32602(self, validation_client):
+        sid = await self._get_session_id(validation_client)
+        resp = await validation_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 11,
+                "method": "tools/call",
+                "params": {"name": "memory_search", "arguments": {"secret": "query"}},
+            },
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32602
+        assert body["error"]["message"] == "forbidden_param:secret"
 
 
 class TestEntrypoint:

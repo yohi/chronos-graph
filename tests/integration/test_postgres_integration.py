@@ -58,6 +58,7 @@ def adapter(db_session):
 
 
 class TestCRUD:
+    @pytest.mark.asyncio
     async def test_save_and_get(self, adapter):
         memory = _make_memory(content="save and get test")
         returned_id = await adapter.save_memory(memory)
@@ -68,6 +69,7 @@ class TestCRUD:
         assert fetched.content == "save and get test"
         assert fetched.memory_type == MemoryType.EPISODIC
 
+    @pytest.mark.asyncio
     async def test_delete_existing(self, adapter):
         memory = _make_memory(content="to be deleted")
         memory_id = await adapter.save_memory(memory)
@@ -77,12 +79,14 @@ class TestCRUD:
         assert result is True
         assert await adapter.get_memory(memory_id) is None
 
+    @pytest.mark.asyncio
     async def test_delete_nonexistent_returns_false(self, adapter):
         from uuid import uuid4
 
         result = await adapter.delete_memory(str(uuid4()))
         assert result is False
 
+    @pytest.mark.asyncio
     async def test_update_importance_score(self, adapter):
         memory = _make_memory(content="update test")
         memory_id = await adapter.save_memory(memory)
@@ -94,6 +98,7 @@ class TestCRUD:
         assert updated is not None
         assert updated.importance_score == pytest.approx(0.99)
 
+    @pytest.mark.asyncio
     async def test_duplicate_content_raises_storage_error(self, adapter):
         memory = _make_memory(content="unique content xyz")
         await adapter.save_memory(memory)
@@ -110,6 +115,7 @@ class TestCRUD:
 
 
 class TestSearch:
+    @pytest.mark.asyncio
     async def test_vector_search_returns_results(self, adapter):
         memory = _make_memory(content="vector search target", embedding=[0.5] * 768)
         await adapter.save_memory(memory)
@@ -120,6 +126,7 @@ class TestSearch:
         contents = [r.memory.content for r in results]
         assert "vector search target" in contents
 
+    @pytest.mark.asyncio
     async def test_vector_search_filters_by_project(self, adapter):
         m1 = _make_memory(content="proj a content", embedding=[0.1] * 768, project="proj_a")
         m2 = _make_memory(content="proj b content", embedding=[0.1] * 768, project="proj_b")
@@ -133,6 +140,7 @@ class TestSearch:
         assert "proj_a" in projects
         assert "proj_b" not in projects
 
+    @pytest.mark.asyncio
     async def test_keyword_search_returns_results(self, adapter):
         memory = _make_memory(content="keyword banana search test")
         await adapter.save_memory(memory)
@@ -143,6 +151,7 @@ class TestSearch:
         contents = [r.memory.content for r in results]
         assert any("banana" in c for c in contents)
 
+    @pytest.mark.asyncio
     async def test_keyword_search_filters_by_project(self, adapter):
         m1 = _make_memory(content="apple in project X", project="proj_x")
         m2 = _make_memory(content="apple in project Y", project="proj_y")
@@ -163,6 +172,7 @@ class TestSearch:
 
 
 class TestListByFilter:
+    @pytest.mark.asyncio
     async def test_lists_active_memories(self, adapter):
         memory = _make_memory(content="active memory")
         await adapter.save_memory(memory)
@@ -171,6 +181,7 @@ class TestListByFilter:
 
         assert any(m.content == "active memory" for m in results)
 
+    @pytest.mark.asyncio
     async def test_lists_archived_memories(self, adapter):
         from datetime import datetime, timezone
 
@@ -182,6 +193,7 @@ class TestListByFilter:
 
         assert any(m.content == "archived memory" for m in results)
 
+    @pytest.mark.asyncio
     async def test_filters_by_memory_type(self, adapter):
         m_ep = _make_memory(content="episodic type", memory_type=MemoryType.EPISODIC)
         m_se = _make_memory(content="semantic type", memory_type=MemoryType.SEMANTIC)
@@ -202,6 +214,7 @@ class TestListByFilter:
 
 
 class TestGetVectorDimension:
+    @pytest.mark.asyncio
     async def test_returns_768_after_save(self, adapter):
         memory = _make_memory(embedding=[0.1] * 768)
         await adapter.save_memory(memory)
@@ -210,6 +223,7 @@ class TestGetVectorDimension:
 
         assert dim == 768
 
+    @pytest.mark.asyncio
     async def test_returns_none_when_empty(self, adapter):
         # No memories saved in this transaction yet
         dim = await adapter.get_vector_dimension()

@@ -6,6 +6,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from context_store.lifecycle.archiver import Archiver, ArchiverResult
 from context_store.models.memory import Memory, MemoryType, SourceType
 from context_store.storage.protocols import MemoryFilters
@@ -31,6 +33,7 @@ def _make_memory(
 
 
 class TestArchiverBasic:
+    @pytest.mark.asyncio
     async def test_run_does_not_count_failed_update(self):
         """ストレージの更新に失敗した場合、archived_count が増えないことを確認。"""
         storage = AsyncMock()
@@ -50,6 +53,7 @@ class TestArchiverBasic:
 
     """Archiver の基本動作テスト。"""
 
+    @pytest.mark.asyncio
     async def test_archives_memory_below_threshold(self):
         """スコアが閾値以下の記憶がアーカイブされること。"""
         storage = AsyncMock()
@@ -67,6 +71,7 @@ class TestArchiverBasic:
         assert result.checked_count == 1
         storage.update_memory.assert_called_once()
 
+    @pytest.mark.asyncio
     async def test_skips_memory_above_threshold(self):
         """スコアが閾値より高い記憶はアーカイブされないこと。"""
         storage = AsyncMock()
@@ -83,6 +88,7 @@ class TestArchiverBasic:
         assert result.checked_count == 1
         storage.update_memory.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_archived_at_is_set_correctly(self):
         """アーカイブ時に archived_at が現在時刻に設定されること。"""
         storage = AsyncMock()
@@ -104,6 +110,7 @@ class TestArchiverBasic:
         archived_at = updates["archived_at"]
         assert before <= archived_at <= after
 
+    @pytest.mark.asyncio
     async def test_uses_active_filter(self):
         """list_by_filter でアクティブ記憶のみ（archived=None）が取得されること。"""
         storage = AsyncMock()
@@ -119,6 +126,7 @@ class TestArchiverBasic:
         # archived=None はアクティブ記憶のみを示す
         assert filters.archived is None
 
+    @pytest.mark.asyncio
     async def test_multiple_memories_partial_archive(self):
         """複数記憶のうち閾値以下のものだけアーカイブされること。"""
         storage = AsyncMock()
@@ -138,6 +146,7 @@ class TestArchiverBasic:
         assert result.checked_count == 3
         assert storage.update_memory.call_count == 2
 
+    @pytest.mark.asyncio
     async def test_empty_memory_list(self):
         """記憶が0件の場合に正常終了すること。"""
         storage = AsyncMock()
@@ -156,6 +165,7 @@ class TestArchiverBasic:
 class TestArchiverProjectFilter:
     """Archiver のプロジェクトフィルタテスト。"""
 
+    @pytest.mark.asyncio
     async def test_project_filter_is_passed_to_storage(self):
         """project パラメータが MemoryFilters に正しく渡されること。"""
         storage = AsyncMock()
@@ -170,6 +180,7 @@ class TestArchiverProjectFilter:
         filters: MemoryFilters = call_args[0][0]
         assert filters.project == "my-project"
 
+    @pytest.mark.asyncio
     async def test_no_project_filter_passes_none(self):
         """project 未指定の場合、MemoryFilters.project が None であること。"""
         storage = AsyncMock()
@@ -188,6 +199,7 @@ class TestArchiverProjectFilter:
 class TestArchiverResult:
     """ArchiverResult のテスト。"""
 
+    @pytest.mark.asyncio
     async def test_result_type_is_archiver_result(self):
         """run() の戻り値が ArchiverResult 型であること。"""
         storage = AsyncMock()
@@ -200,6 +212,7 @@ class TestArchiverResult:
 
         assert isinstance(result, ArchiverResult)
 
+    @pytest.mark.asyncio
     async def test_result_fields_match_processing(self):
         """ArchiverResult のフィールドが処理結果と一致すること。"""
         storage = AsyncMock()
@@ -220,6 +233,7 @@ class TestArchiverResult:
 class TestArchiverPagination:
     """Archiver のページネーションテスト。"""
 
+    @pytest.mark.asyncio
     async def test_pagination_multiple_pages(self):
         """101件以上の記憶がある場合、ページ分割して全件処理されること。"""
         storage = AsyncMock()
@@ -262,6 +276,7 @@ class TestArchiverPagination:
         assert filters_page2.id_after == str(all_memories[99].id)
         assert filters_page2.created_after == all_memories[99].created_at
 
+    @pytest.mark.asyncio
     async def test_pagination_stops_correctly_on_exact_page_size(self):
         """ちょうどページサイズ（100件）の場合、1ページで終了すること。"""
         storage = AsyncMock()

@@ -21,6 +21,7 @@ class TestPurgerValidation:
         with pytest.raises(ValueError, match="retention_days must be non-negative"):
             Purger(storage=storage, graph=None, retention_days=-1)
 
+    @pytest.mark.asyncio
     async def test_run_raises_on_negative_retention(self):
         """run 実行時に負の retention_days が渡された場合に ValueError を投げること。"""
         storage = AsyncMock()
@@ -59,6 +60,7 @@ def _make_active_memory() -> Memory:
 class TestPurgerBasic:
     """Purger の基本動作テスト。"""
 
+    @pytest.mark.asyncio
     async def test_purges_expired_archived_memory(self):
         """retention_days 経過したアーカイブ記憶が削除されること。"""
         storage = AsyncMock()
@@ -76,6 +78,7 @@ class TestPurgerBasic:
         assert result.checked_count == 1
         storage.delete_memory.assert_called_once_with(str(old_memory.id))
 
+    @pytest.mark.asyncio
     async def test_skips_recent_archived_memory(self):
         """retention_days 未満のアーカイブ記憶は削除されないこと。"""
         storage = AsyncMock()
@@ -92,6 +95,7 @@ class TestPurgerBasic:
         assert result.checked_count == 1
         storage.delete_memory.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_skips_memory_with_none_archived_at(self):
         """archived_at が None の記憶（アクティブ）はスキップされること。"""
         storage = AsyncMock()
@@ -107,6 +111,7 @@ class TestPurgerBasic:
         assert result.checked_count == 1
         storage.delete_memory.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_empty_memory_list(self):
         """記憶が0件の場合に正常終了すること。"""
         storage = AsyncMock()
@@ -121,6 +126,7 @@ class TestPurgerBasic:
         assert result.checked_count == 0
         storage.delete_memory.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_uses_archived_filter(self):
         """list_by_filter でアーカイブ済み記憶のみ（archived=True）が取得されること。"""
         storage = AsyncMock()
@@ -139,6 +145,7 @@ class TestPurgerBasic:
 class TestPurgerGraphIntegration:
     """Purger のグラフ連動テスト。"""
 
+    @pytest.mark.asyncio
     async def test_deletes_graph_node_when_graph_provided(self):
         """GraphAdapter が提供されている場合、グラフノードも削除されること。"""
         storage = AsyncMock()
@@ -154,6 +161,7 @@ class TestPurgerGraphIntegration:
 
         graph.delete_node.assert_called_once_with(str(old_memory.id))
 
+    @pytest.mark.asyncio
     async def test_works_without_graph_adapter(self):
         """GraphAdapter が None の場合でも物理削除が正常に動作すること。"""
         storage = AsyncMock()
@@ -169,6 +177,7 @@ class TestPurgerGraphIntegration:
         assert result.purged_count == 1
         storage.delete_memory.assert_called_once_with(str(old_memory.id))
 
+    @pytest.mark.asyncio
     async def test_no_graph_deletion_when_not_expired(self):
         """期限切れでない記憶のグラフノードは削除されないこと。"""
         storage = AsyncMock()
@@ -187,6 +196,7 @@ class TestPurgerGraphIntegration:
 class TestPurgerBoundaryConditions:
     """Purger の境界値テスト。"""
 
+    @pytest.mark.asyncio
     async def test_exactly_at_retention_boundary_is_not_purged(self):
         """ちょうど retention_days 日後の記憶は削除されないこと。"""
         storage = AsyncMock()
@@ -209,6 +219,7 @@ class TestPurgerBoundaryConditions:
 
         assert result.purged_count == 0
 
+    @pytest.mark.asyncio
     async def test_multiple_memories_partial_purge(self):
         """複数記憶のうち期限切れのものだけ削除されること。"""
         storage = AsyncMock()
@@ -233,6 +244,7 @@ class TestPurgerBoundaryConditions:
 class TestPurgerResult:
     """PurgerResult のテスト。"""
 
+    @pytest.mark.asyncio
     async def test_result_type_is_purger_result(self):
         """run() の戻り値が PurgerResult 型であること。"""
         storage = AsyncMock()
@@ -244,6 +256,7 @@ class TestPurgerResult:
 
         assert isinstance(result, PurgerResult)
 
+    @pytest.mark.asyncio
     async def test_result_fields_match_processing(self):
         """PurgerResult のフィールドが処理結果と一致すること。"""
         storage = AsyncMock()

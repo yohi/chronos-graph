@@ -41,6 +41,7 @@ async def dispose_adapters(
 
 
 class TestSQLiteBackend:
+    @pytest.mark.asyncio
     async def test_sqlite_returns_storage_adapter(self, tmp_path: Path) -> None:
         """STORAGE_BACKEND=sqlite → SQLiteStorageAdapter が返される."""
         db_path = str(tmp_path / "test.db")
@@ -52,6 +53,7 @@ class TestSQLiteBackend:
         finally:
             await dispose_adapters(storage, graph_adp, cache_adp)
 
+    @pytest.mark.asyncio
     async def test_sqlite_graph_enabled(self, tmp_path: Path) -> None:
         """GRAPH_ENABLED=true, STORAGE_BACKEND=sqlite → SQLiteGraphAdapter が返される."""
         db_path = str(tmp_path / "test.db")
@@ -67,6 +69,7 @@ class TestSQLiteBackend:
         finally:
             await dispose_adapters(storage, graph_adp, cache_adp)
 
+    @pytest.mark.asyncio
     async def test_sqlite_graph_disabled(self, tmp_path: Path) -> None:
         """GRAPH_ENABLED=false → GraphAdapter が None."""
         db_path = str(tmp_path / "test.db")
@@ -130,6 +133,7 @@ class TestGraphBackend:
 
 
 class TestCacheBackend:
+    @pytest.mark.asyncio
     async def test_inmemory_cache(self, tmp_path: Path) -> None:
         """CACHE_BACKEND=inmemory → InMemoryCacheAdapter が返される."""
         db_path = str(tmp_path / "test.db")
@@ -145,6 +149,7 @@ class TestCacheBackend:
         finally:
             await dispose_adapters(storage, graph_adp, cache_adp)
 
+    @pytest.mark.asyncio
     async def test_redis_cache(self, tmp_path: Path) -> None:
         """CACHE_BACKEND=redis → RedisCacheAdapter が返される."""
         db_path = str(tmp_path / "test.db")
@@ -176,6 +181,7 @@ class TestCacheBackend:
 
 
 class TestPostgresBackend:
+    @pytest.mark.asyncio
     async def test_postgres_returns_postgres_adapter(self, tmp_path: Path) -> None:
         """STORAGE_BACKEND=postgres → PostgresStorageAdapter が返される."""
         settings = make_settings(
@@ -215,6 +221,7 @@ class TestPostgresBackend:
             finally:
                 await dispose_adapters(storage, graph_adp, cache_adp)
 
+    @pytest.mark.asyncio
     async def test_postgres_graph_disabled(self, tmp_path: Path) -> None:
         """STORAGE_BACKEND=postgres, GRAPH_ENABLED=false → GraphAdapter が None."""
         settings = make_settings(
@@ -256,6 +263,7 @@ class TestPostgresBackend:
 
 
 class TestReturnTypes:
+    @pytest.mark.asyncio
     async def test_returns_three_tuple(self, tmp_path: Path) -> None:
         """create_storage は (StorageAdapter, GraphAdapter | None, CacheAdapter) を返す."""
         db_path = str(tmp_path / "test.db")

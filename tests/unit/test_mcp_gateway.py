@@ -2354,7 +2354,7 @@ class TestApprovalNotifier:
             arguments={},
             requested_at=datetime.now(UTC),
         )
-        with pytest.raises((AttributeError, TypeError, ValidationError)):
+        with pytest.raises(ValidationError):
             req.session_id = "mutated"  # type: ignore[misc]
 
     def test_approval_notifier_is_abstract(self):

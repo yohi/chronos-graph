@@ -297,7 +297,7 @@ class TestConcurrentWriteStress:
 class TestMCPServerE2E:
     """ChronosServer(MCPラッパー)経由の全ツール動作確認。"""
 
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def server_with_mock(self, tmp_db_path: str) -> AsyncGenerator[ChronosServer, None]:
         """ChronosServerとモックプロバイダーを設定する。"""
         from context_store.orchestrator import create_orchestrator

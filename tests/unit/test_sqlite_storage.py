@@ -922,10 +922,17 @@ class TestBackpressureControl:
         # 10 件起動 → 2件がセマフォ取得、3件が待機キュー、5件が即座拒否
         tasks = [asyncio.create_task(blocking_request(i)) for i in range(10)]
 
-        # タスクがスタートするよう少し待つ
-        await asyncio.sleep(0.05)
+        # タスクがスタートするようポーリング
+        async def wait_for_busy():
+            for _ in range(50):
+                # StorageError が 5件発生するまで待つ
+                if sum(1 for r in results if isinstance(r, StorageError)) >= 5:
+                    return
+                await asyncio.sleep(0.01)
+            raise TimeoutError("Timed out waiting for busy errors")
 
-        # BUSY になったタスクはすでに完了しているはず
+        await asyncio.wait_for(wait_for_busy(), timeout=1.0)
+
         # hold_event を解放して残りを完了させる
         hold_event.set()
         await asyncio.gather(*tasks)

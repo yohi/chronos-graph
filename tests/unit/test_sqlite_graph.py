@@ -372,30 +372,31 @@ class TestTimeout:
         adp = SQLiteGraphAdapter(db_path=tmp_db_path, settings=settings)
         await adp.initialize()
 
-        interrupt_called = False
+        try:
+            interrupt_called = False
 
-        def mock_interrupt(self):
-            nonlocal interrupt_called
-            interrupt_called = True
+            def mock_interrupt(self):
+                nonlocal interrupt_called
+                interrupt_called = True
 
-        monkeypatch.setattr(SafeSqliteInterruptCtx, "interrupt", mock_interrupt)
+            monkeypatch.setattr(SafeSqliteInterruptCtx, "interrupt", mock_interrupt)
 
-        # Mock _traverse_inner to sleep longer than timeout
-        async def slow_inner(*args, **kwargs):
-            await asyncio.sleep(0.1)
-            return GraphResult(nodes=[], edges=[], traversal_depth=0)
+            # Mock _traverse_inner to sleep longer than timeout
+            async def slow_inner(*args, **kwargs):
+                await asyncio.sleep(0.1)
+                return GraphResult(nodes=[], edges=[], traversal_depth=0)
 
-        monkeypatch.setattr(adp, "_traverse_inner", slow_inner)
+            monkeypatch.setattr(adp, "_traverse_inner", slow_inner)
 
-        # Run traverse
-        result = await adp.traverse(["seed"], [], depth=1)
+            # Run traverse
+            result = await adp.traverse(["seed"], [], depth=1)
 
-        # Verify interrupt was called
-        assert interrupt_called is True
-        assert result.timeout is True
-        assert result.traversal_depth == 0
-
-        await adp.dispose()
+            # Verify interrupt was called
+            assert interrupt_called is True
+            assert result.timeout is True
+            assert result.traversal_depth == 0
+        finally:
+            await adp.dispose()
 
 
 # ---------------------------------------------------------------------------

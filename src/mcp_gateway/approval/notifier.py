@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from types import MappingProxyType
@@ -45,17 +46,44 @@ class ApprovalRequest(BaseModel):
 
 def _sanitize_for_log(data: Any) -> Any:
     """ログ出力用に機密情報をマスクします。"""
-    sensitive_keys = {"api_key", "token", "secret", "authorization", "password", "email", "ssn"}
+    sensitive_tokens = {
+        "api",
+        "key",
+        "token",
+        "secret",
+        "password",
+        "authorization",
+        "ssn",
+        "email",
+        "client",
+    }
 
     if isinstance(data, (dict, MappingProxyType, Mapping)):
-        return {
-            str(k): "**********"
-            if any(s in str(k).lower() for s in sensitive_keys)
-            else _sanitize_for_log(v)
-            for k, v in data.items()
-        }
+        new_data = {}
+        for k, v in data.items():
+            key_str = str(k).lower()
+            # 正規化: 英数字以外を削除して判定
+            normalized_key = re.sub(r"[^a-z0-9]", "", key_str)
+
+            is_sensitive = any(token in normalized_key for token in sensitive_tokens)
+
+            if is_sensitive:
+                new_data[str(k)] = "**********"
+            else:
+                new_data[str(k)] = _sanitize_for_log(v)
+        return new_data
+
     if isinstance(data, (list, tuple)):
         return [_sanitize_for_log(i) for i in data]
+
+    if isinstance(data, str):
+        # メールアドレスの簡易パターンマスク
+        if "@" in data and "." in data:
+            return "**********"
+        # SSN (XXX-XX-XXXX) の簡易パターンマスク
+        if re.match(r"^\d{3}-\d{2}-\d{4}$", data):
+            return "**********"
+
     return data
 
 

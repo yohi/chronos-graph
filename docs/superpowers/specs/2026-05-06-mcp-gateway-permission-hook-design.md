@@ -305,16 +305,7 @@ class GatewaySettings(BaseSettings):
 
 `app.py` では以下の通り配線する:
 
-```python
-approval_registry = PendingApprovalRegistry(
-    max_pending=settings.approval_max_pending,
-)
-sessions = InMemorySessionRegistry(
-    ttl_seconds=settings.session_ttl_seconds,
-    idle_timeout_seconds=settings.session_idle_timeout_seconds,
-    on_session_evicted=approval_registry.cancel_session,
-)
-```
+具体的な配線コードは次節 (§4.5 Eviction callback の例外監視) を参照
 
 これにより、クライアント切断 (idle timeout)・TTL expiry・明示的 `remove`
 すべての session 終了経路で、当該 session に紐づく未解決 approval が

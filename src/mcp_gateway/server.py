@@ -234,10 +234,10 @@ def build_router(
                             ),
                             timeout=5.0,  # 5s timeout for notification
                         )
-                    except (asyncio.TimeoutError, Exception) as exc:
+                    except (asyncio.TimeoutError, Exception) as notifier_exc:
                         audit.log(
                             ev="notification_failed",
-                            detail=f"Approval notification failed: {exc}",
+                            detail=f"Approval notification failed: {notifier_exc}",
                             sid=sid,
                         )
                     return JSONResponse(

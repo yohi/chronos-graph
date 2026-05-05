@@ -118,7 +118,8 @@ class PolicyEngine:
 
             # 2. Allowed values
             if constraint.allowed_values is not None:
-                if val not in constraint.allowed_values:
+                # Use strict type comparison because True == 1 in Python.
+                if not any(v == val and type(v) is type(val) for v in constraint.allowed_values):
                     raise PolicyError(
                         f"parameter {param_name!r} has invalid value {val!r}. "
                         f"allowed: {constraint.allowed_values}"

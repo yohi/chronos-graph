@@ -10,6 +10,19 @@ import pytest_asyncio
 from pydantic import ValidationError
 
 
+async def _get_sse_session_id(client, *, intent: str) -> str:
+    async with client.stream(
+        "GET",
+        "/sse",
+        headers={"Authorization": "Bearer ck_x", "X-MCP-Intent": intent},
+    ) as resp:
+        assert resp.status_code == 200
+        async for line in resp.aiter_lines():
+            if line.startswith("data:") and "session_id=" in line:
+                return line.split("session_id=", 1)[1].strip()
+    raise AssertionError("SSE endpoint event did not return session_id")
+
+
 class TestErrors:
     def test_gateway_error_is_exception(self) -> None:
         from mcp_gateway.errors import GatewayError
@@ -1645,6 +1658,32 @@ class TestToolProxy:
         assert exc_info.value.reason == "param_type_mismatch:p"
         upstream.call_tool.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_call_through_can_skip_redundant_validation(self, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.filters.none_filter import NoneFilter
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.tools.proxy import ToolProxy
+
+        upstream = AsyncMock()
+        upstream.call_tool.return_value = {"ok": True}
+        proxy = ToolProxy(upstream=upstream, filter_=NoneFilter())
+
+        def fail_if_called(*, tool_name, arguments, guardrail=None):
+            raise AssertionError("validate_call should be skipped")
+
+        monkeypatch.setattr(PolicyEngine, "validate_call", fail_if_called)
+
+        out = await proxy.call_through(
+            tool_name="t",
+            arguments={"q": "safe query"},
+            skip_validation=True,
+        )
+
+        assert out == {"ok": True}
+        upstream.call_tool.assert_awaited_once_with("t", {"q": "safe query"})
+
 
 @pytest.fixture(autouse=True)
 def mock_sse_keep_alive(monkeypatch):
@@ -1745,15 +1784,7 @@ class TestSseHandshakeEndpoint:
 class TestMcpMessagesEndpoint:
     @pytest.mark.asyncio
     async def _open_session(self, app_client) -> str:
-        async with app_client.stream(
-            "GET",
-            "/sse",
-            headers={"Authorization": "Bearer ck_x", "X-MCP-Intent": "ro"},
-        ) as resp:
-            async for line in resp.aiter_lines():
-                if line.startswith("data:") and "session_id=" in line:
-                    return line.split("session_id=", 1)[1].strip()
-        raise AssertionError("no session_id received")
+        return await _get_sse_session_id(app_client, intent="ro")
 
     @pytest.mark.asyncio
     async def test_tools_list_filters_by_caps(self, app_client):
@@ -1894,22 +1925,9 @@ class TestServerRequiresApproval:
         async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
             yield client
 
-    async def _get_session_id(self, client) -> str:
-        async with client.stream(
-            "GET",
-            "/sse",
-            headers={"Authorization": "Bearer ck_x", "X-MCP-Intent": "curate_memories"},
-        ) as resp:
-            assert resp.status_code == 200
-            async for line in resp.aiter_lines():
-                if line.startswith("data:") and "session_id=" in line:
-                    data = line[len("data:") :].strip()
-                    return data.split("session_id=", 1)[1]
-        raise AssertionError("SSE endpoint event did not return session_id")
-
     @pytest.mark.asyncio
     async def test_requires_approval_returns_32001(self, approval_client):
-        sid = await self._get_session_id(approval_client)
+        sid = await _get_sse_session_id(approval_client, intent="curate_memories")
         resp = await approval_client.post(
             f"/messages?session_id={sid}",
             json={
@@ -1929,7 +1947,7 @@ class TestServerRequiresApproval:
     async def test_requires_approval_audit_log(self, approval_client, caplog):
         import logging
 
-        sid = await self._get_session_id(approval_client)
+        sid = await _get_sse_session_id(approval_client, intent="curate_memories")
         with caplog.at_level(logging.INFO, logger="mcp_gateway.approval.notifier"):
             resp = await approval_client.post(
                 f"/messages?session_id={sid}",
@@ -1958,7 +1976,7 @@ class TestServerRequiresApproval:
 
         monkeypatch.setattr(LogOnlyApprovalNotifier, "request_approval", raise_error)
 
-        sid = await self._get_session_id(approval_client)
+        sid = await _get_sse_session_id(approval_client, intent="curate_memories")
         resp = await approval_client.post(
             f"/messages?session_id={sid}",
             json={
@@ -1969,6 +1987,7 @@ class TestServerRequiresApproval:
             },
         )
         await asyncio.wait_for(started.wait(), timeout=1.0)
+        await asyncio.sleep(0)
 
         assert resp.status_code == 200
         body = resp.json()
@@ -2011,7 +2030,7 @@ class TestServerRequiresApproval:
         monkeypatch.setattr(LogOnlyApprovalNotifier, "request_approval", block_until_released)
         monkeypatch.setattr(server_module, "_schedule_approval_request", capture_task)
 
-        sid = await self._get_session_id(approval_client)
+        sid = await _get_sse_session_id(approval_client, intent="curate_memories")
         resp = await approval_client.post(
             f"/messages?session_id={sid}",
             json={
@@ -2053,7 +2072,7 @@ class TestServerRequiresApproval:
         monkeypatch.setattr(LogOnlyApprovalNotifier, "request_approval", fail_if_called)
         monkeypatch.setattr(server_module, "_schedule_approval_request", fail_if_scheduled)
 
-        sid = await self._get_session_id(approval_client)
+        sid = await _get_sse_session_id(approval_client, intent="curate_memories")
         resp = await approval_client.post(
             f"/messages?session_id={sid}",
             json={
@@ -2075,8 +2094,53 @@ class TestServerRequiresApproval:
         assert schedule_called is False
 
     @pytest.mark.asyncio
+    async def test_requires_approval_sanitizes_notifier_request_arguments(
+        self, approval_client, monkeypatch
+    ):
+        import mcp_gateway.server as server_module
+
+        captured_request = None
+        created_tasks: list[asyncio.Task] = []
+
+        def capture_request(*, approval_notifier, request, audit, sid, timeout=5.0):
+            nonlocal captured_request
+            captured_request = request
+            task = asyncio.create_task(asyncio.sleep(0))
+            created_tasks.append(task)
+            return task
+
+        monkeypatch.setattr(server_module, "_schedule_approval_request", capture_request)
+
+        sid = await _get_sse_session_id(approval_client, intent="curate_memories")
+        resp = await approval_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 102,
+                "method": "tools/call",
+                "params": {
+                    "name": "memory_delete",
+                    "arguments": {
+                        "password": "s3cr3t",
+                        "api_key": "hunter2",
+                        "safe_param": "visible",
+                    },
+                },
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["error"]["message"] == "approval_required"
+        assert captured_request is not None
+        assert captured_request.arguments["password"] == "**********"
+        assert captured_request.arguments["api_key"] == "**********"
+        assert captured_request.arguments["safe_param"] == "visible"
+
+        await asyncio.gather(*created_tasks, return_exceptions=True)
+
+    @pytest.mark.asyncio
     async def test_caps_denied_returns_32601(self, approval_client):
-        sid = await self._get_session_id(approval_client)
+        sid = await _get_sse_session_id(approval_client, intent="curate_memories")
         resp = await approval_client.post(
             f"/messages?session_id={sid}",
             json={
@@ -2145,22 +2209,9 @@ class TestServerValidationDeny:
         async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
             yield client
 
-    async def _get_session_id(self, client) -> str:
-        async with client.stream(
-            "GET",
-            "/sse",
-            headers={"Authorization": "Bearer ck_x", "X-MCP-Intent": "ro"},
-        ) as resp:
-            assert resp.status_code == 200
-            async for line in resp.aiter_lines():
-                if line.startswith("data:") and "session_id=" in line:
-                    data = line[len("data:") :].strip()
-                    return data.split("session_id=", 1)[1]
-        raise AssertionError("SSE endpoint event did not return session_id")
-
     @pytest.mark.asyncio
     async def test_param_validation_denied_returns_32602(self, validation_client):
-        sid = await self._get_session_id(validation_client)
+        sid = await _get_sse_session_id(validation_client, intent="ro")
         resp = await validation_client.post(
             f"/messages?session_id={sid}",
             json={
@@ -2178,7 +2229,7 @@ class TestServerValidationDeny:
 
     @pytest.mark.asyncio
     async def test_forbidden_param_validation_denied_returns_32602(self, validation_client):
-        sid = await self._get_session_id(validation_client)
+        sid = await _get_sse_session_id(validation_client, intent="ro")
         resp = await validation_client.post(
             f"/messages?session_id={sid}",
             json={

@@ -11,7 +11,12 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
-from mcp_gateway.approval.notifier import ApprovalNotifier, ApprovalRequest, LogOnlyApprovalNotifier
+from mcp_gateway.approval.notifier import (
+    ApprovalNotifier,
+    ApprovalRequest,
+    LogOnlyApprovalNotifier,
+    _sanitize_for_log,
+)
 from mcp_gateway.audit.logger import AuditLogger
 from mcp_gateway.auth.handshake import HandshakeService
 from mcp_gateway.auth.session import SessionRegistry
@@ -52,7 +57,10 @@ async def _request_approval_with_isolation(
             approval_notifier.request_approval(request),
             timeout=timeout,
         )
-    except (asyncio.TimeoutError, Exception) as notifier_exc:
+    # Non-critical notifier failures must not break the main request flow.
+    # We swallow them after audit logging because notifier_exc is recorded via
+    # audit.log(error_type=...) and the client has already received approval_required.
+    except Exception as notifier_exc:  # noqa: BLE001 - deliberate isolation boundary
         audit.log(
             ev="notification_failed",
             detail="Approval notification failed",
@@ -288,7 +296,7 @@ def build_router(
                             agent_id=record.agent_id,
                             intent=record.intent,
                             tool_name=tool_name,
-                            arguments=arguments,
+                            arguments=_sanitize_for_log(arguments),
                             requested_at=datetime.now(UTC),
                         ),
                     )
@@ -328,6 +336,7 @@ def build_router(
                     tool_name=tool_name,
                     arguments=arguments,
                     guardrail=record.guardrails.get(tool_name),
+                    skip_validation=True,
                 )
             except PolicyError as exc:
                 audit.log(

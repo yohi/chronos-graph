@@ -47,17 +47,25 @@ class ToolProxy:
         tool_name: str,
         arguments: dict[str, Any],
         guardrail: ToolGuardrail | None = None,
-        skip_validation: bool = False,
     ) -> dict[str, Any]:
         if _contains_secret(arguments):
             raise PolicyError("arguments contain secret-like content")
 
-        if not skip_validation:
-            PolicyEngine.validate_call(
-                tool_name=tool_name,
-                arguments=arguments,
-                guardrail=guardrail,
-            )
+        PolicyEngine.validate_call(
+            tool_name=tool_name,
+            arguments=arguments,
+            guardrail=guardrail,
+        )
+
+        return await self._call_server_trusted(tool_name=tool_name, arguments=arguments)
+
+    async def _call_server_trusted(
+        self,
+        *,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Server-only entrypoint after PolicyEngine.evaluate_call has already passed."""
 
         payload = await self._upstream.call_tool(tool_name, arguments)
         if _contains_secret(payload):

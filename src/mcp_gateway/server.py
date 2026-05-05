@@ -332,11 +332,9 @@ def build_router(
             filter_ = build_filter(policy.output_filters[record.output_filter_profile])
             proxy = ToolProxy(upstream=upstream, filter_=filter_)
             try:
-                payload = await proxy.call_through(
+                payload = await proxy._call_server_trusted(
                     tool_name=tool_name,
                     arguments=arguments,
-                    guardrail=record.guardrails.get(tool_name),
-                    skip_validation=True,
                 )
             except PolicyError as exc:
                 audit.log(

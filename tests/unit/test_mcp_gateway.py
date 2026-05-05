@@ -1659,7 +1659,7 @@ class TestToolProxy:
         upstream.call_tool.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_call_through_can_skip_redundant_validation(self, monkeypatch):
+    async def test_call_server_trusted_skips_redundant_validation(self, monkeypatch):
         from unittest.mock import AsyncMock
 
         from mcp_gateway.filters.none_filter import NoneFilter
@@ -1675,10 +1675,9 @@ class TestToolProxy:
 
         monkeypatch.setattr(PolicyEngine, "validate_call", fail_if_called)
 
-        out = await proxy.call_through(
+        out = await proxy._call_server_trusted(
             tool_name="t",
             arguments={"q": "safe query"},
-            skip_validation=True,
         )
 
         assert out == {"ok": True}

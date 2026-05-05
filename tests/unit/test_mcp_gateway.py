@@ -896,6 +896,47 @@ class TestPolicyEngine:
         assert isinstance(grant.caps, frozenset)
         assert grant.caps == frozenset({"memory_search"})
 
+    def test_evaluate_grant_propagates_and_copies_guardrails(self):
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.models import (
+            AgentPolicy,
+            GatewayPolicy,
+            IntentPolicy,
+            ParamConstraint,
+            ToolGuardrail,
+        )
+
+        guardrails = {
+            "tool_a": ToolGuardrail(
+                params={"p": ParamConstraint(max_length=10)}, requires_approval=True
+            )
+        }
+        policy = GatewayPolicy(
+            version=1,
+            output_filters={"f": {"type": "none"}},
+            intents={
+                "intent_a": IntentPolicy(
+                    description="d",
+                    allowed_tools=["tool_a"],
+                    output_filter="f",
+                    guardrails=guardrails,
+                )
+            },
+            agents={"agent_a": AgentPolicy(allowed_intents=["intent_a"])},
+        )
+
+        eng = PolicyEngine(policy)
+        grant = eng.evaluate_grant(agent_id="agent_a", intent="intent_a", requested_tools=None)
+
+        # Verifying propagation
+        assert "tool_a" in grant.guardrails
+        assert grant.guardrails["tool_a"].requires_approval is True
+        assert grant.guardrails["tool_a"].params["p"].max_length == 10
+
+        # Verifying reference independence (no shared mutable state)
+        assert grant.guardrails is not policy.intents["intent_a"].guardrails
+        assert grant.guardrails["tool_a"] is not policy.intents["intent_a"].guardrails["tool_a"]
+
     def test_check_call_is_staticmethod(self):
         from mcp_gateway.policy.engine import PolicyEngine
 
@@ -1946,3 +1987,174 @@ class TestContextStoreUntouched:
                     if is_bad:
                         bad.append(f"{mod_info.name}: from {node.module or ''} import ...")
         assert bad == [], f"mcp_gateway imports context_store directly: {bad}"
+
+
+class TestIBACModels:
+    """ParamConstraint / ToolGuardrail / IntentPolicy.guardrails の単体テスト。"""
+
+    def test_param_constraint_defaults(self):
+        from mcp_gateway.policy.models import ParamConstraint
+
+        c = ParamConstraint()
+        assert c.type is None
+        assert c.max_length is None
+        assert c.pattern is None
+        assert c.allowed_values is None
+        assert c.forbidden is False
+
+    def test_param_constraint_accepts_all_fields(self):
+        from mcp_gateway.policy.models import ParamConstraint
+
+        c = ParamConstraint(
+            type="string", max_length=100, pattern="^[a-z]+$", allowed_values=["foo"]
+        )
+        assert c.type == "string"
+        assert c.max_length == 100
+        assert c.pattern == "^[a-z]+$"
+        assert c.allowed_values == ["foo"]
+
+    def test_tool_guardrail_defaults(self):
+        from mcp_gateway.policy.models import ToolGuardrail
+
+        g = ToolGuardrail()
+        assert g.params == {}
+        assert g.requires_approval is False
+
+    def test_intent_policy_accepts_guardrails(self):
+        from mcp_gateway.policy.models import IntentPolicy, ParamConstraint, ToolGuardrail
+
+        p = IntentPolicy(
+            description="test",
+            allowed_tools=["tool_a"],
+            output_filter="f",
+            guardrails={
+                "tool_a": ToolGuardrail(
+                    params={"q": ParamConstraint(max_length=512)},
+                    requires_approval=False,
+                )
+            },
+        )
+        assert "tool_a" in p.guardrails
+        assert p.guardrails["tool_a"].params["q"].max_length == 512
+
+    def test_verify_references_guardrail_key_not_in_allowed_tools(self):
+        from mcp_gateway.policy.models import GatewayPolicy
+
+        with pytest.raises(ValidationError, match="guardrail"):
+            GatewayPolicy.model_validate(
+                {
+                    "version": 1,
+                    "output_filters": {"f": {"type": "none"}},
+                    "intents": {
+                        "intent_a": {
+                            "description": "x",
+                            "allowed_tools": ["tool_a"],
+                            "output_filter": "f",
+                            "guardrails": {"unlisted_tool": {}},
+                        }
+                    },
+                    "agents": {},
+                }
+            )
+
+    def test_verify_references_pattern_without_max_length_raises(self):
+        from mcp_gateway.policy.models import GatewayPolicy
+
+        with pytest.raises(ValidationError, match="missing max_length"):
+            GatewayPolicy.model_validate(
+                {
+                    "version": 1,
+                    "output_filters": {"f": {"type": "none"}},
+                    "intents": {
+                        "intent_a": {
+                            "description": "x",
+                            "allowed_tools": ["tool_a"],
+                            "output_filter": "f",
+                            "guardrails": {
+                                "tool_a": {"params": {"query": {"pattern": "^[a-z]+$"}}}
+                            },
+                        }
+                    },
+                    "agents": {},
+                }
+            )
+
+    def test_verify_references_pattern_too_long_raises(self):
+        from mcp_gateway.policy.models import GatewayPolicy
+
+        with pytest.raises(ValidationError, match="pattern is too long"):
+            GatewayPolicy.model_validate(
+                {
+                    "version": 1,
+                    "output_filters": {"f": {"type": "none"}},
+                    "intents": {
+                        "intent_a": {
+                            "description": "x",
+                            "allowed_tools": ["tool_a"],
+                            "output_filter": "f",
+                            "guardrails": {
+                                "tool_a": {
+                                    "params": {
+                                        "query": {
+                                            "pattern": "a" * 201,
+                                            "max_length": 512,
+                                        }
+                                    }
+                                }
+                            },
+                        }
+                    },
+                    "agents": {},
+                }
+            )
+
+    def test_verify_references_pattern_empty_string_requires_max_length(self):
+        from mcp_gateway.policy.models import GatewayPolicy
+
+        with pytest.raises(ValidationError, match="missing max_length"):
+            GatewayPolicy.model_validate(
+                {
+                    "version": 1,
+                    "output_filters": {"f": {"type": "none"}},
+                    "intents": {
+                        "intent_a": {
+                            "description": "x",
+                            "allowed_tools": ["tool_a"],
+                            "output_filter": "f",
+                            "guardrails": {"tool_a": {"params": {"query": {"pattern": ""}}}},
+                        }
+                    },
+                    "agents": {},
+                }
+            )
+
+    def test_verify_references_valid_guardrail_passes(self):
+        from mcp_gateway.policy.models import GatewayPolicy
+
+        policy = GatewayPolicy.model_validate(
+            {
+                "version": 1,
+                "output_filters": {"f": {"type": "none"}},
+                "intents": {
+                    "intent_a": {
+                        "description": "x",
+                        "allowed_tools": ["tool_a"],
+                        "output_filter": "f",
+                        "guardrails": {
+                            "tool_a": {
+                                "params": {
+                                    "query": {
+                                        "type": "string",
+                                        "max_length": 512,
+                                        "pattern": "^[^<>]+$",
+                                    }
+                                },
+                                "requires_approval": False,
+                            }
+                        },
+                    }
+                },
+                "agents": {},
+            }
+        )
+        assert "tool_a" in policy.intents["intent_a"].guardrails

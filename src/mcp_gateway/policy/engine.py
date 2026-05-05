@@ -7,10 +7,11 @@ to the upstream subprocess.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 
 from mcp_gateway.errors import PolicyError
-from mcp_gateway.policy.models import GatewayPolicy
+from mcp_gateway.policy.models import GatewayPolicy, ToolGuardrail
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +19,7 @@ class Grant:
     intent: str
     caps: frozenset[str]
     output_filter_profile: str
+    guardrails: dict[str, ToolGuardrail]
 
 
 class PolicyEngine:
@@ -53,7 +55,12 @@ class PolicyEngine:
                     f"none of the requested tools are allowed for intent {intent!r}. "
                     f"requested: {sorted(requested_tools)}, allowed: {sorted(allowed)}"
                 )
-        return Grant(intent=intent, caps=caps, output_filter_profile=intent_pol.output_filter)
+        return Grant(
+            intent=intent,
+            caps=caps,
+            output_filter_profile=intent_pol.output_filter,
+            guardrails=deepcopy(intent_pol.guardrails),
+        )
 
     @staticmethod
     def check_call(*, caps: frozenset[str], tool_name: str) -> None:

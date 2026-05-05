@@ -4,19 +4,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
+from mcp_gateway.approval.notifier import ApprovalNotifier, ApprovalRequest
 from mcp_gateway.audit.logger import AuditLogger
 from mcp_gateway.auth.handshake import HandshakeService
 from mcp_gateway.auth.session import SessionRegistry
 from mcp_gateway.errors import AuthError, PolicyError, SessionError, UpstreamError
 from mcp_gateway.filters.factory import build_filter
+from mcp_gateway.policy.engine import Grant, PolicyEngine
 from mcp_gateway.policy.models import GatewayPolicy
-from mcp_gateway.tools.proxy import ToolProxy
+from mcp_gateway.tools.proxy import ToolProxy, _contains_secret
 from mcp_gateway.tools.registry import ToolRegistry
 
 
@@ -44,6 +47,8 @@ def build_router(
     upstream: Any,
     policy: GatewayPolicy,
     audit: AuditLogger,
+    engine: PolicyEngine,
+    approval_notifier: ApprovalNotifier,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -167,22 +172,82 @@ def build_router(
             else:
                 arguments = {}
 
-            if tool_name not in record.caps:
-                audit.log(
-                    ev="call",
-                    decision="deny",
-                    reason="tool_not_in_caps",
-                    agent=record.agent_id,
-                    sid=sid,
-                    tool=tool_name,
-                )
-                return JSONResponse(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": rpc_id,
-                        "error": {"code": -32601, "message": "tool not found"},
-                    }
-                )
+            decision = engine.evaluate_call(
+                grant=Grant(
+                    intent=record.intent,
+                    caps=record.caps,
+                    output_filter_profile=record.output_filter_profile,
+                    guardrails=record.guardrails,
+                ),
+                tool_name=tool_name,
+                arguments=arguments,
+            )
+
+            match decision.status:
+                case "DENY":
+                    audit.log(
+                        ev="call",
+                        decision="deny",
+                        reason=decision.reason,
+                        agent=record.agent_id,
+                        sid=sid,
+                        tool=tool_name,
+                    )
+                    return JSONResponse(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": rpc_id,
+                            "error": {"code": -32601, "message": "tool not found"},
+                        }
+                    )
+                case "REQUIRES_APPROVAL":
+                    if _contains_secret(arguments):
+                        audit.log(
+                            ev="call",
+                            decision="deny",
+                            reason="secret_in_approval_args",
+                            agent=record.agent_id,
+                            sid=sid,
+                            tool=tool_name,
+                        )
+                        return JSONResponse(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": rpc_id,
+                                "error": {"code": -32601, "message": "tool not found"},
+                            }
+                        )
+
+                    audit.log(
+                        ev="call",
+                        decision="requires_approval",
+                        agent=record.agent_id,
+                        sid=sid,
+                        tool=tool_name,
+                    )
+                    await approval_notifier.request_approval(
+                        ApprovalRequest(
+                            session_id=record.session_id,
+                            agent_id=record.agent_id,
+                            intent=record.intent,
+                            tool_name=tool_name,
+                            arguments=arguments,
+                            requested_at=datetime.now(UTC),
+                        )
+                    )
+                    return JSONResponse(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": rpc_id,
+                            "error": {
+                                "code": -32001,
+                                "message": "approval_required",
+                                "data": {"session_id": record.session_id},
+                            },
+                        }
+                    )
+                case "ALLOW":
+                    pass
 
             if record.output_filter_profile not in policy.output_filters:
                 audit.log(

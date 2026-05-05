@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
+from mcp_gateway.approval.notifier import ApprovalNotifier, ApprovalRequest, LogOnlyApprovalNotifier
 from mcp_gateway.audit.logger import AuditLogger
 from mcp_gateway.auth.handshake import HandshakeService
 from mcp_gateway.auth.session import SessionRegistry
@@ -44,8 +45,11 @@ def build_router(
     upstream: Any,
     policy: GatewayPolicy,
     audit: AuditLogger,
+    approval_notifier: ApprovalNotifier | None = None,
 ) -> APIRouter:
     router = APIRouter()
+    if approval_notifier is None:
+        approval_notifier = LogOnlyApprovalNotifier()
 
     @router.get("/sse")
     async def sse(request: Request) -> Any:
@@ -208,6 +212,46 @@ def build_router(
                     guardrail=record.guardrails.get(tool_name),
                 )
             except PolicyError as exc:
+                if exc.reason == "requires_approval":
+                    audit.log(
+                        ev="call",
+                        decision="approval_required",
+                        agent=record.agent_id,
+                        sid=sid,
+                        tool=tool_name,
+                    )
+                    # Trigger HITL approval notification with failure isolation
+                    try:
+                        await asyncio.wait_for(
+                            approval_notifier.request_approval(
+                                ApprovalRequest(
+                                    session_id=sid,
+                                    agent_id=record.agent_id,
+                                    intent=record.intent,
+                                    tool_name=tool_name,
+                                    arguments=arguments,
+                                )
+                            ),
+                            timeout=5.0,  # 5s timeout for notification
+                        )
+                    except (asyncio.TimeoutError, Exception) as notifier_exc:
+                        audit.log(
+                            ev="notification_failed",
+                            detail=f"Approval notification failed: {notifier_exc}",
+                            sid=sid,
+                        )
+                    return JSONResponse(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": rpc_id,
+                            "error": {
+                                "code": -32001,
+                                "message": "approval_required",
+                                "data": {"session_id": sid},
+                            },
+                        }
+                    )
+
                 audit.log(
                     ev="call",
                     decision="deny",

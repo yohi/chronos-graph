@@ -14,7 +14,13 @@ from types import MappingProxyType
 from typing import Any, Literal
 
 from mcp_gateway.errors import PolicyError
-from mcp_gateway.policy.models import GatewayPolicy, ParamConstraint, ToolGuardrail
+from mcp_gateway.policy.models import GatewayPolicy, ToolGuardrail
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationResult:
+    status: Literal["ALLOW", "DENY", "REQUIRES_APPROVAL"]
+    reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,12 +29,6 @@ class Grant:
     caps: frozenset[str]
     output_filter_profile: str
     guardrails: MappingProxyType[str, ToolGuardrail]
-
-
-@dataclass(frozen=True, slots=True)
-class CallDecision:
-    status: Literal["ALLOW", "DENY", "REQUIRES_APPROVAL"]
-    reason: str | None = None
 
 
 class PolicyEngine:
@@ -71,67 +71,37 @@ class PolicyEngine:
             guardrails=MappingProxyType(deepcopy(intent_pol.guardrails)),
         )
 
-    @staticmethod
-    def check_call(*, caps: frozenset[str], tool_name: str) -> None:
-        if tool_name not in caps:
-            raise PolicyError(f"tool {tool_name!r} is not in session capabilities")
-
     def evaluate_call(
         self,
         *,
-        caps: frozenset[str],
+        grant: Grant,
         tool_name: str,
         arguments: dict[str, Any],
-        intent: str,
-    ) -> CallDecision:
+    ) -> EvaluationResult:
+        if tool_name not in grant.caps:
+            return EvaluationResult(status="DENY", reason="tool_not_in_caps")
+
+        try:
+            guardrail = grant.guardrails.get(tool_name)
+            PolicyEngine.validate_call(
+                tool_name=tool_name,
+                arguments=arguments,
+                guardrail=guardrail,
+            )
+        except PolicyError as exc:
+            if exc.reason == "requires_approval":
+                return EvaluationResult(status="REQUIRES_APPROVAL", reason=exc.reason)
+            return EvaluationResult(status="DENY", reason=exc.reason)
+
+        return EvaluationResult(status="ALLOW")
+
+    @staticmethod
+    def check_call(*, caps: frozenset[str], tool_name: str) -> None:
         if tool_name not in caps:
-            return CallDecision(status="DENY", reason="tool_not_in_caps")
-
-        intent_pol = self._policy.intents.get(intent)
-        if intent_pol is None:
-            return CallDecision(status="DENY", reason="unknown_intent")
-
-        if tool_name not in intent_pol.allowed_tools:
-            return CallDecision(status="DENY", reason="tool_not_allowed_for_intent")
-
-        guardrail = intent_pol.guardrails.get(tool_name)
-        if guardrail is None:
-            return CallDecision(status="ALLOW")
-
-        for param_name, constraint in guardrail.params.items():
-            if constraint.forbidden and param_name in arguments:
-                return CallDecision(status="DENY", reason=f"forbidden_param:{param_name}")
-
-            if param_name not in arguments:
-                continue
-
-            value = arguments[param_name]
-
-            if self._type_mismatch(value, constraint):
-                return CallDecision(status="DENY", reason=f"param_type_mismatch:{param_name}")
-
-            if constraint.max_length is not None and isinstance(value, str):
-                if len(value) > constraint.max_length:
-                    return CallDecision(status="DENY", reason=f"param_too_long:{param_name}")
-
-            if constraint.pattern is not None and isinstance(value, str):
-                if not re.fullmatch(constraint.pattern, value):
-                    return CallDecision(
-                        status="DENY",
-                        reason=f"param_pattern_mismatch:{param_name}",
-                    )
-
-            if constraint.allowed_values is not None:
-                if not self._matches_allowed_value(value, constraint.allowed_values):
-                    return CallDecision(
-                        status="DENY",
-                        reason=f"param_not_in_allowed_values:{param_name}",
-                    )
-
-        if guardrail.requires_approval:
-            return CallDecision(status="REQUIRES_APPROVAL")
-
-        return CallDecision(status="ALLOW")
+            raise PolicyError(
+                f"tool {tool_name!r} is not in session capabilities",
+                reason="tool_not_in_caps",
+            )
 
     @staticmethod
     def validate_call(
@@ -143,70 +113,73 @@ class PolicyEngine:
         if guardrail is None:
             return
 
-        if guardrail.requires_approval:
-            raise PolicyError(
-                f"tool {tool_name!r} requires manual approval which is not yet implemented"
-            )
-
         for param_name, constraint in guardrail.params.items():
             if constraint.forbidden and param_name in arguments:
-                raise PolicyError(f"parameter {param_name!r} is forbidden for tool {tool_name!r}")
+                raise PolicyError(
+                    f"parameter {param_name!r} is forbidden for tool {tool_name!r}",
+                    reason=f"forbidden_param:{param_name}",
+                )
 
             if param_name not in arguments:
                 continue
 
-            value = arguments[param_name]
+            val = arguments[param_name]
 
-            if PolicyEngine._type_mismatch(value, constraint):
-                expected_type = constraint.type or "string"
-                actual_type = "boolean" if isinstance(value, bool) else type(value).__name__
-                raise PolicyError(
-                    f"parameter {param_name!r} must be {expected_type}, got {actual_type}"
-                )
+            # 1. Type check
+            expected_type_str = constraint.type
+            has_string_constraint = (
+                constraint.max_length is not None or constraint.pattern is not None
+            )
 
-            if constraint.allowed_values is not None and not PolicyEngine._matches_allowed_value(
-                value, constraint.allowed_values
-            ):
-                raise PolicyError(
-                    f"parameter {param_name!r} has invalid value {value!r}. "
-                    f"allowed: {constraint.allowed_values}"
-                )
+            if expected_type_str is None and has_string_constraint:
+                expected_type_str = "string"
 
-            if isinstance(value, str):
-                if constraint.max_length is not None and len(value) > constraint.max_length:
+            if expected_type_str is not None:
+                if expected_type_str in ("integer", "number") and isinstance(val, bool):
                     raise PolicyError(
-                        f"parameter {param_name!r} exceeds max_length ({constraint.max_length})"
+                        f"parameter {param_name!r} must be {expected_type_str}, got boolean",
+                        reason=f"param_type_mismatch:{param_name}",
                     )
-                if constraint.pattern is not None and not re.fullmatch(constraint.pattern, value):
-                    raise PolicyError(f"parameter {param_name!r} does not match required pattern")
 
-    @staticmethod
-    def _type_mismatch(value: Any, constraint: ParamConstraint) -> bool:
-        constraint_type = constraint.type
-        has_string_constraint = constraint.max_length is not None or constraint.pattern is not None
+                types_map: dict[str, type | tuple[type, ...]] = {
+                    "string": str,
+                    "integer": int,
+                    "number": (int, float),
+                    "boolean": bool,
+                }
+                expected_type_cls = types_map[expected_type_str]
+                if not isinstance(val, expected_type_cls):
+                    actual_type = "boolean" if isinstance(val, bool) else type(val).__name__
+                    raise PolicyError(
+                        f"parameter {param_name!r} must be {expected_type_str}, got {actual_type}",
+                        reason=f"param_type_mismatch:{param_name}",
+                    )
 
-        if constraint_type is None and not has_string_constraint:
-            return False
+            # 2. Allowed values
+            if constraint.allowed_values is not None:
+                if not any(v == val and type(v) is type(val) for v in constraint.allowed_values):
+                    raise PolicyError(
+                        f"parameter {param_name!r} has invalid value {val!r}. "
+                        f"allowed: {constraint.allowed_values}",
+                        reason=f"param_not_in_allowed_values:{param_name}",
+                    )
 
-        if constraint_type == "string" or (constraint_type is None and has_string_constraint):
-            return not isinstance(value, str)
+            # 3. String-specific constraints
+            if isinstance(val, str):
+                if constraint.max_length is not None and len(val) > constraint.max_length:
+                    raise PolicyError(
+                        f"parameter {param_name!r} exceeds max_length ({constraint.max_length})",
+                        reason=f"param_too_long:{param_name}",
+                    )
+                if constraint.pattern is not None:
+                    if not re.fullmatch(constraint.pattern, val):
+                        raise PolicyError(
+                            f"parameter {param_name!r} does not match required pattern",
+                            reason=f"param_pattern_mismatch:{param_name}",
+                        )
 
-        if constraint_type == "integer":
-            return isinstance(value, bool) or not isinstance(value, int)
-
-        if constraint_type == "number":
-            return isinstance(value, bool) or not isinstance(value, (int, float))
-
-        if constraint_type == "boolean":
-            return not isinstance(value, bool)
-
-        return False
-
-    @staticmethod
-    def _matches_allowed_value(
-        value: Any,
-        allowed_values: list[str | int | float | bool],
-    ) -> bool:
-        return any(
-            candidate == value and type(candidate) is type(value) for candidate in allowed_values
-        )
+        if guardrail.requires_approval:
+            raise PolicyError(
+                f"tool {tool_name!r} requires manual approval which is not yet implemented",
+                reason="requires_approval",
+            )

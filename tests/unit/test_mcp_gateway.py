@@ -2464,11 +2464,14 @@ class TestParamConstraint:
         return PolicyEngine(policy), frozenset([tool_name])
 
     def _call(self, engine, caps, tool_name, arguments, intent="test_intent"):
+        # For testing, we create a grant assuming intent is allowed for agent-a
+        grant = engine.evaluate_grant(agent_id="agent-a", intent=intent, requested_tools=None)
+        # Note: testing caps filtering here is bypassed, but evaluated specifically
+        # in TestEvaluateCall
         return engine.evaluate_call(
-            caps=caps,
+            grant=grant,
             tool_name=tool_name,
             arguments=arguments,
-            intent=intent,
         )
 
     def test_max_length_boundary_allow(self):
@@ -2640,64 +2643,59 @@ class TestEvaluateCall:
 
     def test_tool_not_in_caps_deny(self):
         eng = self._engine()
+        # intent 'read_only_recall' allows memory_search and memory_stats
+        grant = eng.evaluate_grant(
+            agent_id="agent-a",
+            intent="read_only_recall",
+            requested_tools=frozenset(["memory_search"]),
+        )
         result = eng.evaluate_call(
-            caps=frozenset(["memory_search"]),
-            tool_name="memory_delete",
+            grant=grant,
+            tool_name="memory_stats",  # allowed by intent, but not in grant caps
             arguments={},
-            intent="curate_memories",
         )
         assert result.status == "DENY"
         assert result.reason == "tool_not_in_caps"
 
-    def test_unknown_intent_deny(self):
-        eng = self._engine()
-        result = eng.evaluate_call(
-            caps=frozenset(["memory_search"]),
-            tool_name="memory_search",
-            arguments={},
-            intent="ghost_intent",
-        )
-        assert result.status == "DENY"
-        assert result.reason == "unknown_intent"
-
-    def test_tool_not_allowed_for_intent_deny(self):
-        eng = self._engine()
-        result = eng.evaluate_call(
-            caps=frozenset(["memory_search"]),
-            tool_name="memory_search",
-            arguments={},
-            intent="curate_memories",
-        )
-        assert result.status == "DENY"
-        assert result.reason == "tool_not_allowed_for_intent"
-
     def test_no_guardrail_allow(self):
         eng = self._engine()
+        grant = eng.evaluate_grant(
+            agent_id="agent-a",
+            intent="read_only_recall",
+            requested_tools=frozenset(["memory_stats"]),
+        )
         result = eng.evaluate_call(
-            caps=frozenset(["memory_stats"]),
+            grant=grant,
             tool_name="memory_stats",
             arguments={},
-            intent="read_only_recall",
         )
         assert result.status == "ALLOW"
 
     def test_all_constraints_pass_allow(self):
         eng = self._engine()
+        grant = eng.evaluate_grant(
+            agent_id="agent-a",
+            intent="read_only_recall",
+            requested_tools=frozenset(["memory_search"]),
+        )
         result = eng.evaluate_call(
-            caps=frozenset(["memory_search"]),
+            grant=grant,
             tool_name="memory_search",
             arguments={"query": "safe query"},
-            intent="read_only_recall",
         )
         assert result.status == "ALLOW"
 
     def test_requires_approval_only_params_empty(self):
         eng = self._engine()
+        grant = eng.evaluate_grant(
+            agent_id="agent-a",
+            intent="curate_memories",
+            requested_tools=frozenset(["memory_delete"]),
+        )
         result = eng.evaluate_call(
-            caps=frozenset(["memory_delete"]),
+            grant=grant,
             tool_name="memory_delete",
             arguments={},
-            intent="curate_memories",
         )
         assert result.status == "REQUIRES_APPROVAL"
 
@@ -2731,11 +2729,13 @@ class TestEvaluateCall:
             agents={"agent-a": AgentPolicy(allowed_intents=["intent_x"])},
         )
         eng = PolicyEngine(policy)
+        grant = eng.evaluate_grant(
+            agent_id="agent-a", intent="intent_x", requested_tools=frozenset(["tool_a"])
+        )
         result = eng.evaluate_call(
-            caps=frozenset(["tool_a"]),
+            grant=grant,
             tool_name="tool_a",
             arguments={"query": "a" * 600},
-            intent="intent_x",
         )
         assert result.status == "DENY"
         assert result.reason == "param_too_long:query"

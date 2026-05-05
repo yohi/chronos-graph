@@ -26,16 +26,43 @@ intents:
     description: "Search and summarize past memories. Cannot write or send out."
     allowed_tools: [memory_search, memory_search_graph, memory_stats]
     output_filter: recall_safe
+    guardrails:
+      memory_search:
+        params:
+          query:
+            type: string
+            max_length: 512
+            pattern: "^[^<>{};]*$"
+      memory_search_graph:
+        params:
+          query:
+            type: string
+            max_length: 512
+            pattern: "^[^<>{};]*$"
 
   curate_memories:
     description: "Curate own working memory. Search/save/delete; no external URL."
     allowed_tools: [memory_search, memory_save, memory_delete, memory_prune]
     output_filter: curator_full
+    guardrails:
+      memory_delete:
+        requires_approval: true
+      memory_prune:
+        requires_approval: true
 
   ingest_external_url:
     description: "External URL ingestion only."
     allowed_tools: [memory_save_url]
     output_filter: url_ingestion
+    guardrails:
+      memory_save_url:
+        params:
+          url:
+            type: string
+            max_length: 2048
+            pattern: "^https://[^@#?\\s]+"
+            # WARNING: This pattern alone does not prevent SSRF.
+            # Enforce IP allowlisting / private-range blocking at the network or application layer.
 
 agents:
   summarizer-bot:

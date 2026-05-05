@@ -10,6 +10,19 @@ import pytest_asyncio
 from pydantic import ValidationError
 
 
+async def _get_sse_session_id(client, *, intent: str) -> str:
+    async with client.stream(
+        "GET",
+        "/sse",
+        headers={"Authorization": "Bearer ck_x", "X-MCP-Intent": intent},
+    ) as resp:
+        assert resp.status_code == 200
+        async for line in resp.aiter_lines():
+            if line.startswith("data:") and "session_id=" in line:
+                return line.split("session_id=", 1)[1].strip()
+    raise AssertionError("SSE endpoint event did not return session_id")
+
+
 class TestErrors:
     def test_gateway_error_is_exception(self) -> None:
         from mcp_gateway.errors import GatewayError
@@ -1645,6 +1658,31 @@ class TestToolProxy:
         assert exc_info.value.reason == "param_type_mismatch:p"
         upstream.call_tool.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_call_server_trusted_skips_redundant_validation(self, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.filters.none_filter import NoneFilter
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.tools.proxy import ToolProxy
+
+        upstream = AsyncMock()
+        upstream.call_tool.return_value = {"ok": True}
+        proxy = ToolProxy(upstream=upstream, filter_=NoneFilter())
+
+        def fail_if_called(*, tool_name, arguments, guardrail=None):
+            raise AssertionError("validate_call should be skipped")
+
+        monkeypatch.setattr(PolicyEngine, "validate_call", fail_if_called)
+
+        out = await proxy._call_server_trusted(
+            tool_name="t",
+            arguments={"q": "safe query"},
+        )
+
+        assert out == {"ok": True}
+        upstream.call_tool.assert_awaited_once_with("t", {"q": "safe query"})
+
 
 @pytest.fixture(autouse=True)
 def mock_sse_keep_alive(monkeypatch):
@@ -1745,15 +1783,7 @@ class TestSseHandshakeEndpoint:
 class TestMcpMessagesEndpoint:
     @pytest.mark.asyncio
     async def _open_session(self, app_client) -> str:
-        async with app_client.stream(
-            "GET",
-            "/sse",
-            headers={"Authorization": "Bearer ck_x", "X-MCP-Intent": "ro"},
-        ) as resp:
-            async for line in resp.aiter_lines():
-                if line.startswith("data:") and "session_id=" in line:
-                    return line.split("session_id=", 1)[1].strip()
-        raise AssertionError("no session_id received")
+        return await _get_sse_session_id(app_client, intent="ro")
 
     @pytest.mark.asyncio
     async def test_tools_list_filters_by_caps(self, app_client):
@@ -1842,6 +1872,448 @@ class TestMcpMessagesEndpoint:
         body = resp.json()
         assert body["error"]["code"] == -32602
         assert "missing required parameter: name" in body["error"]["message"]
+
+
+class TestServerRequiresApproval:
+    """REQUIRES_APPROVAL パスの /messages エンドポイントテスト。"""
+
+    @pytest.fixture
+    def approval_app(self, tmp_path, monkeypatch):
+        policy = tmp_path / "intents.yaml"
+        policy.write_text(
+            textwrap.dedent(
+                """
+                version: 1
+                output_filters:
+                  f:
+                    type: none
+                intents:
+                  curate_memories:
+                    description: "x"
+                    allowed_tools: [memory_delete]
+                    output_filter: f
+                    guardrails:
+                      memory_delete:
+                        requires_approval: true
+                agents:
+                  agent-a:
+                    allowed_intents: [curate_memories]
+                """
+            ).lstrip()
+        )
+        monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy))
+        monkeypatch.setenv("MCP_GATEWAY_API_KEYS_JSON", '{"agent-a":"ck_x"}')
+
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.app import build_app
+
+        upstream = AsyncMock()
+        upstream.list_tools.return_value = [{"name": "memory_delete"}]
+        return build_app(
+            upstream_override=upstream,
+            initial_tools=upstream.list_tools.return_value,
+        )
+
+    @pytest_asyncio.fixture
+    async def approval_client(self, approval_app):
+        import httpx
+        from httpx import ASGITransport
+
+        transport = ASGITransport(app=approval_app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+            yield client
+
+    @pytest.mark.asyncio
+    async def test_requires_approval_returns_32001(self, approval_client):
+        sid = await _get_sse_session_id(approval_client, intent="curate_memories")
+        resp = await approval_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "memory_delete", "arguments": {"id": "m-001"}},
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32001
+        assert body["error"]["message"] == "approval_required"
+        assert "session_id" in body["error"]["data"]
+
+    @pytest.mark.asyncio
+    async def test_requires_approval_audit_log(self, approval_client, caplog):
+        import logging
+
+        sid = await _get_sse_session_id(approval_client, intent="curate_memories")
+        with caplog.at_level(logging.INFO, logger="mcp_gateway.approval.notifier"):
+            resp = await approval_client.post(
+                f"/messages?session_id={sid}",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {"name": "memory_delete", "arguments": {}},
+                },
+            )
+            await asyncio.sleep(0)
+        assert resp.status_code == 200
+        assert any("approval_required" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_requires_approval_notifier_failure_is_isolated(
+        self, approval_client, monkeypatch, capfd
+    ):
+        from mcp_gateway.approval.notifier import LogOnlyApprovalNotifier
+
+        started = asyncio.Event()
+
+        async def raise_error(self, request):
+            started.set()
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(LogOnlyApprovalNotifier, "request_approval", raise_error)
+
+        sid = await _get_sse_session_id(approval_client, intent="curate_memories")
+        resp = await approval_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 99,
+                "method": "tools/call",
+                "params": {"name": "memory_delete", "arguments": {}},
+            },
+        )
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        await asyncio.sleep(0)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32001
+        assert body["error"]["message"] == "approval_required"
+
+        _, err = capfd.readouterr()
+        assert '"ev":"notification_failed"' in err
+        assert '"detail":"Approval notification failed"' in err
+        assert '"error_type":"RuntimeError"' in err
+        assert "boom" not in err
+
+    @pytest.mark.asyncio
+    async def test_requires_approval_notification_is_fire_and_forget(
+        self, approval_client, monkeypatch
+    ):
+        import mcp_gateway.server as server_module
+        from mcp_gateway.approval.notifier import LogOnlyApprovalNotifier
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+        created_tasks: list[asyncio.Task] = []
+        original_schedule = server_module._schedule_approval_request
+
+        async def block_until_released(self, request):
+            started.set()
+            await release.wait()
+
+        def capture_task(*, approval_notifier, request, audit, sid, timeout=5.0):
+            task = original_schedule(
+                approval_notifier=approval_notifier,
+                request=request,
+                audit=audit,
+                sid=sid,
+                timeout=timeout,
+            )
+            created_tasks.append(task)
+            return task
+
+        monkeypatch.setattr(LogOnlyApprovalNotifier, "request_approval", block_until_released)
+        monkeypatch.setattr(server_module, "_schedule_approval_request", capture_task)
+
+        sid = await _get_sse_session_id(approval_client, intent="curate_memories")
+        resp = await approval_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 100,
+                "method": "tools/call",
+                "params": {"name": "memory_delete", "arguments": {}},
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["error"]["message"] == "approval_required"
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        assert created_tasks
+
+        release.set()
+        await asyncio.gather(*created_tasks, return_exceptions=True)
+
+    @pytest.mark.asyncio
+    async def test_requires_approval_secret_args_denied_without_notifier_calls(
+        self, approval_client, monkeypatch
+    ):
+        import mcp_gateway.server as server_module
+        from mcp_gateway.approval.notifier import LogOnlyApprovalNotifier
+
+        notifier_called = False
+        schedule_called = False
+
+        async def fail_if_called(self, request):
+            nonlocal notifier_called
+            notifier_called = True
+            raise AssertionError("request_approval should not be called")
+
+        def fail_if_scheduled(*, approval_notifier, request, audit, sid, timeout=5.0):
+            nonlocal schedule_called
+            schedule_called = True
+            raise AssertionError("_schedule_approval_request should not be called")
+
+        monkeypatch.setattr(LogOnlyApprovalNotifier, "request_approval", fail_if_called)
+        monkeypatch.setattr(server_module, "_schedule_approval_request", fail_if_scheduled)
+
+        sid = await _get_sse_session_id(approval_client, intent="curate_memories")
+        resp = await approval_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 101,
+                "method": "tools/call",
+                "params": {
+                    "name": "memory_delete",
+                    "arguments": {"token": "sk-1234567890abcdef"},
+                },
+            },
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32601
+        assert body["error"]["message"] == "tool not found"
+        assert notifier_called is False
+        assert schedule_called is False
+
+    @pytest.mark.asyncio
+    async def test_requires_approval_sanitizes_notifier_request_arguments(
+        self, approval_client, monkeypatch
+    ):
+        import mcp_gateway.server as server_module
+
+        captured_request = None
+        created_tasks: list[asyncio.Task] = []
+
+        def capture_request(*, approval_notifier, request, audit, sid, timeout=5.0):
+            nonlocal captured_request
+            captured_request = request
+            task = asyncio.create_task(asyncio.sleep(0))
+            created_tasks.append(task)
+            return task
+
+        monkeypatch.setattr(server_module, "_schedule_approval_request", capture_request)
+
+        sid = await _get_sse_session_id(approval_client, intent="curate_memories")
+        resp = await approval_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 102,
+                "method": "tools/call",
+                "params": {
+                    "name": "memory_delete",
+                    "arguments": {
+                        "password": "s3cr3t",
+                        "api_key": "hunter2",
+                        "safe_param": "visible",
+                    },
+                },
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["error"]["message"] == "approval_required"
+        assert captured_request is not None
+        assert captured_request.arguments["password"] == "**********"
+        assert captured_request.arguments["api_key"] == "**********"
+        assert captured_request.arguments["safe_param"] == "visible"
+
+        await asyncio.gather(*created_tasks, return_exceptions=True)
+
+    @pytest.mark.asyncio
+    async def test_caps_denied_returns_32601(self, approval_client):
+        sid = await _get_sse_session_id(approval_client, intent="curate_memories")
+        resp = await approval_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "admin_tool", "arguments": {}},
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32601
+        assert body["error"]["message"] == "tool not found"
+
+
+class TestServerValidationDeny:
+    @pytest.fixture
+    def validation_app(self, tmp_path, monkeypatch):
+        policy = tmp_path / "intents.yaml"
+        policy.write_text(
+            textwrap.dedent(
+                """
+                version: 1
+                output_filters:
+                  f:
+                    type: none
+                intents:
+                  ro:
+                    description: "x"
+                    allowed_tools: [memory_search]
+                    output_filter: f
+                    guardrails:
+                      memory_search:
+                        params:
+                          query:
+                            type: string
+                            max_length: 3
+                          secret:
+                            forbidden: true
+                agents:
+                  agent-a:
+                    allowed_intents: [ro]
+                """
+            ).lstrip()
+        )
+        monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy))
+        monkeypatch.setenv("MCP_GATEWAY_API_KEYS_JSON", '{"agent-a":"ck_x"}')
+
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.app import build_app
+
+        upstream = AsyncMock()
+        upstream.list_tools.return_value = [{"name": "memory_search"}]
+        return build_app(
+            upstream_override=upstream,
+            initial_tools=upstream.list_tools.return_value,
+        )
+
+    @pytest_asyncio.fixture
+    async def validation_client(self, validation_app):
+        import httpx
+        from httpx import ASGITransport
+
+        transport = ASGITransport(app=validation_app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+            yield client
+
+    @pytest.fixture
+    def allow_app_with_upstream(self, tmp_path, monkeypatch):
+        policy = tmp_path / "intents.yaml"
+        policy.write_text(
+            textwrap.dedent(
+                """
+                version: 1
+                output_filters:
+                  f:
+                    type: none
+                intents:
+                  ro:
+                    description: "x"
+                    allowed_tools: [memory_search]
+                    output_filter: f
+                agents:
+                  agent-a:
+                    allowed_intents: [ro]
+                """
+            ).lstrip()
+        )
+        monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy))
+        monkeypatch.setenv("MCP_GATEWAY_API_KEYS_JSON", '{"agent-a":"ck_x"}')
+
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.app import build_app
+
+        upstream = AsyncMock()
+        upstream.list_tools.return_value = [{"name": "memory_search"}]
+        upstream.call_tool.return_value = {"ok": True}
+        app = build_app(
+            upstream_override=upstream,
+            initial_tools=upstream.list_tools.return_value,
+        )
+        return app, upstream
+
+    @pytest_asyncio.fixture
+    async def allow_client_with_upstream(self, allow_app_with_upstream):
+        import httpx
+        from httpx import ASGITransport
+
+        app, upstream = allow_app_with_upstream
+        transport = ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+            yield client, upstream
+
+    @pytest.mark.asyncio
+    async def test_param_validation_denied_returns_32602(self, validation_client):
+        sid = await _get_sse_session_id(validation_client, intent="ro")
+        resp = await validation_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 10,
+                "method": "tools/call",
+                "params": {"name": "memory_search", "arguments": {"query": "abcd"}},
+            },
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32602
+        assert body["error"]["message"] == "param_too_long:query"
+
+    @pytest.mark.asyncio
+    async def test_forbidden_param_validation_denied_returns_32602(self, validation_client):
+        sid = await _get_sse_session_id(validation_client, intent="ro")
+        resp = await validation_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 11,
+                "method": "tools/call",
+                "params": {"name": "memory_search", "arguments": {"secret": "query"}},
+            },
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32602
+        assert body["error"]["message"] == "forbidden_param:secret"
+
+    @pytest.mark.asyncio
+    async def test_allow_secret_args_denied_before_upstream_call(self, allow_client_with_upstream):
+        client, upstream = allow_client_with_upstream
+
+        sid = await _get_sse_session_id(client, intent="ro")
+        resp = await client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 12,
+                "method": "tools/call",
+                "params": {
+                    "name": "memory_search",
+                    "arguments": {"token": "sk-1234567890abcdef"},
+                },
+            },
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32601
+        assert body["error"]["message"] == "tool not found"
+        upstream.call_tool.assert_not_awaited()
 
 
 class TestEntrypoint:

@@ -4,19 +4,27 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
+from mcp_gateway.approval.notifier import (
+    ApprovalNotifier,
+    ApprovalRequest,
+    LogOnlyApprovalNotifier,
+    _sanitize_for_log,
+)
 from mcp_gateway.audit.logger import AuditLogger
 from mcp_gateway.auth.handshake import HandshakeService
 from mcp_gateway.auth.session import SessionRegistry
 from mcp_gateway.errors import AuthError, PolicyError, SessionError, UpstreamError
 from mcp_gateway.filters.factory import build_filter
+from mcp_gateway.policy.engine import Grant, PolicyEngine
 from mcp_gateway.policy.models import GatewayPolicy
-from mcp_gateway.tools.proxy import ToolProxy
+from mcp_gateway.tools.proxy import ToolProxy, _contains_secret
 from mcp_gateway.tools.registry import ToolRegistry
 
 
@@ -36,6 +44,56 @@ async def _keep_alive() -> None:
     await asyncio.sleep(1)
 
 
+async def _request_approval_with_isolation(
+    *,
+    approval_notifier: ApprovalNotifier,
+    request: ApprovalRequest,
+    audit: AuditLogger,
+    sid: str,
+    timeout: float = 5.0,
+) -> None:
+    try:
+        await asyncio.wait_for(
+            approval_notifier.request_approval(request),
+            timeout=timeout,
+        )
+    # Non-critical notifier failures must not break the main request flow.
+    # We swallow them after audit logging because notifier_exc is recorded via
+    # audit.log(error_type=...) and the client has already received approval_required.
+    except Exception as notifier_exc:  # noqa: BLE001 - deliberate isolation boundary
+        audit.log(
+            ev="notification_failed",
+            detail="Approval notification failed",
+            error_type=notifier_exc.__class__.__name__,
+            sid=sid,
+        )
+
+
+def _schedule_approval_request(
+    *,
+    approval_notifier: ApprovalNotifier,
+    request: ApprovalRequest,
+    audit: AuditLogger,
+    sid: str,
+    timeout: float = 5.0,
+) -> asyncio.Task[None]:
+    return asyncio.create_task(
+        _request_approval_with_isolation(
+            approval_notifier=approval_notifier,
+            request=request,
+            audit=audit,
+            sid=sid,
+            timeout=timeout,
+        )
+    )
+
+
+def _is_validation_deny(reason: str | None) -> bool:
+    if reason is None:
+        return False
+    return reason.startswith("param_") or reason.startswith("forbidden_param:")
+
+
 def build_router(
     *,
     handshake: HandshakeService,
@@ -44,8 +102,12 @@ def build_router(
     upstream: Any,
     policy: GatewayPolicy,
     audit: AuditLogger,
+    engine: PolicyEngine,
+    approval_notifier: ApprovalNotifier | None = None,
 ) -> APIRouter:
     router = APIRouter()
+    if approval_notifier is None:
+        approval_notifier = LogOnlyApprovalNotifier()
 
     @router.get("/sse")
     async def sse(request: Request) -> Any:
@@ -167,22 +229,89 @@ def build_router(
             else:
                 arguments = {}
 
-            if tool_name not in record.caps:
-                audit.log(
-                    ev="call",
-                    decision="deny",
-                    reason="tool_not_in_caps",
-                    agent=record.agent_id,
-                    sid=sid,
-                    tool=tool_name,
-                )
-                return JSONResponse(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": rpc_id,
-                        "error": {"code": -32601, "message": "tool not found"},
-                    }
-                )
+            decision = engine.evaluate_call(
+                grant=Grant(
+                    intent=record.intent,
+                    caps=record.caps,
+                    output_filter_profile=record.output_filter_profile,
+                    guardrails=record.guardrails,
+                ),
+                tool_name=tool_name,
+                arguments=arguments,
+            )
+
+            match decision.status:
+                case "DENY":
+                    audit.log(
+                        ev="call",
+                        decision="deny",
+                        reason=decision.reason,
+                        agent=record.agent_id,
+                        sid=sid,
+                        tool=tool_name,
+                    )
+                    error = (
+                        {"code": -32602, "message": decision.reason}
+                        if _is_validation_deny(decision.reason)
+                        else {"code": -32601, "message": "tool not found"}
+                    )
+                    return JSONResponse(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": rpc_id,
+                            "error": error,
+                        }
+                    )
+                case "ALLOW" | "REQUIRES_APPROVAL" if _contains_secret(arguments):
+                    audit.log(
+                        ev="call",
+                        decision="deny",
+                        reason="secret_in_approval_args",
+                        agent=record.agent_id,
+                        sid=sid,
+                        tool=tool_name,
+                    )
+                    return JSONResponse(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": rpc_id,
+                            "error": {"code": -32601, "message": "tool not found"},
+                        }
+                    )
+                case "REQUIRES_APPROVAL":
+                    audit.log(
+                        ev="call",
+                        decision="requires_approval",
+                        agent=record.agent_id,
+                        sid=sid,
+                        tool=tool_name,
+                    )
+                    _schedule_approval_request(
+                        approval_notifier=approval_notifier,
+                        audit=audit,
+                        sid=sid,
+                        request=ApprovalRequest(
+                            session_id=record.session_id,
+                            agent_id=record.agent_id,
+                            intent=record.intent,
+                            tool_name=tool_name,
+                            arguments=_sanitize_for_log(arguments),
+                            requested_at=datetime.now(UTC),
+                        ),
+                    )
+                    return JSONResponse(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": rpc_id,
+                            "error": {
+                                "code": -32001,
+                                "message": "approval_required",
+                                "data": {"session_id": record.session_id},
+                            },
+                        }
+                    )
+                case "ALLOW":
+                    pass
 
             if record.output_filter_profile not in policy.output_filters:
                 audit.log(
@@ -202,10 +331,9 @@ def build_router(
             filter_ = build_filter(policy.output_filters[record.output_filter_profile])
             proxy = ToolProxy(upstream=upstream, filter_=filter_)
             try:
-                payload = await proxy.call_through(
+                payload = await proxy._call_server_trusted(
                     tool_name=tool_name,
                     arguments=arguments,
-                    guardrail=record.guardrails.get(tool_name),
                 )
             except PolicyError as exc:
                 audit.log(

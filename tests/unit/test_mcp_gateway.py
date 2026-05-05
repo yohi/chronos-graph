@@ -2342,6 +2342,8 @@ class TestApprovalNotifier:
     def test_approval_request_is_immutable(self):
         from datetime import UTC, datetime
 
+        from pydantic import ValidationError
+
         from mcp_gateway.approval.notifier import ApprovalRequest
 
         req = ApprovalRequest(
@@ -2352,7 +2354,7 @@ class TestApprovalNotifier:
             arguments={},
             requested_at=datetime.now(UTC),
         )
-        with pytest.raises((AttributeError, TypeError)):
+        with pytest.raises((AttributeError, TypeError, ValidationError)):
             req.session_id = "mutated"  # type: ignore[misc]
 
     def test_approval_notifier_is_abstract(self):

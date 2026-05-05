@@ -37,14 +37,12 @@ def test_sanitize_collections():
     s = {"Bearer token", "normal"}
     sanitized_s = _sanitize_for_log(s)
     assert isinstance(sanitized_s, set)
-    assert "**********" in sanitized_s
-    assert "normal" in sanitized_s
+    assert sanitized_s == {"**********", "normal"}
 
     fs = frozenset({"Bearer token", "normal"})
     sanitized_fs = _sanitize_for_log(fs)
     assert isinstance(sanitized_fs, frozenset)
-    assert "**********" in sanitized_fs
-    assert "normal" in sanitized_fs
+    assert sanitized_fs == frozenset({"**********", "normal"})
 
 
 def test_sanitize_nested():
@@ -54,5 +52,5 @@ def test_sanitize_nested():
     }
     sanitized = _sanitize_for_log(data)
     assert sanitized["params"][0]["key"] == "**********"
-    assert "**********" in list(sanitized["params"][1])
+    assert sanitized["params"][1] == frozenset({"**********"})
     assert sanitized["safe"] == "hello"

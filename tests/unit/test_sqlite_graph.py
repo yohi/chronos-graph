@@ -221,21 +221,21 @@ class TestTraverse:
         )
         adp = SQLiteGraphAdapter(db_path=adapter._db_path, settings=settings)
         await adp.initialize()
+        try:
+            nodes = [f"n{i}" for i in range(7)]
+            for nid in nodes:
+                await adp.create_node(nid, {})
+            for i in range(6):
+                await adp.create_edge(nodes[i], nodes[i + 1], "TEMPORAL_NEXT", {})
 
-        nodes = [f"n{i}" for i in range(7)]
-        for nid in nodes:
-            await adp.create_node(nid, {})
-        for i in range(6):
-            await adp.create_edge(nodes[i], nodes[i + 1], "TEMPORAL_NEXT", {})
-
-        # request depth=10, should be clamped to max_logical_depth=3
-        result = await adp.traverse(["n0"], ["TEMPORAL_NEXT"], depth=10)
-        node_ids = {n["id"] for n in result.nodes}
-        # n4+ is beyond depth 3 from n0
-        assert "n4" not in node_ids
-        assert result.traversal_depth <= 3
-
-        await adp.dispose()
+            # request depth=10, should be clamped to max_logical_depth=3
+            result = await adp.traverse(["n0"], ["TEMPORAL_NEXT"], depth=10)
+            node_ids = {n["id"] for n in result.nodes}
+            # n4+ is beyond depth 3 from n0
+            assert "n4" not in node_ids
+            assert result.traversal_depth <= 3
+        finally:
+            await adp.dispose()
 
     @pytest.mark.asyncio
     async def test_traverse_supersedes_no_logical_depth(self, adapter: SQLiteGraphAdapter) -> None:

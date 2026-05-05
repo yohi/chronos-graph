@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import pytest
+import pytest_asyncio
 
 from context_store.config import Settings
 from context_store.storage.sqlite_graph import SQLiteGraphAdapter
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def graph_adapter(tmp_path):
     settings = Settings(
         storage_backend="sqlite",

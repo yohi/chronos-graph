@@ -9,13 +9,14 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
+import pytest_asyncio
 
 from context_store.config import Settings
 from context_store.storage.sqlite import SQLiteStorageAdapter
 from context_store.storage.sqlite_graph import SQLiteGraphAdapter
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def sqlite_db(tmp_path):
     db_path = str(tmp_path / "test_memories.db")
     settings = Settings(sqlite_db_path=db_path, storage_backend="sqlite", graph_enabled=True)

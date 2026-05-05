@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, AsyncGenerator
 from unittest.mock import patch
 
 import pytest
+import pytest_asyncio
 from pydantic import SecretStr
 
 from context_store.config import Settings
@@ -49,7 +50,7 @@ def sqlite_settings(tmp_db_path: str) -> Settings:
     )
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def orchestrator(sqlite_settings: Settings) -> AsyncGenerator[Orchestrator, None]:
     """テスト用 Orchestrator(モック Embedding Provider 使用)。
 

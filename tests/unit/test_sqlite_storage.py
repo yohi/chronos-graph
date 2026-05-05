@@ -13,6 +13,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+import pytest_asyncio
 
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
 from context_store.storage.protocols import MemoryFilters, StorageError
@@ -52,7 +53,7 @@ async def _fetch_one_value(adapter, sql: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def adapter(tmp_path):
     """SQLiteStorageAdapter を tmpdir の DB ファイルで作成して返す。"""
     from context_store.config import Settings
@@ -72,7 +73,7 @@ async def adapter(tmp_path):
     await adp.dispose()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def adapter_with_backpressure(tmp_path):
     """バックプレッシャーテスト用の厳格な制限付きアダプター。"""
     from context_store.config import Settings

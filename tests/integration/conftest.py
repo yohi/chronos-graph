@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 
 import asyncpg
-import pytest
+import pytest_asyncio
 
 PG_HOST = os.getenv("PG_HOST", "localhost")
 PG_PORT = int(os.getenv("PG_PORT", "5435"))
@@ -18,7 +18,7 @@ PG_USER = os.getenv("PG_USER", "context_store")
 PG_PASSWORD = os.getenv("PG_PASSWORD", "dev_password")
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def postgres_pool():
     """Function-scoped asyncpg pool connecting to the Docker PostgreSQL."""
     pool = await asyncpg.create_pool(
@@ -34,7 +34,7 @@ async def postgres_pool():
     await pool.close()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def db_session(postgres_pool):
     """Per-test transactional connection that is always rolled back."""
     conn = await postgres_pool.acquire()

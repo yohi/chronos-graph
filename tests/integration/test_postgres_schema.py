@@ -7,11 +7,12 @@ They verify the schema was applied correctly.
 
 import asyncpg
 import pytest
+import pytest_asyncio
 
 from tests.integration.conftest import PG_DB, PG_HOST, PG_PASSWORD, PG_PORT, PG_USER
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def pg_conn():
     conn = await asyncpg.connect(
         host=PG_HOST,

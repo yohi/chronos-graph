@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import AsyncGenerator
 
 import pytest
+import pytest_asyncio
 
 from context_store.models.graph import GraphResult
 from context_store.storage.sqlite_graph import SQLiteGraphAdapter
@@ -17,12 +18,12 @@ from tests.unit.conftest import make_settings
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def tmp_db_path(tmp_path: Path) -> str:
     return str(tmp_path / "test_graph.db")
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def adapter(tmp_db_path: str) -> AsyncGenerator[SQLiteGraphAdapter, None]:
     """Create and initialize a SQLiteGraphAdapter with a fresh DB."""
     settings = make_settings(sqlite_db_path=tmp_db_path)

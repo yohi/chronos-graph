@@ -93,12 +93,13 @@ class ParamConstraint(BaseModel):
             except re.error as exc:
                 raise ValueError(f"invalid regex pattern: {exc}") from exc
 
-        # 4. Limit max_length to MAX_PARAM_LENGTH and enforce ReDoS mitigation cap
+        # 4. Limit max_length to MAX_PARAM_LENGTH and enforce ReDoS mitigation cap.
+        # We check RE_DOS_MAX_LENGTH first because it is the stricter constraint.
         if self.max_length is not None:
-            if self.max_length > MAX_PARAM_LENGTH:
-                raise ValueError(f"max_length exceeds system limit ({MAX_PARAM_LENGTH})")
             if self.max_length > RE_DOS_MAX_LENGTH:
                 raise ValueError(f"max_length exceeds ReDoS mitigation limit ({RE_DOS_MAX_LENGTH})")
+            if self.max_length > MAX_PARAM_LENGTH:
+                raise ValueError(f"max_length exceeds system limit ({MAX_PARAM_LENGTH})")
 
         return self
 
@@ -153,7 +154,7 @@ class GatewayPolicy(BaseModel):
                     f"output_filter {fname!r} type=structural_allowlist requires schemas"
                 )
         # 4. structural_allowlist の schema キーは、
-        # そのフィルターを使用している intent.allowed_tools にに含まれる
+        # そのフィルターを使用している intent.allowed_tools に含まれる
         for fname, fdef in self.output_filters.items():
             if fdef.type != "structural_allowlist" or fdef.schemas is None:
                 continue

@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from copy import deepcopy
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from mcp_gateway.errors import PolicyError
@@ -21,7 +22,7 @@ class Grant:
     intent: str
     caps: frozenset[str]
     output_filter_profile: str
-    guardrails: dict[str, ToolGuardrail]
+    guardrails: MappingProxyType[str, ToolGuardrail]
 
 
 class PolicyEngine:
@@ -61,7 +62,7 @@ class PolicyEngine:
             intent=intent,
             caps=caps,
             output_filter_profile=intent_pol.output_filter,
-            guardrails=deepcopy(intent_pol.guardrails),
+            guardrails=MappingProxyType(deepcopy(intent_pol.guardrails)),
         )
 
     @staticmethod

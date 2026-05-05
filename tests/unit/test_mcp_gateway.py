@@ -937,6 +937,25 @@ class TestPolicyEngine:
         assert grant.guardrails is not policy.intents["intent_a"].guardrails
         assert grant.guardrails["tool_a"] is not policy.intents["intent_a"].guardrails["tool_a"]
 
+        # Verifying deep-copy immutability (Issue 3 Nitpick)
+        # Note: Pydantic models are frozen, so we check if they are distinct objects
+        # that were independent at creation. The 'is not' check above already covers this,
+        # but we can also verify that modifying a nested mutable (if any existed) would be safe.
+        # Since ParamConstraint is frozen, we can't mutate it. But we can verify
+        # that the guardrails dict in policy can be modified without affecting grant.
+
+        # Original guardrails dict in policy is mutable (Pydantic field is dict)
+        policy.intents["intent_a"].guardrails["tool_b"] = ToolGuardrail()
+        assert "tool_b" not in grant.guardrails
+
+        # Verifying dict-level immutability of the Grant (Issue 1)
+        # MappingProxyType should prevent direct modifications
+        from types import MappingProxyType
+
+        assert isinstance(grant.guardrails, MappingProxyType)
+        with pytest.raises(TypeError):
+            grant.guardrails["tool_c"] = ToolGuardrail()  # type: ignore[index]
+
     def test_check_call_is_staticmethod(self):
         from mcp_gateway.policy.engine import PolicyEngine
 

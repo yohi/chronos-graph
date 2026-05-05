@@ -112,6 +112,8 @@ def build_app(
 
     app = FastAPI(title="ChronosGraph MCP Gateway", lifespan=lifespan)
     app.state.tool_registry = registry
+    from mcp_gateway.approval.notifier import LogOnlyApprovalNotifier
+
     app.include_router(
         build_router(
             handshake=handshake,
@@ -120,6 +122,7 @@ def build_app(
             upstream=upstream,
             policy=policy,
             audit=audit,
+            approval_notifier=LogOnlyApprovalNotifier(),
         )
     )
 

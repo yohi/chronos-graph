@@ -896,6 +896,47 @@ class TestPolicyEngine:
         assert isinstance(grant.caps, frozenset)
         assert grant.caps == frozenset({"memory_search"})
 
+    def test_evaluate_grant_propagates_and_copies_guardrails(self):
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.models import (
+            AgentPolicy,
+            GatewayPolicy,
+            IntentPolicy,
+            ParamConstraint,
+            ToolGuardrail,
+        )
+
+        guardrails = {
+            "tool_a": ToolGuardrail(
+                params={"p": ParamConstraint(max_length=10)}, requires_approval=True
+            )
+        }
+        policy = GatewayPolicy(
+            version=1,
+            output_filters={"f": {"type": "none"}},
+            intents={
+                "intent_a": IntentPolicy(
+                    description="d",
+                    allowed_tools=["tool_a"],
+                    output_filter="f",
+                    guardrails=guardrails,
+                )
+            },
+            agents={"agent_a": AgentPolicy(allowed_intents=["intent_a"])},
+        )
+
+        eng = PolicyEngine(policy)
+        grant = eng.evaluate_grant(agent_id="agent_a", intent="intent_a", requested_tools=None)
+
+        # Verifying propagation
+        assert "tool_a" in grant.guardrails
+        assert grant.guardrails["tool_a"].requires_approval is True
+        assert grant.guardrails["tool_a"].params["p"].max_length == 10
+
+        # Verifying reference independence (no shared mutable state)
+        assert grant.guardrails is not policy.intents["intent_a"].guardrails
+        assert grant.guardrails["tool_a"] is not policy.intents["intent_a"].guardrails["tool_a"]
+
     def test_check_call_is_staticmethod(self):
         from mcp_gateway.policy.engine import PolicyEngine
 
@@ -1997,8 +2038,6 @@ class TestIBACModels:
         assert p.guardrails["tool_a"].params["q"].max_length == 512
 
     def test_verify_references_guardrail_key_not_in_allowed_tools(self):
-        from pydantic import ValidationError
-
         from mcp_gateway.policy.models import GatewayPolicy
 
         with pytest.raises(ValidationError, match="guardrail"):
@@ -2019,11 +2058,9 @@ class TestIBACModels:
             )
 
     def test_verify_references_pattern_without_max_length_raises(self):
-        from pydantic import ValidationError
-
         from mcp_gateway.policy.models import GatewayPolicy
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError, match="missing max_length"):
             GatewayPolicy.model_validate(
                 {
                     "version": 1,
@@ -2043,11 +2080,9 @@ class TestIBACModels:
             )
 
     def test_verify_references_pattern_too_long_raises(self):
-        from pydantic import ValidationError
-
         from mcp_gateway.policy.models import GatewayPolicy
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError, match="pattern is too long"):
             GatewayPolicy.model_validate(
                 {
                     "version": 1,
@@ -2067,6 +2102,26 @@ class TestIBACModels:
                                     }
                                 }
                             },
+                        }
+                    },
+                    "agents": {},
+                }
+            )
+
+    def test_verify_references_pattern_empty_string_requires_max_length(self):
+        from mcp_gateway.policy.models import GatewayPolicy
+
+        with pytest.raises(ValidationError, match="missing max_length"):
+            GatewayPolicy.model_validate(
+                {
+                    "version": 1,
+                    "output_filters": {"f": {"type": "none"}},
+                    "intents": {
+                        "intent_a": {
+                            "description": "x",
+                            "allowed_tools": ["tool_a"],
+                            "output_filter": "f",
+                            "guardrails": {"tool_a": {"params": {"query": {"pattern": ""}}}},
                         }
                     },
                     "agents": {},

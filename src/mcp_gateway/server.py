@@ -39,6 +39,46 @@ async def _keep_alive() -> None:
     await asyncio.sleep(1)
 
 
+async def _request_approval_with_isolation(
+    *,
+    approval_notifier: ApprovalNotifier,
+    request: ApprovalRequest,
+    audit: AuditLogger,
+    sid: str,
+    timeout: float = 5.0,
+) -> None:
+    try:
+        await asyncio.wait_for(
+            approval_notifier.request_approval(request),
+            timeout=timeout,
+        )
+    except (asyncio.TimeoutError, Exception) as notifier_exc:
+        audit.log(
+            ev="notification_failed",
+            detail=f"Approval notification failed: {notifier_exc}",
+            sid=sid,
+        )
+
+
+def _schedule_approval_request(
+    *,
+    approval_notifier: ApprovalNotifier,
+    request: ApprovalRequest,
+    audit: AuditLogger,
+    sid: str,
+    timeout: float = 5.0,
+) -> asyncio.Task[None]:
+    return asyncio.create_task(
+        _request_approval_with_isolation(
+            approval_notifier=approval_notifier,
+            request=request,
+            audit=audit,
+            sid=sid,
+            timeout=timeout,
+        )
+    )
+
+
 def build_router(
     *,
     handshake: HandshakeService,
@@ -227,15 +267,18 @@ def build_router(
                         sid=sid,
                         tool=tool_name,
                     )
-                    await approval_notifier.request_approval(
-                        ApprovalRequest(
+                    _schedule_approval_request(
+                        approval_notifier=approval_notifier,
+                        audit=audit,
+                        sid=sid,
+                        request=ApprovalRequest(
                             session_id=record.session_id,
                             agent_id=record.agent_id,
                             intent=record.intent,
                             tool_name=tool_name,
                             arguments=arguments,
                             requested_at=datetime.now(UTC),
-                        )
+                        ),
                     )
                     return JSONResponse(
                         {
@@ -275,46 +318,6 @@ def build_router(
                     guardrail=record.guardrails.get(tool_name),
                 )
             except PolicyError as exc:
-                if exc.reason == "requires_approval":
-                    audit.log(
-                        ev="call",
-                        decision="approval_required",
-                        agent=record.agent_id,
-                        sid=sid,
-                        tool=tool_name,
-                    )
-                    # Trigger HITL approval notification with failure isolation
-                    try:
-                        await asyncio.wait_for(
-                            approval_notifier.request_approval(
-                                ApprovalRequest(
-                                    session_id=sid,
-                                    agent_id=record.agent_id,
-                                    intent=record.intent,
-                                    tool_name=tool_name,
-                                    arguments=arguments,
-                                )
-                            ),
-                            timeout=5.0,  # 5s timeout for notification
-                        )
-                    except (asyncio.TimeoutError, Exception) as notifier_exc:
-                        audit.log(
-                            ev="notification_failed",
-                            detail=f"Approval notification failed: {notifier_exc}",
-                            sid=sid,
-                        )
-                    return JSONResponse(
-                        {
-                            "jsonrpc": "2.0",
-                            "id": rpc_id,
-                            "error": {
-                                "code": -32001,
-                                "message": "approval_required",
-                                "data": {"session_id": sid},
-                            },
-                        }
-                    )
-
                 audit.log(
                     ev="call",
                     decision="deny",

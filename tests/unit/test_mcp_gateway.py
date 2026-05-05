@@ -1940,8 +1940,80 @@ class TestServerRequiresApproval:
                     "params": {"name": "memory_delete", "arguments": {}},
                 },
             )
+            await asyncio.sleep(0)
         assert resp.status_code == 200
         assert any("approval_required" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_requires_approval_notifier_failure_is_isolated(
+        self, approval_client, monkeypatch
+    ):
+        from mcp_gateway.approval.notifier import LogOnlyApprovalNotifier
+
+        async def raise_error(self, request):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(LogOnlyApprovalNotifier, "request_approval", raise_error)
+
+        sid = await self._get_session_id(approval_client)
+        resp = await approval_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 99,
+                "method": "tools/call",
+                "params": {"name": "memory_delete", "arguments": {}},
+            },
+        )
+        await asyncio.sleep(0)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32001
+        assert body["error"]["message"] == "approval_required"
+
+    @pytest.mark.asyncio
+    async def test_requires_approval_notification_is_fire_and_forget(
+        self, approval_client, monkeypatch
+    ):
+        import mcp_gateway.server as server_module
+        from mcp_gateway.approval.notifier import LogOnlyApprovalNotifier
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+        created_tasks: list[asyncio.Task] = []
+        original_create_task = server_module.asyncio.create_task
+
+        async def block_until_released(self, request):
+            started.set()
+            await release.wait()
+
+        def capture_task(coro):
+            task = original_create_task(coro)
+            created_tasks.append(task)
+            return task
+
+        monkeypatch.setattr(LogOnlyApprovalNotifier, "request_approval", block_until_released)
+        monkeypatch.setattr(server_module.asyncio, "create_task", capture_task)
+
+        sid = await self._get_session_id(approval_client)
+        resp = await approval_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 100,
+                "method": "tools/call",
+                "params": {"name": "memory_delete", "arguments": {}},
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["error"]["message"] == "approval_required"
+        await asyncio.wait_for(started.wait(), timeout=0.2)
+        assert created_tasks
+
+        release.set()
+        await asyncio.gather(*created_tasks, return_exceptions=True)
 
     @pytest.mark.asyncio
     async def test_caps_denied_returns_32601(self, approval_client):

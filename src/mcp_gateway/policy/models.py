@@ -58,31 +58,37 @@ class GatewayPolicy(BaseModel):
     @model_validator(mode="after")
     def _verify_references(self) -> Self:
         # 1. intent.output_filter は output_filters に存在
+        # 5. guardrail keys exist in allowed_tools & param constraints validation
         for iname, intent in self.intents.items():
             if intent.output_filter not in self.output_filters:
                 raise ValueError(
                     f"intent {iname!r} references unknown output_filter {intent.output_filter!r}"
                 )
 
-            # 5. guardrail keys exist in allowed_tools
-            for tname in intent.guardrails:
-                if tname not in intent.allowed_tools:
+            allowed_set = set(intent.allowed_tools)
+            for tname, guardrail in intent.guardrails.items():
+                if tname not in allowed_set:
                     raise ValueError(f"intent {iname!r} guardrail {tname!r} not in allowed_tools")
 
-            # 6. param constraints validation
-            for tname, guardrail in intent.guardrails.items():
                 for pname, constraint in guardrail.params.items():
                     if constraint.pattern is not None:
                         if constraint.max_length is None:
                             raise ValueError(
-                                f"intent {iname!r} tool {tname!r} param {pname!r} "
-                                "has pattern but missing max_length"
+                                f"intent {iname!r} tool {tname!r} param {pname!r}: "
+                                "pattern requires max_length to be set (ReDoS mitigation)"
                             )
                         if len(constraint.pattern) > 200:
                             raise ValueError(
-                                f"intent {iname!r} tool {tname!r} param {pname!r} "
-                                "pattern is too long (> 200)"
+                                f"intent {iname!r} tool {tname!r} param {pname!r}: "
+                                "pattern exceeds 200 chars (ReDoS mitigation)"
                             )
+                        try:
+                            re.compile(constraint.pattern)
+                        except re.error as exc:
+                            raise ValueError(
+                                f"intent {iname!r} tool {tname!r} param {pname!r}: "
+                                f"invalid regex pattern: {exc}"
+                            ) from exc
 
         # 2. agent.allowed_intents は intents に存在
         for aname, agent in self.agents.items():
@@ -96,7 +102,7 @@ class GatewayPolicy(BaseModel):
                     f"output_filter {fname!r} type=structural_allowlist requires schemas"
                 )
         # 4. structural_allowlist の schema キーは、
-        # そのフィルターを使用している intent.allowed_tools に含まれる
+        # そのフィルターを使用している intent.allowed_tools にに含まれる
         for fname, fdef in self.output_filters.items():
             if fdef.type != "structural_allowlist" or fdef.schemas is None:
                 continue
@@ -113,43 +119,4 @@ class GatewayPolicy(BaseModel):
                         f"output_filter {fname!r} schema key {tool_name!r} is not "
                         "referenced by any intent that uses this filter (typo?)"
                     )
-        # 5. guardrails のキーは allowed_tools に含まれる必要がある
-        #    （ReDoS 対策バリデーションも含む）
-        for iname, intent in self.intents.items():
-            allowed_set = set(intent.allowed_tools)
-            for tool_name, guardrail in intent.guardrails.items():
-                if tool_name not in allowed_set:
-                    raise ValueError(
-                        f"intent {iname!r} guardrail references unknown tool {tool_name!r}"
-                    )
-
-                for param_name, constraint in guardrail.params.items():
-                    if constraint.allowed_values is not None and not all(
-                        isinstance(value, str) for value in constraint.allowed_values
-                    ):
-                        raise ValueError(
-                            f"intent {iname!r} tool {tool_name!r} param {param_name!r}: "
-                            "allowed_values must contain only strings"
-                        )
-
-                    if constraint.pattern is None:
-                        continue
-
-                    if len(constraint.pattern) > 200:
-                        raise ValueError(
-                            f"intent {iname!r} tool {tool_name!r} param {param_name!r}: "
-                            "pattern exceeds 200 chars (ReDoS mitigation)"
-                        )
-                    try:
-                        re.compile(constraint.pattern)
-                    except re.error as exc:
-                        raise ValueError(
-                            f"intent {iname!r} tool {tool_name!r} param {param_name!r}: "
-                            f"invalid regex pattern: {exc}"
-                        ) from exc
-                    if constraint.max_length is None:
-                        raise ValueError(
-                            f"intent {iname!r} tool {tool_name!r} param {param_name!r}: "
-                            "pattern requires max_length to be set (ReDoS mitigation)"
-                        )
         return self

@@ -2060,7 +2060,7 @@ class TestIBACModels:
     def test_verify_references_pattern_without_max_length_raises(self):
         from mcp_gateway.policy.models import GatewayPolicy
 
-        with pytest.raises(ValidationError, match="missing max_length"):
+        with pytest.raises(ValidationError, match="pattern requires max_length"):
             GatewayPolicy.model_validate(
                 {
                     "version": 1,
@@ -2082,7 +2082,7 @@ class TestIBACModels:
     def test_verify_references_pattern_too_long_raises(self):
         from mcp_gateway.policy.models import GatewayPolicy
 
-        with pytest.raises(ValidationError, match="pattern is too long"):
+        with pytest.raises(ValidationError, match="pattern exceeds 200 chars"):
             GatewayPolicy.model_validate(
                 {
                     "version": 1,
@@ -2111,7 +2111,7 @@ class TestIBACModels:
     def test_verify_references_pattern_empty_string_requires_max_length(self):
         from mcp_gateway.policy.models import GatewayPolicy
 
-        with pytest.raises(ValidationError, match="missing max_length"):
+        with pytest.raises(ValidationError, match="pattern requires max_length"):
             GatewayPolicy.model_validate(
                 {
                     "version": 1,

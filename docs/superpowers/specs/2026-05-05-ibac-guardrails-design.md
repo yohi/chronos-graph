@@ -111,9 +111,21 @@ def evaluate_call(
 1. `tool_name not in caps` → `DENY` (reason: `tool_not_in_caps`)
 2. `intent` が未知 → `DENY` (reason: `unknown_intent`)
 3. `guardrail` が存在しない → `ALLOW`（ガードレール未定義 = 制約なし）
-4. パラメータ制約評価（`forbidden` → `max_length` → `pattern` → `allowed_values`）
+4. パラメータ制約評価（`forbidden` → **型チェック** → `max_length` → `pattern` → `allowed_values`）
 5. `requires_approval: true` → `REQUIRES_APPROVAL`
 6. 全通過 → `ALLOW`
+
+**型チェックの仕様：**  
+`constraint.type` が設定されている場合、または文字列固有の制約（`max_length` / `pattern`）が設定されている場合、値の Python 型が期待される型と一致しない場合は即座に `DENY`（reason: `param_type_mismatch:<param_name>`）とする。型チェックに失敗した場合、後続の `max_length` / `pattern` 評価は行わない。
+
+| `constraint.type` | 期待される Python 型 |
+|-------------------|---------------------|
+| `"string"` | `str` |
+| `"integer"` | `int`（`bool` は除く） |
+| `"number"` | `int` または `float`（`bool` は除く） |
+| `"boolean"` | `bool` |
+| `None` かつ `max_length` または `pattern` あり | `str` |
+| `None` かつ文字列固有制約なし | 型チェックなし |
 
 **`re.fullmatch`** を使用するため `pattern` は部分一致ではなく完全マッチ。
 
@@ -299,7 +311,10 @@ match decision.status:
 | forbidden: パラメータが存在する | `{"secret": "x"}` | `forbidden=True` on `secret` | `DENY` | `forbidden_param:secret` |
 | forbidden: パラメータが存在しない | `{"query": "hi"}` | `forbidden=True` on `secret` | `ALLOW` | — |
 | パラメータ自体が欠落（制約あり） | `{}` | `max_length=512` on `query` | `ALLOW` | — （欠落は無視）|
-| パラメータ型が不正（int を文字列制約に渡す） | `{"query": 12345}` | `max_length=512, pattern="^[a-z]+$"` | `ALLOW` | — （非 str は長さ・パターン検証をスキップ）|
+| パラメータ型が不正（int を文字列制約に渡す） | `{"query": 12345}` | `max_length=512, pattern="^[a-z]+$"` | `DENY` | `param_type_mismatch:query` |
+| パラメータ型が不正（int を `type: string` 制約に渡す） | `{"query": 12345}` | `type="string"` のみ | `DENY` | `param_type_mismatch:query` |
+| bool を `type: integer` に渡す（bool は int のサブクラスだが除外） | `{"count": True}` | `type="integer"` | `DENY` | `param_type_mismatch:count` |
+| 正しい型（str を `type: string` に渡す） | `{"query": "safe"}` | `type="string"` | `ALLOW` | — |
 
 #### `TestEvaluateCall` — 分岐全網羅
 

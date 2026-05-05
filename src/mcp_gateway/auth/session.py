@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import threading
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Iterable, Protocol
@@ -87,7 +88,7 @@ class InMemorySessionRegistry:
                 agent_id=agent_id,
                 intent=intent,
                 caps=frozenset(caps),
-                guardrails=guardrails.copy(),
+                guardrails=deepcopy(guardrails),
                 output_filter_profile=output_filter_profile,
                 issued_at=now,
                 expires_at=now + self._ttl,

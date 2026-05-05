@@ -134,7 +134,7 @@ class PolicyEngine:
                     # Note: We rely on the fact that pattern was validated at load time.
                     # For absolute ReDoS safety, one could use a library with timeouts,
                     # but here we ensure pattern length and max_length are capped.
-                    if not re.match(constraint.pattern, val):
+                    if not re.fullmatch(constraint.pattern, val):
                         raise PolicyError(
                             f"parameter {param_name!r} does not match required pattern"
                         )

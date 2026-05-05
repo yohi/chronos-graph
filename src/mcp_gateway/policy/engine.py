@@ -126,12 +126,18 @@ class PolicyEngine:
             val = arguments[param_name]
 
             # 1. Type check
-            if constraint.type is not None:
-                # Booleans are subclasses of int in Python, but for policy enforcement
-                # we treat them as distinct types.
-                if constraint.type in ("integer", "number") and isinstance(val, bool):
+            expected_type_str = constraint.type
+            has_string_constraint = (
+                constraint.max_length is not None or constraint.pattern is not None
+            )
+
+            if expected_type_str is None and has_string_constraint:
+                expected_type_str = "string"
+
+            if expected_type_str is not None:
+                if expected_type_str in ("integer", "number") and isinstance(val, bool):
                     raise PolicyError(
-                        f"parameter {param_name!r} must be {constraint.type}, got boolean",
+                        f"parameter {param_name!r} must be {expected_type_str}, got boolean",
                         reason=f"param_type_mismatch:{param_name}",
                     )
 
@@ -141,17 +147,16 @@ class PolicyEngine:
                     "number": (int, float),
                     "boolean": bool,
                 }
-                expected_type = types_map[constraint.type]
-                if not isinstance(val, expected_type):
+                expected_type_cls = types_map[expected_type_str]
+                if not isinstance(val, expected_type_cls):
+                    actual_type = "boolean" if isinstance(val, bool) else type(val).__name__
                     raise PolicyError(
-                        f"parameter {param_name!r} must be {constraint.type}, "
-                        f"got {type(val).__name__}",
+                        f"parameter {param_name!r} must be {expected_type_str}, got {actual_type}",
                         reason=f"param_type_mismatch:{param_name}",
                     )
 
             # 2. Allowed values
             if constraint.allowed_values is not None:
-                # Use strict type comparison because True == 1 in Python.
                 if not any(v == val and type(v) is type(val) for v in constraint.allowed_values):
                     raise PolicyError(
                         f"parameter {param_name!r} has invalid value {val!r}. "
@@ -167,9 +172,6 @@ class PolicyEngine:
                         reason=f"param_too_long:{param_name}",
                     )
                 if constraint.pattern is not None:
-                    # Note: We rely on the fact that pattern was validated at load time.
-                    # For absolute ReDoS safety, one could use a library with timeouts,
-                    # but here we ensure pattern length and max_length are capped.
                     if not re.fullmatch(constraint.pattern, val):
                         raise PolicyError(
                             f"parameter {param_name!r} does not match required pattern",
@@ -177,7 +179,6 @@ class PolicyEngine:
                         )
 
         if guardrail.requires_approval:
-            # Until approval flow is implemented, we must fail closed.
             raise PolicyError(
                 f"tool {tool_name!r} requires manual approval which is not yet implemented",
                 reason="requires_approval",

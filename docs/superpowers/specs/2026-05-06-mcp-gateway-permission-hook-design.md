@@ -252,8 +252,7 @@ log/stderr/stdout に出力しない。これにより監査ログ漏洩経由�
 - **処理フロー**:
   1. `Authorization` ヘッダを `ApiKeyAuthenticator` で検証 → `resolver_agent_id` を取得。
      失敗時 401 `{"error": "auth_failed"}`。
-  2. body をパース。サイズ 1KB 超過なら 413 `{"error": "payload_too_large"}`。
-     JSON 不正なら 400 `{"error": "invalid_json"}`。
+  2. `Request.body()` で生のバイト列を取得し、サイズを検証する。1KB を超過している場合は即座に 413 `{"error": "payload_too_large"}` を返す (これはリバースプロキシやASGIミドルウェア等での一次防御を前提としたフォールバックのチェックである)。サイズが許容範囲内であれば JSON パースを試み、不正な場合は 400 `{"error": "invalid_json"}` を返す。
   3. `decision in {"approve","reject"}` を検証 (それ以外は 400 `{"error": "invalid_decision"}`)。
   4. `outcome = await registry.resolve(approval_id, resolver_agent_id=..., status=..., reason=...)` を呼ぶ。
   5. `outcome` に応じて HTTP 応答を返す:

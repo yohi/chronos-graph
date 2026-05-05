@@ -11,9 +11,12 @@ import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Iterable, Protocol
+from typing import TYPE_CHECKING, Iterable, Protocol
 
 from mcp_gateway.errors import SessionError
+
+if TYPE_CHECKING:
+    from mcp_gateway.policy.models import ToolGuardrail
 
 
 def _utcnow() -> datetime:
@@ -26,6 +29,7 @@ class SessionRecord:
     agent_id: str
     intent: str
     caps: frozenset[str]
+    guardrails: dict[str, ToolGuardrail]
     output_filter_profile: str
     issued_at: datetime
     expires_at: datetime
@@ -38,6 +42,7 @@ class SessionRegistry(Protocol):
         agent_id: str,
         intent: str,
         caps: Iterable[str],
+        guardrails: dict[str, ToolGuardrail],
         output_filter_profile: str,
     ) -> SessionRecord: ...
 
@@ -71,6 +76,7 @@ class InMemorySessionRegistry:
         agent_id: str,
         intent: str,
         caps: Iterable[str],
+        guardrails: dict[str, ToolGuardrail],
         output_filter_profile: str,
     ) -> SessionRecord:
         with self._lock:
@@ -81,6 +87,7 @@ class InMemorySessionRegistry:
                 agent_id=agent_id,
                 intent=intent,
                 caps=frozenset(caps),
+                guardrails=guardrails,
                 output_filter_profile=output_filter_profile,
                 issued_at=now,
                 expires_at=now + self._ttl,

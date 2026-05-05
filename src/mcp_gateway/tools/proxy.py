@@ -7,6 +7,8 @@ from typing import Any, Protocol
 
 from mcp_gateway.errors import PolicyError
 from mcp_gateway.filters.protocol import OutputFilter
+from mcp_gateway.policy.engine import PolicyEngine
+from mcp_gateway.policy.models import ToolGuardrail
 
 _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
@@ -39,9 +41,18 @@ class ToolProxy:
         self._upstream = upstream
         self._filter = filter_
 
-    async def call_through(self, *, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def call_through(
+        self,
+        *,
+        tool_name: str,
+        arguments: dict[str, Any],
+        guardrail: ToolGuardrail | None = None,
+    ) -> dict[str, Any]:
         if _contains_secret(arguments):
             raise PolicyError("arguments contain secret-like content")
+
+        PolicyEngine.validate_call(tool_name=tool_name, arguments=arguments, guardrail=guardrail)
+
         payload = await self._upstream.call_tool(tool_name, arguments)
         if _contains_secret(payload):
             raise PolicyError("upstream response contains secret-like content")

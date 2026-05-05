@@ -202,7 +202,11 @@ def build_router(
             filter_ = build_filter(policy.output_filters[record.output_filter_profile])
             proxy = ToolProxy(upstream=upstream, filter_=filter_)
             try:
-                payload = await proxy.call_through(tool_name=tool_name, arguments=arguments)
+                payload = await proxy.call_through(
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    guardrail=record.guardrails.get(tool_name),
+                )
             except PolicyError as exc:
                 audit.log(
                     ev="call",

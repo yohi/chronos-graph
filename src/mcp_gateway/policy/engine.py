@@ -7,8 +7,10 @@ to the upstream subprocess.
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from dataclasses import dataclass
+from typing import Any
 
 from mcp_gateway.errors import PolicyError
 from mcp_gateway.policy.models import GatewayPolicy, ToolGuardrail
@@ -66,3 +68,56 @@ class PolicyEngine:
     def check_call(*, caps: frozenset[str], tool_name: str) -> None:
         if tool_name not in caps:
             raise PolicyError(f"tool {tool_name!r} is not in session capabilities")
+
+    @staticmethod
+    def validate_call(
+        *,
+        tool_name: str,
+        arguments: dict[str, Any],
+        guardrail: ToolGuardrail | None,
+    ) -> None:
+        if guardrail is None:
+            return
+
+        for param_name, constraint in guardrail.params.items():
+            if constraint.forbidden and param_name in arguments:
+                raise PolicyError(f"parameter {param_name!r} is forbidden for tool {tool_name!r}")
+
+            if param_name not in arguments:
+                continue
+
+            val = arguments[param_name]
+
+            # Type check
+            if constraint.type is not None:
+                expected_type = {
+                    "string": str,
+                    "integer": int,
+                    "number": (int, float),
+                    "boolean": bool,
+                }[constraint.type]
+                if not isinstance(val, expected_type):
+                    raise PolicyError(
+                        f"parameter {param_name!r} must be {constraint.type}, "
+                        f"got {type(val).__name__}"
+                    )
+
+            # Allowed values
+            if constraint.allowed_values is not None:
+                if val not in constraint.allowed_values:
+                    raise PolicyError(
+                        f"parameter {param_name!r} has invalid value {val!r}. "
+                        f"allowed: {constraint.allowed_values}"
+                    )
+
+            # String specific constraints
+            if isinstance(val, str):
+                if constraint.max_length is not None and len(val) > constraint.max_length:
+                    raise PolicyError(
+                        f"parameter {param_name!r} exceeds max_length ({constraint.max_length})"
+                    )
+                if constraint.pattern is not None:
+                    if not re.match(constraint.pattern, val):
+                        raise PolicyError(
+                            f"parameter {param_name!r} does not match required pattern"
+                        )

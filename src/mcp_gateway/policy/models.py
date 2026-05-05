@@ -23,13 +23,42 @@ class OutputFilterDef(BaseModel):
     schemas: dict[str, StructuralAllowlistSchema] | None = None
 
 
+MAX_PARAM_LENGTH = 1048576  # 1MB
+
+
 class ParamConstraint(BaseModel):
     model_config = ConfigDict(frozen=True)
     type: Literal["string", "integer", "number", "boolean"] | None = None
     max_length: int | None = None
     pattern: str | None = None
-    allowed_values: list[str] | None = None
+    allowed_values: list[str | int | float | bool] | None = None
     forbidden: bool = False
+
+    @model_validator(mode="after")
+    def validate_consistency(self) -> Self:
+        if self.type != "string":
+            if self.pattern is not None:
+                raise ValueError("pattern is only allowed for type='string'")
+            if self.max_length is not None:
+                raise ValueError("max_length is only allowed for type='string'")
+
+        if self.allowed_values is not None and self.type is not None:
+            expected_type = {
+                "string": str,
+                "integer": int,
+                "number": (int, float),
+                "boolean": bool,
+            }[self.type]
+            for val in self.allowed_values:
+                if not isinstance(val, expected_type):
+                    raise ValueError(
+                        f"allowed_values must be {self.type}, got {type(val).__name__}"
+                    )
+
+        if self.max_length is not None and self.max_length > MAX_PARAM_LENGTH:
+            raise ValueError(f"max_length exceeds system limit ({MAX_PARAM_LENGTH})")
+
+        return self
 
 
 class ToolGuardrail(BaseModel):

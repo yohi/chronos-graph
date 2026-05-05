@@ -101,6 +101,7 @@ def extract_update_call(call) -> tuple[str, dict[str, Any]]:
 class TestDeduplicationLogic:
     """重複検出ロジックのテスト。"""
 
+    @pytest.mark.asyncio
     async def test_detects_high_similarity_pair(self):
         """similarity >= 0.90 のペアを正しく検出してアーカイブすること。"""
         # 古いメモリ（アーカイブ対象）
@@ -132,6 +133,7 @@ class TestDeduplicationLogic:
         ]
         assert str(older_memory.id) in archived_ids
 
+    @pytest.mark.asyncio
     async def test_archives_regular_consolidation_candidate(self):
         """0.85 <= similarity < 0.90 の通常統合候補も古い方がアーカイブされること。"""
         target_memory = _make_memory()
@@ -159,6 +161,7 @@ class TestDeduplicationLogic:
         assert extract_update_call(update_calls_with_archive[0])[0] == str(other_memory.id)
         assert result.consolidated_count == 1
 
+    @pytest.mark.asyncio
     async def test_avoids_full_scan_uses_vector_search(self):
         """O(N)のフルスキャンを避けてHNSW経由の vector_search を使うこと。
 
@@ -182,6 +185,7 @@ class TestDeduplicationLogic:
         # O(N^2) = N*(N-1)/2 = 45 回にはならないこと
         assert storage.vector_search.call_count == n
 
+    @pytest.mark.asyncio
     async def test_vector_search_called_with_top_k_5(self):
         """vector_search が top_k=5 で呼ばれること。"""
         memory = _make_memory(embedding=[0.1, 0.2, 0.3])
@@ -197,6 +201,7 @@ class TestDeduplicationLogic:
             == 5
         )
 
+    @pytest.mark.asyncio
     async def test_skips_memory_without_embedding(self):
         """embedding が空のメモリは vector_search をスキップすること。"""
         memory_with_embedding = _make_memory(embedding=[0.1, 0.2, 0.3])
@@ -220,6 +225,7 @@ class TestDeduplicationLogic:
 class TestSelfHealingRaceCondition:
     """レースコンディションによる重複見逃しの事後修復テスト。"""
 
+    @pytest.mark.asyncio
     async def test_consolidator_fixes_missed_duplicates(self):
         """並行 memory_save で Deduplicator が見逃した重複を Consolidator が事後修復すること。"""
         # 同じ内容が並行保存されてしまった状況をシミュレート
@@ -257,6 +263,7 @@ class TestSelfHealingRaceCondition:
         # update_memory が呼ばれること（アーカイブ処理）
         assert storage.update_memory.call_count >= 1
 
+    @pytest.mark.asyncio
     async def test_newer_memory_survives_older_archived(self):
         """自己修復時に古い方がアーカイブされ、新しい方が残ること。"""
         older = _make_memory(
@@ -288,6 +295,7 @@ class TestSelfHealingRaceCondition:
         assert str(older.id) in archived_ids
         assert str(newer.id) not in archived_ids
 
+    @pytest.mark.asyncio
     async def test_already_archived_memory_skipped(self):
         """既にアーカイブ済みのメモリは処理対象に含まれないこと。"""
         active = _make_memory()
@@ -312,6 +320,7 @@ class TestSelfHealingRaceCondition:
 class TestPriorityProcessing:
     """優先順位テスト: 自己修復候補を通常統合候補より優先して処理することを検証。"""
 
+    @pytest.mark.asyncio
     async def test_self_healing_prioritized_over_regular_consolidation(self):
         """0.90以上の自己修復候補が 0.85–0.89 の通常候補より先に処理されること。
 
@@ -351,6 +360,7 @@ class TestPriorityProcessing:
         # mem_high_dup（古い方）がアーカイブされること
         assert str(mem_high_dup.id) in archived_ids
 
+    @pytest.mark.asyncio
     async def test_mixed_scores_self_healing_executed(self):
         """0.85–0.89 と ≥0.90 が混在する場合、≥0.90 が自己修復対象となること。"""
         now = datetime.now(timezone.utc)
@@ -382,6 +392,7 @@ class TestPriorityProcessing:
 class TestPerformance:
     """パフォーマンステスト: 10,000件のモックデータで O(M log N) であることを検証。"""
 
+    @pytest.mark.asyncio
     async def test_large_dataset_completes_within_time_limit(self):
         """10,000件のモック環境で、30秒以内に処理が完了すること。
 
@@ -417,6 +428,7 @@ class TestPerformance:
         # vector_search の呼び出し回数が batch_size 件 = O(M) であること（O(N) = O(10000) ではない）
         assert storage.vector_search.call_count == batch_size
 
+    @pytest.mark.asyncio
     async def test_vector_search_call_count_is_not_quadratic(self):
         """vector_search の呼び出し回数が O(N^2) でなく O(N) であること。
 
@@ -442,6 +454,7 @@ class TestPerformance:
         # 各メモリに対して1回ずつ呼び出す（O(N^2) を避けるため N 回であることを確認）
         assert storage.vector_search.call_count == n
 
+    @pytest.mark.asyncio
     async def test_batch_size_limits_processing(self):
         """batch_size が設定された件数だけ処理すること（メモリ枯渇防止）。"""
         n = 50
@@ -491,6 +504,7 @@ def _capture_logs(logger_name: str):
 class TestMonitoringLogs:
     """自己修復発動時のログ出力テスト。"""
 
+    @pytest.mark.asyncio
     async def test_self_healing_log_emitted_on_archive(self):
         """自己修復時に INFO/WARNING レベルでログが出力されること。"""
         now = datetime.now(timezone.utc)
@@ -514,6 +528,7 @@ class TestMonitoringLogs:
             f"Self-healing ログが見つかりません。実際のログ: {log_messages}"
         )
 
+    @pytest.mark.asyncio
     async def test_self_healing_log_contains_memory_id(self):
         """自己修復ログにメモリIDが含まれること。"""
         now = datetime.now(timezone.utc)
@@ -540,6 +555,7 @@ class TestMonitoringLogs:
             f"メモリID {dup_id} がログに含まれていません。ログ: {log_messages}"
         )
 
+    @pytest.mark.asyncio
     async def test_self_healing_log_contains_similarity_score(self):
         """自己修復ログに類似度スコアが含まれること。"""
         now = datetime.now(timezone.utc)
@@ -563,6 +579,7 @@ class TestMonitoringLogs:
             f"スコア {score} がログに含まれていません。ログ: {log_messages}"
         )
 
+    @pytest.mark.asyncio
     async def test_no_log_when_no_self_healing(self):
         """自己修復が発動しない場合はログが出力されないこと。"""
         memory = _make_memory()
@@ -589,6 +606,7 @@ class TestMonitoringLogs:
 class TestGraphAndEmbeddingIntegration:
     """GraphAdapter と EmbeddingProvider との連携テスト。"""
 
+    @pytest.mark.asyncio
     async def test_supersedes_edge_created_when_graph_provided(self):
         """GraphAdapter が提供されている場合、SUPERSEDES エッジが作成されること。"""
         now = datetime.now(timezone.utc)
@@ -626,6 +644,7 @@ class TestGraphAndEmbeddingIntegration:
             assert str(duplicate.id) in str(to_id)
             assert "SUPERSEDES" == edge_type
 
+    @pytest.mark.asyncio
     async def test_no_graph_edge_when_graph_not_provided(self):
         """GraphAdapter が None の場合、エッジ作成が呼ばれないこと。"""
         now = datetime.now(timezone.utc)
@@ -644,6 +663,7 @@ class TestGraphAndEmbeddingIntegration:
         # エラーなく完了すること
         assert result.consolidated_count >= 1
 
+    @pytest.mark.asyncio
     async def test_embedding_recomputed_when_provider_given(self):
         """EmbeddingProvider が提供されている場合、埋め込みが再計算されること。"""
         now = datetime.now(timezone.utc)
@@ -676,6 +696,7 @@ class TestGraphAndEmbeddingIntegration:
 class TestSlidingWindow:
     """スライディングウィンドウ（last_cleanup_at）のテスト。"""
 
+    @pytest.mark.asyncio
     async def test_last_cleanup_at_filters_old_memories(self):
         """last_cleanup_at 以前に作成された記憶はウィンドウに含まれないこと。"""
         cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
@@ -696,6 +717,7 @@ class TestSlidingWindow:
         # recent_memory のみが処理対象
         assert result.checked_count == 1
 
+    @pytest.mark.asyncio
     async def test_none_last_cleanup_at_processes_all(self):
         """last_cleanup_at=None の場合、全記憶が対象となること。"""
         memories = [_make_memory() for _ in range(5)]
@@ -708,6 +730,7 @@ class TestSlidingWindow:
 
         assert result.checked_count == 5
 
+    @pytest.mark.asyncio
     async def test_list_by_filter_called_with_created_after(self):
         """last_cleanup_at が指定された場合、フィルタが正しく渡されること。"""
         cutoff = datetime(2025, 1, 1, tzinfo=timezone.utc)
@@ -733,6 +756,7 @@ class TestSlidingWindow:
 class TestConsolidatorResult:
     """ConsolidatorResult のテスト。"""
 
+    @pytest.mark.asyncio
     async def test_result_type(self):
         """run() が ConsolidatorResult を返すこと。"""
         storage = _make_storage(memories=[])
@@ -741,6 +765,7 @@ class TestConsolidatorResult:
 
         assert isinstance(result, ConsolidatorResult)
 
+    @pytest.mark.asyncio
     async def test_result_fields_zero_when_no_memories(self):
         """記憶が0件の場合、カウントが0であること。"""
         storage = _make_storage(memories=[])
@@ -750,6 +775,7 @@ class TestConsolidatorResult:
         assert result.consolidated_count == 0
         assert result.checked_count == 0
 
+    @pytest.mark.asyncio
     async def test_result_counts_match_processing(self):
         """ConsolidatorResult のカウントが実際の処理結果と一致すること。"""
         now = datetime.now(timezone.utc)

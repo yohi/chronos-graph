@@ -97,6 +97,7 @@ def adapter(mock_pool):
 
 
 class TestSaveMemory:
+    @pytest.mark.asyncio
     async def test_returns_memory_id(self, adapter):
         adp, conn = adapter
         memory = _make_memory()
@@ -106,6 +107,7 @@ class TestSaveMemory:
 
         assert result == str(memory.id)
 
+    @pytest.mark.asyncio
     async def test_executes_insert_with_correct_params(self, adapter):
         adp, conn = adapter
         memory = _make_memory(content="hello world")
@@ -119,6 +121,7 @@ class TestSaveMemory:
         assert "INSERT INTO memories" in sql
         assert "content" in sql
 
+    @pytest.mark.asyncio
     async def test_includes_embedding_when_present(self, adapter):
         adp, conn = adapter
         memory = _make_memory(embedding=[0.1, 0.2, 0.3])
@@ -132,6 +135,7 @@ class TestSaveMemory:
         embedding_str = str([0.1, 0.2, 0.3]).replace(" ", "")
         assert any(embedding_str in str(a) for a in args)
 
+    @pytest.mark.asyncio
     async def test_empty_embedding_stored_as_none(self, adapter):
         adp, conn = adapter
         memory = _make_memory(embedding=[])
@@ -143,6 +147,7 @@ class TestSaveMemory:
         args = call_args[0][1:]
         assert None in args
 
+    @pytest.mark.asyncio
     async def test_raises_storage_error_on_unique_violation(self, adapter):
         import asyncpg
 
@@ -162,6 +167,7 @@ class TestSaveMemory:
 
 
 class TestGetMemory:
+    @pytest.mark.asyncio
     async def test_returns_none_when_not_found(self, adapter):
         adp, conn = adapter
         conn.fetchrow = AsyncMock(return_value=None)
@@ -170,6 +176,7 @@ class TestGetMemory:
 
         assert result is None
 
+    @pytest.mark.asyncio
     async def test_returns_memory_when_found(self, adapter):
         adp, conn = adapter
         memory = _make_memory()
@@ -182,6 +189,7 @@ class TestGetMemory:
         assert result.content == memory.content
         assert result.memory_type == memory.memory_type
 
+    @pytest.mark.asyncio
     async def test_query_uses_memory_id(self, adapter):
         adp, conn = adapter
         memory_id = str(uuid4())
@@ -199,6 +207,7 @@ class TestGetMemory:
 
 
 class TestDeleteMemory:
+    @pytest.mark.asyncio
     async def test_returns_true_when_deleted(self, adapter):
         adp, conn = adapter
         conn.execute = AsyncMock(return_value="DELETE 1")
@@ -207,6 +216,7 @@ class TestDeleteMemory:
 
         assert result is True
 
+    @pytest.mark.asyncio
     async def test_returns_false_when_not_found(self, adapter):
         adp, conn = adapter
         conn.execute = AsyncMock(return_value="DELETE 0")
@@ -222,6 +232,7 @@ class TestDeleteMemory:
 
 
 class TestUpdateMemory:
+    @pytest.mark.asyncio
     async def test_returns_true_on_success(self, adapter):
         adp, conn = adapter
         conn.execute = AsyncMock(return_value="UPDATE 1")
@@ -230,6 +241,7 @@ class TestUpdateMemory:
 
         assert result is True
 
+    @pytest.mark.asyncio
     async def test_returns_false_when_not_found(self, adapter):
         adp, conn = adapter
         conn.execute = AsyncMock(return_value="UPDATE 0")
@@ -238,6 +250,7 @@ class TestUpdateMemory:
 
         assert result is False
 
+    @pytest.mark.asyncio
     async def test_builds_dynamic_set_clause(self, adapter):
         adp, conn = adapter
         conn.execute = AsyncMock(return_value="UPDATE 1")
@@ -250,6 +263,7 @@ class TestUpdateMemory:
         assert "importance_score" in sql
         assert "access_count" in sql
 
+    @pytest.mark.asyncio
     async def test_casts_embedding_to_vector(self, adapter):
         adp, conn = adapter
         conn.execute = AsyncMock(return_value="UPDATE 1")
@@ -262,6 +276,7 @@ class TestUpdateMemory:
         assert "::vector" in sql
         assert params[0] == "[0.1,0.2,0.3]"
 
+    @pytest.mark.asyncio
     async def test_updates_content_hash_when_content_changes(self, adapter):
         adp, conn = adapter
         conn.execute = AsyncMock(return_value="UPDATE 1")
@@ -281,6 +296,7 @@ class TestUpdateMemory:
 
 
 class TestVectorSearch:
+    @pytest.mark.asyncio
     async def test_returns_empty_list_when_no_results(self, adapter):
         adp, conn = adapter
         conn.fetch = AsyncMock(return_value=[])
@@ -289,6 +305,7 @@ class TestVectorSearch:
 
         assert result == []
 
+    @pytest.mark.asyncio
     async def test_returns_scored_memories(self, adapter):
         adp, conn = adapter
         memory = _make_memory()
@@ -303,6 +320,7 @@ class TestVectorSearch:
         assert result[0].score == pytest.approx(0.95)
         assert result[0].source == MemorySource.VECTOR
 
+    @pytest.mark.asyncio
     async def test_uses_cosine_distance_operator(self, adapter):
         adp, conn = adapter
         conn.fetch = AsyncMock(return_value=[])
@@ -313,6 +331,7 @@ class TestVectorSearch:
         sql: str = call_args[0][0]
         assert "<=>" in sql
 
+    @pytest.mark.asyncio
     async def test_filters_by_project(self, adapter):
         adp, conn = adapter
         conn.fetch = AsyncMock(return_value=[])
@@ -323,6 +342,7 @@ class TestVectorSearch:
         sql: str = call_args[0][0]
         assert "project" in sql
 
+    @pytest.mark.asyncio
     async def test_excludes_rows_without_embeddings(self, adapter):
         adp, conn = adapter
         conn.fetch = AsyncMock(return_value=[])
@@ -333,6 +353,7 @@ class TestVectorSearch:
         sql: str = call_args[0][0]
         assert "embedding IS NOT NULL" in sql
 
+    @pytest.mark.asyncio
     async def test_respects_top_k(self, adapter):
         adp, conn = adapter
         conn.fetch = AsyncMock(return_value=[])
@@ -349,6 +370,7 @@ class TestVectorSearch:
 
 
 class TestKeywordSearch:
+    @pytest.mark.asyncio
     async def test_returns_empty_list_when_no_results(self, adapter):
         adp, conn = adapter
         conn.fetch = AsyncMock(return_value=[])
@@ -357,6 +379,7 @@ class TestKeywordSearch:
 
         assert result == []
 
+    @pytest.mark.asyncio
     async def test_returns_scored_memories(self, adapter):
         adp, conn = adapter
         memory = _make_memory(content="hello world")
@@ -369,6 +392,7 @@ class TestKeywordSearch:
         assert len(result) == 1
         assert result[0].source == MemorySource.KEYWORD
 
+    @pytest.mark.asyncio
     async def test_query_uses_bigm_like(self, adapter):
         adp, conn = adapter
         conn.fetch = AsyncMock(return_value=[])
@@ -380,6 +404,7 @@ class TestKeywordSearch:
         # pg_bigm uses LIKE or % operator
         assert "LIKE" in sql or "%" in sql or "bigm" in sql.lower() or "content" in sql
 
+    @pytest.mark.asyncio
     async def test_filters_by_project(self, adapter):
         adp, conn = adapter
         conn.fetch = AsyncMock(return_value=[])
@@ -397,6 +422,7 @@ class TestKeywordSearch:
 
 
 class TestListByFilter:
+    @pytest.mark.asyncio
     async def test_no_filter_returns_active_memories(self, adapter):
         adp, conn = adapter
         memory = _make_memory()
@@ -406,6 +432,7 @@ class TestListByFilter:
 
         assert len(result) == 1
 
+    @pytest.mark.asyncio
     async def test_archived_true_filters_archived(self, adapter):
         adp, conn = adapter
         conn.fetch = AsyncMock(return_value=[])
@@ -416,6 +443,7 @@ class TestListByFilter:
         sql: str = call_args[0][0]
         assert "archived_at" in sql
 
+    @pytest.mark.asyncio
     async def test_project_filter_applied(self, adapter):
         adp, conn = adapter
         conn.fetch = AsyncMock(return_value=[])
@@ -426,6 +454,7 @@ class TestListByFilter:
         sql: str = call_args[0][0]
         assert "project" in sql
 
+    @pytest.mark.asyncio
     async def test_memory_type_filter_applied(self, adapter):
         adp, conn = adapter
         conn.fetch = AsyncMock(return_value=[])
@@ -436,6 +465,7 @@ class TestListByFilter:
         sql: str = call_args[0][0]
         assert "memory_type" in sql
 
+    @pytest.mark.asyncio
     async def test_tags_filter_applied(self, adapter):
         adp, conn = adapter
         conn.fetch = AsyncMock(return_value=[])
@@ -446,6 +476,7 @@ class TestListByFilter:
         sql: str = call_args[0][0]
         assert "tags" in sql
 
+    @pytest.mark.asyncio
     async def test_min_importance_and_offset_applied(self, adapter):
         """Verify min_importance and offset logic in PostgreSQL query building."""
         adp, conn = adapter
@@ -506,6 +537,7 @@ class TestGetMemoriesValidation:
 
 
 class TestGetVectorDimension:
+    @pytest.mark.asyncio
     async def test_returns_dimension_when_exists(self, adapter):
         adp, conn = adapter
         conn.fetchval = AsyncMock(return_value=768)
@@ -514,6 +546,7 @@ class TestGetVectorDimension:
 
         assert result == 768
 
+    @pytest.mark.asyncio
     async def test_returns_none_when_no_data(self, adapter):
         adp, conn = adapter
         conn.fetchval = AsyncMock(return_value=None)
@@ -522,6 +555,7 @@ class TestGetVectorDimension:
 
         assert result is None
 
+    @pytest.mark.asyncio
     async def test_uses_vector_dims_function(self, adapter):
         adp, conn = adapter
         conn.fetchval = AsyncMock(return_value=None)
@@ -539,6 +573,7 @@ class TestGetVectorDimension:
 
 
 class TestDispose:
+    @pytest.mark.asyncio
     async def test_closes_pool(self, adapter):
         adp, _conn = adapter
         adp._pool.close = AsyncMock()

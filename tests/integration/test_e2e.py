@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, AsyncGenerator
 from unittest.mock import patch
 
 import pytest
+import pytest_asyncio
 from pydantic import SecretStr
 
 from context_store.config import Settings
@@ -49,7 +50,7 @@ def sqlite_settings(tmp_db_path: str) -> Settings:
     )
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def orchestrator(sqlite_settings: Settings) -> AsyncGenerator[Orchestrator, None]:
     """テスト用 Orchestrator(モック Embedding Provider 使用)。
 
@@ -74,6 +75,7 @@ async def orchestrator(sqlite_settings: Settings) -> AsyncGenerator[Orchestrator
 class TestLightweightE2E:
     """SQLiteバックエンドを使用した外部サービス不要のE2Eテスト。"""
 
+    @pytest.mark.asyncio
     async def test_memory_save_and_search(self, orchestrator: Orchestrator) -> None:
         """memory_save → memory_search の基本フロー。"""
         # 保存
@@ -99,6 +101,7 @@ class TestLightweightE2E:
             f"Saved memory {memory_id} not found in search results: {found_ids}"
         )
 
+    @pytest.mark.asyncio
     async def test_memory_stats(self, orchestrator: Orchestrator) -> None:
         """memory_stats の動作確認。"""
         # 事前に保存
@@ -112,6 +115,7 @@ class TestLightweightE2E:
         assert "total_count" in stats
         assert stats["active_count"] >= 2
 
+    @pytest.mark.asyncio
     async def test_memory_delete(self, orchestrator: Orchestrator) -> None:
         """memory_delete の動作確認。"""
         results = await orchestrator.save("削除対象のテスト記憶")
@@ -126,6 +130,7 @@ class TestLightweightE2E:
         deleted_again = await orchestrator.delete(memory_id)
         assert deleted_again is False
 
+    @pytest.mark.asyncio
     async def test_memory_prune_dry_run(self, orchestrator: Orchestrator) -> None:
         """memory_prune dry_run の動作確認。"""
         # dry_run=True はエラーなく件数を返す
@@ -133,6 +138,7 @@ class TestLightweightE2E:
         assert isinstance(count, int)
         assert count >= 0
 
+    @pytest.mark.asyncio
     async def test_multiple_memories_ingestion(self, orchestrator: Orchestrator) -> None:
         """複数記憶の連続保存と検索。"""
         memories = [
@@ -155,6 +161,7 @@ class TestLightweightE2E:
         stats = await orchestrator.stats()
         assert stats["active_count"] >= 5
 
+    @pytest.mark.asyncio
     async def test_search_returns_normalized_rrf_scores(self, orchestrator: Orchestrator) -> None:
         """検索結果のRRFスコアが [0.0, 1.0] に正規化されていること。"""
         await orchestrator.save("GraphQLとRESTの比較検討を行った")
@@ -168,6 +175,7 @@ class TestLightweightE2E:
             score = item.get("score", 0.0)
             assert 0.0 <= score <= 1.0, f"Score {score} is out of [0.0, 1.0]"
 
+    @pytest.mark.asyncio
     async def test_deduplication_append_only(self, orchestrator: Orchestrator) -> None:
         """Deduplicator の Append-only 動作確認。類似データをDELETEせず SUPERSEDES を作成。"""
         content = "JWTトークンの有効期限は24時間に設定した"
@@ -197,6 +205,7 @@ class TestLightweightE2E:
 class TestConcurrentWriteStress:
     """並行書き込み時のSQLite WAL動作確認。"""
 
+    @pytest.mark.asyncio
     async def test_concurrent_writes_no_busy_errors(self, orchestrator: Orchestrator) -> None:
         """複数の並行 memory_save が SQLITE_BUSY なしで成功すること。"""
         N = 5
@@ -210,6 +219,7 @@ class TestConcurrentWriteStress:
 
         assert all(ids)  # すべて成功すること(SQLITE_BUSY 回避の検証)
 
+    @pytest.mark.asyncio
     async def test_search_during_concurrent_writes(self, orchestrator: Orchestrator) -> None:
         """書き込み中でも memory_search がブロックされないこと。"""
         # 事前データ保存
@@ -259,6 +269,7 @@ class TestConcurrentWriteStress:
         # 書き込み中に少なくとも1回は検索が完了したこと
         assert search_during_write is True
 
+    @pytest.mark.asyncio
     async def test_db_integrity_after_stress(self, orchestrator: Orchestrator) -> None:
         """ストレステスト(並行書き込み)後にDBの整合性が保たれていること。"""
         # 並行書き込みによる負荷
@@ -314,6 +325,7 @@ class TestMCPServerE2E:
         if server._orchestrator:
             await server._orchestrator.dispose()
 
+    @pytest.mark.asyncio
     async def test_memory_save_default_source(self, server_with_mock: ChronosServer) -> None:
         """memory_save の source デフォルト値が 'conversation' であること。"""
         server = server_with_mock
@@ -330,6 +342,7 @@ class TestMCPServerE2E:
         )
         assert any(item["source_type"] == "conversation" for item in search_res["results"])
 
+    @pytest.mark.asyncio
     async def test_memory_save_explicit_source(self, server_with_mock: ChronosServer) -> None:
         """memory_save に source='manual' を指定したとき正しく保持されること。"""
         server = server_with_mock
@@ -346,6 +359,7 @@ class TestMCPServerE2E:
         )
         assert any(item["source_type"] == "manual" for item in search_res["results"])
 
+    @pytest.mark.asyncio
     async def test_memory_search(self, server_with_mock: ChronosServer) -> None:
         """memory_search がJSON文字列を返すこと。"""
         server = server_with_mock
@@ -355,6 +369,7 @@ class TestMCPServerE2E:
         data = json.loads(result)
         assert "results" in data
 
+    @pytest.mark.asyncio
     async def test_memory_stats(self, server_with_mock: ChronosServer) -> None:
         """memory_stats がJSON文字列を返すこと。"""
         server = server_with_mock
@@ -363,6 +378,7 @@ class TestMCPServerE2E:
         data = json.loads(result)
         assert "total_count" in data
 
+    @pytest.mark.asyncio
     async def test_memory_prune_dry_run(self, server_with_mock: ChronosServer) -> None:
         """memory_prune dry_run がJSON文字列を返すこと。"""
         server = server_with_mock

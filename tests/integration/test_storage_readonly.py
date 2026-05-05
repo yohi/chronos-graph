@@ -6,13 +6,14 @@ import sqlite3
 import uuid
 
 import pytest
+import pytest_asyncio
 
 from context_store.config import Settings
 from context_store.models.memory import Memory
 from context_store.storage.factory import create_storage
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def seeded_sqlite(tmp_path):
     """First create DB in write mode, seed 1 record, then reopen in read-only mode."""
     db_path = tmp_path / "test.db"

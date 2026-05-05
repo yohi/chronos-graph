@@ -2322,6 +2322,7 @@ class TestRuntimeValidation:
 class TestApprovalNotifier:
     """LogOnlyApprovalNotifier の単体テスト。"""
 
+    @pytest.mark.asyncio
     async def test_request_approval_does_not_raise(self):
         from datetime import UTC, datetime
 
@@ -2362,6 +2363,7 @@ class TestApprovalNotifier:
         with pytest.raises(TypeError):
             ApprovalNotifier()  # type: ignore[abstract]
 
+    @pytest.mark.asyncio
     async def test_request_approval_logs(self, caplog):
         import logging
         from datetime import UTC, datetime

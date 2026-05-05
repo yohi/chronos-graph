@@ -41,6 +41,7 @@ def adapter(redis_mock):
 
 
 class TestGet:
+    @pytest.mark.asyncio
     async def test_returns_none_on_cache_miss(self, adapter):
         adp, r = adapter
         r.get = AsyncMock(return_value=None)
@@ -49,6 +50,7 @@ class TestGet:
 
         assert result is None
 
+    @pytest.mark.asyncio
     async def test_returns_deserialized_value(self, adapter):
         import json
 
@@ -59,6 +61,7 @@ class TestGet:
 
         assert result == {"x": 1}
 
+    @pytest.mark.asyncio
     async def test_returns_none_on_redis_failure(self, adapter):
         adp, r = adapter
         r.get = AsyncMock(side_effect=Exception("redis down"))
@@ -74,6 +77,7 @@ class TestGet:
 
 
 class TestSet:
+    @pytest.mark.asyncio
     async def test_serializes_and_stores(self, adapter):
         adp, r = adapter
         r.set = AsyncMock(return_value=True)
@@ -88,6 +92,7 @@ class TestSet:
         stored = json.loads(call_args[0][1])
         assert stored == {"data": 42}
 
+    @pytest.mark.asyncio
     async def test_passes_ttl_as_ex(self, adapter):
         adp, r = adapter
         r.set = AsyncMock(return_value=True)
@@ -97,6 +102,7 @@ class TestSet:
         call_kwargs = r.set.call_args[1]
         assert call_kwargs.get("ex") == 300
 
+    @pytest.mark.asyncio
     async def test_does_not_raise_on_failure(self, adapter):
         adp, r = adapter
         r.set = AsyncMock(side_effect=Exception("redis down"))
@@ -110,6 +116,7 @@ class TestSet:
 
 
 class TestInvalidate:
+    @pytest.mark.asyncio
     async def test_deletes_key(self, adapter):
         adp, r = adapter
         r.delete = AsyncMock(return_value=1)
@@ -118,6 +125,7 @@ class TestInvalidate:
 
         r.delete.assert_called_once_with("key1")
 
+    @pytest.mark.asyncio
     async def test_does_not_raise_on_failure(self, adapter):
         adp, r = adapter
         r.delete = AsyncMock(side_effect=Exception("redis down"))
@@ -131,6 +139,7 @@ class TestInvalidate:
 
 
 class TestInvalidatePrefix:
+    @pytest.mark.asyncio
     async def test_uses_scan_not_keys(self, adapter):
         """Redis KEYS コマンドを使わず SCAN を使うことを検証。"""
         adp, r = adapter
@@ -147,6 +156,7 @@ class TestInvalidatePrefix:
 
         r.delete.assert_called()
 
+    @pytest.mark.asyncio
     async def test_does_not_raise_on_failure(self, adapter):
         adp, r = adapter
 
@@ -158,6 +168,7 @@ class TestInvalidatePrefix:
 
         await adp.invalidate_prefix("prefix:")
 
+    @pytest.mark.asyncio
     async def test_deletes_in_batches(self, adapter):
         adp, r = adapter
 
@@ -182,6 +193,7 @@ class TestInvalidatePrefix:
 
 
 class TestClear:
+    @pytest.mark.asyncio
     async def test_clears_only_managed_prefix(self, adapter):
         adp, r = adapter
 
@@ -199,6 +211,7 @@ class TestClear:
         r.delete.assert_called_once_with(b"cache:key1", b"cache:key2")
         r.flushdb.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_does_not_raise_on_failure(self, adapter):
         adp, r = adapter
         adp._prefix = "cache:"
@@ -218,6 +231,7 @@ class TestClear:
 
 
 class TestDispose:
+    @pytest.mark.asyncio
     async def test_closes_connection(self, adapter):
         adp, r = adapter
         r.close = AsyncMock()

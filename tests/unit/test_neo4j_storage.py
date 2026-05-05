@@ -48,6 +48,7 @@ def adapter_and_session():
 
 
 class TestCreateNode:
+    @pytest.mark.asyncio
     async def test_runs_merge_cypher(self, adapter_and_session):
         adp, session = adapter_and_session
         session.run = AsyncMock()
@@ -59,6 +60,7 @@ class TestCreateNode:
         assert "MERGE" in cypher
         assert "Memory" in cypher
 
+    @pytest.mark.asyncio
     async def test_passes_memory_id(self, adapter_and_session):
         adp, session = adapter_and_session
         session.run = AsyncMock()
@@ -69,6 +71,7 @@ class TestCreateNode:
         # id が渡されていること
         assert any(v == "abc-123" for v in kwargs.values())
 
+    @pytest.mark.asyncio
     async def test_does_not_raise_on_connection_failure(self, adapter_and_session):
         adp, session = adapter_and_session
         session.run = AsyncMock(side_effect=Exception("Neo4j unavailable"))
@@ -83,6 +86,7 @@ class TestCreateNode:
 
 
 class TestCreateEdge:
+    @pytest.mark.asyncio
     async def test_runs_create_edge_cypher(self, adapter_and_session):
         adp, session = adapter_and_session
         session.run = AsyncMock()
@@ -93,6 +97,7 @@ class TestCreateEdge:
         cypher: str = session.run.call_args[0][0]
         assert "CREATE" in cypher or "MERGE" in cypher
 
+    @pytest.mark.asyncio
     async def test_passes_edge_type(self, adapter_and_session):
         adp, session = adapter_and_session
         session.run = AsyncMock()
@@ -102,12 +107,14 @@ class TestCreateEdge:
         cypher: str = session.run.call_args[0][0]
         assert "SUPERSEDES" in cypher
 
+    @pytest.mark.asyncio
     async def test_does_not_raise_on_failure(self, adapter_and_session):
         adp, session = adapter_and_session
         session.run = AsyncMock(side_effect=Exception("connection error"))
 
         await adp.create_edge("a", "b", "RELATES_TO", {})
 
+    @pytest.mark.asyncio
     async def test_rejects_invalid_edge_type(self, adapter_and_session):
         adp, session = adapter_and_session
         session.run = AsyncMock()
@@ -116,6 +123,7 @@ class TestCreateEdge:
 
         session.run.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_rejects_edge_type_starting_with_digit(self, adapter_and_session):
         adp, session = adapter_and_session
         session.run = AsyncMock()
@@ -131,6 +139,7 @@ class TestCreateEdge:
 
 
 class TestCreateEdgesBatch:
+    @pytest.mark.asyncio
     async def test_uses_unwind_for_batch(self, adapter_and_session):
         adp, session = adapter_and_session
         session.run = AsyncMock()
@@ -147,6 +156,7 @@ class TestCreateEdgesBatch:
             cypher: str = call_args[0][0]
             assert "UNWIND" in cypher
 
+    @pytest.mark.asyncio
     async def test_empty_list_does_nothing(self, adapter_and_session):
         adp, session = adapter_and_session
         session.run = AsyncMock()
@@ -155,6 +165,7 @@ class TestCreateEdgesBatch:
 
         session.run.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_does_not_raise_on_failure(self, adapter_and_session):
         adp, session = adapter_and_session
         session.run = AsyncMock(side_effect=Exception("neo4j down"))
@@ -162,6 +173,7 @@ class TestCreateEdgesBatch:
 
         await adp.create_edges_batch(edges)
 
+    @pytest.mark.asyncio
     async def test_skips_invalid_edge_types(self, adapter_and_session):
         adp, session = adapter_and_session
         session.run = AsyncMock()
@@ -184,6 +196,7 @@ class TestCreateEdgesBatch:
 
 
 class TestTraverse:
+    @pytest.mark.asyncio
     async def test_returns_graph_result(self, adapter_and_session):
         adp, session = adapter_and_session
 
@@ -203,6 +216,7 @@ class TestTraverse:
 
         assert isinstance(result, GraphResult)
 
+    @pytest.mark.asyncio
     async def test_returns_empty_result_on_failure(self, adapter_and_session):
         adp, session = adapter_and_session
         session.run = AsyncMock(side_effect=Exception("neo4j down"))
@@ -213,6 +227,7 @@ class TestTraverse:
         assert result.nodes == []
         assert result.edges == []
 
+    @pytest.mark.asyncio
     async def test_cypher_includes_depth(self, adapter_and_session):
         adp, session = adapter_and_session
         result_mock = AsyncMock()
@@ -224,6 +239,7 @@ class TestTraverse:
         cypher: str = session.run.call_args[0][0]
         assert "3" in cypher or "depth" in cypher.lower()
 
+    @pytest.mark.asyncio
     async def test_skips_invalid_edge_types_in_filter(self, adapter_and_session):
         adp, session = adapter_and_session
         result_mock = AsyncMock()
@@ -236,6 +252,7 @@ class TestTraverse:
         assert "RELATES_TO" in cypher
         assert "BAD-TYPE" not in cypher
 
+    @pytest.mark.asyncio
     async def test_places_relationship_types_before_depth_range(self, adapter_and_session):
         adp, session = adapter_and_session
         result_mock = AsyncMock()
@@ -247,6 +264,7 @@ class TestTraverse:
         cypher: str = session.run.call_args[0][0]
         assert "[:RELATES_TO|CITES*1..2]" in cypher
 
+    @pytest.mark.asyncio
     async def test_deduplicates_returned_edges(self, adapter_and_session):
         adp, session = adapter_and_session
 
@@ -289,6 +307,7 @@ class TestTraverse:
 
 
 class TestDeleteNode:
+    @pytest.mark.asyncio
     async def test_runs_detach_delete(self, adapter_and_session):
         adp, session = adapter_and_session
         session.run = AsyncMock()
@@ -299,6 +318,7 @@ class TestDeleteNode:
         cypher: str = session.run.call_args[0][0]
         assert "DELETE" in cypher
 
+    @pytest.mark.asyncio
     async def test_does_not_raise_on_failure(self, adapter_and_session):
         adp, session = adapter_and_session
         session.run = AsyncMock(side_effect=Exception("neo4j down"))
@@ -312,6 +332,7 @@ class TestDeleteNode:
 
 
 class TestDispose:
+    @pytest.mark.asyncio
     async def test_closes_driver(self, adapter_and_session):
         adp, _session = adapter_and_session
         adp._driver.close = AsyncMock()
@@ -327,6 +348,7 @@ class TestDispose:
 
 
 class TestReadOnlyMode:
+    @pytest.mark.asyncio
     async def test_uses_read_access_mode(self, adapter_and_session):
         import neo4j
 
@@ -341,6 +363,7 @@ class TestReadOnlyMode:
         # 呼び出し時の引数を確認
         adp._driver.session.assert_called_with(default_access_mode=neo4j.READ_ACCESS)
 
+    @pytest.mark.asyncio
     async def test_skips_create_node(self, adapter_and_session):
         adp, session = adapter_and_session
         adp._read_only = True
@@ -350,6 +373,7 @@ class TestReadOnlyMode:
 
         session.run.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_skips_create_edge(self, adapter_and_session):
         adp, session = adapter_and_session
         adp._read_only = True
@@ -359,6 +383,7 @@ class TestReadOnlyMode:
 
         session.run.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_skips_create_edges_batch(self, adapter_and_session):
         adp, session = adapter_and_session
         adp._read_only = True
@@ -370,6 +395,7 @@ class TestReadOnlyMode:
 
         session.run.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_skips_delete_node(self, adapter_and_session):
         adp, session = adapter_and_session
         adp._read_only = True
@@ -386,6 +412,7 @@ class TestReadOnlyMode:
 
 
 class TestDashboardQueries:
+    @pytest.mark.asyncio
     async def test_list_edges_for_memories_basic(self, adapter_and_session):
         adp, session = adapter_and_session
 
@@ -416,6 +443,7 @@ class TestDashboardQueries:
         assert edges[0].edge_type == "LINK"
         assert edges[0].properties == {"w": 1}
 
+    @pytest.mark.asyncio
     async def test_list_edges_for_memories_empty(self, adapter_and_session):
         adp, session = adapter_and_session
         session.run = AsyncMock()
@@ -425,6 +453,7 @@ class TestDashboardQueries:
         assert edges == []
         session.run.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_list_edges_for_memories_failure(self, adapter_and_session):
         adp, session = adapter_and_session
         session.run = AsyncMock(side_effect=Exception("Neo4j error"))
@@ -434,6 +463,7 @@ class TestDashboardQueries:
         assert edges == []
         session.run.assert_awaited()
 
+    @pytest.mark.asyncio
     async def test_list_all_edges_basic(self, adapter_and_session):
         adp, session = adapter_and_session
 
@@ -462,6 +492,7 @@ class TestDashboardQueries:
         assert edges[0].from_id == "x"
         assert edges[0].to_id == "y"
 
+    @pytest.mark.asyncio
     async def test_list_all_edges_failure(self, adapter_and_session):
         adp, session = adapter_and_session
         session.run = AsyncMock(side_effect=Exception("Neo4j error"))
@@ -469,6 +500,7 @@ class TestDashboardQueries:
         edges = await adp.list_all_edges()
         assert edges == []
 
+    @pytest.mark.asyncio
     async def test_count_edges_basic(self, adapter_and_session):
         adp, session = adapter_and_session
 
@@ -482,6 +514,7 @@ class TestDashboardQueries:
 
         assert count == 42
 
+    @pytest.mark.asyncio
     async def test_count_edges_failure(self, adapter_and_session):
         adp, session = adapter_and_session
         session.run = AsyncMock(side_effect=Exception("Neo4j error"))

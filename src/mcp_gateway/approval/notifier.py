@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from datetime import datetime
-from typing import Any
+from datetime import UTC, datetime
+from types import MappingProxyType
+from typing import Any, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +22,16 @@ class ApprovalRequest(BaseModel):
     agent_id: str
     intent: str
     tool_name: str
-    arguments: dict[str, Any]
-    requested_at: datetime = Field(default_factory=datetime.now)
+    arguments: Mapping[str, Any]
+    requested_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @field_validator("arguments", mode="after")
+    @classmethod
+    def _make_immutable(cls, v: Mapping[str, Any]) -> Mapping[str, Any]:
+        """引数を不変（MappingProxyType）に変換します。"""
+        if isinstance(v, dict):
+            return MappingProxyType(v)
+        return v
 
 
 class ApprovalNotifier(ABC):

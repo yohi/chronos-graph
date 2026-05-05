@@ -2377,6 +2377,6 @@ class TestApprovalNotifier:
             arguments={"id": "m-abc"},
             requested_at=datetime.now(UTC),
         )
-        with caplog.at_level(logging.INFO):
+        with caplog.at_level(logging.INFO, logger="mcp_gateway.approval.notifier"):
             await notifier.request_approval(req)
         assert any("approval_required" in record.message for record in caplog.records)

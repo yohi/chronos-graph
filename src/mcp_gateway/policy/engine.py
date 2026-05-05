@@ -78,10 +78,8 @@ class PolicyEngine:
         tool_name: str,
         arguments: dict[str, Any],
     ) -> EvaluationResult:
-        if tool_name not in grant.caps:
-            return EvaluationResult(status="DENY", reason="tool_not_in_caps")
-
         try:
+            PolicyEngine.check_call(caps=grant.caps, tool_name=tool_name)
             guardrail = grant.guardrails.get(tool_name)
             PolicyEngine.validate_call(
                 tool_name=tool_name,

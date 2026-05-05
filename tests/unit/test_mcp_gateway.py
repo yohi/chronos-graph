@@ -1619,6 +1619,32 @@ class TestToolProxy:
             )
         upstream.call_tool.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_call_through_rejects_param_violation_before_approval(self):
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.filters.none_filter import NoneFilter
+        from mcp_gateway.policy.models import ParamConstraint, ToolGuardrail
+        from mcp_gateway.tools.proxy import ToolProxy
+
+        upstream = AsyncMock()
+        proxy = ToolProxy(upstream=upstream, filter_=NoneFilter())
+
+        guardrail = ToolGuardrail(
+            params={"p": ParamConstraint(type="integer")}, requires_approval=True
+        )
+
+        with pytest.raises(PolicyError) as exc_info:
+            await proxy.call_through(
+                tool_name="t",
+                arguments={"p": "not_an_int"},
+                guardrail=guardrail,
+            )
+
+        assert exc_info.value.reason == "param_type_mismatch:p"
+        upstream.call_tool.assert_not_awaited()
+
 
 @pytest.fixture(autouse=True)
 def mock_sse_keep_alive(monkeypatch):
@@ -2463,9 +2489,11 @@ class TestParamConstraint:
         )
         return PolicyEngine(policy)
 
-    def _call(self, engine, tool_name, arguments, intent="test_intent"):
+    def _call(self, engine, tool_name, arguments, intent="test_intent", requested_tools=None):
         # For testing, we create a grant assuming intent is allowed for agent-a
-        grant = engine.evaluate_grant(agent_id="agent-a", intent=intent, requested_tools=None)
+        grant = engine.evaluate_grant(
+            agent_id="agent-a", intent=intent, requested_tools=requested_tools
+        )
         # Note: testing caps filtering here is bypassed, but evaluated specifically
         # in TestEvaluateCall
         return engine.evaluate_call(

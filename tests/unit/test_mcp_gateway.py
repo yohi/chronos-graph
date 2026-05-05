@@ -1978,7 +1978,9 @@ class TestServerRequiresApproval:
 
         _, err = capfd.readouterr()
         assert '"ev":"notification_failed"' in err
-        assert "Approval notification failed: boom" in err
+        assert '"detail":"Approval notification failed"' in err
+        assert '"error_type":"RuntimeError"' in err
+        assert "boom" not in err
 
     @pytest.mark.asyncio
     async def test_requires_approval_notification_is_fire_and_forget(
@@ -1990,19 +1992,25 @@ class TestServerRequiresApproval:
         started = asyncio.Event()
         release = asyncio.Event()
         created_tasks: list[asyncio.Task] = []
-        original_create_task = server_module.asyncio.create_task
+        original_schedule = server_module._schedule_approval_request
 
         async def block_until_released(self, request):
             started.set()
             await release.wait()
 
-        def capture_task(coro):
-            task = original_create_task(coro)
+        def capture_task(*, approval_notifier, request, audit, sid, timeout=5.0):
+            task = original_schedule(
+                approval_notifier=approval_notifier,
+                request=request,
+                audit=audit,
+                sid=sid,
+                timeout=timeout,
+            )
             created_tasks.append(task)
             return task
 
         monkeypatch.setattr(LogOnlyApprovalNotifier, "request_approval", block_until_released)
-        monkeypatch.setattr(server_module.asyncio, "create_task", capture_task)
+        monkeypatch.setattr(server_module, "_schedule_approval_request", capture_task)
 
         sid = await self._get_session_id(approval_client)
         resp = await approval_client.post(
@@ -2063,6 +2071,8 @@ class TestServerValidationDeny:
                           query:
                             type: string
                             max_length: 3
+                          secret:
+                            forbidden: true
                 agents:
                   agent-a:
                     allowed_intents: [ro]
@@ -2122,6 +2132,24 @@ class TestServerValidationDeny:
         body = resp.json()
         assert body["error"]["code"] == -32602
         assert body["error"]["message"] == "param_too_long:query"
+
+    @pytest.mark.asyncio
+    async def test_forbidden_param_validation_denied_returns_32602(self, validation_client):
+        sid = await self._get_session_id(validation_client)
+        resp = await validation_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 11,
+                "method": "tools/call",
+                "params": {"name": "memory_search", "arguments": {"secret": "query"}},
+            },
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32602
+        assert body["error"]["message"] == "forbidden_param:secret"
 
 
 class TestEntrypoint:

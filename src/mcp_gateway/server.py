@@ -55,7 +55,8 @@ async def _request_approval_with_isolation(
     except (asyncio.TimeoutError, Exception) as notifier_exc:
         audit.log(
             ev="notification_failed",
-            detail=f"Approval notification failed: {notifier_exc}",
+            detail="Approval notification failed",
+            error_type=notifier_exc.__class__.__name__,
             sid=sid,
         )
 

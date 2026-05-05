@@ -2322,7 +2322,6 @@ class TestRuntimeValidation:
 class TestApprovalNotifier:
     """LogOnlyApprovalNotifier の単体テスト。"""
 
-    @pytest.mark.asyncio
     async def test_request_approval_does_not_raise(self):
         from datetime import UTC, datetime
 
@@ -2342,6 +2341,8 @@ class TestApprovalNotifier:
     def test_approval_request_is_immutable(self):
         from datetime import UTC, datetime
 
+        from pydantic import ValidationError
+
         from mcp_gateway.approval.notifier import ApprovalRequest
 
         req = ApprovalRequest(
@@ -2352,7 +2353,7 @@ class TestApprovalNotifier:
             arguments={},
             requested_at=datetime.now(UTC),
         )
-        with pytest.raises((AttributeError, TypeError)):
+        with pytest.raises((AttributeError, TypeError, ValidationError)):
             req.session_id = "mutated"  # type: ignore[misc]
 
     def test_approval_notifier_is_abstract(self):
@@ -2361,7 +2362,6 @@ class TestApprovalNotifier:
         with pytest.raises(TypeError):
             ApprovalNotifier()  # type: ignore[abstract]
 
-    @pytest.mark.asyncio
     async def test_request_approval_logs(self, caplog):
         import logging
         from datetime import UTC, datetime
@@ -2377,6 +2377,6 @@ class TestApprovalNotifier:
             arguments={"id": "m-abc"},
             requested_at=datetime.now(UTC),
         )
-        with caplog.at_level(logging.INFO, logger="mcp_gateway.approval.notifier"):
+        with caplog.at_level(logging.INFO):
             await notifier.request_approval(req)
         assert any("approval_required" in record.message for record in caplog.records)

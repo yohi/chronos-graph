@@ -29,6 +29,7 @@ suspend/resume 型の承認フロー**をオプトイン機能として追加す
 - `GatewaySettings` 拡張: `approval_blocking_mode` (default `False`)、
   `approval_timeout_seconds` (default `30`)、`approval_max_pending` (default `1000`)。
 - `InMemorySessionRegistry` の eviction hook 追加 (`on_session_evicted`)。
+  hook 起動時の例外は必ず audit log + `logger.error` で観測可能とする。
 - 単体テスト (TDD)。
 
 ### Out-of-Scope
@@ -300,7 +301,7 @@ class GatewaySettings(BaseSettings):
 `on_session_evicted: Callable[[str], Awaitable[None]] | None = None`
 を受け取れるようにする。`lookup()` (TTL/idle expiry 検出時)、`remove()`、
 `purge()` で session が辞書から削除されるパスにおいて、callback が設定済なら
-`asyncio.create_task(on_session_evicted(sid))` で非同期発火する。
+**例外回収可能な形で** 非同期発火する (詳細は次節)。
 
 `app.py` では以下の通り配線する:
 
@@ -319,6 +320,30 @@ sessions = InMemorySessionRegistry(
 すべての session 終了経路で、当該 session に紐づく未解決 approval が
 `REJECTED` で解決され、`_pending` が直ちに回収される。**§8 の `max_pending` 上限
 保護はこの hook を前提として成立する。**
+
+#### Eviction callback の例外監視 (要件)
+
+`asyncio.create_task()` で起動した eviction task の例外は、デフォルトでは
+task が GC されるまで補足されず stderr の `Task exception was never retrieved`
+警告として流れるのみとなる。本設計の hook は `max_pending` 解放という
+**DoS 防御のクリティカルパス** を担うため、cleanup 失敗が silent になることは
+許容できない。したがって `InMemorySessionRegistry` 側の hook 起動コードは
+以下の不変条件を満たすこと:
+
+1. `asyncio.create_task(on_session_evicted(sid), name=f"session_evict_{sid[:8]}")`
+   で生成し、識別可能な name を付与する。
+2. 直ちに `task.add_done_callback(_log_evict_exception)` を呼んで
+   done callback を登録する。
+3. `_log_evict_exception(task)` 内で `task.exception()` を取得し、`None`
+   でなければ:
+   - `logger.error("session_eviction_callback_failed", ...)` で `exc_info` 付きログ。
+   - `AuditLogger.log(ev="session_evict_failed",
+     error_type=exc.__class__.__name__, sid=sid)` で監査ログにも出力。
+
+これにより hook 失敗 (例: `cancel_session` 実装変更で `RuntimeError`) は
+構造化監査ログ経由で必ず観測可能となり、回帰テスト
+(§7.1 `test_eviction_callback_logs_exception_when_cancel_session_raises`)
+で不変条件を保証する。
 
 ## 5. データフロー (REQUIRES_APPROVAL → APPROVED 例)
 
@@ -395,6 +420,17 @@ client (LLM)         gateway                      registry        notifier   ope
   下のテストとして維持し、既存の挙動契約を保証する。
 - 新規 fixture `approval_app_blocking` を追加し、blocking モード ON で別 app を組む。
 
+### 7.4 `TestSessionEvictionHook` (`InMemorySessionRegistry` の eviction hook)
+
+| テスト名                                                              | 期待 |
+|-----------------------------------------------------------------------|------|
+| `test_eviction_callback_invoked_on_idle_expiry`                       | idle timeout 経過後 lookup() で hook が起動する |
+| `test_eviction_callback_invoked_on_ttl_expiry`                        | TTL 経過後 lookup() で hook が起動する |
+| `test_eviction_callback_invoked_on_remove`                            | 明示的 remove() で hook が起動する |
+| `test_eviction_callback_invoked_on_purge`                             | purge() で全 expired session の hook が起動する |
+| `test_eviction_callback_logs_exception_when_callback_raises`          | hook 内例外が `session_evict_failed` audit + `logger.error` で観測可能 |
+| `test_eviction_callback_does_not_block_caller`                        | hook の awaitable は同期パスをブロックしない (即時 return) |
+
 ## 8. セキュリティ考慮
 
 ### 8.1 承認エンドポイントの認可モデル (defense-in-depth)
@@ -414,6 +450,21 @@ client (LLM)         gateway                      registry        notifier   ope
 policy で明示) を残すが、本仕様の範囲では「**要求元 agent ≠ resolver agent**」
 の単純規則で扱う。これは複数 agent (例: AI agent と UI operator) を別 API key で
 登録する運用前提で十分機能する。
+
+##### 既知の限界 (lateral approval)
+
+本モデルは **要求元と異なる任意の登録 agent による承認 ("lateral approval")**
+を防がない。具体的には次の脅威モデルに対しては脆弱:
+
+- 複数の AI agent (例: agent_A, agent_B) が登録されており、両者の API key が
+  独立した管理者の手元にある場合、agent_B の鍵保持者は (audit log や stderr 経由で
+  `approval_id` の漏洩を得れば) agent_A 由来の `tools/call` を承認できる。
+
+ChronosGraph の主要ユースケース (個人セルフホスト、全鍵を単一ユーザが保有)
+ではこの脅威は受容範囲内とみなすが、**多者運用を行う場合は本仕様のままでは
+不十分** であり、§11 の「`permitted_approvers: [agent_id, ...]` の policy DSL
+拡張」を実装する必要がある。本 Spec はこの不完全性を明示的に文書化することで
+運用者の判断材料とする。
 
 ### 8.2 監査ログ経由の自己昇格対策
 
@@ -473,9 +524,15 @@ log 漏洩経由での総当たり攻撃は実質困難 (`2^96` 試行が必要)
   展開では承認状態が共有されない。将来 Redis Pub/Sub 等への置換を想定する。
 - **MCP elicitation 未統合**: ccgate の "Server-defined Prompts" 相当の
   MCP プロトコルレベルでの UI 連携は本仕様では扱わない。
-- **operator role の policy 表現**: 本仕様の認可は「要求元 ≠ resolver」の
-  単純規則のみ。policy DSL に許可主体 (例: `permitted_approvers: [agent_id, ...]`
-  や `approver_role: operator`) を導入する高度な表現は将来課題。
+- **operator role の policy 表現 (lateral approval 対策)**: 本仕様の認可は
+  「要求元 ≠ resolver」の単純規則のみで、§8.1 末尾の「既知の限界 (lateral approval)」
+  に記載した脅威 (複数登録 agent 間での横断承認) を防がない。policy DSL に
+  許可主体 (例: `permitted_approvers: [agent_id, ...]` や
+  `approver_role: operator`) を導入する高度な表現は将来課題。
+  実装時は `IntentPolicy` / `ToolGuardrail` への `permitted_approvers:
+  frozenset[str] | None` 追加と、`PolicyEngine.evaluate_call()` 戻り値への
+  許可主体集合の伝搬、`PendingApprovalRegistry.register()` 引数への
+  `permitted_approvers: frozenset[str]` 追加が必要となる。
 - **永続化された監査ログの長期保管**: 本仕様では audit log を `AuditLogger`
   経由の構造化ログ出力に留める。長期保管・改ざん検知 (例: WORM ストレージ)
   は将来課題。

@@ -13,6 +13,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 logger = logging.getLogger(__name__)
 
 
+def _deep_freeze(v: Any) -> Any:
+    """再帰的にオブジェクトを不変な形式に変換します。"""
+    if isinstance(v, (dict, MappingProxyType, Mapping)):
+        return MappingProxyType({k: _deep_freeze(val) for k, val in v.items()})
+    if isinstance(v, (list, tuple)):
+        return tuple(_deep_freeze(i) for i in v)
+    if isinstance(v, (set, frozenset)):
+        return frozenset(_deep_freeze(i) for i in v)
+    return v
+
+
 class ApprovalRequest(BaseModel):
     """承認リクエストのデータモデル。"""
 
@@ -28,11 +39,8 @@ class ApprovalRequest(BaseModel):
     @field_validator("arguments", mode="after")
     @classmethod
     def _make_immutable(cls, v: Mapping[str, Any]) -> Mapping[str, Any]:
-        """引数を不変（MappingProxyType）に変換します。
-
-        元の辞書への参照を切るため、常に新しい辞書を作成してからラップします。
-        """
-        return MappingProxyType(dict(v))
+        """引数を再帰的に不変な形式に変換します。"""
+        return _deep_freeze(v)
 
 
 def _sanitize_for_log(data: Any) -> Any:

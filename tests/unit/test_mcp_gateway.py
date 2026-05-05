@@ -2208,6 +2208,53 @@ class TestServerValidationDeny:
         async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
             yield client
 
+    @pytest.fixture
+    def allow_app_with_upstream(self, tmp_path, monkeypatch):
+        policy = tmp_path / "intents.yaml"
+        policy.write_text(
+            textwrap.dedent(
+                """
+                version: 1
+                output_filters:
+                  f:
+                    type: none
+                intents:
+                  ro:
+                    description: "x"
+                    allowed_tools: [memory_search]
+                    output_filter: f
+                agents:
+                  agent-a:
+                    allowed_intents: [ro]
+                """
+            ).lstrip()
+        )
+        monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy))
+        monkeypatch.setenv("MCP_GATEWAY_API_KEYS_JSON", '{"agent-a":"ck_x"}')
+
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.app import build_app
+
+        upstream = AsyncMock()
+        upstream.list_tools.return_value = [{"name": "memory_search"}]
+        upstream.call_tool.return_value = {"ok": True}
+        app = build_app(
+            upstream_override=upstream,
+            initial_tools=upstream.list_tools.return_value,
+        )
+        return app, upstream
+
+    @pytest_asyncio.fixture
+    async def allow_client_with_upstream(self, allow_app_with_upstream):
+        import httpx
+        from httpx import ASGITransport
+
+        app, upstream = allow_app_with_upstream
+        transport = ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+            yield client, upstream
+
     @pytest.mark.asyncio
     async def test_param_validation_denied_returns_32602(self, validation_client):
         sid = await _get_sse_session_id(validation_client, intent="ro")
@@ -2243,6 +2290,30 @@ class TestServerValidationDeny:
         body = resp.json()
         assert body["error"]["code"] == -32602
         assert body["error"]["message"] == "forbidden_param:secret"
+
+    @pytest.mark.asyncio
+    async def test_allow_secret_args_denied_before_upstream_call(self, allow_client_with_upstream):
+        client, upstream = allow_client_with_upstream
+
+        sid = await _get_sse_session_id(client, intent="ro")
+        resp = await client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 12,
+                "method": "tools/call",
+                "params": {
+                    "name": "memory_search",
+                    "arguments": {"token": "sk-1234567890abcdef"},
+                },
+            },
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32601
+        assert body["error"]["message"] == "tool not found"
+        upstream.call_tool.assert_not_awaited()
 
 
 class TestEntrypoint:

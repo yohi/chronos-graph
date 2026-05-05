@@ -262,24 +262,23 @@ def build_router(
                             "error": error,
                         }
                     )
+                case "ALLOW" | "REQUIRES_APPROVAL" if _contains_secret(arguments):
+                    audit.log(
+                        ev="call",
+                        decision="deny",
+                        reason="secret_in_approval_args",
+                        agent=record.agent_id,
+                        sid=sid,
+                        tool=tool_name,
+                    )
+                    return JSONResponse(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": rpc_id,
+                            "error": {"code": -32601, "message": "tool not found"},
+                        }
+                    )
                 case "REQUIRES_APPROVAL":
-                    if _contains_secret(arguments):
-                        audit.log(
-                            ev="call",
-                            decision="deny",
-                            reason="secret_in_approval_args",
-                            agent=record.agent_id,
-                            sid=sid,
-                            tool=tool_name,
-                        )
-                        return JSONResponse(
-                            {
-                                "jsonrpc": "2.0",
-                                "id": rpc_id,
-                                "error": {"code": -32601, "message": "tool not found"},
-                            }
-                        )
-
                     audit.log(
                         ev="call",
                         decision="requires_approval",

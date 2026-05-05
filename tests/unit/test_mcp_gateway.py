@@ -2317,3 +2317,66 @@ class TestRuntimeValidation:
             PolicyEngine.validate_call(
                 tool_name="test", arguments={"price": False}, guardrail=guardrail_num
             )
+
+
+class TestApprovalNotifier:
+    """LogOnlyApprovalNotifier の単体テスト。"""
+
+    @pytest.mark.asyncio
+    async def test_request_approval_does_not_raise(self):
+        from datetime import UTC, datetime
+
+        from mcp_gateway.approval.notifier import ApprovalRequest, LogOnlyApprovalNotifier
+
+        notifier = LogOnlyApprovalNotifier()
+        req = ApprovalRequest(
+            session_id="sid-001",
+            agent_id="agent-a",
+            intent="curate_memories",
+            tool_name="memory_delete",
+            arguments={"id": "m-xyz"},
+            requested_at=datetime(2026, 5, 5, 12, 0, 0, tzinfo=UTC),
+        )
+        await notifier.request_approval(req)
+
+    def test_approval_request_is_immutable(self):
+        from datetime import UTC, datetime
+
+        from mcp_gateway.approval.notifier import ApprovalRequest
+
+        req = ApprovalRequest(
+            session_id="s",
+            agent_id="a",
+            intent="i",
+            tool_name="t",
+            arguments={},
+            requested_at=datetime.now(UTC),
+        )
+        with pytest.raises((AttributeError, TypeError)):
+            req.session_id = "mutated"  # type: ignore[misc]
+
+    def test_approval_notifier_is_abstract(self):
+        from mcp_gateway.approval.notifier import ApprovalNotifier
+
+        with pytest.raises(TypeError):
+            ApprovalNotifier()  # type: ignore[abstract]
+
+    @pytest.mark.asyncio
+    async def test_request_approval_logs(self, caplog):
+        import logging
+        from datetime import UTC, datetime
+
+        from mcp_gateway.approval.notifier import ApprovalRequest, LogOnlyApprovalNotifier
+
+        notifier = LogOnlyApprovalNotifier()
+        req = ApprovalRequest(
+            session_id="sid-log",
+            agent_id="agent-b",
+            intent="curate_memories",
+            tool_name="memory_delete",
+            arguments={"id": "m-abc"},
+            requested_at=datetime.now(UTC),
+        )
+        with caplog.at_level(logging.INFO, logger="mcp_gateway.approval.notifier"):
+            await notifier.request_approval(req)
+        assert any("approval_required" in record.message for record in caplog.records)

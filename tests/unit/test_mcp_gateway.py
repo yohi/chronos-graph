@@ -1904,7 +1904,7 @@ class TestServerRequiresApproval:
             async for line in resp.aiter_lines():
                 if line.startswith("data:") and "session_id=" in line:
                     data = line[len("data:") :].strip()
-                    return data.split("session_id=")[1]
+                    return data.split("session_id=", 1)[1]
         raise AssertionError("SSE endpoint event did not return session_id")
 
     @pytest.mark.asyncio
@@ -1930,8 +1930,8 @@ class TestServerRequiresApproval:
         import logging
 
         sid = await self._get_session_id(approval_client)
-        with caplog.at_level(logging.INFO):
-            await approval_client.post(
+        with caplog.at_level(logging.INFO, logger="mcp_gateway.approval.notifier"):
+            resp = await approval_client.post(
                 f"/messages?session_id={sid}",
                 json={
                     "jsonrpc": "2.0",
@@ -1940,6 +1940,7 @@ class TestServerRequiresApproval:
                     "params": {"name": "memory_delete", "arguments": {}},
                 },
             )
+        assert resp.status_code == 200
         assert any("approval_required" in r.message for r in caplog.records)
 
     @pytest.mark.asyncio

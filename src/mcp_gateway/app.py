@@ -113,6 +113,7 @@ def build_app(
 
     app = FastAPI(title="ChronosGraph MCP Gateway", lifespan=lifespan)
     app.state.tool_registry = registry
+
     app.include_router(
         build_router(
             handshake=handshake,

@@ -90,12 +90,13 @@ class PolicyEngine:
 
             # Type check
             if constraint.type is not None:
-                expected_type = {
+                types_map: dict[str, type | tuple[type, ...]] = {
                     "string": str,
                     "integer": int,
                     "number": (int, float),
                     "boolean": bool,
-                }[constraint.type]
+                }
+                expected_type = types_map[constraint.type]
                 if not isinstance(val, expected_type):
                     raise PolicyError(
                         f"parameter {param_name!r} must be {constraint.type}, "

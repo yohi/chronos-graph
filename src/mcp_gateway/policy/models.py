@@ -36,28 +36,51 @@ class ParamConstraint(BaseModel):
 
     @model_validator(mode="after")
     def validate_consistency(self) -> Self:
-        if self.type != "string":
+        # 1. pattern/max_length are only allowed for "string" or when type is None
+        if self.type not in (None, "string"):
             if self.pattern is not None:
-                raise ValueError("pattern is only allowed for type='string'")
+                raise ValueError(
+                    f"pattern is only allowed for type='string', got type={self.type!r}"
+                )
             if self.max_length is not None:
-                raise ValueError("max_length is only allowed for type='string'")
+                raise ValueError(
+                    f"max_length is only allowed for type='string', got type={self.type!r}"
+                )
 
-        if self.allowed_values is not None and self.type is not None:
-            expected_type = {
-                "string": str,
-                "integer": int,
-                "number": (int, float),
-                "boolean": bool,
-            }[self.type]
-            for val in self.allowed_values:
-                if not isinstance(val, expected_type):
-                    raise ValueError(
-                        f"allowed_values must be {self.type}, got {type(val).__name__}"
-                    )
+        # 2. Type-specific validation for allowed_values
+        if self.allowed_values is not None:
+            if self.type is not None:
+                types_map: dict[str, type | tuple[type, ...]] = {
+                    "string": str,
+                    "integer": int,
+                    "number": (int, float),
+                    "boolean": bool,
+                }
+                expected_type = types_map[self.type]
+                for val in self.allowed_values:
+                    if not isinstance(val, expected_type):
+                        raise ValueError(
+                            f"allowed_values must be {self.type}, got {type(val).__name__}"
+                        )
+            else:
+                # If type is None, ensure all elements in allowed_values are the same type
+                first_type = type(self.allowed_values[0])
+                # For "number" convenience, treat int and float as compatible if the
+                # first is one of them?
+                # But the requirement said "homogeneous", so let's stick to strict
+                # type(val) == first_type unless we want to be fancy.
+                for val in self.allowed_values:
+                    if type(val) is not first_type:
+                        raise ValueError(
+                            f"allowed_values must be homogeneous when type is None, "
+                            f"got mixture of {first_type.__name__} and {type(val).__name__}"
+                        )
 
-        if self.max_length is not None and self.max_length > MAX_PARAM_LENGTH:
-            raise ValueError(f"max_length exceeds system limit ({MAX_PARAM_LENGTH})")
+        # 3. ReDoS mitigation: Cap max_length at 4096
+        if self.max_length is not None and self.max_length > 4096:
+            raise ValueError("max_length exceeds ReDoS mitigation limit (4096)")
 
+        # (System limit check removed or replaced by the tighter 4096 limit)
         return self
 
 

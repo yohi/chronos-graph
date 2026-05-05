@@ -73,8 +73,14 @@ def _sanitize_for_log(data: Any) -> Any:
                 new_data[str(k)] = _sanitize_for_log(v)
         return new_data
 
-    if isinstance(data, (list, tuple)):
-        return [_sanitize_for_log(i) for i in data]
+    if isinstance(data, (list, tuple, set, frozenset)):
+        sanitized = [_sanitize_for_log(i) for i in data]
+        if isinstance(data, list):
+            return sanitized
+        if isinstance(data, tuple):
+            return tuple(sanitized)
+        if isinstance(data, (set, frozenset)):
+            return type(data)(sanitized)
 
     if isinstance(data, str):
         # メールアドレスの簡易パターンマスク
@@ -82,6 +88,17 @@ def _sanitize_for_log(data: Any) -> Any:
             return "**********"
         # SSN (XXX-XX-XXXX) の簡易パターンマスク
         if re.match(r"^\d{3}-\d{2}-\d{4}$", data):
+            return "**********"
+        # Secret patterns: Bearer, JWT, long hex/base64, credit card
+        if (
+            re.search(r"Bearer\s+\S+", data, re.I)
+            or re.match(r"^[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+$", data)  # JWT
+            or re.match(r"^[a-fA-F0-9]{32,}$", data)  # Long hex key (at least 32 chars)
+            or (
+                len(data) >= 32 and re.match(r"^[a-zA-Z0-9+/]+={0,2}$", data)
+            )  # Long base64-like key
+            or re.match(r"^\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}$", data)  # Credit card
+        ):
             return "**********"
 
     return data

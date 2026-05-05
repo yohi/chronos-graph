@@ -394,6 +394,7 @@ class TestTimeout:
             # Verify interrupt was called
             assert interrupt_called is True
             assert result.timeout is True
+            assert result.partial is True
             assert result.traversal_depth == 0
         finally:
             await adp.dispose()

@@ -1321,9 +1321,75 @@ MCP サーバーとは独立した Read-Only 可視化ダッシュボード。�
 
 ---
 
-## 15. ロードマップ
+## 15. MCP Gateway (IBAC & Guardrails)
 
-### 15.1 実装済み（2026-04-14 時点）
+### 15.1 概要
+
+MCP Gateway は、エージェントへの過剰権限付与を防ぐための意図ベースアクセス制御（IBAC）と、出力フィルタリング、およびパラメータ制約（Semantic Guardrails）による安全なツール実行環境を提供します。
+
+### 15.2 データモデル（`policy/models.py`）
+
+#### ParamConstraint
+
+各ツール引数に対する制約を定義します。
+
+| フィールド | 型 | 説明 |
+|---|---|---|
+| `type` | Literal | `string`, `integer`, `number`, `boolean` |
+| `max_length` | int | 文字列の最大長（ReDoS 対策を兼ねる） |
+| `pattern` | str | 正規表現（`re.fullmatch` で評価） |
+| `allowed_values` | list | 許容される値のリスト |
+| `forbidden` | bool | 引数の使用自体を禁止 |
+
+#### ToolGuardrail
+
+ツール単位のガードレール設定です。
+
+- `params`: `dict[str, ParamConstraint]` — 引数名ごとの制約
+- `requires_approval`: `bool` — HITL（Human-In-The-Loop）承認を必須とするか
+
+### 15.3 評価ロジック（`evaluate_call`）
+
+`tools/call` の実行前に以下の順序で評価を行います：
+
+1. **Capability チェック**: セッションに許可されたツールか
+2. **Intent チェック**: 現在のインテントで許可されたツールか
+3. **シークレットスキャン**: 引数に機密情報（APIキー等）が含まれていないか
+4. **パラメータ制約評価**:
+    - `forbidden` → 型チェック → `allowed_values` → `max_length` → `pattern`
+    - *※ 実際の処理は `check_call()` と `validate_call()` によって `PolicyError` を発生させ、`evaluate_call()` がキャッチして `EvaluationResult` を返す例外駆動フローで実装されています。*
+5. **承認フラグチェック**: `requires_approval` が true の場合、承認フローへ
+
+### 15.4 ReDoS 対策
+
+ユーザー定義の正規表現による脆弱性を防ぐため、以下の制約を強制します：
+
+- **パターン長制限**: `pattern` 文字列は 200 文字以内。
+- **先行長さ制限**: `pattern` を指定する場合、必ず `max_length` を併せて指定する必要があり、評価対象の文字列長が事前に制限されます。
+- **入力値制限**: 入力値自体も `RE_DOS_MAX_LENGTH` (4096文字) を超える場合は拒否されます。
+- **評価場所**: これらは `ParamConstraint` の `@model_validator` によって初期化時に Fail-fast で検証されます。
+
+### 15.5 HITL 承認フロー（`REQUIRES_APPROVAL`）
+
+承認が必要な操作が検知された場合、ゲートウェイは以下の挙動をとります：
+
+1. **通知**: `_schedule_approval_request` を通じて `ApprovalNotifier` を非同期タスクとして安全に分離起動し、承認要求を発行（現在は `LogOnlyApprovalNotifier` により、サニタイズされた安全なログを出力）。
+2. **エラー応答**: クライアントへ JSON-RPC エラーコード `-32001` (`approval_required`) を返却。
+3. **相関 ID**: エラーデータの `session_id` を用いて、後の承認操作と紐付けを可能にします。
+
+### 15.6 エラーコード定義
+
+| コード | メッセージ | 意味 |
+|---|---|---|
+| `-32601` | tool not found | 権限不足、または承認対象にシークレットが含まれる場合 |
+| `-32602` | (reason) | パラメータ制約違反（`param_too_long` 等） |
+| `-32001` | approval_required | 承認待ち。`data.session_id` を含む |
+
+---
+
+## 16. ロードマップ
+
+### 16.1 実装済み（2026-04-14 時点）
 
 | 機能 | 備考 |
 |------|------|
@@ -1340,7 +1406,7 @@ MCP サーバーとは独立した Read-Only 可視化ダッシュボード。�
 | pre-commit フック（ruff / mypy / shellcheck） | |
 | Playwright E2E テスト（6 テストグループ + axe-core） | |
 
-### 15.2 近期予定（1-2 ヶ月）
+### 16.2 近期予定（1-2 ヶ月）
 
 | 機能 | 優先度 | 概要 |
 |------|--------|------|
@@ -1350,7 +1416,7 @@ MCP サーバーとは独立した Read-Only 可視化ダッシュボード。�
 | 埋め込みベクトル自動マイグレーション | Medium | プロバイダー切替時の次元数変更に対応する再埋め込みスクリプト（`scripts/migrate_dimension.py`）。現状はフェイルファスト停止のみ（v2.1 ロードマップ） |
 | ベンチマーク artifact 自動化 | Low | `memory_edges` 10,000 件での depth=2/5 トラバーサルレイテンシを CI で記録 |
 
-### 15.3 中期予定（2-4 ヶ月）
+### 16.3 中期予定（2-4 ヶ月）
 
 | 機能 | 概要 |
 |------|------|
@@ -1361,7 +1427,7 @@ MCP サーバーとは独立した Read-Only 可視化ダッシュボード。�
 | 概念ドリフト検出 | `CONTRADICTS` エッジの自動検出・ユーザー通知・自動統合ロジック |
 | マルチプロバイダー統合強化 | LiteLLM / Custom API エンドポイントの本番安定化・テスト拡充 |
 
-### 15.4 長期予定（6 ヶ月以上）
+### 16.4 長期予定（6 ヶ月以上）
 
 | 機能 | 概要 |
 |------|------|

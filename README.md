@@ -146,6 +146,8 @@ uv run python -m context_store.dashboard.api_server
 #### 1. 宣言的な権限管理 (`intents.yaml`)
 「AIエージェントに対する権限設定の最大効率」を図るため、コードを修正することなく YAML ファイルのみで権限を一元管理できます。Gateway はこの設定に基づき、未許可リクエストを拒否し、許可済み出力をフィルタリングすることを支援します。
 
+さらに、**Semantic Guardrails** により、ツールの引数に対しても型、最大長、正規表現パターン、許容値のリストによる制限をかけることができ、不正な操作を未然に防ぎます。型チェックは厳密に行われ、指定した型（`string`, `integer`, `number`, `boolean`）と不一致の場合は即座に拒否（`DENY`）されます。また、ReDoS（正規表現DoS）攻撃を防ぐため、パターン文字数（最大200文字）や先行する長さ制限（`max_length`）が強制されます。
+
 ```yaml
 version: 1
 output_filters:
@@ -157,12 +159,30 @@ output_filters:
 
 intents:
   read_only_recall:
-    description: "検索専用の権限" # 非実行メタ情報（認可ロジックには影響しません）
+    description: "検索専用の権限"
     allowed_tools: [memory_search]
     output_filter: recall_safe
+    guardrails:
+      memory_search:
+        params:
+          query:
+            type: string
+            max_length: 512
+            pattern: "^[^<>{};]*$" # スクリプトインジェクション等の簡易防止
+
+  curate_memories:
+    description: "記憶の管理権限"
+    allowed_tools: [memory_delete]
+    output_filter: none
+    guardrails:
+      memory_delete:
+        requires_approval: true # 削除実行前に人間(HITL)の承認を必須にする
 ```
 
-#### 2. クライアント側の接続設定
+#### 2. HITL (Human-In-The-Loop) 承認
+`requires_approval: true` が設定されたツールが呼び出されると、Gateway は `-32001` (`approval_required`) エラーを返し、バックグラウンドで承認通知を発行します。これにより、破壊的な操作や機密性の高い操作を人間が事前にチェックすることが可能です。
+
+#### 3. クライアント側の接続設定
 エージェント側の設定（`mcp.json` や `claude_desktop_config.json` 等）には、環境変数ではなくヘッダを付与してエンドポイントを指定するだけです。これにより、エージェントごとに役割とアクセス権を安全に切り替えることができます。
 
 ```json
@@ -180,7 +200,7 @@ intents:
 }
 ```
 
-#### 3. プロンプトの最大効率化
+#### 4. プロンプトの最大効率化
 Gateway がツールの露出とペイロードを物理的にインターセプトするため、エージェントのシステムプロンプト（`AGENTS.md` 等）に「〇〇のツールは使わないで」「このフィールドは隠して」といった複雑な禁止事項を書く必要がなくなります。シンプルなプロンプトと Gateway の組み合わせにより、命令予算の浪費や LLM のハルシネーションを抑制することができます。
 
 *(※ 今後のロードマップとして、Gateway が MCP の `prompts` 機能をフックし、接続時にエージェントへ役割や制約を自動注入する機能の実装を予定しています。)*

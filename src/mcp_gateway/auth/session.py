@@ -87,7 +87,7 @@ class InMemorySessionRegistry:
                 agent_id=agent_id,
                 intent=intent,
                 caps=frozenset(caps),
-                guardrails=guardrails,
+                guardrails=guardrails.copy(),
                 output_filter_profile=output_filter_profile,
                 issued_at=now,
                 expires_at=now + self._ttl,

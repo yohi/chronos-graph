@@ -63,6 +63,11 @@ class ParamConstraint(BaseModel):
                 }
                 expected_type = types_map[self.type]
                 for val in self.allowed_values:
+                    # Booleans are subclasses of int in Python, but for policy enforcement
+                    # we treat them as distinct types.
+                    if self.type in ("integer", "number") and isinstance(val, bool):
+                        raise ValueError(f"allowed_values must be {self.type}, got boolean")
+
                     if not isinstance(val, expected_type):
                         raise ValueError(
                             f"allowed_values must be {self.type}, got {type(val).__name__}"

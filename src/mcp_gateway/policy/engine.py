@@ -79,6 +79,12 @@ class PolicyEngine:
         if guardrail is None:
             return
 
+        if guardrail.requires_approval:
+            # Until approval flow is implemented, we must fail closed.
+            raise PolicyError(
+                f"tool {tool_name!r} requires manual approval which is not yet implemented"
+            )
+
         for param_name, constraint in guardrail.params.items():
             if constraint.forbidden and param_name in arguments:
                 raise PolicyError(f"parameter {param_name!r} is forbidden for tool {tool_name!r}")
@@ -90,6 +96,13 @@ class PolicyEngine:
 
             # 1. Type check
             if constraint.type is not None:
+                # Booleans are subclasses of int in Python, but for policy enforcement
+                # we treat them as distinct types.
+                if constraint.type in ("integer", "number") and isinstance(val, bool):
+                    raise PolicyError(
+                        f"parameter {param_name!r} must be {constraint.type}, got boolean"
+                    )
+
                 types_map: dict[str, type | tuple[type, ...]] = {
                     "string": str,
                     "integer": int,

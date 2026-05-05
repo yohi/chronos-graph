@@ -2268,3 +2268,33 @@ class TestRuntimeValidation:
             PolicyEngine.validate_call(
                 tool_name="test", arguments={"id": "abc"}, guardrail=guardrail
             )
+
+    def test_validate_call_requires_approval(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.models import ToolGuardrail
+
+        guardrail = ToolGuardrail(requires_approval=True)
+        with pytest.raises(PolicyError, match="requires manual approval"):
+            PolicyEngine.validate_call(
+                tool_name="restricted_tool", arguments={}, guardrail=guardrail
+            )
+
+    def test_validate_call_numeric_bool_rejection(self):
+        from mcp_gateway.errors import PolicyError
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.models import ParamConstraint, ToolGuardrail
+
+        # Integer constraint
+        guardrail_int = ToolGuardrail(params={"age": ParamConstraint(type="integer")})
+        with pytest.raises(PolicyError, match="must be integer, got boolean"):
+            PolicyEngine.validate_call(
+                tool_name="test", arguments={"age": True}, guardrail=guardrail_int
+            )
+
+        # Number constraint
+        guardrail_num = ToolGuardrail(params={"price": ParamConstraint(type="number")})
+        with pytest.raises(PolicyError, match="must be number, got boolean"):
+            PolicyEngine.validate_call(
+                tool_name="test", arguments={"price": False}, guardrail=guardrail_num
+            )

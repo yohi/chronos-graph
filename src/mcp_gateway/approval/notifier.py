@@ -1,3 +1,7 @@
+"""HITL approval notifier: abstract base + log-only stub implementation."""
+
+from __future__ import annotations
+
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -35,9 +39,13 @@ class LogOnlyApprovalNotifier(ApprovalNotifier):
 
     async def request_approval(self, request: ApprovalRequest) -> None:
         """ログに承認が必要な旨を出力します。"""
+        # TODO: Slack Webhook / CIBA event queue への送信に差し替える
         logger.info(
-            "approval_required: session=%s, tool=%s, intent=%s",
+            "approval_required sid=%s agent=%s intent=%s tool=%s args=%r requested_at=%s",
             request.session_id,
-            request.tool_name,
+            request.agent_id,
             request.intent,
+            request.tool_name,
+            request.arguments,
+            request.requested_at.isoformat(),
         )

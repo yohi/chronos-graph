@@ -79,6 +79,10 @@ def _schedule_approval_request(
     )
 
 
+def _is_validation_deny(reason: str | None) -> bool:
+    return bool(reason) and (reason.startswith("param_") or reason.startswith("forbidden_param:"))
+
+
 def build_router(
     *,
     handshake: HandshakeService,
@@ -235,11 +239,16 @@ def build_router(
                         sid=sid,
                         tool=tool_name,
                     )
+                    error = (
+                        {"code": -32602, "message": decision.reason}
+                        if _is_validation_deny(decision.reason)
+                        else {"code": -32601, "message": "tool not found"}
+                    )
                     return JSONResponse(
                         {
                             "jsonrpc": "2.0",
                             "id": rpc_id,
-                            "error": {"code": -32601, "message": "tool not found"},
+                            "error": error,
                         }
                     )
                 case "REQUIRES_APPROVAL":

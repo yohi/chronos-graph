@@ -1946,11 +1946,14 @@ class TestServerRequiresApproval:
 
     @pytest.mark.asyncio
     async def test_requires_approval_notifier_failure_is_isolated(
-        self, approval_client, monkeypatch
+        self, approval_client, monkeypatch, capfd
     ):
         from mcp_gateway.approval.notifier import LogOnlyApprovalNotifier
 
+        started = asyncio.Event()
+
         async def raise_error(self, request):
+            started.set()
             raise RuntimeError("boom")
 
         monkeypatch.setattr(LogOnlyApprovalNotifier, "request_approval", raise_error)
@@ -1965,12 +1968,17 @@ class TestServerRequiresApproval:
                 "params": {"name": "memory_delete", "arguments": {}},
             },
         )
+        await asyncio.wait_for(started.wait(), timeout=0.2)
         await asyncio.sleep(0)
 
         assert resp.status_code == 200
         body = resp.json()
         assert body["error"]["code"] == -32001
         assert body["error"]["message"] == "approval_required"
+
+        _, err = capfd.readouterr()
+        assert '"ev":"notification_failed"' in err
+        assert "Approval notification failed: boom" in err
 
     @pytest.mark.asyncio
     async def test_requires_approval_notification_is_fire_and_forget(
@@ -2031,6 +2039,89 @@ class TestServerRequiresApproval:
         body = resp.json()
         assert body["error"]["code"] == -32601
         assert body["error"]["message"] == "tool not found"
+
+
+class TestServerValidationDeny:
+    @pytest.fixture
+    def validation_app(self, tmp_path, monkeypatch):
+        policy = tmp_path / "intents.yaml"
+        policy.write_text(
+            textwrap.dedent(
+                """
+                version: 1
+                output_filters:
+                  f:
+                    type: none
+                intents:
+                  ro:
+                    description: "x"
+                    allowed_tools: [memory_search]
+                    output_filter: f
+                    guardrails:
+                      memory_search:
+                        params:
+                          query:
+                            type: string
+                            max_length: 3
+                agents:
+                  agent-a:
+                    allowed_intents: [ro]
+                """
+            ).lstrip()
+        )
+        monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy))
+        monkeypatch.setenv("MCP_GATEWAY_API_KEYS_JSON", '{"agent-a":"ck_x"}')
+
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.app import build_app
+
+        upstream = AsyncMock()
+        upstream.list_tools.return_value = [{"name": "memory_search"}]
+        return build_app(
+            upstream_override=upstream,
+            initial_tools=upstream.list_tools.return_value,
+        )
+
+    @pytest_asyncio.fixture
+    async def validation_client(self, validation_app):
+        import httpx
+        from httpx import ASGITransport
+
+        transport = ASGITransport(app=validation_app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+            yield client
+
+    async def _get_session_id(self, client) -> str:
+        async with client.stream(
+            "GET",
+            "/sse",
+            headers={"Authorization": "Bearer ck_x", "X-MCP-Intent": "ro"},
+        ) as resp:
+            assert resp.status_code == 200
+            async for line in resp.aiter_lines():
+                if line.startswith("data:") and "session_id=" in line:
+                    data = line[len("data:") :].strip()
+                    return data.split("session_id=", 1)[1]
+        raise AssertionError("SSE endpoint event did not return session_id")
+
+    @pytest.mark.asyncio
+    async def test_param_validation_denied_returns_32602(self, validation_client):
+        sid = await self._get_session_id(validation_client)
+        resp = await validation_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 10,
+                "method": "tools/call",
+                "params": {"name": "memory_search", "arguments": {"query": "abcd"}},
+            },
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32602
+        assert body["error"]["message"] == "param_too_long:query"
 
 
 class TestEntrypoint:

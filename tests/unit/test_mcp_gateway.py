@@ -2382,3 +2382,43 @@ class TestApprovalNotifier:
         with caplog.at_level(logging.INFO, logger="mcp_gateway.approval.notifier"):
             await notifier.request_approval(req)
         assert any("approval_required" in record.message for record in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_request_approval_logs_masking(self, caplog):
+        """機密情報がログ出力時にマスクされることを検証します。"""
+        import logging
+        from datetime import UTC, datetime
+
+        from mcp_gateway.approval.notifier import ApprovalRequest, LogOnlyApprovalNotifier
+
+        notifier = LogOnlyApprovalNotifier()
+        req = ApprovalRequest(
+            session_id="sid-mask",
+            agent_id="agent-c",
+            intent="sensitive_op",
+            tool_name="auth_tool",
+            arguments={
+                "api_key": "secret123",
+                "user_password": "mypassword",
+                "auth_token": "token456",
+                "safe_param": "visible",
+            },
+            requested_at=datetime.now(UTC),
+        )
+        with caplog.at_level(logging.INFO, logger="mcp_gateway.approval.notifier"):
+            await notifier.request_approval(req)
+
+        log_records = [r.message for r in caplog.records if "approval_required" in r.message]
+        assert len(log_records) == 1
+        log_msg = log_records[0]
+
+        # 完全一致および部分一致でのマスクを確認
+        assert "'api_key': '**********'" in log_msg
+        assert "'user_password': '**********'" in log_msg
+        assert "'auth_token': '**********'" in log_msg
+        assert "'safe_param': 'visible'" in log_msg
+
+        # 生の値が残っていないことを確認
+        assert "secret123" not in log_msg
+        assert "mypassword" not in log_msg
+        assert "token456" not in log_msg

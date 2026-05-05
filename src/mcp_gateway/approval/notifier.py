@@ -49,7 +49,9 @@ def _sanitize_for_log(data: Any) -> Any:
 
     if isinstance(data, (dict, MappingProxyType, Mapping)):
         return {
-            str(k): "**********" if str(k).lower() in sensitive_keys else _sanitize_for_log(v)
+            str(k): "**********"
+            if any(s in str(k).lower() for s in sensitive_keys)
+            else _sanitize_for_log(v)
             for k, v in data.items()
         }
     if isinstance(data, (list, tuple)):

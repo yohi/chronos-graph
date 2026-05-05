@@ -327,22 +327,52 @@ sessions = InMemorySessionRegistry(
 task が GC されるまで補足されず stderr の `Task exception was never retrieved`
 警告として流れるのみとなる。本設計の hook は `max_pending` 解放という
 **DoS 防御のクリティカルパス** を担うため、cleanup 失敗が silent になることは
-許容できない。したがって `InMemorySessionRegistry` 側の hook 起動コードは
-以下の不変条件を満たすこと:
+許容できない。したがって責務は以下の通り 2 層に分離して満たすこと:
+
+**`InMemorySessionRegistry` 側 (hook 起動層)** — 不変条件:
 
 1. `asyncio.create_task(on_session_evicted(sid), name=f"session_evict_{sid[:8]}")`
    で生成し、識別可能な name を付与する。
 2. 直ちに `task.add_done_callback(_log_evict_exception)` を呼んで
    done callback を登録する。
 3. `_log_evict_exception(task)` 内で `task.exception()` を取得し、`None`
-   でなければ:
-   - `logger.error("session_eviction_callback_failed", ...)` で `exc_info` 付きログ。
-   - `AuditLogger.log(ev="session_evict_failed",
-     error_type=exc.__class__.__name__, sid=sid)` で監査ログにも出力。
+   でなければ `logger.error("session_eviction_callback_failed", ..., exc_info=True)`
+   でモジュールロガーに記録する。`AuditLogger` は **呼ばない**。
+
+`InMemorySessionRegistry` は `AuditLogger` を直接依存しない。
+これにより低レベルの registry コンポーネントと高レベルの監査機構を疎結合に保つ。
+
+**`app.py` 側 (on_session_evicted ラッパー層)** — 不変条件:
+
+`app.py` は `on_session_evicted` を `approval_registry.cancel_session` で直接配線
+するのではなく、以下のようなラッパー coroutine を介して配線する:
+
+```python
+async def _on_session_evicted(sid: str) -> None:
+    try:
+        await approval_registry.cancel_session(sid)
+    except Exception as exc:
+        audit.log(
+            ev="session_evict_failed",
+            error_type=exc.__class__.__name__,
+            sid=sid,
+        )
+        raise
+
+sessions = InMemorySessionRegistry(
+    ttl_seconds=settings.session_ttl_seconds,
+    idle_timeout_seconds=settings.session_idle_timeout_seconds,
+    on_session_evicted=_on_session_evicted,
+)
+```
+
+ラッパーは例外を再 `raise` してタスクに伝播させることで、
+`InMemorySessionRegistry` 側の `_log_evict_exception` による
+`logger.error` も確実に発火する。
 
 これにより hook 失敗 (例: `cancel_session` 実装変更で `RuntimeError`) は
-構造化監査ログ経由で必ず観測可能となり、回帰テスト
-(§7.1 `test_eviction_callback_logs_exception_when_cancel_session_raises`)
+`logger.error` (registry 層) と `AuditLogger.log` (app 層) の両方で観測可能となり、
+回帰テスト (§7.4 `test_eviction_callback_logs_exception_when_callback_raises`)
 で不変条件を保証する。
 
 ## 5. データフロー (REQUIRES_APPROVAL → APPROVED 例)

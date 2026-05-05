@@ -28,10 +28,25 @@ class ApprovalRequest(BaseModel):
     @field_validator("arguments", mode="after")
     @classmethod
     def _make_immutable(cls, v: Mapping[str, Any]) -> Mapping[str, Any]:
-        """引数を不変（MappingProxyType）に変換します。"""
-        if isinstance(v, dict):
-            return MappingProxyType(v)
-        return v
+        """引数を不変（MappingProxyType）に変換します。
+
+        元の辞書への参照を切るため、常に新しい辞書を作成してからラップします。
+        """
+        return MappingProxyType(dict(v))
+
+
+def _sanitize_for_log(data: Any) -> Any:
+    """ログ出力用に機密情報をマスクします。"""
+    sensitive_keys = {"api_key", "token", "secret", "authorization", "password", "email", "ssn"}
+
+    if isinstance(data, (dict, MappingProxyType, Mapping)):
+        return {
+            str(k): "**********" if str(k).lower() in sensitive_keys else _sanitize_for_log(v)
+            for k, v in data.items()
+        }
+    if isinstance(data, (list, tuple)):
+        return [_sanitize_for_log(i) for i in data]
+    return data
 
 
 class ApprovalNotifier(ABC):
@@ -55,6 +70,6 @@ class LogOnlyApprovalNotifier(ApprovalNotifier):
             request.agent_id,
             request.intent,
             request.tool_name,
-            request.arguments,
+            _sanitize_for_log(request.arguments),
             request.requested_at.isoformat(),
         )

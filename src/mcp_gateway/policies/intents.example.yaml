@@ -33,6 +33,12 @@ intents:
             type: string
             max_length: 512
             pattern: "^[^<>{};]*$"
+      memory_search_graph:
+        params:
+          query:
+            type: string
+            max_length: 512
+            pattern: "^[^<>{};]*$"
 
   curate_memories:
     description: "Curate own working memory. Search/save/delete; no external URL."
@@ -40,6 +46,8 @@ intents:
     output_filter: curator_full
     guardrails:
       memory_delete:
+        requires_approval: true
+      memory_prune:
         requires_approval: true
 
   ingest_external_url:
@@ -52,7 +60,7 @@ intents:
           url:
             type: string
             max_length: 2048
-            pattern: "^https?://.+"
+            pattern: "^https://[^@#?\\s]+"
 
 agents:
   summarizer-bot:

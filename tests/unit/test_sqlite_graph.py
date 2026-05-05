@@ -50,7 +50,7 @@ class TestCreateNode:
 
     @pytest.mark.asyncio
     async def test_create_node_idempotent(self, adapter: SQLiteGraphAdapter) -> None:
-        """同じノードIDで2回呼び出しても例外が発生しない (upsert)."""
+        """同じノードIDで2回呼び出しても例外が発生しない (upsert)."""  # noqa: RUF002
         await adapter.create_node("node-1", {"label": "first"})
         await adapter.create_node("node-1", {"label": "updated"})
         result = await adapter.traverse(["node-1"], [], depth=0)

@@ -117,6 +117,17 @@ def evaluate_call(
 
 **`re.fullmatch`** を使用するため `pattern` は部分一致ではなく完全マッチ。
 
+### ReDoS 対策
+
+ユーザー定義の `pattern` を外部入力文字列に対して評価する際、正規表現の壊滅的バックトラッキング（ReDoS）リスクが存在する。以下の2つの制御を実装に含めること。
+
+| 対策 | 実施タイミング | 具体的な内容 |
+|------|---------------|-------------|
+| **パターン文字列長制限** | ポリシーロード時（`_verify_references`） | `ParamConstraint.pattern` の文字数が 200 字を超える場合は `PolicyError` として起動を拒否 |
+| **評価対象の長さ先行保証** | `evaluate_call()` 内の評価順序の強制 | `pattern` チェックは必ず `max_length` チェックの**後**に実行する。`max_length` が未設定かつ `pattern` が存在する場合は `PolicyError` をロード時に発生させ、起動を拒否する |
+
+これにより、regex エンジンに渡される文字列長は `max_length` で事前に上限が保証される。
+
 ---
 
 ## 5. intents.example.yaml 拡張
@@ -161,6 +172,21 @@ src/mcp_gateway/approval/
     __init__.py
     notifier.py
 ```
+
+### `ApprovalRequest` データモデル
+
+```python
+@dataclass(frozen=True, slots=True)
+class ApprovalRequest:
+    session_id: str          # セッション識別子（SessionRecord.session_id）
+    agent_id: str            # エージェント識別子（SessionRecord.agent_id）
+    intent: str              # セッションに紐づくインテント名（SessionRecord.intent）
+    tool_name: str           # 承認が必要なツール名
+    arguments: dict[str, Any]  # ツールに渡された引数（そのまま転送）
+    requested_at: datetime   # 承認要求日時（UTC）
+```
+
+全フィールドは必須。`arguments` はシークレットスキャン済みの値のみ含む（`ToolProxy._contains_secret()` による事前検査後の値を使用するため、`ApprovalNotifier` 内での再スキャンは不要）。
 
 ### 抽象基底
 
@@ -254,6 +280,45 @@ match decision.status:
 | `TestEvaluateCall` | ALLOW / DENY / REQUIRES_APPROVAL の全分岐 |
 | `TestApprovalNotifier` | `LogOnlyApprovalNotifier.request_approval()` の呼び出し |
 | `TestServerRequiresApproval` | `/messages` エンドポイントの `-32001` レスポンス |
+
+### エッジケーステスト入力値と期待出力
+
+#### `TestParamConstraint` — 制約別エッジケース
+
+| テストケース | 入力値 | 制約設定 | 期待ステータス | 期待 reason |
+|-------------|--------|---------|--------------|------------|
+| max_length: 境界値（ちょうど上限） | `"a" * 512` | `max_length=512` | `ALLOW` | — |
+| max_length: 上限超過 | `"a" * 513` | `max_length=512` | `DENY` | `param_too_long:query` |
+| max_length: 空文字列 | `""` | `max_length=512` | `ALLOW` | — |
+| pattern: 完全マッチ | `"hello_world"` | `pattern="^[a-z_]+$"` | `ALLOW` | — |
+| pattern: 部分的に一致する文字列（fullmatch のため拒否） | `"hello world!"` | `pattern="^[a-z_]+$"` | `DENY` | `param_pattern_mismatch:query` |
+| pattern: 特殊文字（`<script>`） | `"<script>alert(1)</script>"` | `pattern="^[^<>{};]*$"` | `DENY` | `param_pattern_mismatch:query` |
+| pattern: Unicode 文字 | `"こんにちは"` | `pattern="^[a-z_]+$"` | `DENY` | `param_pattern_mismatch:query` |
+| allowed_values: リスト内の値 | `"read"` | `allowed_values=["read","write"]` | `ALLOW` | — |
+| allowed_values: リスト外の値 | `"admin"` | `allowed_values=["read","write"]` | `DENY` | `param_not_in_allowed_values:mode` |
+| forbidden: パラメータが存在する | `{"secret": "x"}` | `forbidden=True` on `secret` | `DENY` | `forbidden_param:secret` |
+| forbidden: パラメータが存在しない | `{"query": "hi"}` | `forbidden=True` on `secret` | `ALLOW` | — |
+| パラメータ自体が欠落（制約あり） | `{}` | `max_length=512` on `query` | `ALLOW` | — （欠落は無視）|
+| パラメータ型が不正（int を文字列制約に渡す） | `{"query": 12345}` | `max_length=512, pattern="^[a-z]+$"` | `ALLOW` | — （非 str は長さ・パターン検証をスキップ）|
+
+#### `TestEvaluateCall` — 分岐全網羅
+
+| テストケース | 入力 | 期待 `CallDecision.status` |
+|-------------|------|--------------------------|
+| caps になしツール | `tool_name="memory_delete"`, caps=`{"memory_search"}` | `DENY` |
+| 不明な intent | `intent="ghost_intent"` | `DENY` |
+| ガードレール未定義ツール | guardrails なし | `ALLOW` |
+| 全制約通過 | `query="safe query"`, max_length=512, pattern=`^[^<>]*$` | `ALLOW` |
+| requires_approval のみ（params 空） | `requires_approval=True` | `REQUIRES_APPROVAL` |
+| パラメータ違反 + requires_approval=True | `query="a"*600`, max_length=512 | `DENY` （パラメータ違反が優先）|
+
+#### `TestServerRequiresApproval` — エンドポイントレスポンス
+
+| テストケース | 操作 | 期待レスポンス |
+|-------------|------|--------------|
+| 承認必須ツール呼び出し | `tools/call` で `memory_delete` | `{"error": {"code": -32001, "message": "approval_required"}}` |
+| 承認必須ツール呼び出し時の監査ログ | 同上 | stderr に `decision=requires_approval` を含む JSON Lines |
+| 通常拒否ツール（caps 外） | `tools/call` で `admin_tool` | `{"error": {"code": -32601, "message": "tool not found"}}` |
 
 ### devcontainer でのテスト実行
 

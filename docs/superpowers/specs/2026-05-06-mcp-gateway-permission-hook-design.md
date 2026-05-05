@@ -27,7 +27,8 @@ suspend/resume 型の承認フロー**をオプトイン機能として追加す
 - `POST /approvals/{approval_id}` (新規エンドポイント): UI/operator からの decision 受信。
 - `server.py` の `tools/call` 処理拡張: blocking モード時に suspend/resume。
 - `GatewaySettings` 拡張: `approval_blocking_mode` (default `False`)、
-  `approval_timeout_seconds` (default `30`)。
+  `approval_timeout_seconds` (default `30`)、`approval_max_pending` (default `1000`)。
+- `InMemorySessionRegistry` の eviction hook 追加 (`on_session_evicted`)。
 - 単体テスト (TDD)。
 
 ### Out-of-Scope
@@ -39,7 +40,7 @@ suspend/resume 型の承認フロー**をオプトイン機能として追加す
 
 ## 3. アーキテクチャ
 
-```
+```text
 ┌───────────────────────────────────────────────────────────────┐
 │                     MCP Gateway Process                        │
 │                                                                │
@@ -88,39 +89,60 @@ class ApprovalDecision:
 ### 4.2 `src/mcp_gateway/approval/registry.py` (新規)
 
 ```python
+class ResolveOutcome(str, Enum):
+    OK = "ok"
+    NOT_FOUND = "not_found"          # 未登録 or 既に resolve 済みで wait 側削除済
+    ALREADY_RESOLVED = "already_resolved"
+    FORBIDDEN = "forbidden"          # resolver agent_id が許可主体と不一致
+
 class PendingApprovalRegistry:
     def __init__(self, *, max_pending: int = 1000) -> None:
         self._lock = asyncio.Lock()
         self._pending: dict[str, _Pending] = {}
         self._max_pending = max_pending
         # _Pending: { event: asyncio.Event, decision: ApprovalDecision|None,
-        #             session_id: str, request: ApprovalRequest }
+        #             session_id: str, requester_agent_id: str,
+        #             request: ApprovalRequest }
 
-    async def register(self, *, session_id: str, request: ApprovalRequest) -> str:
+    async def register(
+        self, *, session_id: str, requester_agent_id: str, request: ApprovalRequest
+    ) -> str:
         """approval_id (uuid hex) を発行し、Event を初期化して dict に登録する。
-        - サイズ上限 (max_pending) 到達時は KeyError("approval_registry_full")。"""
+        - サイズ上限 (max_pending) 到達時は PolicyError("approval_registry_full") を送出。
+          server.py 側で捕捉し JSON-RPC -32603 internal_error に変換する。"""
 
     async def wait_for_decision(self, approval_id: str, *, timeout: float) -> ApprovalDecision:
         """asyncio.Event を timeout 付きで待機。
         - timeout 発火時: dict から削除し DecisionStatus.TIMEOUT を返す。
         - resolve 済み時 (Event 既セット含む): 保存した decision を返し、dict から削除。
-        - 未登録 ID への呼び出しは KeyError (server.py 直後呼び出しでは発生し得ない)。"""
+        - 未登録 ID への呼び出しは KeyError(approval_id) を送出 (プログラミングエラー扱い)。"""
 
     async def resolve(
-        self, approval_id: str, *, status: DecisionStatus, reason: str | None = None
-    ) -> bool:
-        """既に resolve 済みなら False、未登録なら False。
-        成功時は decision をセットして Event.set()。エントリ自身は wait 側が削除。"""
+        self,
+        approval_id: str,
+        *,
+        resolver_agent_id: str,
+        status: DecisionStatus,
+        reason: str | None = None,
+    ) -> ResolveOutcome:
+        """resolver_agent_id を必須引数化し、許可主体検証を内蔵する。
+        - 未登録: NOT_FOUND
+        - 既に resolve 済み (decision 設定済): ALREADY_RESOLVED
+        - resolver_agent_id == requester_agent_id (自己承認): FORBIDDEN
+        - 上記以外で成功: OK (decision をセットして Event.set())
+        エントリの削除は wait_for_decision() 側で行う。"""
 
     async def cancel_session(self, session_id: str) -> None:
-        """指定 session_id に紐づく未解決の承認をすべて REJECTED で解決。"""
+        """指定 session_id に紐づく未解決の承認をすべて REJECTED で解決。
+        呼び出し契機は §4.5 の SessionRegistry expiry hook 参照。"""
 ```
 
 #### 不変条件
 
-- 同一 `approval_id` への `resolve()` は idempotent (2回目は False)。
+- 同一 `approval_id` への `resolve()` 成功は 1 回のみ (2 回目以降は ALREADY_RESOLVED)。
 - `wait_for_decision()` は必ず `_pending` から自身のエントリを削除して返却する。
 - `register()` の戻り `approval_id` は uuid4 hex で、衝突確率は無視可能とみなす。
+- 自己承認 (resolver == requester) は常に FORBIDDEN (audit log 漏洩経由の自己昇格防御)。
 
 ### 4.3 `src/mcp_gateway/server.py` 拡張
 
@@ -146,49 +168,107 @@ def build_router(
 - `approval_blocking_mode=False` (default): 既存挙動を維持 (`-32001` 即時返却)。
 - `approval_blocking_mode=True`: 以下の suspend/resume フローを実行。
 
+##### 前提条件 (precondition)
+
+`build_router()` 関数冒頭で以下の検証を行い、不正組み合わせを起動時に検出する:
+
+```python
+if approval_blocking_mode and approval_registry is None:
+    raise ValueError(
+        "approval_registry must be provided when approval_blocking_mode=True"
+    )
+```
+
+これにより `app.py` でのワイヤリングミスが実行時 `AttributeError` ではなく
+**起動時 ValueError** として検出され、Fail-fast 原則を維持する。
+
 #### 4.3.2 REQUIRES_APPROVAL ハンドラ (blocking モード時)
 
-```
-1. registry.register(session_id, ApprovalRequest) → approval_id
+```text
+1. try:
+       approval_id = await registry.register(
+           session_id=record.session_id,
+           requester_agent_id=record.agent_id,
+           request=ApprovalRequest(...),
+       )
+   except PolicyError as exc:
+       # max_pending overflow
+       audit.log(ev="call", decision="deny", reason="approval_registry_full", ...)
+       return JSON-RPC error -32603 "internal_error"
+
 2. _schedule_approval_request(notifier, request)  # 既存通り fire-and-forget
-3. audit.log(ev="call", decision="approval_pending",
-             agent=..., sid=..., tool=..., approval_id=approval_id)
+3. approval_id_log = _approval_id_for_log(approval_id)  # 先頭 8 文字 + "..."
+   audit.log(ev="call", decision="approval_pending",
+             agent=..., sid=..., tool=..., approval_ref=approval_id_log)
 4. decision = await registry.wait_for_decision(approval_id, timeout=approval_timeout_seconds)
 
 5. match decision.status:
    case APPROVED:
        # 既存 ALLOW パスと同じ処理
        payload = await proxy._call_server_trusted(tool_name, arguments)
-       audit.log(ev="call", decision="allow_after_approval", ..., approval_id=...)
+       audit.log(ev="call", decision="allow_after_approval",
+                 ..., approval_ref=approval_id_log)
        return {"jsonrpc": "2.0", "id": rpc_id, "result": payload}
    case REJECTED:
-       audit.log(ev="call", decision="approval_rejected", ..., approval_id=...,
-                 reason=decision.reason)
+       audit.log(ev="call", decision="approval_rejected",
+                 ..., approval_ref=approval_id_log, reason=decision.reason)
        return JSON-RPC error -32002 "approval_rejected"
    case TIMEOUT:
-       audit.log(ev="call", decision="approval_timeout", ..., approval_id=...)
+       audit.log(ev="call", decision="approval_timeout",
+                 ..., approval_ref=approval_id_log)
        return JSON-RPC error -32003 "approval_timeout"
 ```
 
+##### audit log での approval_id 取り扱い
+
+`_approval_id_for_log(approval_id: str) -> str` ヘルパを `server.py` に追加し、
+audit log には常に `approval_id[:8] + "..."` (先頭 8 文字 + 省略記号、機械可読
+ではあるが原 ID 推測不可) を `approval_ref` フィールドで出力する。
+原 `approval_id` (32 文字 uuid hex) は **process メモリ内でのみ保持** し、
+log/stderr/stdout に出力しない。これにより監査ログ漏洩経由での承認エンドポイント
+不正利用を防ぐ (詳細は §8 を参照)。
+
 #### 4.3.3 新エンドポイント `POST /approvals/{approval_id}`
 
-- 認証: 既存の Bearer API key (Authorization ヘッダ) を流用。`HandshakeService`
-  ではなく `ApiKeyAuthenticator` を直接呼んで agent_id 解決のみ行う
+- **認証**: 既存の Bearer API key (Authorization ヘッダ) を流用。`HandshakeService`
+  ではなく `ApiKeyAuthenticator` を直接呼んで `resolver_agent_id` を解決
   (intent ヘッダ等は不要)。認証失敗時は 401。
+- **認可 (許可主体検証)**: `registry.resolve()` 内で `resolver_agent_id` と
+  `requester_agent_id` を比較し、**自己承認 (一致)** を `FORBIDDEN` として拒否。
+  `tools/call` を出した agent がそのまま自分の approval を承認することを禁ずる。
+  これにより監査ログから推測された approval_id が万が一漏洩しても、
+  自己昇格 (self-approval) は成立しない。
 - リクエストボディ:
+
   ```json
   {
-    "decision": "approve",          // | "reject"
+    "decision": "approve",
     "reason": "explanation (optional)"
   }
   ```
-- 処理:
-  1. body をパースし、`decision in {"approve","reject"}` を検証 (それ以外は 400)。
-  2. `registry.resolve(approval_id, status=APPROVED|REJECTED, reason=...)` を呼ぶ。
-  3. 戻り値が `False` なら 404 (`approval_not_found_or_already_resolved`)。
-  4. 成功時 200 `{"status": "resolved", "approval_id": "..."}`。
-- audit log: `ev="approval_decision", decision=..., agent=..., approval_id=..., reason=...`。
-- セキュリティ: body はサイズ制限 (例: 1KB) を `Request.body()` の長さチェックで設ける。
+
+  `decision` は `"approve" | "reject"` のいずれか。
+- **処理フロー**:
+  1. `Authorization` ヘッダを `ApiKeyAuthenticator` で検証 → `resolver_agent_id` を取得。
+     失敗時 401 `{"error": "auth_failed"}`。
+  2. body をパース。サイズ 1KB 超過なら 413 `{"error": "payload_too_large"}`。
+     JSON 不正なら 400 `{"error": "invalid_json"}`。
+  3. `decision in {"approve","reject"}` を検証 (それ以外は 400 `{"error": "invalid_decision"}`)。
+  4. `outcome = await registry.resolve(approval_id, resolver_agent_id=..., status=..., reason=...)` を呼ぶ。
+  5. `outcome` に応じて HTTP 応答を返す:
+
+     | outcome             | HTTP | body                                              |
+     |---------------------|------|---------------------------------------------------|
+     | `OK`                | 200  | `{"status": "resolved", "approval_id": "..."}`    |
+     | `NOT_FOUND`         | 404  | `{"error": "approval_not_found"}`                 |
+     | `ALREADY_RESOLVED`  | 404  | `{"error": "approval_not_found"}` (NOT_FOUND と統合) |
+     | `FORBIDDEN`         | 403  | `{"error": "self_approval_forbidden"}`            |
+
+     `ALREADY_RESOLVED` と `NOT_FOUND` を 404 に統合する理由は
+     存在判定オラクルを与えないため。
+- **audit log**: `ev="approval_decision", outcome=..., resolver=resolver_agent_id,
+  approval_ref=approval_id[:8]+"...", reason=...` を記録。
+  原 approval_id は出力しない。
 
 ### 4.4 `src/mcp_gateway/config.py`
 
@@ -197,18 +277,52 @@ class GatewaySettings(BaseSettings):
     ...
     approval_blocking_mode: bool = False
     approval_timeout_seconds: float = Field(default=30.0, gt=0.0, le=600.0)
+    approval_max_pending: int = Field(default=1000, gt=0, le=100_000)
 ```
+
+環境変数:
+
+- `MCP_GATEWAY_APPROVAL_BLOCKING_MODE=true|false`
+- `MCP_GATEWAY_APPROVAL_TIMEOUT_SECONDS=30`
+- `MCP_GATEWAY_APPROVAL_MAX_PENDING=1000`
 
 ### 4.5 `src/mcp_gateway/app.py`
 
-- `PendingApprovalRegistry` をライフサイクルでシングルトン生成。
+- `PendingApprovalRegistry` をライフサイクル (FastAPI `lifespan`) で
+  シングルトン生成し、`app.state.approval_registry` に格納。
 - `build_router()` に `approval_registry`、`approval_blocking_mode`、
   `approval_timeout_seconds` を渡す。
 - 既存の `LogOnlyApprovalNotifier` 注入箇所はそのまま維持。
 
+#### Session lifecycle hook の配線
+
+`InMemorySessionRegistry` を拡張し、コンストラクタで
+`on_session_evicted: Callable[[str], Awaitable[None]] | None = None`
+を受け取れるようにする。`lookup()` (TTL/idle expiry 検出時)、`remove()`、
+`purge()` で session が辞書から削除されるパスにおいて、callback が設定済なら
+`asyncio.create_task(on_session_evicted(sid))` で非同期発火する。
+
+`app.py` では以下の通り配線する:
+
+```python
+approval_registry = PendingApprovalRegistry(
+    max_pending=settings.approval_max_pending,
+)
+sessions = InMemorySessionRegistry(
+    ttl_seconds=settings.session_ttl_seconds,
+    idle_timeout_seconds=settings.session_idle_timeout_seconds,
+    on_session_evicted=approval_registry.cancel_session,
+)
+```
+
+これにより、クライアント切断 (idle timeout)・TTL expiry・明示的 `remove`
+すべての session 終了経路で、当該 session に紐づく未解決 approval が
+`REJECTED` で解決され、`_pending` が直ちに回収される。**§8 の `max_pending` 上限
+保護はこの hook を前提として成立する。**
+
 ## 5. データフロー (REQUIRES_APPROVAL → APPROVED 例)
 
-```
+```text
 client (LLM)         gateway                      registry        notifier   operator UI
    │                    │                            │                │           │
    │── tools/call ─────▶│                            │                │           │
@@ -241,16 +355,20 @@ client (LLM)         gateway                      registry        notifier   ope
 
 ### 7.1 `TestPendingApprovalRegistry` (registry 単体)
 
-| テスト名                                              | 期待 |
-|-------------------------------------------------------|------|
-| `test_register_returns_unique_approval_id`            | 連続登録で uuid hex がユニーク |
-| `test_wait_for_decision_returns_approved_when_resolved` | resolve(APPROVED) 後の wait は APPROVED を返す |
-| `test_wait_for_decision_returns_rejected_when_resolved` | 同上 (REJECTED) |
-| `test_wait_for_decision_times_out`                    | timeout 経過で TIMEOUT |
-| `test_resolve_unknown_id_returns_false`               | 未登録 ID は idempotent に False |
-| `test_resolve_already_resolved_returns_false`         | 2 回目の resolve は False |
-| `test_concurrent_resolve_is_safe`                     | 同時 resolve でも 1 つだけ True |
-| `test_cancel_session_rejects_pending`                 | session_id 単位で REJECTED 解決 |
+| テスト名                                                  | 期待 |
+|-----------------------------------------------------------|------|
+| `test_register_returns_unique_approval_id`                | 連続登録で uuid hex がユニーク |
+| `test_register_raises_policy_error_on_overflow`           | `max_pending` 超過で `PolicyError("approval_registry_full")` |
+| `test_wait_for_decision_returns_approved_when_resolved`   | resolve(APPROVED) 後の wait は APPROVED を返す |
+| `test_wait_for_decision_returns_rejected_when_resolved`   | 同上 (REJECTED) |
+| `test_wait_for_decision_times_out`                        | timeout 経過で TIMEOUT |
+| `test_wait_for_decision_unknown_id_raises_keyerror`       | 未登録 ID で KeyError |
+| `test_resolve_unknown_id_returns_not_found`               | 未登録 ID は `ResolveOutcome.NOT_FOUND` |
+| `test_resolve_already_resolved_returns_already_resolved`  | 2 回目は `ALREADY_RESOLVED` |
+| `test_resolve_self_approval_returns_forbidden`            | resolver == requester で `FORBIDDEN`、Event 未セット |
+| `test_concurrent_resolve_is_safe`                         | 同時 resolve で OK は 1 つのみ |
+| `test_cancel_session_rejects_pending`                     | session_id 単位で REJECTED 解決 |
+| `test_cancel_session_is_idempotent_for_unknown_sid`       | 未登録 session_id でも例外なし |
 
 ### 7.2 `TestServerApprovalSuspend` (httpx ASGITransport, blocking モード)
 
@@ -259,12 +377,17 @@ client (LLM)         gateway                      registry        notifier   ope
 | `test_blocking_mode_suspends_until_approve`             | approve 後 result が返る |
 | `test_blocking_mode_returns_32002_on_reject`            | -32002 + reason |
 | `test_blocking_mode_returns_32003_on_timeout`           | timeout 後 -32003 |
+| `test_blocking_mode_returns_32603_when_registry_full`   | `max_pending=1` で 2 件目は -32603 |
+| `test_blocking_mode_session_eviction_cancels_pending`   | session expiry で pending が REJECTED 解決される |
 | `test_approval_callback_404_for_unknown_id`             | 未登録 ID で 404 |
 | `test_approval_callback_404_for_already_resolved`       | 2回目の resolve は 404 (404 に統合) |
+| `test_approval_callback_403_for_self_approval`          | resolver == requester で 403 `self_approval_forbidden` |
 | `test_approval_callback_400_for_invalid_decision`       | decision が approve/reject 以外なら 400 |
+| `test_approval_callback_413_for_oversized_body`         | body が 1KB 超で 413 |
 | `test_approval_callback_401_without_auth`               | Authorization ヘッダ欠落で 401 |
-| `test_blocking_mode_audit_logs_pending_and_resolution`  | pending/resolved/rejected/timeout の audit log が出力される |
+| `test_blocking_mode_audit_logs_truncate_approval_id`    | audit log には `approval_ref` のみ出力され、原 ID は出ない |
 | `test_blocking_mode_does_not_call_upstream_on_reject`   | upstream モックが呼ばれない |
+| `test_build_router_raises_when_blocking_without_registry` | `approval_blocking_mode=True` かつ `approval_registry=None` で `ValueError` |
 
 ### 7.3 既存テストの扱い
 
@@ -274,19 +397,58 @@ client (LLM)         gateway                      registry        notifier   ope
 
 ## 8. セキュリティ考慮
 
-- **承認エンドポイントの認可**: 現バージョンでは Bearer API key (任意の登録 agent)
-  で承認可能とする。将来的には operator 専用 key スコープを追加する余地を残す。
-  本仕様では `approval_id` 自体が unguessable な uuid4 hex (128bit)
-  であることをもって "authenticated callback" を成立させる。
-- **シークレット混入**: 既存 `_contains_secret(arguments)` チェックは
-  `evaluate_call` 後に既に行われているため、approval_id に紐付く request 内に
-  原始的な secret が混入することはない。`_sanitize_for_log` で notifier 引数も既にマスク済。
-- **DoS 対策**: `PendingApprovalRegistry` の最大エントリ数を `max_pending`
-  (default 1000) で上限制御。`register()` 時に上限到達なら
-  `PolicyError("approval_registry_full")` を送出し、`tools/call` は
-  JSON-RPC `-32603 internal_error` を返す。timeout (default 30s) による
-  自然回収を併用。
-- **request body サイズ**: `POST /approvals/{id}` は 1KB 上限。
+### 8.1 承認エンドポイントの認可モデル (defense-in-depth)
+
+承認の安全性は以下 **3 段階** で担保する。いずれか単独に依存しない:
+
+1. **Bearer API key 認証** (Authorization ヘッダ): `ApiKeyAuthenticator` で
+   `resolver_agent_id` を解決。失敗時 401。
+2. **`approval_id` 知識** (uuid4 hex 128bit): URL path から取得した値が
+   registry に存在しない/既解決なら 404。総当たり耐性は uuid4 のエントロピーで担保。
+3. **許可主体検証 (自己承認禁止)**: `registry.resolve()` 内で
+   `resolver_agent_id == requester_agent_id` の場合 `FORBIDDEN` (HTTP 403)。
+   これにより万が一 audit log や stderr 経由で `approval_id` が要求元 agent に
+   漏洩しても、自己昇格 (self-approval) は成立しない。
+
+将来課題として「operator 専用 agent role / API key スコープ」(任意の許可主体集合を
+policy で明示) を残すが、本仕様の範囲では「**要求元 agent ≠ resolver agent**」
+の単純規則で扱う。これは複数 agent (例: AI agent と UI operator) を別 API key で
+登録する運用前提で十分機能する。
+
+### 8.2 監査ログ経由の自己昇格対策
+
+audit log には原 `approval_id` (32 文字) を **絶対に出力しない**。
+代わりに `approval_ref = approval_id[:8] + "..."` (先頭 8 文字 + 省略記号) を
+全ての関連 audit ログ (`approval_pending` / `allow_after_approval` /
+`approval_rejected` / `approval_timeout` / `approval_decision`) に記録する。
+
+8 文字 (32bit 相当) は人間が pending な承認をログ上で識別する用途には十分で、
+かつ残り 24 文字 (96bit) のエントロピーが ID 推測に対して残るため、
+log 漏洩経由での総当たり攻撃は実質困難 (`2^96` 試行が必要)。
+仮にログから推測 ID を完全に復元されても、§8.1 の自己承認禁止により
+要求元 agent では承認できない。
+
+### 8.3 シークレット混入
+
+既存の `_contains_secret(arguments)` チェックは `evaluate_call` 後に
+既に行われているため、`approval_id` に紐付く request 内に原始的な secret が
+混入することはない。`_sanitize_for_log` で notifier 引数も既にマスク済。
+
+### 8.4 DoS 対策
+
+- `PendingApprovalRegistry` の最大エントリ数を `max_pending` (default 1000)
+  で上限制御。`register()` 時に上限到達なら `PolicyError("approval_registry_full")`
+  を送出し、`tools/call` は JSON-RPC `-32603 internal_error` を返す。
+- timeout (default 30s) による自然回収。
+- §4.5 の **session lifecycle hook (`cancel_session`)** により、クライアント切断・
+  session expiry 経路でも `_pending` エントリは即時回収される。
+  これにより `max_pending` の保護が「TTL/idle 単位での即時開放」と組み合わせて
+  実効的に機能する。
+
+### 8.5 request body サイズ
+
+`POST /approvals/{id}` の body は 1KB 上限 (`Request.body()` 長さチェック)。
+超過時 413 を返却。
 
 ## 9. 後方互換性
 
@@ -307,7 +469,13 @@ client (LLM)         gateway                      registry        notifier   ope
 
 ## 11. 既知の限界 / 将来課題
 
-- インメモリ実装のためマルチプロセス展開 (gunicorn workers) では承認状態が共有されない。
-  将来 Redis Pub/Sub 等への置換を想定する。
-- ccgate の "Server-defined Prompts" 相当の MCP elicitation 連携は本仕様では扱わない。
-- 承認エンドポイントの operator 認可ロールは将来課題。
+- **マルチプロセス非対応**: インメモリ実装のため gunicorn 等の複数 worker
+  展開では承認状態が共有されない。将来 Redis Pub/Sub 等への置換を想定する。
+- **MCP elicitation 未統合**: ccgate の "Server-defined Prompts" 相当の
+  MCP プロトコルレベルでの UI 連携は本仕様では扱わない。
+- **operator role の policy 表現**: 本仕様の認可は「要求元 ≠ resolver」の
+  単純規則のみ。policy DSL に許可主体 (例: `permitted_approvers: [agent_id, ...]`
+  や `approver_role: operator`) を導入する高度な表現は将来課題。
+- **永続化された監査ログの長期保管**: 本仕様では audit log を `AuditLogger`
+  経由の構造化ログ出力に留める。長期保管・改ざん検知 (例: WORM ストレージ)
+  は将来課題。

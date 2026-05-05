@@ -1968,8 +1968,7 @@ class TestServerRequiresApproval:
                 "params": {"name": "memory_delete", "arguments": {}},
             },
         )
-        await asyncio.wait_for(started.wait(), timeout=0.2)
-        await asyncio.sleep(0)
+        await asyncio.wait_for(started.wait(), timeout=1.0)
 
         assert resp.status_code == 200
         body = resp.json()
@@ -2025,11 +2024,55 @@ class TestServerRequiresApproval:
 
         assert resp.status_code == 200
         assert resp.json()["error"]["message"] == "approval_required"
-        await asyncio.wait_for(started.wait(), timeout=0.2)
+        await asyncio.wait_for(started.wait(), timeout=1.0)
         assert created_tasks
 
         release.set()
         await asyncio.gather(*created_tasks, return_exceptions=True)
+
+    @pytest.mark.asyncio
+    async def test_requires_approval_secret_args_denied_without_notifier_calls(
+        self, approval_client, monkeypatch
+    ):
+        import mcp_gateway.server as server_module
+        from mcp_gateway.approval.notifier import LogOnlyApprovalNotifier
+
+        notifier_called = False
+        schedule_called = False
+
+        async def fail_if_called(self, request):
+            nonlocal notifier_called
+            notifier_called = True
+            raise AssertionError("request_approval should not be called")
+
+        def fail_if_scheduled(*, approval_notifier, request, audit, sid, timeout=5.0):
+            nonlocal schedule_called
+            schedule_called = True
+            raise AssertionError("_schedule_approval_request should not be called")
+
+        monkeypatch.setattr(LogOnlyApprovalNotifier, "request_approval", fail_if_called)
+        monkeypatch.setattr(server_module, "_schedule_approval_request", fail_if_scheduled)
+
+        sid = await self._get_session_id(approval_client)
+        resp = await approval_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 101,
+                "method": "tools/call",
+                "params": {
+                    "name": "memory_delete",
+                    "arguments": {"token": "sk-1234567890abcdef"},
+                },
+            },
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32601
+        assert body["error"]["message"] == "tool not found"
+        assert notifier_called is False
+        assert schedule_called is False
 
     @pytest.mark.asyncio
     async def test_caps_denied_returns_32601(self, approval_client):

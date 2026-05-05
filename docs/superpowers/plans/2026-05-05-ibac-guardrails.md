@@ -24,17 +24,17 @@
 | `tests/unit/test_mcp_gateway.py` | 変更 | `TestIBACModels`, `TestApprovalNotifier`, `TestParamConstraint`, `TestEvaluateCall`, `TestServerRequiresApproval` 追加 |
 
 ---
-
 ## Git ブランチ戦略
 
-```
+```text
 master
 ├── feature/phase1_ibac-models__base
 │   ├── feature/phase1-task1_model-tests       (base から派生)
 │   └── feature/phase1-task2_model-impl        (task1 から派生)
-├── feature/phase2_approval-notifier__base     (phase1 master マージ後)
+├── feature/phase2_approval-notifier__base     (master から作成・Phase 1 に依存しない)
 │   ├── feature/phase2-task1_notifier-tests    (base から派生)
 │   └── feature/phase2-task2_notifier-impl     (task1 から派生)
+```,old_string:
 ├── feature/phase3_evaluate-call__base         (phase2 master マージ後)
 │   ├── feature/phase3-task1_engine-tests      (base から派生)
 │   └── feature/phase3-task2_engine-impl       (task1 から派生)
@@ -282,12 +282,13 @@ git checkout -b feature/phase1-task2_model-impl
 
 - [ ] **Step 1: `models.py` に `ParamConstraint` と `ToolGuardrail` を追加する**
 
-`from __future__ import annotations` の下の import 行に `Any` を追加し、`OutputFilterDef` の直後に以下を挿入する。
+`from __future__ import annotations` の下の import 行に `re` と `Any` を追加し、`OutputFilterDef` の直後に以下を挿入する。
 
 ```python
 # models.py の import を変更
+import re
 from typing import Any, Literal, Self
-```
+```,old_string:
 
 `OutputFilterDef` クラスの直後（`IntentPolicy` の直前）に以下を追加する。
 
@@ -334,6 +335,13 @@ class IntentPolicy(BaseModel):
                             raise ValueError(
                                 f"intent {iname!r} tool {tool_name!r} param {param_name!r}: "
                                 f"pattern exceeds 200 chars (ReDoS mitigation)"
+                            )
+                        try:
+                            re.compile(constraint.pattern)
+                        except re.error as e:
+                            raise ValueError(
+                                f"intent {iname!r} tool {tool_name!r} param {param_name!r}: "
+                                f"invalid regex pattern: {e}"
                             )
                         if constraint.max_length is None:
                             raise ValueError(
@@ -1096,6 +1104,9 @@ class CallDecision:
         if intent_pol is None:
             return CallDecision(status="DENY", reason="unknown_intent")
 
+        if tool_name not in intent_pol.allowed_tools:
+            return CallDecision(status="DENY", reason="tool_not_allowed_for_intent")
+
         guardrail = intent_pol.guardrails.get(tool_name)
         if guardrail is None:
             return CallDecision(status="ALLOW")
@@ -1451,19 +1462,21 @@ class TestServerRequiresApproval:
         assert "session_id" in body["error"]["data"]
 
     @pytest.mark.asyncio
-    async def test_requires_approval_audit_log(self, approval_client, capsys):
+    async def test_requires_approval_audit_log(self, approval_client, caplog):
+        import logging
+
         sid = await self._get_session_id(approval_client)
-        await approval_client.post(
-            f"/messages?session_id={sid}",
-            json={
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": {"name": "memory_delete", "arguments": {}},
-            },
-        )
-        captured = capsys.readouterr()
-        assert "requires_approval" in captured.err
+        with caplog.at_level(logging.INFO):
+            await approval_client.post(
+                f"/messages?session_id={sid}",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {"name": "memory_delete", "arguments": {}},
+                },
+            )
+        assert any("approval_required" in r.message for r in caplog.records)
 
     @pytest.mark.asyncio
     async def test_caps_denied_returns_32601(self, approval_client):

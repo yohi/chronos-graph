@@ -329,34 +329,34 @@ class TestTimeout:
         )
         adp = SQLiteGraphAdapter(db_path=tmp_db_path, settings=settings)
         await adp.initialize()
+        try:
+            # Create a small graph
+            for nid in ["t1", "t2", "t3"]:
+                await adp.create_node(nid, {})
+            await adp.create_edge("t1", "t2", "TEMPORAL_NEXT", {})
+            await adp.create_edge("t2", "t3", "TEMPORAL_NEXT", {})
 
-        # Create a small graph
-        for nid in ["t1", "t2", "t3"]:
-            await adp.create_node(nid, {})
-        await adp.create_edge("t1", "t2", "TEMPORAL_NEXT", {})
-        await adp.create_edge("t2", "t3", "TEMPORAL_NEXT", {})
+            # Monkeypatch to force timeout
+            original_inner = adp._traverse_inner
 
-        # Monkeypatch to force timeout
-        original_inner = adp._traverse_inner
+            async def slow_inner(*args, **kwargs):
+                await asyncio.sleep(0.01)
+                return await original_inner(*args, **kwargs)
 
-        async def slow_inner(*args, **kwargs):
-            await asyncio.sleep(0.01)
-            return await original_inner(*args, **kwargs)
+            adp._traverse_inner = slow_inner
 
-        adp._traverse_inner = slow_inner
-
-        # Should not raise even if timeout hits
-        result = await adp.traverse(["t1"], [], depth=5)
-        assert isinstance(result, GraphResult)
-        assert result.partial is True
-        assert result.timeout is True
-        assert result.traversal_depth == 0
-        # In this specific test, because we sleep BEFORE calling the actual traversal,
-        # the result will be empty.
-        assert len(result.nodes) == 0
-        assert len(result.edges) == 0
-
-        await adp.dispose()
+            # Should not raise even if timeout hits
+            result = await adp.traverse(["t1"], [], depth=5)
+            assert isinstance(result, GraphResult)
+            assert result.partial is True
+            assert result.timeout is True
+            assert result.traversal_depth == 0
+            # In this specific test, because we sleep BEFORE calling the actual traversal,
+            # the result will be empty.
+            assert len(result.nodes) == 0
+            assert len(result.edges) == 0
+        finally:
+            await adp.dispose()
 
     @pytest.mark.asyncio
     async def test_traverse_interrupt_called_on_timeout(

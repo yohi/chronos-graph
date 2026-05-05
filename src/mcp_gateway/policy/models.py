@@ -26,6 +26,20 @@ class IntentPolicy(BaseModel):
     description: str
     allowed_tools: list[str] = Field(..., min_length=1)
     output_filter: str
+    guardrails: dict[str, ToolGuardrail] = Field(default_factory=dict)
+
+
+class ParamConstraint(BaseModel):
+    type: str | None = None
+    max_length: int | None = None
+    pattern: str | None = None
+    allowed_values: list[str] | None = None
+    forbidden: bool = False
+
+
+class ToolGuardrail(BaseModel):
+    params: dict[str, ParamConstraint] = Field(default_factory=dict)
+    requires_approval: bool = False
 
 
 class AgentPolicy(BaseModel):
@@ -46,6 +60,27 @@ class GatewayPolicy(BaseModel):
                 raise ValueError(
                     f"intent {iname!r} references unknown output_filter {intent.output_filter!r}"
                 )
+
+            # 5. guardrail keys exist in allowed_tools
+            for tname in intent.guardrails:
+                if tname not in intent.allowed_tools:
+                    raise ValueError(f"intent {iname!r} guardrail {tname!r} not in allowed_tools")
+
+            # 6. param constraints validation
+            for tname, guardrail in intent.guardrails.items():
+                for pname, constraint in guardrail.params.items():
+                    if constraint.pattern:
+                        if constraint.max_length is None:
+                            raise ValueError(
+                                f"intent {iname!r} tool {tname!r} param {pname!r} "
+                                "has pattern but missing max_length"
+                            )
+                        if len(constraint.pattern) > 200:
+                            raise ValueError(
+                                f"intent {iname!r} tool {tname!r} param {pname!r} "
+                                "pattern is too long (> 200)"
+                            )
+
         # 2. agent.allowed_intents は intents に存在
         for aname, agent in self.agents.items():
             for iname in agent.allowed_intents:

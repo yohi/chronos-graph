@@ -1997,8 +1997,6 @@ class TestIBACModels:
         assert p.guardrails["tool_a"].params["q"].max_length == 512
 
     def test_verify_references_guardrail_key_not_in_allowed_tools(self):
-        from pydantic import ValidationError
-
         from mcp_gateway.policy.models import GatewayPolicy
 
         with pytest.raises(ValidationError, match="guardrail"):
@@ -2019,11 +2017,9 @@ class TestIBACModels:
             )
 
     def test_verify_references_pattern_without_max_length_raises(self):
-        from pydantic import ValidationError
-
         from mcp_gateway.policy.models import GatewayPolicy
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError, match="missing max_length"):
             GatewayPolicy.model_validate(
                 {
                     "version": 1,
@@ -2043,11 +2039,9 @@ class TestIBACModels:
             )
 
     def test_verify_references_pattern_too_long_raises(self):
-        from pydantic import ValidationError
-
         from mcp_gateway.policy.models import GatewayPolicy
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError, match="pattern is too long"):
             GatewayPolicy.model_validate(
                 {
                     "version": 1,

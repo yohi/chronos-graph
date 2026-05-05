@@ -11,10 +11,10 @@ import re
 from copy import deepcopy
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal
 
 from mcp_gateway.errors import PolicyError
-from mcp_gateway.policy.models import GatewayPolicy, ToolGuardrail
+from mcp_gateway.policy.models import GatewayPolicy, ParamConstraint, ToolGuardrail
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +23,12 @@ class Grant:
     caps: frozenset[str]
     output_filter_profile: str
     guardrails: MappingProxyType[str, ToolGuardrail]
+
+
+@dataclass(frozen=True, slots=True)
+class CallDecision:
+    status: Literal["ALLOW", "DENY", "REQUIRES_APPROVAL"]
+    reason: str | None = None
 
 
 class PolicyEngine:
@@ -70,6 +76,63 @@ class PolicyEngine:
         if tool_name not in caps:
             raise PolicyError(f"tool {tool_name!r} is not in session capabilities")
 
+    def evaluate_call(
+        self,
+        *,
+        caps: frozenset[str],
+        tool_name: str,
+        arguments: dict[str, Any],
+        intent: str,
+    ) -> CallDecision:
+        if tool_name not in caps:
+            return CallDecision(status="DENY", reason="tool_not_in_caps")
+
+        intent_pol = self._policy.intents.get(intent)
+        if intent_pol is None:
+            return CallDecision(status="DENY", reason="unknown_intent")
+
+        if tool_name not in intent_pol.allowed_tools:
+            return CallDecision(status="DENY", reason="tool_not_allowed_for_intent")
+
+        guardrail = intent_pol.guardrails.get(tool_name)
+        if guardrail is None:
+            return CallDecision(status="ALLOW")
+
+        for param_name, constraint in guardrail.params.items():
+            if constraint.forbidden and param_name in arguments:
+                return CallDecision(status="DENY", reason=f"forbidden_param:{param_name}")
+
+            if param_name not in arguments:
+                continue
+
+            value = arguments[param_name]
+
+            if self._type_mismatch(value, constraint):
+                return CallDecision(status="DENY", reason=f"param_type_mismatch:{param_name}")
+
+            if constraint.max_length is not None and isinstance(value, str):
+                if len(value) > constraint.max_length:
+                    return CallDecision(status="DENY", reason=f"param_too_long:{param_name}")
+
+            if constraint.pattern is not None and isinstance(value, str):
+                if not re.fullmatch(constraint.pattern, value):
+                    return CallDecision(
+                        status="DENY",
+                        reason=f"param_pattern_mismatch:{param_name}",
+                    )
+
+            if constraint.allowed_values is not None:
+                if not self._matches_allowed_value(value, constraint.allowed_values):
+                    return CallDecision(
+                        status="DENY",
+                        reason=f"param_not_in_allowed_values:{param_name}",
+                    )
+
+        if guardrail.requires_approval:
+            return CallDecision(status="REQUIRES_APPROVAL")
+
+        return CallDecision(status="ALLOW")
+
     @staticmethod
     def validate_call(
         *,
@@ -81,7 +144,6 @@ class PolicyEngine:
             return
 
         if guardrail.requires_approval:
-            # Until approval flow is implemented, we must fail closed.
             raise PolicyError(
                 f"tool {tool_name!r} requires manual approval which is not yet implemented"
             )
@@ -93,50 +155,58 @@ class PolicyEngine:
             if param_name not in arguments:
                 continue
 
-            val = arguments[param_name]
+            value = arguments[param_name]
 
-            # 1. Type check
-            if constraint.type is not None:
-                # Booleans are subclasses of int in Python, but for policy enforcement
-                # we treat them as distinct types.
-                if constraint.type in ("integer", "number") and isinstance(val, bool):
-                    raise PolicyError(
-                        f"parameter {param_name!r} must be {constraint.type}, got boolean"
-                    )
+            if PolicyEngine._type_mismatch(value, constraint):
+                expected_type = constraint.type or "string"
+                actual_type = "boolean" if isinstance(value, bool) else type(value).__name__
+                raise PolicyError(
+                    f"parameter {param_name!r} must be {expected_type}, got {actual_type}"
+                )
 
-                types_map: dict[str, type | tuple[type, ...]] = {
-                    "string": str,
-                    "integer": int,
-                    "number": (int, float),
-                    "boolean": bool,
-                }
-                expected_type = types_map[constraint.type]
-                if not isinstance(val, expected_type):
-                    raise PolicyError(
-                        f"parameter {param_name!r} must be {constraint.type}, "
-                        f"got {type(val).__name__}"
-                    )
+            if constraint.allowed_values is not None and not PolicyEngine._matches_allowed_value(
+                value, constraint.allowed_values
+            ):
+                raise PolicyError(
+                    f"parameter {param_name!r} has invalid value {value!r}. "
+                    f"allowed: {constraint.allowed_values}"
+                )
 
-            # 2. Allowed values
-            if constraint.allowed_values is not None:
-                # Use strict type comparison because True == 1 in Python.
-                if not any(v == val and type(v) is type(val) for v in constraint.allowed_values):
-                    raise PolicyError(
-                        f"parameter {param_name!r} has invalid value {val!r}. "
-                        f"allowed: {constraint.allowed_values}"
-                    )
-
-            # 3. String-specific constraints
-            if isinstance(val, str):
-                if constraint.max_length is not None and len(val) > constraint.max_length:
+            if isinstance(value, str):
+                if constraint.max_length is not None and len(value) > constraint.max_length:
                     raise PolicyError(
                         f"parameter {param_name!r} exceeds max_length ({constraint.max_length})"
                     )
-                if constraint.pattern is not None:
-                    # Note: We rely on the fact that pattern was validated at load time.
-                    # For absolute ReDoS safety, one could use a library with timeouts,
-                    # but here we ensure pattern length and max_length are capped.
-                    if not re.fullmatch(constraint.pattern, val):
-                        raise PolicyError(
-                            f"parameter {param_name!r} does not match required pattern"
-                        )
+                if constraint.pattern is not None and not re.fullmatch(constraint.pattern, value):
+                    raise PolicyError(f"parameter {param_name!r} does not match required pattern")
+
+    @staticmethod
+    def _type_mismatch(value: Any, constraint: ParamConstraint) -> bool:
+        constraint_type = constraint.type
+        has_string_constraint = constraint.max_length is not None or constraint.pattern is not None
+
+        if constraint_type is None and not has_string_constraint:
+            return False
+
+        if constraint_type == "string" or (constraint_type is None and has_string_constraint):
+            return not isinstance(value, str)
+
+        if constraint_type == "integer":
+            return isinstance(value, bool) or not isinstance(value, int)
+
+        if constraint_type == "number":
+            return isinstance(value, bool) or not isinstance(value, (int, float))
+
+        if constraint_type == "boolean":
+            return not isinstance(value, bool)
+
+        return False
+
+    @staticmethod
+    def _matches_allowed_value(
+        value: Any,
+        allowed_values: list[str | int | float | bool],
+    ) -> bool:
+        return any(
+            candidate == value and type(candidate) is type(value) for candidate in allowed_values
+        )

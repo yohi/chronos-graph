@@ -6,7 +6,7 @@ import logging
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -40,7 +40,7 @@ class ApprovalRequest(BaseModel):
     @classmethod
     def _make_immutable(cls, v: Mapping[str, Any]) -> Mapping[str, Any]:
         """引数を再帰的に不変な形式に変換します。"""
-        return _deep_freeze(v)
+        return cast(Mapping[str, Any], _deep_freeze(v))
 
 
 def _sanitize_for_log(data: Any) -> Any:

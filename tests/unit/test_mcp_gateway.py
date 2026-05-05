@@ -2427,7 +2427,7 @@ class TestApprovalNotifier:
 class TestParamConstraint:
     """evaluate_call() を通じたパラメータ制約の動作テスト。"""
 
-    def _make_engine_and_caps(
+    def _make_engine(
         self,
         tool_name: str,
         params: dict,
@@ -2461,9 +2461,9 @@ class TestParamConstraint:
             },
             agents={"agent-a": AgentPolicy(allowed_intents=[intent])},
         )
-        return PolicyEngine(policy), frozenset([tool_name])
+        return PolicyEngine(policy)
 
-    def _call(self, engine, caps, tool_name, arguments, intent="test_intent"):
+    def _call(self, engine, tool_name, arguments, intent="test_intent"):
         # For testing, we create a grant assuming intent is allowed for agent-a
         grant = engine.evaluate_grant(agent_id="agent-a", intent=intent, requested_tools=None)
         # Note: testing caps filtering here is bypassed, but evaluated specifically
@@ -2475,119 +2475,151 @@ class TestParamConstraint:
         )
 
     def test_max_length_boundary_allow(self):
-        engine, caps = self._make_engine_and_caps(
+        engine = self._make_engine(
             "memory_search", {"query": {"type": "string", "max_length": 512}}
         )
-        result = self._call(engine, caps, "memory_search", {"query": "a" * 512})
+        result = self._call(engine, "memory_search", {"query": "a" * 512})
         assert result.status == "ALLOW"
 
     def test_max_length_exceeded_deny(self):
-        engine, caps = self._make_engine_and_caps(
+        engine = self._make_engine(
             "memory_search", {"query": {"type": "string", "max_length": 512}}
         )
-        result = self._call(engine, caps, "memory_search", {"query": "a" * 513})
+        result = self._call(engine, "memory_search", {"query": "a" * 513})
         assert result.status == "DENY"
         assert result.reason == "param_too_long:query"
 
     def test_max_length_empty_string_allow(self):
-        engine, caps = self._make_engine_and_caps(
+        engine = self._make_engine(
             "memory_search", {"query": {"type": "string", "max_length": 512}}
         )
-        result = self._call(engine, caps, "memory_search", {"query": ""})
+        result = self._call(engine, "memory_search", {"query": ""})
         assert result.status == "ALLOW"
 
     def test_pattern_full_match_allow(self):
-        engine, caps = self._make_engine_and_caps(
+        engine = self._make_engine(
             "memory_search",
             {"query": {"type": "string", "max_length": 100, "pattern": "^[a-z_]+$"}},
         )
-        result = self._call(engine, caps, "memory_search", {"query": "hello_world"})
+        result = self._call(engine, "memory_search", {"query": "hello_world"})
         assert result.status == "ALLOW"
 
     def test_pattern_partial_match_deny(self):
-        engine, caps = self._make_engine_and_caps(
+        engine = self._make_engine(
             "memory_search",
             {"query": {"type": "string", "max_length": 100, "pattern": "^[a-z_]+$"}},
         )
-        result = self._call(engine, caps, "memory_search", {"query": "hello world!"})
+        result = self._call(engine, "memory_search", {"query": "hello world!"})
         assert result.status == "DENY"
         assert result.reason == "param_pattern_mismatch:query"
 
     def test_pattern_script_injection_deny(self):
-        engine, caps = self._make_engine_and_caps(
+        engine = self._make_engine(
             "memory_search",
             {"query": {"type": "string", "max_length": 100, "pattern": "^[^<>{};]*$"}},
         )
-        result = self._call(engine, caps, "memory_search", {"query": "<script>alert(1)</script>"})
+        result = self._call(engine, "memory_search", {"query": "<script>alert(1)</script>"})
         assert result.status == "DENY"
         assert result.reason == "param_pattern_mismatch:query"
 
     def test_pattern_unicode_deny(self):
-        engine, caps = self._make_engine_and_caps(
+        engine = self._make_engine(
             "memory_search",
             {"query": {"type": "string", "max_length": 100, "pattern": "^[a-z_]+$"}},
         )
-        result = self._call(engine, caps, "memory_search", {"query": "こんにちは"})
+        result = self._call(engine, "memory_search", {"query": "こんにちは"})
         assert result.status == "DENY"
         assert result.reason == "param_pattern_mismatch:query"
 
     def test_allowed_values_in_list_allow(self):
-        engine, caps = self._make_engine_and_caps(
+        engine = self._make_engine(
             "memory_search", {"mode": {"type": "string", "allowed_values": ["read", "write"]}}
         )
-        result = self._call(engine, caps, "memory_search", {"mode": "read"})
+        result = self._call(engine, "memory_search", {"mode": "read"})
         assert result.status == "ALLOW"
 
     def test_allowed_values_not_in_list_deny(self):
-        engine, caps = self._make_engine_and_caps(
+        engine = self._make_engine(
             "memory_search", {"mode": {"type": "string", "allowed_values": ["read", "write"]}}
         )
-        result = self._call(engine, caps, "memory_search", {"mode": "admin"})
+        result = self._call(engine, "memory_search", {"mode": "admin"})
         assert result.status == "DENY"
         assert result.reason == "param_not_in_allowed_values:mode"
 
     def test_forbidden_param_present_deny(self):
-        engine, caps = self._make_engine_and_caps("memory_search", {"secret": {"forbidden": True}})
-        result = self._call(engine, caps, "memory_search", {"secret": "x"})
+        engine = self._make_engine("memory_search", {"secret": {"forbidden": True}})
+        result = self._call(engine, "memory_search", {"secret": "x"})
         assert result.status == "DENY"
         assert result.reason == "forbidden_param:secret"
 
     def test_forbidden_param_absent_allow(self):
-        engine, caps = self._make_engine_and_caps("memory_search", {"secret": {"forbidden": True}})
-        result = self._call(engine, caps, "memory_search", {"query": "hi"})
+        engine = self._make_engine("memory_search", {"secret": {"forbidden": True}})
+        result = self._call(engine, "memory_search", {"query": "hi"})
         assert result.status == "ALLOW"
 
     def test_missing_constrained_param_allow(self):
-        engine, caps = self._make_engine_and_caps(
+        engine = self._make_engine(
             "memory_search", {"query": {"type": "string", "max_length": 512}}
         )
-        result = self._call(engine, caps, "memory_search", {})
+        result = self._call(engine, "memory_search", {})
         assert result.status == "ALLOW"
 
     def test_type_mismatch_int_for_string_constraint_deny(self):
-        engine, caps = self._make_engine_and_caps(
+        engine = self._make_engine(
             "memory_search", {"query": {"type": "string", "max_length": 512, "pattern": "^[a-z]+$"}}
         )
-        result = self._call(engine, caps, "memory_search", {"query": 12345})
+        result = self._call(engine, "memory_search", {"query": 12345})
         assert result.status == "DENY"
         assert result.reason == "param_type_mismatch:query"
 
     def test_type_string_explicit_int_deny(self):
-        engine, caps = self._make_engine_and_caps("memory_search", {"query": {"type": "string"}})
-        result = self._call(engine, caps, "memory_search", {"query": 12345})
+        engine = self._make_engine("memory_search", {"query": {"type": "string"}})
+        result = self._call(engine, "memory_search", {"query": 12345})
         assert result.status == "DENY"
         assert result.reason == "param_type_mismatch:query"
 
     def test_type_integer_bool_excluded_deny(self):
-        engine, caps = self._make_engine_and_caps("memory_search", {"count": {"type": "integer"}})
-        result = self._call(engine, caps, "memory_search", {"count": True})
+        engine = self._make_engine("memory_search", {"count": {"type": "integer"}})
+        result = self._call(engine, "memory_search", {"count": True})
         assert result.status == "DENY"
         assert result.reason == "param_type_mismatch:count"
 
     def test_type_string_correct_allow(self):
-        engine, caps = self._make_engine_and_caps("memory_search", {"query": {"type": "string"}})
-        result = self._call(engine, caps, "memory_search", {"query": "safe"})
+        engine = self._make_engine("memory_search", {"query": {"type": "string"}})
+        result = self._call(engine, "memory_search", {"query": "safe"})
         assert result.status == "ALLOW"
+
+    def test_type_inference_max_length_allow(self):
+        # type is None, but max_length is set -> infer string
+        engine = self._make_engine("memory_search", {"query": {"max_length": 512}})
+        result = self._call(engine, "memory_search", {"query": "valid string"})
+        assert result.status == "ALLOW"
+
+    def test_type_inference_max_length_deny(self):
+        # type is None, but max_length is set -> infer string.
+        # Should deny if an integer is passed.
+        engine = self._make_engine("memory_search", {"query": {"max_length": 512}})
+        result = self._call(engine, "memory_search", {"query": 12345})
+        assert result.status == "DENY"
+        assert result.reason == "param_type_mismatch:query"
+
+    def test_type_inference_pattern_allow(self):
+        # type is None, but pattern is set -> infer string
+        engine = self._make_engine(
+            "memory_search", {"query": {"max_length": 100, "pattern": "^[a-z]+$"}}
+        )
+        result = self._call(engine, "memory_search", {"query": "match"})
+        assert result.status == "ALLOW"
+
+    def test_type_inference_pattern_deny(self):
+        # type is None, but pattern is set -> infer string.
+        # Should deny if a non-matching string is passed.
+        engine = self._make_engine(
+            "memory_search", {"query": {"max_length": 100, "pattern": "^[a-z]+$"}}
+        )
+        result = self._call(engine, "memory_search", {"query": "123"})
+        assert result.status == "DENY"
+        assert result.reason == "param_pattern_mismatch:query"
 
 
 class TestEvaluateCall:
@@ -2698,6 +2730,7 @@ class TestEvaluateCall:
             arguments={},
         )
         assert result.status == "REQUIRES_APPROVAL"
+        assert result.reason == "requires_approval"
 
     def test_param_violation_beats_requires_approval(self):
         from mcp_gateway.policy.engine import PolicyEngine

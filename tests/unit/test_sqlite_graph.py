@@ -38,6 +38,7 @@ async def adapter(tmp_db_path: str) -> AsyncGenerator[SQLiteGraphAdapter, None]:
 
 
 class TestCreateNode:
+    @pytest.mark.asyncio
     async def test_create_node_basic(self, adapter: SQLiteGraphAdapter) -> None:
         """ノードが正常に作成される."""
         await adapter.create_node("node-1", {"label": "test"})
@@ -46,6 +47,7 @@ class TestCreateNode:
         node_ids = [n["id"] for n in result.nodes]
         assert "node-1" in node_ids
 
+    @pytest.mark.asyncio
     async def test_create_node_idempotent(self, adapter: SQLiteGraphAdapter) -> None:
         """同じノードIDで2回呼び出しても例外が発生しない（upsert）."""
         await adapter.create_node("node-1", {"label": "first"})
@@ -53,6 +55,7 @@ class TestCreateNode:
         result = await adapter.traverse(["node-1"], [], depth=0)
         assert len(result.nodes) == 1
 
+    @pytest.mark.asyncio
     async def test_create_node_with_metadata(self, adapter: SQLiteGraphAdapter) -> None:
         """メタデータが保持される."""
         metadata = {"label": "Memory", "project": "proj-a", "memory_type": "SEMANTIC"}
@@ -68,6 +71,7 @@ class TestCreateNode:
 
 
 class TestCreateEdge:
+    @pytest.mark.asyncio
     async def test_create_edge_basic(self, adapter: SQLiteGraphAdapter) -> None:
         """エッジが正常に作成される."""
         await adapter.create_node("a", {})
@@ -78,6 +82,7 @@ class TestCreateEdge:
         edge_pairs = [(e.from_id, e.to_id, e.edge_type) for e in result.edges]
         assert ("a", "b", "SEMANTICALLY_RELATED") in edge_pairs
 
+    @pytest.mark.asyncio
     async def test_create_edge_duplicate_ignored(self, adapter: SQLiteGraphAdapter) -> None:
         """同じエッジを2回追加しても重複しない."""
         await adapter.create_node("x", {})
@@ -96,6 +101,7 @@ class TestCreateEdge:
 
 
 class TestCreateEdgesBatch:
+    @pytest.mark.asyncio
     async def test_batch_insert(self, adapter: SQLiteGraphAdapter) -> None:
         """複数エッジを一括登録できる."""
         for nid in ["n1", "n2", "n3", "n4"]:
@@ -115,6 +121,7 @@ class TestCreateEdgesBatch:
         # n2, n3, n4 should be reachable
         assert {"n2", "n3", "n4"}.issubset(node_ids)
 
+    @pytest.mark.asyncio
     async def test_batch_empty(self, adapter: SQLiteGraphAdapter) -> None:
         """空リストでも例外が発生しない."""
         await adapter.create_edges_batch([])  # no exception
@@ -126,6 +133,7 @@ class TestCreateEdgesBatch:
 
 
 class TestTraverse:
+    @pytest.mark.asyncio
     async def test_traverse_depth_1(self, adapter: SQLiteGraphAdapter) -> None:
         """depth=1 で直接隣接ノードのみ返される."""
         for nid in ["root", "child1", "child2", "grandchild"]:
@@ -141,6 +149,7 @@ class TestTraverse:
         assert "grandchild" not in node_ids
         assert result.traversal_depth == 1
 
+    @pytest.mark.asyncio
     async def test_traverse_depth_2(self, adapter: SQLiteGraphAdapter) -> None:
         """depth=2 で孫ノードまで返される."""
         for nid in ["root", "child", "grandchild"]:
@@ -153,6 +162,7 @@ class TestTraverse:
         assert "grandchild" in node_ids
         assert result.traversal_depth == 2
 
+    @pytest.mark.asyncio
     async def test_traverse_depth_3(self, adapter: SQLiteGraphAdapter) -> None:
         """depth=3 でさらに深いノードまで返される."""
         nodes = ["a", "b", "c", "d"]
@@ -167,12 +177,14 @@ class TestTraverse:
         assert "d" in node_ids
         assert result.traversal_depth == 3
 
+    @pytest.mark.asyncio
     async def test_traverse_empty_seed(self, adapter: SQLiteGraphAdapter) -> None:
         """空のシードリストは空結果を返す."""
         result = await adapter.traverse([], [], depth=5)
         assert result.nodes == []
         assert result.edges == []
 
+    @pytest.mark.asyncio
     async def test_traverse_edge_type_filter(self, adapter: SQLiteGraphAdapter) -> None:
         """edge_types フィルタが機能する."""
         for nid in ["src", "a", "b"]:
@@ -185,6 +197,7 @@ class TestTraverse:
         assert "a" in node_ids
         assert "b" not in node_ids
 
+    @pytest.mark.asyncio
     async def test_traverse_no_edge_type_filter(self, adapter: SQLiteGraphAdapter) -> None:
         """edge_types が空リストのとき全エッジタイプを辿る."""
         for nid in ["src", "a", "b"]:
@@ -197,6 +210,7 @@ class TestTraverse:
         assert "a" in node_ids
         assert "b" in node_ids
 
+    @pytest.mark.asyncio
     async def test_traverse_depth_hard_limit(self, adapter: SQLiteGraphAdapter) -> None:
         """graph_max_logical_depth を超える depth は強制制限される."""
         # Settings: graph_max_logical_depth=3
@@ -222,6 +236,7 @@ class TestTraverse:
 
         await adp.dispose()
 
+    @pytest.mark.asyncio
     async def test_traverse_supersedes_no_logical_depth(self, adapter: SQLiteGraphAdapter) -> None:
         """SUPERSEDES エッジは論理深さをカウントしない."""
         # a -SUPERSEDES-> b -SUPERSEDES-> c -TEMPORAL_NEXT-> d
@@ -248,6 +263,7 @@ class TestTraverse:
 
 
 class TestDeleteNode:
+    @pytest.mark.asyncio
     async def test_delete_existing_node(self, adapter: SQLiteGraphAdapter) -> None:
         """存在するノードを削除できる."""
         await adapter.create_node("to-delete", {})
@@ -255,6 +271,7 @@ class TestDeleteNode:
         result = await adapter.traverse(["to-delete"], [], depth=0)
         assert "to-delete" not in {n["id"] for n in result.nodes}
 
+    @pytest.mark.asyncio
     async def test_delete_cascades_edges(self, adapter: SQLiteGraphAdapter) -> None:
         """ノード削除時に関連エッジも削除される."""
         for nid in ["p", "q"]:
@@ -268,6 +285,7 @@ class TestDeleteNode:
         assert len(result.edges) == 0
         assert "p" not in {n["id"] for n in result.nodes}
 
+    @pytest.mark.asyncio
     async def test_delete_nonexistent_node(self, adapter: SQLiteGraphAdapter) -> None:
         """存在しないノードの削除でも例外が発生しない."""
         await adapter.delete_node("does-not-exist")  # no exception
@@ -279,12 +297,14 @@ class TestDeleteNode:
 
 
 class TestProtocolCompliance:
+    @pytest.mark.asyncio
     async def test_implements_graph_adapter_protocol(self, adapter: SQLiteGraphAdapter) -> None:
         """GraphAdapter Protocol を実装しているか確認."""
         from context_store.storage.protocols import GraphAdapter
 
         assert isinstance(adapter, GraphAdapter)
 
+    @pytest.mark.asyncio
     async def test_traverse_returns_graph_result(self, adapter: SQLiteGraphAdapter) -> None:
         """traverse の戻り値は GraphResult."""
         result = await adapter.traverse([], [], depth=1)
@@ -299,6 +319,7 @@ class TestProtocolCompliance:
 
 
 class TestTimeout:
+    @pytest.mark.asyncio
     async def test_traverse_timeout_returns_partial_result(self, tmp_db_path: str) -> None:
         """タイムアウト発生時に例外を送出せず部分/空結果を返す."""
         settings = make_settings(
@@ -336,6 +357,7 @@ class TestTimeout:
 
         await adp.dispose()
 
+    @pytest.mark.asyncio
     async def test_traverse_interrupt_called_on_timeout(
         self, tmp_db_path: str, monkeypatch
     ) -> None:
@@ -381,6 +403,7 @@ class TestTimeout:
 
 
 class TestDashboardQueries:
+    @pytest.mark.asyncio
     async def test_list_edges_for_memories_basic(self, adapter: SQLiteGraphAdapter) -> None:
         """指定したメモリID間のエッジが取得される."""
         for nid in ["a", "b", "c", "d"]:
@@ -397,6 +420,7 @@ class TestDashboardQueries:
         assert ("b", "c") in edge_pairs
         assert ("c", "d") not in edge_pairs
 
+    @pytest.mark.asyncio
     async def test_list_edges_for_memories_chunking_boundaries(
         self, adapter: SQLiteGraphAdapter
     ) -> None:
@@ -441,6 +465,7 @@ class TestDashboardQueries:
         res_901 = await adapter.list_edges_for_memories(ids_901)
         assert len(res_901) == 900
 
+    @pytest.mark.asyncio
     async def test_list_edges_for_memories_cross_chunk(self, adapter: SQLiteGraphAdapter) -> None:
         """Verify that edges crossing chunk boundaries are correctly retrieved."""
         # Create 1000 nodes (assuming CHUNK_SIZE=900)
@@ -466,6 +491,7 @@ class TestDashboardQueries:
         assert ("node_950", "node_2") in edge_pairs
         assert len(edges) == 2
 
+    @pytest.mark.asyncio
     async def test_list_all_edges(self, adapter: SQLiteGraphAdapter) -> None:
         """全エッジが取得される."""
         await adapter.create_node("n1", {})
@@ -479,6 +505,7 @@ class TestDashboardQueries:
         assert "TYPE_A" in types
         assert "TYPE_B" in types
 
+    @pytest.mark.asyncio
     async def test_count_edges(self, adapter: SQLiteGraphAdapter) -> None:
         """エッジ総数が返される."""
         assert await adapter.count_edges() == 0

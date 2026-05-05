@@ -50,6 +50,7 @@ async def sqlite_db_with_migrations():
             os.unlink(db_path)
 
 
+@pytest.mark.asyncio
 async def test_lifecycle_state_fields():
     state = LifecycleState()
     assert hasattr(state, "cleanup_lock_owner")
@@ -138,6 +139,7 @@ def _make_manager(
 class TestOnMemorySaved:
     """on_memory_saved() のテスト。"""
 
+    @pytest.mark.asyncio
     async def test_increments_counter(self):
         """on_memory_saved() がカウンターをインクリメントすること。"""
         manager, _ = _make_manager()
@@ -153,6 +155,7 @@ class TestOnMemorySaved:
             if os.path.exists(manager._lock_path):
                 os.unlink(manager._lock_path)
 
+    @pytest.mark.asyncio
     async def test_triggers_cleanup_at_threshold(self):
         """閾値到達時に run_cleanup がトリガーされること。"""
         manager, _ = _make_manager(save_count_threshold=50)
@@ -178,6 +181,7 @@ class TestOnMemorySaved:
         await asyncio.sleep(0)
         assert len(run_cleanup_called) == 1
 
+    @pytest.mark.asyncio
     async def test_does_not_trigger_cleanup_below_threshold(self):
         """閾値未満では run_cleanup がトリガーされないこと。"""
         manager, _ = _make_manager()
@@ -198,6 +202,7 @@ class TestOnMemorySaved:
         await asyncio.sleep(0)
         assert len(cleanup_called) == 0
 
+    @pytest.mark.asyncio
     async def test_save_count_persisted(self):
         """save_count が状態ストアに永続化されること。"""
         manager, store = _make_manager()
@@ -212,6 +217,7 @@ class TestOnMemorySaved:
 class TestRunCleanup:
     """run_cleanup() のテスト。"""
 
+    @pytest.mark.asyncio
     async def test_run_cleanup_aborts_on_lock_loss(self, temp_lock_path):
         """クリーンアップ中にロックが他者に奪われた場合、中断されることを確認。"""
         manager, state_store = _make_manager(lock_path=temp_lock_path)
@@ -247,6 +253,7 @@ class TestRunCleanup:
         # ロックが奪われた状態が維持されていること（自分のトークンで上書きされていないこと）
         assert final_state.cleanup_lock_owner == "someone-else"
 
+    @pytest.mark.asyncio
     async def test_runs_all_jobs(self):
         """run_cleanup() が全ジョブを実行すること。"""
         manager, _ = _make_manager()
@@ -260,6 +267,7 @@ class TestRunCleanup:
             if os.path.exists(manager._lock_path):
                 os.unlink(manager._lock_path)
 
+    @pytest.mark.asyncio
     async def test_resets_save_count_after_cleanup(self):
         """クリーンアップ後に save_count がリセットされること。"""
         manager, store = _make_manager()
@@ -276,6 +284,7 @@ class TestRunCleanup:
         state = await store.load_state()
         assert state.save_count == 0
 
+    @pytest.mark.asyncio
     async def test_updates_last_cleanup_at(self):
         """run_cleanup() 後に last_cleanup_at が更新されること。"""
         manager, store = _make_manager()
@@ -288,6 +297,7 @@ class TestRunCleanup:
         assert state.last_cleanup_at is not None
         assert before <= state.last_cleanup_at <= after
 
+    @pytest.mark.asyncio
     async def test_idempotent_two_runs(self):
         """2回連続実行しても同じ結果に収束すること（冪等性）。"""
         manager, store = _make_manager()
@@ -309,6 +319,7 @@ class TestRunCleanup:
         # save_count はどちらも 0 にリセットされること
         assert state_after_second.save_count == 0
 
+    @pytest.mark.asyncio
     async def test_skips_when_filelock_acquired(self, temp_lock_path):
         """filelock が既に取得されている場合にスキップすること。"""
         manager, _ = _make_manager(lock_path=temp_lock_path)
@@ -327,6 +338,7 @@ class TestRunCleanup:
         manager._purger.run.assert_not_called()
         manager._consolidator.run.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_releases_db_lock_after_cleanup(self):
         """クリーンアップ後に DB ロックが解放されること。"""
         manager, store = _make_manager()
@@ -336,6 +348,7 @@ class TestRunCleanup:
         state = await store.load_state()
         assert state.cleanup_lock_owner is None
 
+    @pytest.mark.asyncio
     async def test_releases_db_lock_on_exception(self):
         """例外発生時でも DB ロックが解放されること。"""
         manager, store = _make_manager()
@@ -354,6 +367,7 @@ class TestRunCleanup:
 class TestStaleLock:
     """スタルロックの検出と解放テスト。"""
 
+    @pytest.mark.asyncio
     async def test_stale_lock_is_force_released(self):
         """古い cleanup_lock_owner が強制解放されること。"""
         # stale_lock_timeout_seconds を 1 秒に設定
@@ -377,6 +391,7 @@ class TestStaleLock:
         state = await store.load_state()
         assert state.cleanup_lock_owner == token
 
+    @pytest.mark.asyncio
     async def test_recent_lock_is_not_released(self):
         """新しい cleanup_lock_owner は解放されないこと。"""
         store = InMemoryLifecycleStateStore(stale_lock_timeout_seconds=600)
@@ -398,6 +413,7 @@ class TestStaleLock:
         state = await store.load_state()
         assert state.cleanup_lock_owner == "current_token"
 
+    @pytest.mark.asyncio
     async def test_cleanup_skipped_when_db_lock_held(self):
         """DB ロックが保持されている場合はクリーンアップをスキップすること。"""
         manager, store = _make_manager()
@@ -425,6 +441,7 @@ class TestStaleLock:
 class TestTimeBasedCleanup:
     """_check_time_based_cleanup() のテスト。"""
 
+    @pytest.mark.asyncio
     async def test_triggers_cleanup_when_never_run(self):
         """last_cleanup_at が None の場合にクリーンアップがトリガーされること。"""
         manager, _ = _make_manager()
@@ -438,6 +455,7 @@ class TestTimeBasedCleanup:
         await manager._check_time_based_cleanup()
         assert len(cleanup_called) == 1
 
+    @pytest.mark.asyncio
     async def test_triggers_cleanup_when_over_24h(self):
         """前回から 24 時間以上経過した場合にクリーンアップがトリガーされること。"""
         store = InMemoryLifecycleStateStore()
@@ -460,6 +478,7 @@ class TestTimeBasedCleanup:
         await manager._check_time_based_cleanup()
         assert len(cleanup_called) == 1
 
+    @pytest.mark.asyncio
     async def test_does_not_trigger_when_recent_cleanup(self):
         """前回から 24 時間未満の場合はクリーンアップがトリガーされないこと。"""
         store = InMemoryLifecycleStateStore()
@@ -482,6 +501,7 @@ class TestTimeBasedCleanup:
         await manager._check_time_based_cleanup()
         assert len(cleanup_called) == 0
 
+    @pytest.mark.asyncio
     async def test_start_schedules_time_based_check(self):
         """start() が時間ベースのチェックをスケジュールすること。"""
         manager, _ = _make_manager()
@@ -505,6 +525,7 @@ class TestTimeBasedCleanup:
 class TestPersistence:
     """状態の永続化テスト。"""
 
+    @pytest.mark.asyncio
     async def test_last_cleanup_at_persisted_after_cleanup(self):
         """run_cleanup() 後に last_cleanup_at が DB に永続化されること。"""
         manager, store = _make_manager()
@@ -515,6 +536,7 @@ class TestPersistence:
         state = await store.load_state()
         assert state.last_cleanup_at is not None
 
+    @pytest.mark.asyncio
     async def test_save_count_resets_after_cleanup(self):
         """run_cleanup() 後に save_count が 0 にリセットされ永続化されること。"""
         manager, store = _make_manager()
@@ -531,6 +553,7 @@ class TestPersistence:
         state_after = await store.load_state()
         assert state_after.save_count == 0
 
+    @pytest.mark.asyncio
     async def test_wal_state_persisted(self):
         """WAL 状態が永続化されること。"""
         store = InMemoryLifecycleStateStore()
@@ -550,6 +573,7 @@ class TestPersistence:
 class TestGracefulShutdown:
     """graceful_shutdown() のテスト。"""
 
+    @pytest.mark.asyncio
     async def test_shutdown_with_no_tasks(self):
         """タスクがない場合はシャットダウンが即座に完了すること。"""
         manager, _ = _make_manager()
@@ -559,6 +583,7 @@ class TestGracefulShutdown:
         # タイムアウトなしで即時完了すること
         await asyncio.wait_for(manager.graceful_shutdown(), timeout=1.0)
 
+    @pytest.mark.asyncio
     async def test_shutdown_waits_for_running_task(self):
         """実行中タスクの完了を待機すること。"""
         manager, _ = _make_manager()
@@ -575,6 +600,7 @@ class TestGracefulShutdown:
         await manager.graceful_shutdown()
         assert len(completed) == 1
 
+    @pytest.mark.asyncio
     async def test_shutdown_times_out_after_5s(self):
         """5秒以内にシャットダウンが収束すること（タイムアウト発生でもエラーにならない）。"""
         manager, _ = _make_manager()
@@ -598,6 +624,7 @@ class TestGracefulShutdown:
 class TestWalCheckpoint:
     """WAL チェックポイントのテスト。"""
 
+    @pytest.mark.asyncio
     async def test_wal_checkpoint_called_when_fn_provided(self):
         """wal_checkpoint_fn が提供された場合に WAL チェックポイントが実行されること。"""
         checkpoint_calls = []
@@ -611,6 +638,7 @@ class TestWalCheckpoint:
         await manager.run_cleanup()
         assert len(checkpoint_calls) == 1
 
+    @pytest.mark.asyncio
     async def test_wal_not_called_when_fn_not_provided(self):
         """wal_checkpoint_fn が None の場合に WAL チェックポイントが実行されないこと。"""
         manager, store = _make_manager(wal_checkpoint_fn=None)
@@ -622,6 +650,7 @@ class TestWalCheckpoint:
         state = await store.load_state()
         assert state.last_cleanup_at is not None
 
+    @pytest.mark.asyncio
     async def test_consecutive_passive_failures_tracked(self):
         """PASSIVE チェックポイント連続失敗がトラッキングされること。"""
         call_count = [0]
@@ -638,6 +667,7 @@ class TestWalCheckpoint:
         assert wal_state.wal_consecutive_passive_failures == 1
         assert wal_state.wal_failure_count == 1
 
+    @pytest.mark.asyncio
     async def test_truncate_triggered_on_consecutive_failure_and_large_wal(self):
         """連続失敗かつ WAL サイズ超過時に TRUNCATE が試みられること。"""
         call_count = [0]
@@ -681,6 +711,7 @@ class TestWalCheckpoint:
 class TestSQLiteLifecycleStateStore:
     """SQLiteLifecycleStateStore のテスト。"""
 
+    @pytest.mark.asyncio
     async def test_load_default_state(self, sqlite_db_with_migrations):
         """初期状態が正しく読み込まれること。"""
         from context_store.lifecycle.manager import SQLiteLifecycleStateStore
@@ -691,6 +722,7 @@ class TestSQLiteLifecycleStateStore:
         assert state.last_cleanup_at is None
         assert state.cleanup_lock_owner is None
 
+    @pytest.mark.asyncio
     async def test_save_and_load_state(self, sqlite_db_with_migrations):
         """状態の保存と読み込みが正しく動作すること。"""
         from context_store.lifecycle.manager import SQLiteLifecycleStateStore
@@ -712,6 +744,7 @@ class TestSQLiteLifecycleStateStore:
         assert abs((loaded.last_cleanup_at - now).total_seconds()) < 2
         assert loaded.cleanup_lock_owner == "some_token"
 
+    @pytest.mark.asyncio
     async def test_acquire_and_release_lock(self, sqlite_db_with_migrations):
         """DB ロックの取得と解放が正しく動作すること。"""
         from context_store.lifecycle.manager import SQLiteLifecycleStateStore
@@ -735,6 +768,7 @@ class TestSQLiteLifecycleStateStore:
         assert acquired_after_release is True
         await store.release_cleanup_lock("new_token")
 
+    @pytest.mark.asyncio
     async def test_stale_lock_detection_in_sqlite(self, sqlite_db_with_migrations):
         """SQLite のスタルロックが検出・解放されること。"""
         import aiosqlite
@@ -762,6 +796,7 @@ class TestSQLiteLifecycleStateStore:
         state = await store.load_state()
         assert state.cleanup_lock_owner == new_token
 
+    @pytest.mark.asyncio
     async def test_wal_state_save_and_load(self, sqlite_db_with_migrations):
         """WAL 状態の保存と読み込みが正しく動作すること。"""
         from context_store.lifecycle.manager import SQLiteLifecycleStateStore
@@ -786,6 +821,7 @@ class TestSQLiteLifecycleStateStore:
         assert loaded.wal_last_observed_size_bytes == 50 * 1024 * 1024
         assert len(loaded.wal_failure_window) == 1
 
+    @pytest.mark.asyncio
     async def test_save_state_requires_correct_token(self, sqlite_db_with_migrations):
         """正しいトークンがないと save_state が失敗することを確認。"""
         from context_store.lifecycle.manager import SQLiteLifecycleStateStore

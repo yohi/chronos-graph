@@ -24,6 +24,7 @@ async def pg_conn():
     await conn.close()
 
 
+@pytest.mark.asyncio
 async def test_memories_table_exists(pg_conn):
     row = await pg_conn.fetchrow(
         "SELECT table_name FROM information_schema.tables WHERE table_name = 'memories'"
@@ -31,6 +32,7 @@ async def test_memories_table_exists(pg_conn):
     assert row is not None
 
 
+@pytest.mark.asyncio
 async def test_lifecycle_state_table_exists(pg_conn):
     row = await pg_conn.fetchrow(
         "SELECT table_name FROM information_schema.tables WHERE table_name = 'lifecycle_state'"
@@ -38,11 +40,13 @@ async def test_lifecycle_state_table_exists(pg_conn):
     assert row is not None
 
 
+@pytest.mark.asyncio
 async def test_vector_extension_enabled(pg_conn):
     row = await pg_conn.fetchrow("SELECT extname FROM pg_extension WHERE extname = 'vector'")
     assert row is not None
 
 
+@pytest.mark.asyncio
 async def test_content_hash_unique_constraint(pg_conn):
     # Verify content_hash column has unique constraint
     row = await pg_conn.fetchrow(
@@ -54,6 +58,7 @@ async def test_content_hash_unique_constraint(pg_conn):
     assert row["cnt"] > 0
 
 
+@pytest.mark.asyncio
 async def test_memory_type_and_source_type_have_check_constraints(pg_conn):
     rows = await pg_conn.fetch(
         """
@@ -70,6 +75,7 @@ async def test_memory_type_and_source_type_have_check_constraints(pg_conn):
     assert "source_type" in clauses
 
 
+@pytest.mark.asyncio
 async def test_indexes_exist(pg_conn):
     # Check that key indexes exist
     rows = await pg_conn.fetch("SELECT indexname FROM pg_indexes WHERE tablename = 'memories'")

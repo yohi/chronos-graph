@@ -451,7 +451,7 @@ policy で明示) を残すが、本仕様の範囲では「**要求元 agent �
 の単純規則で扱う。これは複数 agent (例: AI agent と UI operator) を別 API key で
 登録する運用前提で十分機能する。
 
-##### 既知の限界 (lateral approval)
+#### 既知の限界 (lateral approval)
 
 本モデルは **要求元と異なる任意の登録 agent による承認 ("lateral approval")**
 を防がない。具体的には次の脅威モデルに対しては脆弱:

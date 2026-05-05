@@ -464,7 +464,7 @@ client (LLM)         gateway                      registry        notifier   ope
    registry に存在しない/既解決なら 404。総当たり耐性は uuid4 のエントロピーで担保。
 3. **許可主体検証 (自己承認禁止)**: `registry.resolve()` 内で
    `resolver_agent_id == requester_agent_id` の場合 `FORBIDDEN` (HTTP 403)。
-   これにより万が一 audit log や stderr 経由で `approval_id` が要求元 agent に
+   これにより万が一 audit log 経由で `approval_id` が要求元 agent に
    漏洩しても、自己昇格 (self-approval) は成立しない。
 
 将来課題として「operator 専用 agent role / API key スコープ」(任意の許可主体集合を
@@ -478,7 +478,7 @@ policy で明示) を残すが、本仕様の範囲では「**要求元 agent �
 を防がない。具体的には次の脅威モデルに対しては脆弱:
 
 - 複数の AI agent (例: agent_A, agent_B) が登録されており、両者の API key が
-  独立した管理者の手元にある場合、agent_B の鍵保持者は (audit log や stderr 経由で
+  独立した管理者の手元にある場合、agent_B の鍵保持者は (audit log 経由で
   `approval_id` の漏洩を得れば) agent_A 由来の `tools/call` を承認できる。
 
 ChronosGraph の主要ユースケース (個人セルフホスト、全鍵を単一ユーザが保有)

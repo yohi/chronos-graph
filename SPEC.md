@@ -1446,8 +1446,3 @@ MCP Gateway は、エージェントへの過剰権限付与を防ぐための�
 - [MCP 仕様](https://modelcontextprotocol.io/) — Model Context Protocol
 - [CrewAI Memory](https://docs.crewai.com/en/concepts/memory) — 複合スコアリングの参照実装
 - AIエージェントの長期記憶と強化学習プラグイン開発 — コグニティブアーキテクチャ / 複合スコアリング / RL
-ngram](https://zenn.dev/kimmaru/articles/3dbd92dea9ede8) — sui-memory の MCP サーバー化
-- [MAGMA](https://arxiv.org/html/2601.03236v1) — Multi-Graph based Agentic Memory Architecture
-- [MCP 仕様](https://modelcontextprotocol.io/) — Model Context Protocol
-- [CrewAI Memory](https://docs.crewai.com/en/concepts/memory) — 複合スコアリングの参照実装
-- AIエージェントの長期記憶と強化学習プラグイン開発 — コグニティブアーキテクチャ / 複合スコアリング / RL

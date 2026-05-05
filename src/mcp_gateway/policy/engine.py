@@ -74,21 +74,15 @@ class PolicyEngine:
     def evaluate_call(
         self,
         *,
-        caps: frozenset[str],
+        grant: Grant,
         tool_name: str,
         arguments: dict[str, Any],
-        intent: str,
     ) -> EvaluationResult:
-        intent_pol = self._policy.intents.get(intent)
-        if intent_pol is None:
-            return EvaluationResult(status="DENY", reason="unknown_intent")
-
-        if tool_name not in intent_pol.allowed_tools:
-            return EvaluationResult(status="DENY", reason="tool_not_allowed_for_intent")
+        if tool_name not in grant.caps:
+            return EvaluationResult(status="DENY", reason="tool_not_in_caps")
 
         try:
-            PolicyEngine.check_call(caps=caps, tool_name=tool_name)
-            guardrail = intent_pol.guardrails.get(tool_name)
+            guardrail = grant.guardrails.get(tool_name)
             PolicyEngine.validate_call(
                 tool_name=tool_name,
                 arguments=arguments,

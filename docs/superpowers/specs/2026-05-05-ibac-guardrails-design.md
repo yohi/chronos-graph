@@ -29,7 +29,7 @@ MCP Gateway では既にハンドシェイク時の Intent ベースアクセス
 
 ### 選択アプローチ：PolicyEngine 中心 + server.py での判断分岐
 
-```
+```text
 GET /sse (handshake)
   └─ PolicyEngine.evaluate_grant()  ← 既存（変更なし）
   └─ SessionRecord { caps, intent, ... }
@@ -78,6 +78,9 @@ class IntentPolicy(BaseModel):
 ### バリデーション拡張（`GatewayPolicy._verify_references`）
 
 - `guardrails` のキー（tool_name）が `allowed_tools` に含まれるかを検証
+- **ReDoS 対策の検証**（詳細はセクション 4 参照）:
+    - `pattern` 文字列が規定値（200字）を超えていないか
+    - `pattern` が指定されている場合に `max_length` が設定されているか
 - 不整合は起動時 `PolicyError` としてフェイルファスト
 
 ---
@@ -179,7 +182,7 @@ intents:
 
 ## 6. REQUIRES_APPROVAL スタブ（新規 `approval/notifier.py`）
 
-```
+```text
 src/mcp_gateway/approval/
     __init__.py
     notifier.py
@@ -198,7 +201,7 @@ class ApprovalRequest:
     requested_at: datetime   # 承認要求日時（UTC）
 ```
 
-全フィールドは必須。`arguments` はシークレットスキャン済みの値のみ含む（`ToolProxy._contains_secret()` による事前検査後の値を使用するため、`ApprovalNotifier` 内での再スキャンは不要）。
+全フィールドは必須。`arguments` はシークレットスキャン済みの値のみ含む（通知直前に `ToolProxy._contains_secret()` 相当のロジックで検査し、シークレットが含まれる場合は通知せずに `DENY` とする）。
 
 ### 抽象基底
 
@@ -259,9 +262,20 @@ match decision.status:
         audit.log(ev="call", decision="deny", reason=decision.reason, ...)
         return JSONResponse({"error": {"code": -32601, "message": "tool not found"}})
     case "REQUIRES_APPROVAL":
+        # 通知前にシークレットが含まれていないか再検証（漏洩防止）
+        if any(ToolProxy._contains_secret(v) for v in arguments.values()):
+            audit.log(ev="call", decision="deny", reason="secret_in_approval_args", ...)
+            return JSONResponse({"error": {"code": -32601, "message": "tool not found"}})
+
         audit.log(ev="call", decision="requires_approval", ...)
         await approval_notifier.request_approval(ApprovalRequest(...))
-        return JSONResponse({"error": {"code": -32001, "message": "approval_required"}})
+        return JSONResponse({
+            "error": {
+                "code": -32001,
+                "message": "approval_required",
+                "data": {"session_id": record.session_id}  # 相関用 ID
+            }
+        })
     case "ALLOW":
         pass  # 既存の ToolProxy フローへ
 ```
@@ -275,10 +289,10 @@ match decision.status:
 
 ## 8. エラーコード定義
 
-| コード | 意味 |
-|--------|------|
-| `-32601` | tool not found（既存。DENY 全般に使用） |
-| `-32001` | approval_required（新規。REQUIRES_APPROVAL 時） |
+| コード | 意味 | 備考 |
+|--------|------|------|
+| `-32601` | tool not found | DENY 全般、または承認対象引数にシークレットが含まれる場合 |
+| `-32001` | approval_required | 承認待ち。`data.session_id` を含める |
 
 ---
 

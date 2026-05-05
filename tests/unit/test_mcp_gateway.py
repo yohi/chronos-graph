@@ -2705,6 +2705,7 @@ class TestEvaluateCall:
             intent="curate_memories",
         )
         assert result.status == "REQUIRES_APPROVAL"
+        assert result.reason == "requires_approval"
 
     def test_param_violation_beats_requires_approval(self):
         from mcp_gateway.policy.engine import PolicyEngine

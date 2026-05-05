@@ -87,16 +87,16 @@ class PolicyEngine:
             return EvaluationResult(status="DENY", reason="tool_not_allowed_for_intent")
 
         try:
-            self.check_call(caps=caps, tool_name=tool_name)
+            PolicyEngine.check_call(caps=caps, tool_name=tool_name)
             guardrail = intent_pol.guardrails.get(tool_name)
-            self.validate_call(
+            PolicyEngine.validate_call(
                 tool_name=tool_name,
                 arguments=arguments,
                 guardrail=guardrail,
             )
         except PolicyError as exc:
             if exc.reason == "requires_approval":
-                return EvaluationResult(status="REQUIRES_APPROVAL")
+                return EvaluationResult(status="REQUIRES_APPROVAL", reason=exc.reason)
             return EvaluationResult(status="DENY", reason=exc.reason)
 
         return EvaluationResult(status="ALLOW")

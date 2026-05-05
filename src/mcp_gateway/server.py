@@ -80,7 +80,9 @@ def _schedule_approval_request(
 
 
 def _is_validation_deny(reason: str | None) -> bool:
-    return bool(reason) and (reason.startswith("param_") or reason.startswith("forbidden_param:"))
+    if reason is None:
+        return False
+    return reason.startswith("param_") or reason.startswith("forbidden_param:")
 
 
 def build_router(

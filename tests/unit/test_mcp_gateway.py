@@ -2067,6 +2067,26 @@ class TestIBACModels:
                 }
             )
 
+    def test_verify_references_pattern_empty_string_requires_max_length(self):
+        from mcp_gateway.policy.models import GatewayPolicy
+
+        with pytest.raises(ValidationError, match="missing max_length"):
+            GatewayPolicy.model_validate(
+                {
+                    "version": 1,
+                    "output_filters": {"f": {"type": "none"}},
+                    "intents": {
+                        "intent_a": {
+                            "description": "x",
+                            "allowed_tools": ["tool_a"],
+                            "output_filter": "f",
+                            "guardrails": {"tool_a": {"params": {"query": {"pattern": ""}}}},
+                        }
+                    },
+                    "agents": {},
+                }
+            )
+
     def test_verify_references_valid_guardrail_passes(self):
         from mcp_gateway.policy.models import GatewayPolicy
 

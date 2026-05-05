@@ -69,7 +69,7 @@ class GatewayPolicy(BaseModel):
             # 6. param constraints validation
             for tname, guardrail in intent.guardrails.items():
                 for pname, constraint in guardrail.params.items():
-                    if constraint.pattern:
+                    if constraint.pattern is not None:
                         if constraint.max_length is None:
                             raise ValueError(
                                 f"intent {iname!r} tool {tname!r} param {pname!r} "

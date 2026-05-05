@@ -896,6 +896,47 @@ class TestPolicyEngine:
         assert isinstance(grant.caps, frozenset)
         assert grant.caps == frozenset({"memory_search"})
 
+    def test_evaluate_grant_propagates_and_copies_guardrails(self):
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.models import (
+            AgentPolicy,
+            GatewayPolicy,
+            IntentPolicy,
+            ParamConstraint,
+            ToolGuardrail,
+        )
+
+        guardrails = {
+            "tool_a": ToolGuardrail(
+                params={"p": ParamConstraint(max_length=10)}, requires_approval=True
+            )
+        }
+        policy = GatewayPolicy(
+            version=1,
+            output_filters={"f": {"type": "none"}},
+            intents={
+                "intent_a": IntentPolicy(
+                    description="d",
+                    allowed_tools=["tool_a"],
+                    output_filter="f",
+                    guardrails=guardrails,
+                )
+            },
+            agents={"agent_a": AgentPolicy(allowed_intents=["intent_a"])},
+        )
+
+        eng = PolicyEngine(policy)
+        grant = eng.evaluate_grant(agent_id="agent_a", intent="intent_a", requested_tools=None)
+
+        # Verifying propagation
+        assert "tool_a" in grant.guardrails
+        assert grant.guardrails["tool_a"].requires_approval is True
+        assert grant.guardrails["tool_a"].params["p"].max_length == 10
+
+        # Verifying reference independence (no shared mutable state)
+        assert grant.guardrails is not policy.intents["intent_a"].guardrails
+        assert grant.guardrails["tool_a"] is not policy.intents["intent_a"].guardrails["tool_a"]
+
     def test_check_call_is_staticmethod(self):
         from mcp_gateway.policy.engine import PolicyEngine
 

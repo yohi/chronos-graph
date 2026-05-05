@@ -7,6 +7,7 @@ to the upstream subprocess.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 
 from mcp_gateway.errors import PolicyError
@@ -58,7 +59,7 @@ class PolicyEngine:
             intent=intent,
             caps=caps,
             output_filter_profile=intent_pol.output_filter,
-            guardrails=intent_pol.guardrails,
+            guardrails=deepcopy(intent_pol.guardrails),
         )
 
     @staticmethod

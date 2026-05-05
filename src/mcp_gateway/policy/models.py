@@ -30,6 +30,7 @@ class IntentPolicy(BaseModel):
 
 
 class ParamConstraint(BaseModel):
+    model_config = ConfigDict(frozen=True)
     type: str | None = None
     max_length: int | None = None
     pattern: str | None = None
@@ -38,6 +39,7 @@ class ParamConstraint(BaseModel):
 
 
 class ToolGuardrail(BaseModel):
+    model_config = ConfigDict(frozen=True)
     params: dict[str, ParamConstraint] = Field(default_factory=dict)
     requires_approval: bool = False
 

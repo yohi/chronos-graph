@@ -1844,6 +1844,122 @@ class TestMcpMessagesEndpoint:
         assert "missing required parameter: name" in body["error"]["message"]
 
 
+class TestServerRequiresApproval:
+    """REQUIRES_APPROVAL パスの /messages エンドポイントテスト。"""
+
+    @pytest.fixture
+    def approval_app(self, tmp_path, monkeypatch):
+        policy = tmp_path / "intents.yaml"
+        policy.write_text(
+            textwrap.dedent(
+                """
+                version: 1
+                output_filters:
+                  f:
+                    type: none
+                intents:
+                  curate_memories:
+                    description: "x"
+                    allowed_tools: [memory_delete]
+                    output_filter: f
+                    guardrails:
+                      memory_delete:
+                        requires_approval: true
+                agents:
+                  agent-a:
+                    allowed_intents: [curate_memories]
+                """
+            ).lstrip()
+        )
+        monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy))
+        monkeypatch.setenv("MCP_GATEWAY_API_KEYS_JSON", '{"agent-a":"ck_x"}')
+
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.app import build_app
+
+        upstream = AsyncMock()
+        upstream.list_tools.return_value = [{"name": "memory_delete"}]
+        return build_app(
+            upstream_override=upstream,
+            initial_tools=upstream.list_tools.return_value,
+        )
+
+    @pytest_asyncio.fixture
+    async def approval_client(self, approval_app):
+        import httpx
+        from httpx import ASGITransport
+
+        transport = ASGITransport(app=approval_app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+            yield client
+
+    async def _get_session_id(self, client) -> str:
+        async with client.stream(
+            "GET",
+            "/sse",
+            headers={"Authorization": "Bearer ck_x", "X-MCP-Intent": "curate_memories"},
+        ) as resp:
+            assert resp.status_code == 200
+            async for line in resp.aiter_lines():
+                if line.startswith("data:") and "session_id=" in line:
+                    data = line[len("data:") :].strip()
+                    return data.split("session_id=")[1]
+        raise AssertionError("SSE endpoint event did not return session_id")
+
+    @pytest.mark.asyncio
+    async def test_requires_approval_returns_32001(self, approval_client):
+        sid = await self._get_session_id(approval_client)
+        resp = await approval_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "memory_delete", "arguments": {"id": "m-001"}},
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32001
+        assert body["error"]["message"] == "approval_required"
+        assert "session_id" in body["error"]["data"]
+
+    @pytest.mark.asyncio
+    async def test_requires_approval_audit_log(self, approval_client, caplog):
+        import logging
+
+        sid = await self._get_session_id(approval_client)
+        with caplog.at_level(logging.INFO):
+            await approval_client.post(
+                f"/messages?session_id={sid}",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {"name": "memory_delete", "arguments": {}},
+                },
+            )
+        assert any("approval_required" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_caps_denied_returns_32601(self, approval_client):
+        sid = await self._get_session_id(approval_client)
+        resp = await approval_client.post(
+            f"/messages?session_id={sid}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "admin_tool", "arguments": {}},
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32601
+        assert body["error"]["message"] == "tool not found"
+
+
 class TestEntrypoint:
     def test_main_callable(self, monkeypatch):
         from unittest.mock import patch

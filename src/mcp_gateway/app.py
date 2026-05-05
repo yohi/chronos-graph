@@ -11,6 +11,7 @@ from typing import Any, AsyncGenerator
 from fastapi import FastAPI
 from pydantic import ValidationError
 
+from mcp_gateway.approval.notifier import LogOnlyApprovalNotifier
 from mcp_gateway.audit.logger import AuditLogger
 from mcp_gateway.auth.api_key import ApiKeyAuthenticator
 from mcp_gateway.auth.handshake import HandshakeService
@@ -120,6 +121,8 @@ def build_app(
             upstream=upstream,
             policy=policy,
             audit=audit,
+            engine=engine,
+            approval_notifier=LogOnlyApprovalNotifier(),
         )
     )
 

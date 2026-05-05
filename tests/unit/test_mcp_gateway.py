@@ -2441,7 +2441,12 @@ class TestParamConstraint:
             GatewayPolicy,
             IntentPolicy,
             OutputFilterDef,
+            ParamConstraint,
+            ToolGuardrail,
         )
+
+        # 生の dict を ParamConstraint に変換して型安全性を確保
+        typed_params = {k: ParamConstraint(**v) for k, v in params.items()}
 
         policy = GatewayPolicy(
             version=1,
@@ -2452,10 +2457,10 @@ class TestParamConstraint:
                     allowed_tools=[tool_name],
                     output_filter="f",
                     guardrails={
-                        tool_name: {
-                            "params": params,
-                            "requires_approval": requires_approval,
-                        }
+                        tool_name: ToolGuardrail(
+                            params=typed_params,
+                            requires_approval=requires_approval,
+                        )
                     },
                 )
             },

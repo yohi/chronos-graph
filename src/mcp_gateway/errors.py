@@ -18,6 +18,10 @@ class AuthError(GatewayError):
 class PolicyError(GatewayError):
     """Intent / capabilities policy violation or invalid policy DSL (HTTP 403 or startup fail)."""
 
+    def __init__(self, message: str, reason: str | None = None) -> None:
+        super().__init__(message)
+        self.reason = reason
+
 
 class SessionError(GatewayError):
     """Session lookup miss / TTL expiry / idle timeout (HTTP 404)."""

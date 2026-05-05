@@ -61,6 +61,8 @@ intents:
             type: string
             max_length: 2048
             pattern: "^https://[^@#?\\s]+"
+            # WARNING: This pattern alone does not prevent SSRF.
+            # Enforce IP allowlisting / private-range blocking at the network or application layer.
 
 agents:
   summarizer-bot:

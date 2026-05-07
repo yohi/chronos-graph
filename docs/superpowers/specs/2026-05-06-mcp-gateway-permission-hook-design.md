@@ -24,7 +24,7 @@ suspend/resume 型の承認フロー**をオプトイン機能として追加す
 ### In-Scope
 
 - `PendingApprovalRegistry` (新規): `asyncio.Event` ベースの承認待ち管理。
-- `POST /approvals/{approval_id}` (新規エンドポイント): UI/operator からの decision 受信。
+- `POST /approvals` (新規エンドポイント): UI/operator からの decision 受信。
 - `server.py` の `tools/call` 処理拡張: blocking モード時に suspend/resume。
 - `GatewaySettings` 拡張: `approval_blocking_mode` (default `False`)、
   `approval_timeout_seconds` (default `30`)、`approval_max_pending` (default `1000`)。
@@ -55,7 +55,7 @@ suspend/resume 型の承認フロー**をオプトイン機能として追加す
 │           ▼                                  │ resolve         │
 │      ToolProxy / Upstream                    │                 │
 │                                  ┌───────────┴───────────────┐ │
-│                                  │ POST /approvals/{id}      │ │
+│                                  │ POST /approvals      │ │
 │                                  │  decision: approve|reject │ │
 │                                  └───────────────────────────┘ │
 │                                                                │
@@ -229,8 +229,9 @@ audit log には常に `approval_id[:8] + "..."` (先頭 8 文字 + 省略記号
 log/stderr/stdout に出力しない。これにより監査ログ漏洩経由での承認エンドポイント
 不正利用を防ぐ (詳細は §8 を参照)。
 
-#### 4.3.3 新エンドポイント `POST /approvals/{approval_id}`
+#### 4.3.3 新エンドポイント `POST /approvals`
 
+- **設計上の決定**: 原 `approval_id` がリバースプロキシや ASGI サーバーのアクセスログに露出するのを防ぐため、パスパラメータではなくリクエストボディで ID を受け取る設計とする。これにより、アクセスログのパス・マスキング設定に依存せず ID の秘匿性を担保する。
 - **認証**: 既存の Bearer API key (Authorization ヘッダ) を流用。`HandshakeService`
   ではなく `ApiKeyAuthenticator` を直接呼んで `resolver_agent_id` を解決
   (intent ヘッダ等は不要)。認証失敗時は 401。
@@ -243,6 +244,7 @@ log/stderr/stdout に出力しない。これにより監査ログ漏洩経由�
 
   ```json
   {
+    "approval_id": "32-char-uuid-hex",
     "decision": "approve",
     "reason": "explanation (optional)"
   }
@@ -252,10 +254,11 @@ log/stderr/stdout に出力しない。これにより監査ログ漏洩経由�
 - **処理フロー**:
   1. `Authorization` ヘッダを `ApiKeyAuthenticator` で検証 → `resolver_agent_id` を取得。
      失敗時 401 `{"error": "auth_failed"}`。
-  2. `Request.body()` で生のバイト列を取得し、サイズを検証する。1KB を超過している場合は即座に 413 `{"error": "payload_too_large"}` を返す (これはリバースプロキシやASGIミドルウェア等での一次防御を前提としたフォールバックのチェックである)。サイズが許容範囲内であれば JSON パースを試み、不正な場合は 400 `{"error": "invalid_json"}` を返す。
-  3. `decision in {"approve","reject"}` を検証 (それ以外は 400 `{"error": "invalid_decision"}`)。
-  4. `outcome = await registry.resolve(approval_id, resolver_agent_id=..., status=..., reason=...)` を呼ぶ。
-  5. `outcome` に応じて HTTP 応答を返す:
+  2. `Request.body()` で生のバイト列を取得し、サイズを検証する。1KB を超過している場合は即座に 413 `{"error": "payload_too_large"}` を返す。サイズが許容範囲内であれば JSON パースを試みる。
+  3. `body` 内の `approval_id` (必須) および `decision in {"approve","reject"}` を検証。不備がある場合は 400 `{"error": "invalid_request"}` 等を返す。
+  4. **サニタイズ**: `normalized_reason = sanitize_reason(body.get("reason"))` を取得。これは §8.6 の正規化・切り詰めルールを確実に適用するため、ロジックの最前段で行う。
+  5. `outcome = await registry.resolve(approval_id, resolver_agent_id=..., status=..., reason=normalized_reason)` を呼ぶ。
+  6. `outcome` に応じて HTTP 応答を返す:
 
      | outcome             | HTTP | body                                              |
      |---------------------|------|---------------------------------------------------|
@@ -267,7 +270,7 @@ log/stderr/stdout に出力しない。これにより監査ログ漏洩経由�
      `ALREADY_RESOLVED` と `NOT_FOUND` を 404 に統合する理由は
      存在判定オラクルを与えないため。
 - **audit log**: `ev="approval_decision", outcome=..., resolver=resolver_agent_id,
-  approval_ref=approval_id[:8]+"...", reason=...` を記録。
+  approval_ref=approval_id[:8]+"...", reason=normalized_reason` を記録。
   原 approval_id は出力しない。
 
 ### 4.4 `src/mcp_gateway/config.py`
@@ -381,7 +384,7 @@ client (LLM)         gateway                      registry        notifier   ope
    │                    │     (suspended)            │                │           │
    │                    │                            │                │  ◀───approve
    │                    │                            │                            │
-   │                    │                            │◀── POST /approvals/{id}────│
+   │                    │                            │◀── POST /approvals────│
    │                    │                            │── set Event                │
    │                    │◀── ApprovalDecision(APPROVED)                            │
    │                    │── proxy.call_through ─────▶ upstream                    │
@@ -518,18 +521,18 @@ log 漏洩経由での総当たり攻撃は実質困難 (`2^96` 試行が必要)
 
 ### 8.5 request body サイズ
 
-`POST /approvals/{id}` の body は 1KB 上限 (`Request.body()` 長さチェック)。超過時 413 を返却。
+`POST /approvals` の body は 1KB 上限 (`Request.body()` 長さチェック)。超過時 413 を返却。
 **必須事項**: Starlette/FastAPI の `Request.body()` はペイロード全体をメモリにキャッシュするため、このコード層のチェックだけでは大容量ボディを送りつける DoS 攻撃を防げない。さらに Uvicorn 単体にはボディサイズ上限の起動オプションが存在しない。そのため、防御の主体として**リバースプロキシ (例: Nginx の `client_max_body_size`) または ASGI レベルのミドルウェアでリクエストサイズの上限を設定することを必須化**する。`Request.body()` による後段チェックは、あくまで防御の補助として位置づける。
 
-### 8.6 audit "reason" フィールドの正規化と文字数制限
+### 8.6 audit "reason" フィールドの正規化と文字数制限 (`sanitize_reason`)
 
-`reason` フィールド (および全箇所で出現する同名の理由文字列) は、ログインジェクションやログ基盤の破壊を防ぐため、以下のクレンジングと切り詰め (Truncation) を**必須**とする:
+`reason` フィールド (および全箇所で出現する同名の理由文字列) は、ログインジェクションやログ基盤の破壊を防ぐため、ヘルパー関数 `sanitize_reason()` 等を用いて以下のクレンジングと切り詰め (Truncation) を**必須**とする:
 
 1. **制御文字の除去**: 改行 (`\n`) を除く ASCII < 32 の制御文字をすべてストリップする。
 2. **空白の正規化**: 連続する空白文字を 1 つのスペースに置換し、前後の空白をトリムする。
 3. **最大バイト長制限**: UTF-8 エンコーディングで最大 256 バイトに切り詰める (文字境界での切り捨てを保証すること)。
 
-**実装要件**: これらの正規化・切り詰め処理は、`PermissionHook` の評価時や、`createAuditEntry` / `writeAuditLog` などのハンドラ層、および audit log schema において、永続化・ログ出力される**前**にランタイムコードで確実に実行されるように実装すること。
+**実装要件**: これらの正規化・切り詰め処理は、`PermissionHook` の評価時や、`POST /approvals` ハンドラ層、および audit log schema において、永続化・ログ出力される**前**にランタイムコードで確実に実行されるように実装すること。
 
 ## 9. 後方互換性
 
@@ -545,7 +548,7 @@ log 漏洩経由での総当たり攻撃は実質困難 (`2^96` 試行が必要)
 3. `uv run ruff check src/ tests/` がエラーなしで通る。
 4. `intents.example.yaml` の `requires_approval: true` を持つツール
    (`memory_delete` 等) を blocking モードで呼び出した際、
-   `POST /approvals/{id}` で `approve` するとアップストリームが呼ばれ、
+   `POST /approvals` で `approve` するとアップストリームが呼ばれ、
    `reject` すると `-32002` が返ることが新規テストで検証される。
 
 ## 11. 既知の限界 / 将来課題

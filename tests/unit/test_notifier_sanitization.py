@@ -1,4 +1,4 @@
-from src.mcp_gateway.approval.notifier import _sanitize_for_log
+from mcp_gateway.approval.notifier import _sanitize_for_log
 
 
 def test_sanitize_value_patterns():

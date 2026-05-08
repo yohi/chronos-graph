@@ -15,7 +15,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Iterable, Protocol, cast
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Iterable, Protocol
 
 from mcp_gateway.errors import SessionError
 
@@ -94,7 +94,7 @@ class InMemorySessionRegistry:
                 session_id,
             )
             return
-        coro = cast(Coroutine[Any, Any, None], self._on_evicted(session_id))
+        coro = self._on_evicted(session_id)
         task: asyncio.Task[None] = loop.create_task(coro, name=f"session_evict_{session_id[:8]}")
         task.add_done_callback(self._log_evict_exception)
 

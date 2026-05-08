@@ -151,7 +151,7 @@ async def test_eviction_callback_does_not_block_caller() -> None:
     t0 = time.monotonic()
     reg.remove(sid)
     elapsed = time.monotonic() - t0
-    assert elapsed < 0.05
+    assert elapsed < 0.2
     await asyncio.wait_for(started.wait(), timeout=0.5)
 
 

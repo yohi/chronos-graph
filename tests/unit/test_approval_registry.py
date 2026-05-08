@@ -92,6 +92,22 @@ class TestWaitForDecision:
         d = await reg.wait_for_decision(aid, timeout=0.1)
         assert d.status is DecisionStatus.APPROVED
 
+    @pytest.mark.asyncio
+    async def test_wait_for_decision_handles_cancellation(self) -> None:
+        reg = PendingApprovalRegistry()
+        aid = await reg.register(session_id="s1", requester_agent_id="agent-a", request=_req())
+
+        task = asyncio.create_task(reg.wait_for_decision(aid, timeout=1.0))
+        await asyncio.sleep(0.01)
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        # Should be removed from pending
+        async with reg._lock:
+            assert aid not in reg._pending
+
 
 class TestResolve:
     @pytest.mark.asyncio

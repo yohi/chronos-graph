@@ -69,7 +69,7 @@ class InMemorySessionRegistry:
         ttl_seconds: int,
         idle_timeout_seconds: int,
         *,
-        on_session_evicted: Callable[[str], Coroutine[Any, Any, None]] | None = None,
+        on_session_evicted: Callable[[str, str], Coroutine[Any, Any, None]] | None = None,
     ) -> None:
         if ttl_seconds <= 0:
             raise ValueError(f"ttl_seconds must be positive, got {ttl_seconds}")
@@ -83,7 +83,7 @@ class InMemorySessionRegistry:
         self._lock = threading.Lock()
         self._on_evicted = on_session_evicted
 
-    def _fire_evicted(self, session_id: str) -> None:
+    def _fire_evicted(self, session_id: str, reason: str) -> None:
         if self._on_evicted is None:
             return
         try:
@@ -94,7 +94,7 @@ class InMemorySessionRegistry:
                 session_id,
             )
             return
-        coro = self._on_evicted(session_id)
+        coro = self._on_evicted(session_id, reason)
         task: asyncio.Task[None] = loop.create_task(coro, name=f"session_evict_{session_id[:8]}")
         task.add_done_callback(self._log_evict_exception)
 
@@ -159,7 +159,7 @@ class InMemorySessionRegistry:
                 return rec
         finally:
             if evicted is not None:
-                self._fire_evicted(evicted)
+                self._fire_evicted(evicted, "session_expired")
 
     def touch(self, session_id: str) -> None:
         evicted: str | None = None
@@ -182,7 +182,7 @@ class InMemorySessionRegistry:
                 else:
                     self._last_active[session_id] = now
         if evicted is not None:
-            self._fire_evicted(evicted)
+            self._fire_evicted(evicted, "session_expired")
 
     def purge(self) -> None:
         """Remove all expired or idle sessions from the registry."""
@@ -201,7 +201,7 @@ class InMemorySessionRegistry:
                 self._records.pop(sid, None)
                 self._last_active.pop(sid, None)
         for sid in evicted_ids:
-            self._fire_evicted(sid)
+            self._fire_evicted(sid, "session_expired")
 
     def remove(self, session_id: str) -> None:
         existed = False
@@ -210,4 +210,4 @@ class InMemorySessionRegistry:
             self._records.pop(session_id, None)
             self._last_active.pop(session_id, None)
         if existed:
-            self._fire_evicted(session_id)
+            self._fire_evicted(session_id, "session_closed")

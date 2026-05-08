@@ -79,6 +79,19 @@ class TestWaitForDecision:
         assert d.status is DecisionStatus.REJECTED
         assert d.reason == "not_found_or_evicted"
 
+    @pytest.mark.asyncio
+    async def test_wait_for_decision_returns_already_resolved_if_in_history(self) -> None:
+        reg = PendingApprovalRegistry()
+        aid = await reg.register(session_id="s1", requester_agent_id="agent-a", request=_req())
+        await reg.resolve(aid, resolver_agent_id="op", status=DecisionStatus.APPROVED)
+
+        # First waiter pops it
+        await reg.wait_for_decision(aid, timeout=0.1)
+
+        # Second waiter should see the same decision
+        d = await reg.wait_for_decision(aid, timeout=0.1)
+        assert d.status is DecisionStatus.APPROVED
+
 
 class TestResolve:
     @pytest.mark.asyncio
@@ -123,6 +136,43 @@ class TestResolve:
         assert ok_count == 1
         assert already_count == 2
 
+    @pytest.mark.asyncio
+    async def test_resolve_passes_reason_through_sanitize_reason(self) -> None:
+        reg = PendingApprovalRegistry()
+        aid = await reg.register(session_id="s1", requester_agent_id="agent-a", request=_req())
+        long_reason = "X" * 1000 + "\x00\x1f"
+        await reg.resolve(
+            aid,
+            resolver_agent_id="op",
+            status=DecisionStatus.REJECTED,
+            reason=long_reason,
+        )
+        d = await reg.wait_for_decision(aid, timeout=0.1)
+        assert d.status is DecisionStatus.REJECTED
+        assert len(d.reason) == 256
+        assert "\x00" not in d.reason
+        assert d.reason == "X" * 256
+
+    @pytest.mark.asyncio
+    async def test_resolve_returns_invalid_status_for_timeout(self) -> None:
+        reg = PendingApprovalRegistry()
+        aid = await reg.register(session_id="s1", requester_agent_id="agent-a", request=_req())
+        outcome = await reg.resolve(aid, resolver_agent_id="op", status=DecisionStatus.TIMEOUT)
+        assert outcome is ResolveOutcome.INVALID_STATUS
+
+    @pytest.mark.asyncio
+    async def test_resolve_returns_already_resolved_after_waiter_consumes(self) -> None:
+        reg = PendingApprovalRegistry()
+        aid = await reg.register(session_id="s1", requester_agent_id="agent-a", request=_req())
+        await reg.resolve(aid, resolver_agent_id="op", status=DecisionStatus.APPROVED)
+
+        # Waiter consumes it
+        await reg.wait_for_decision(aid, timeout=0.1)
+
+        # Subsequent resolve should return ALREADY_RESOLVED instead of NOT_FOUND
+        outcome = await reg.resolve(aid, resolver_agent_id="op", status=DecisionStatus.APPROVED)
+        assert outcome is ResolveOutcome.ALREADY_RESOLVED
+
 
 class TestCancelSession:
     @pytest.mark.asyncio
@@ -147,6 +197,15 @@ class TestCancelSession:
 
         d_c = await reg.wait_for_decision(aid_s2, timeout=0.05)
         assert d_c.status is DecisionStatus.TIMEOUT
+
+    @pytest.mark.asyncio
+    async def test_rejects_pending_with_custom_reason(self) -> None:
+        reg = PendingApprovalRegistry()
+        aid = await reg.register(session_id="s1", requester_agent_id="agent-a", request=_req())
+        await reg.cancel_session("s1", reason="custom_reason")
+        d = await reg.wait_for_decision(aid, timeout=0.05)
+        assert d.status is DecisionStatus.REJECTED
+        assert d.reason == "custom_reason"
 
     @pytest.mark.asyncio
     async def test_idempotent_for_unknown_sid(self) -> None:

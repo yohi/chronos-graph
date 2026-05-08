@@ -21,6 +21,7 @@ class ResolveOutcome(str, Enum):
     NOT_FOUND = "not_found"
     ALREADY_RESOLVED = "already_resolved"
     FORBIDDEN = "forbidden"
+    INVALID_STATUS = "invalid_status"
 
 
 @dataclass(frozen=True, slots=True)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections import deque
 from dataclasses import dataclass
 
 from mcp_gateway.approval.models import ApprovalDecision, DecisionStatus, ResolveOutcome
@@ -29,7 +30,18 @@ class PendingApprovalRegistry:
             raise ValueError(f"max_pending must be positive, got {max_pending}")
         self._lock = asyncio.Lock()
         self._pending: dict[str, _Pending] = {}
+        self._recent_ids: deque[str] = deque(maxlen=max_pending)
+        self._recent_decisions: dict[str, ApprovalDecision] = {}
         self._max_pending = max_pending
+
+    def _add_to_history(self, approval_id: str, decision: ApprovalDecision) -> None:
+        if approval_id in self._recent_decisions:
+            return
+        if len(self._recent_ids) >= self._recent_ids.maxlen:
+            oldest = self._recent_ids.popleft()
+            self._recent_decisions.pop(oldest, None)
+        self._recent_ids.append(approval_id)
+        self._recent_decisions[approval_id] = decision
 
     async def register(
         self,
@@ -54,6 +66,8 @@ class PendingApprovalRegistry:
         async with self._lock:
             entry = self._pending.get(approval_id)
             if entry is None:
+                if approval_id in self._recent_decisions:
+                    return self._recent_decisions[approval_id]
                 return ApprovalDecision(
                     status=DecisionStatus.REJECTED,
                     reason="not_found_or_evicted",
@@ -65,15 +79,20 @@ class PendingApprovalRegistry:
         except asyncio.TimeoutError:
             async with self._lock:
                 self._pending.pop(approval_id, None)
+                self._add_to_history(approval_id, ApprovalDecision(status=DecisionStatus.TIMEOUT))
             return ApprovalDecision(status=DecisionStatus.TIMEOUT)
         except asyncio.CancelledError:
             async with self._lock:
-                self._pending.pop(approval_id, None)
+                entry = self._pending.pop(approval_id, None)
+                if entry and entry.decision:
+                    self._add_to_history(approval_id, entry.decision)
             raise
 
         async with self._lock:
             # cancel_session 等で既に pop されている可能性がある
             self._pending.pop(approval_id, None)
+            if entry.decision:
+                self._add_to_history(approval_id, entry.decision)
 
         if entry.decision is None:
             return ApprovalDecision(status=DecisionStatus.TIMEOUT)
@@ -87,9 +106,14 @@ class PendingApprovalRegistry:
         status: DecisionStatus,
         reason: str | None = None,
     ) -> ResolveOutcome:
+        if status not in (DecisionStatus.APPROVED, DecisionStatus.REJECTED):
+            return ResolveOutcome.INVALID_STATUS
+
         async with self._lock:
             entry = self._pending.get(approval_id)
             if entry is None:
+                if approval_id in self._recent_decisions:
+                    return ResolveOutcome.ALREADY_RESOLVED
                 return ResolveOutcome.NOT_FOUND
             if entry.decision is not None:
                 return ResolveOutcome.ALREADY_RESOLVED
@@ -99,7 +123,7 @@ class PendingApprovalRegistry:
             entry.event.set()
             return ResolveOutcome.OK
 
-    async def cancel_session(self, session_id: str) -> None:
+    async def cancel_session(self, session_id: str, reason: str = "session_evicted") -> None:
         async with self._lock:
             to_cancel = [
                 aid
@@ -108,8 +132,10 @@ class PendingApprovalRegistry:
             ]
             for aid in to_cancel:
                 entry = self._pending.pop(aid)
-                entry.decision = ApprovalDecision(
+                decision = ApprovalDecision(
                     status=DecisionStatus.REJECTED,
-                    reason="session_evicted",
+                    reason=reason,
                 )
+                entry.decision = decision
+                self._add_to_history(aid, decision)
                 entry.event.set()

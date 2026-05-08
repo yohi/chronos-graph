@@ -27,10 +27,10 @@ def _make_session(reg: InMemorySessionRegistry) -> str:
 
 @pytest.mark.asyncio
 async def test_eviction_callback_invoked_on_idle_expiry() -> None:
-    fired: list[str] = []
+    fired: list[tuple[str, str]] = []
 
-    async def hook(sid: str) -> None:
-        fired.append(sid)
+    async def hook(sid: str, reason: str) -> None:
+        fired.append((sid, reason))
 
     reg = InMemorySessionRegistry(ttl_seconds=3600, idle_timeout_seconds=1, on_session_evicted=hook)
     sid = _make_session(reg)
@@ -40,15 +40,15 @@ async def test_eviction_callback_invoked_on_idle_expiry() -> None:
         reg.lookup(sid)
 
     await asyncio.sleep(0)
-    assert fired == [sid]
+    assert fired == [(sid, "session_expired")]
 
 
 @pytest.mark.asyncio
 async def test_eviction_callback_invoked_on_ttl_expiry() -> None:
-    fired: list[str] = []
+    fired: list[tuple[str, str]] = []
 
-    async def hook(sid: str) -> None:
-        fired.append(sid)
+    async def hook(sid: str, reason: str) -> None:
+        fired.append((sid, reason))
 
     reg = InMemorySessionRegistry(ttl_seconds=1, idle_timeout_seconds=3600, on_session_evicted=hook)
     sid = _make_session(reg)
@@ -60,15 +60,15 @@ async def test_eviction_callback_invoked_on_ttl_expiry() -> None:
         reg.lookup(sid)
 
     await asyncio.sleep(0)
-    assert fired == [sid]
+    assert fired == [(sid, "session_expired")]
 
 
 @pytest.mark.asyncio
 async def test_eviction_callback_invoked_on_remove() -> None:
-    fired: list[str] = []
+    fired: list[tuple[str, str]] = []
 
-    async def hook(sid: str) -> None:
-        fired.append(sid)
+    async def hook(sid: str, reason: str) -> None:
+        fired.append((sid, reason))
 
     reg = InMemorySessionRegistry(
         ttl_seconds=3600, idle_timeout_seconds=3600, on_session_evicted=hook
@@ -76,15 +76,15 @@ async def test_eviction_callback_invoked_on_remove() -> None:
     sid = _make_session(reg)
     reg.remove(sid)
     await asyncio.sleep(0)
-    assert fired == [sid]
+    assert fired == [(sid, "session_closed")]
 
 
 @pytest.mark.asyncio
 async def test_eviction_callback_invoked_on_purge() -> None:
-    fired: list[str] = []
+    fired: list[tuple[str, str]] = []
 
-    async def hook(sid: str) -> None:
-        fired.append(sid)
+    async def hook(sid: str, reason: str) -> None:
+        fired.append((sid, reason))
 
     reg = InMemorySessionRegistry(ttl_seconds=1, idle_timeout_seconds=3600, on_session_evicted=hook)
     sid_a = _make_session(reg)
@@ -96,7 +96,7 @@ async def test_eviction_callback_invoked_on_purge() -> None:
 
     reg.purge()
     await asyncio.sleep(0)
-    assert sorted(fired) == sorted([sid_a, sid_b])
+    assert sorted(fired) == sorted([(sid_a, "session_expired"), (sid_b, "session_expired")])
 
 
 @pytest.mark.asyncio
@@ -109,10 +109,11 @@ async def test_eviction_callback_logs_exception_when_callback_raises() -> None:
         def emit(self, record: logging.LogRecord) -> None:
             records.append(record)
 
-    async def boom(sid: str) -> None:
+    async def boom(sid: str, reason: str) -> None:
         raise RuntimeError("explode")
 
     handler = _CaptureHandler(level=logging.ERROR)
+    orig_level = session_module.logger.level
     session_module.logger.addHandler(handler)
     session_module.logger.setLevel(logging.ERROR)
     try:
@@ -127,6 +128,7 @@ async def test_eviction_callback_logs_exception_when_callback_raises() -> None:
             await asyncio.sleep(0.01)
     finally:
         session_module.logger.removeHandler(handler)
+        session_module.logger.setLevel(orig_level)
 
     assert any(
         record.getMessage().startswith("session_eviction_callback_failed") for record in records
@@ -137,7 +139,7 @@ async def test_eviction_callback_logs_exception_when_callback_raises() -> None:
 async def test_eviction_callback_does_not_block_caller() -> None:
     started = asyncio.Event()
 
-    async def slow(sid: str) -> None:
+    async def slow(sid: str, reason: str) -> None:
         started.set()
         await asyncio.sleep(0.5)
 
@@ -164,10 +166,11 @@ def test_eviction_callback_logs_warning_when_no_event_loop() -> None:
         def emit(self, record: logging.LogRecord) -> None:
             records.append(record)
 
-    async def hook(sid: str) -> None:
+    async def hook(sid: str, reason: str) -> None:
         pass
 
     handler = _CaptureHandler(level=logging.WARNING)
+    orig_level = session_module.logger.level
     session_module.logger.addHandler(handler)
     session_module.logger.setLevel(logging.WARNING)
     try:
@@ -187,6 +190,7 @@ def test_eviction_callback_logs_warning_when_no_event_loop() -> None:
         t.join()
     finally:
         session_module.logger.removeHandler(handler)
+        session_module.logger.setLevel(orig_level)
 
     assert any(
         record.getMessage().startswith("session_eviction_hook_skipped") for record in records

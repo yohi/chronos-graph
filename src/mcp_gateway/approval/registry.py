@@ -62,7 +62,13 @@ class PendingApprovalRegistry:
             )
             return approval_id
 
-    async def wait_for_decision(self, approval_id: str, *, timeout: float) -> ApprovalDecision:
+    async def wait_for_decision(
+        self,
+        approval_id: str,
+        *,
+        timeout: float,
+        started_event: asyncio.Event | None = None,
+    ) -> ApprovalDecision:
         async with self._lock:
             entry = self._pending.get(approval_id)
             if entry is None:
@@ -75,10 +81,16 @@ class PendingApprovalRegistry:
             event = entry.event
 
         try:
+            if started_event:
+                started_event.set()
             await asyncio.wait_for(event.wait(), timeout=timeout)
         except asyncio.TimeoutError:
             async with self._lock:
-                self._pending.pop(approval_id, None)
+                entry = self._pending.pop(approval_id, None)
+                if entry and entry.decision:
+                    # タイムアウト検知〜ロック取得の間に他タスクで resolve されていた場合
+                    self._add_to_history(approval_id, entry.decision)
+                    return entry.decision
                 self._add_to_history(approval_id, ApprovalDecision(status=DecisionStatus.TIMEOUT))
             return ApprovalDecision(status=DecisionStatus.TIMEOUT)
         except asyncio.CancelledError:
@@ -91,6 +103,7 @@ class PendingApprovalRegistry:
         async with self._lock:
             # cancel_session 等で既に pop されている可能性がある
             self._pending.pop(approval_id, None)
+            # wait_for が正常終了した場合、entry.decision はセットされているはず
             if entry.decision:
                 self._add_to_history(approval_id, entry.decision)
 
@@ -130,11 +143,12 @@ class PendingApprovalRegistry:
                 for aid, entry in self._pending.items()
                 if entry.session_id == session_id and entry.decision is None
             ]
+            sanitized = sanitize_reason(reason)
             for aid in to_cancel:
                 entry = self._pending.pop(aid)
                 decision = ApprovalDecision(
                     status=DecisionStatus.REJECTED,
-                    reason=reason,
+                    reason=sanitized,
                 )
                 entry.decision = decision
                 self._add_to_history(aid, decision)

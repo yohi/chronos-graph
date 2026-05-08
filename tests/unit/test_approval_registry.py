@@ -97,8 +97,11 @@ class TestWaitForDecision:
         reg = PendingApprovalRegistry()
         aid = await reg.register(session_id="s1", requester_agent_id="agent-a", request=_req())
 
-        task = asyncio.create_task(reg.wait_for_decision(aid, timeout=1.0))
-        await asyncio.sleep(0.01)
+        started_event = asyncio.Event()
+        task = asyncio.create_task(
+            reg.wait_for_decision(aid, timeout=1.0, started_event=started_event)
+        )
+        await started_event.wait()
         task.cancel()
 
         with pytest.raises(asyncio.CancelledError):

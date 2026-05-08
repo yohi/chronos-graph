@@ -37,7 +37,7 @@ class PendingApprovalRegistry:
     def _add_to_history(self, approval_id: str, decision: ApprovalDecision) -> None:
         if approval_id in self._recent_decisions:
             return
-        if len(self._recent_ids) >= self._recent_ids.maxlen:
+        if len(self._recent_ids) >= self._max_pending:
             oldest = self._recent_ids.popleft()
             self._recent_decisions.pop(oldest, None)
         self._recent_ids.append(approval_id)

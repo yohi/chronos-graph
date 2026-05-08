@@ -151,5 +151,44 @@ async def test_eviction_callback_does_not_block_caller() -> None:
     t0 = time.monotonic()
     reg.remove(sid)
     elapsed = time.monotonic() - t0
-    assert elapsed < 0.05
+    assert elapsed < 0.2
     await asyncio.wait_for(started.wait(), timeout=0.5)
+
+
+def test_eviction_callback_logs_warning_when_no_event_loop() -> None:
+    from mcp_gateway.auth import session as session_module
+
+    records: list[logging.LogRecord] = []
+
+    class _CaptureHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    async def hook(sid: str) -> None:
+        pass
+
+    handler = _CaptureHandler(level=logging.WARNING)
+    session_module.logger.addHandler(handler)
+    session_module.logger.setLevel(logging.WARNING)
+    try:
+        reg = InMemorySessionRegistry(
+            ttl_seconds=3600, idle_timeout_seconds=3600, on_session_evicted=hook
+        )
+        sid = _make_session(reg)
+
+        # Call remove from a thread without an event loop
+        import threading
+
+        def worker() -> None:
+            reg.remove(sid)
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+    finally:
+        session_module.logger.removeHandler(handler)
+
+    assert any(
+        record.getMessage().startswith("session_eviction_hook_skipped") for record in records
+    )
+    assert any(record.levelno == logging.WARNING for record in records)

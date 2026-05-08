@@ -7,22 +7,18 @@ return a uniform 404 + close the SSE stream.
 
 from __future__ import annotations
 
-import asyncio
-import logging
 import threading
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Coroutine, Iterable, Protocol, cast
+from typing import TYPE_CHECKING, Iterable, Protocol
 
 from mcp_gateway.errors import SessionError
 
 if TYPE_CHECKING:
     from mcp_gateway.policy.models import ToolGuardrail
-
-logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -64,13 +60,7 @@ class SessionRegistry(Protocol):
 class InMemorySessionRegistry:
     """Process-local registry. Replaceable later with a Redis-backed implementation."""
 
-    def __init__(
-        self,
-        ttl_seconds: int,
-        idle_timeout_seconds: int,
-        *,
-        on_session_evicted: Callable[[str], Awaitable[None]] | None = None,
-    ) -> None:
+    def __init__(self, ttl_seconds: int, idle_timeout_seconds: int) -> None:
         if ttl_seconds <= 0:
             raise ValueError(f"ttl_seconds must be positive, got {ttl_seconds}")
         if idle_timeout_seconds <= 0:
@@ -81,27 +71,6 @@ class InMemorySessionRegistry:
         self._records: dict[str, SessionRecord] = {}
         self._last_active: dict[str, datetime] = {}
         self._lock = threading.Lock()
-        self._on_evicted = on_session_evicted
-
-    def _fire_evicted(self, session_id: str) -> None:
-        if self._on_evicted is None:
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        coro = cast(Coroutine[Any, Any, None], self._on_evicted(session_id))
-        task: asyncio.Task[None] = loop.create_task(coro, name=f"session_evict_{session_id[:8]}")
-        task.add_done_callback(self._log_evict_exception)
-
-    @staticmethod
-    def _log_evict_exception(task: asyncio.Task[None]) -> None:
-        try:
-            exc = task.exception()
-        except asyncio.CancelledError:
-            return
-        if exc is not None:
-            logger.error("session_eviction_callback_failed: %s", exc, exc_info=exc)
 
     def create(
         self,
@@ -130,80 +99,67 @@ class InMemorySessionRegistry:
         return rec
 
     def lookup(self, session_id: str) -> SessionRecord:
-        evicted: str | None = None
-        try:
-            with self._lock:
-                now = _utcnow()
-                rec = self._records.get(session_id)
-                if rec is None:
-                    raise SessionError(f"unknown session_id {session_id!r}")
+        with self._lock:
+            now = _utcnow()
+            rec = self._records.get(session_id)
+            if rec is None:
+                raise SessionError(f"unknown session_id {session_id!r}")
 
-                if now >= rec.expires_at:
-                    self._records.pop(session_id, None)
-                    self._last_active.pop(session_id, None)
-                    evicted = session_id
-                    raise SessionError("session expired (ttl)")
+            if now >= rec.expires_at:
+                self._records.pop(session_id, None)
+                self._last_active.pop(session_id, None)
+                raise SessionError("session expired (ttl)")
 
-                last = self._last_active.get(session_id, rec.issued_at)
-                if now - last >= self._idle:
-                    self._records.pop(session_id, None)
-                    self._last_active.pop(session_id, None)
-                    evicted = session_id
-                    raise SessionError("session expired (idle)")
+            last = self._last_active.get(session_id, rec.issued_at)
+            if now - last >= self._idle:
+                self._records.pop(session_id, None)
+                self._last_active.pop(session_id, None)
+                raise SessionError("session expired (idle)")
 
-                self._last_active[session_id] = now
-                return rec
-        finally:
-            if evicted is not None:
-                self._fire_evicted(evicted)
+            # Update idle timer on successful lookup
+            self._last_active[session_id] = now
+            return rec
 
     def touch(self, session_id: str) -> None:
-        evicted: str | None = None
         with self._lock:
             now = _utcnow()
             rec = self._records.get(session_id)
             if rec is None:
                 return
 
+            # Check TTL
             if now >= rec.expires_at:
                 self._records.pop(session_id, None)
                 self._last_active.pop(session_id, None)
-                evicted = session_id
-            else:
-                last = self._last_active.get(session_id, rec.issued_at)
-                if now - last >= self._idle:
-                    self._records.pop(session_id, None)
-                    self._last_active.pop(session_id, None)
-                    evicted = session_id
-                else:
-                    self._last_active[session_id] = now
-        if evicted is not None:
-            self._fire_evicted(evicted)
+                return
+
+            # Check Idle
+            last = self._last_active.get(session_id, rec.issued_at)
+            if now - last >= self._idle:
+                self._records.pop(session_id, None)
+                self._last_active.pop(session_id, None)
+                return
+
+            self._last_active[session_id] = now
 
     def purge(self) -> None:
         """Remove all expired or idle sessions from the registry."""
-        evicted_ids: list[str] = []
         with self._lock:
             now = _utcnow()
+            expired_ids = []
             for sid, rec in self._records.items():
                 if now >= rec.expires_at:
-                    evicted_ids.append(sid)
+                    expired_ids.append(sid)
                     continue
                 last = self._last_active.get(sid, rec.issued_at)
                 if now - last >= self._idle:
-                    evicted_ids.append(sid)
+                    expired_ids.append(sid)
 
-            for sid in evicted_ids:
+            for sid in expired_ids:
                 self._records.pop(sid, None)
                 self._last_active.pop(sid, None)
-        for sid in evicted_ids:
-            self._fire_evicted(sid)
 
     def remove(self, session_id: str) -> None:
-        existed = False
         with self._lock:
-            existed = session_id in self._records
             self._records.pop(session_id, None)
             self._last_active.pop(session_id, None)
-        if existed:
-            self._fire_evicted(session_id)

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from mcp_gateway.approval.models import ApprovalDecision, DecisionStatus, ResolveOutcome
 from mcp_gateway.approval.notifier import ApprovalRequest
+from mcp_gateway.approval.sanitize import sanitize_reason
 from mcp_gateway.errors import PolicyError
 
 
@@ -53,7 +54,10 @@ class PendingApprovalRegistry:
         async with self._lock:
             entry = self._pending.get(approval_id)
             if entry is None:
-                raise KeyError(approval_id)
+                return ApprovalDecision(
+                    status=DecisionStatus.REJECTED,
+                    reason="not_found_or_evicted",
+                )
             event = entry.event
 
         try:
@@ -62,10 +66,16 @@ class PendingApprovalRegistry:
             async with self._lock:
                 self._pending.pop(approval_id, None)
             return ApprovalDecision(status=DecisionStatus.TIMEOUT)
+        except asyncio.CancelledError:
+            async with self._lock:
+                self._pending.pop(approval_id, None)
+            raise
 
         async with self._lock:
-            entry = self._pending.pop(approval_id, None)
-        if entry is None or entry.decision is None:
+            # cancel_session 等で既に pop されている可能性がある
+            self._pending.pop(approval_id, None)
+
+        if entry.decision is None:
             return ApprovalDecision(status=DecisionStatus.TIMEOUT)
         return entry.decision
 
@@ -85,16 +95,21 @@ class PendingApprovalRegistry:
                 return ResolveOutcome.ALREADY_RESOLVED
             if resolver_agent_id == entry.requester_agent_id:
                 return ResolveOutcome.FORBIDDEN
-            entry.decision = ApprovalDecision(status=status, reason=reason)
+            entry.decision = ApprovalDecision(status=status, reason=sanitize_reason(reason))
             entry.event.set()
             return ResolveOutcome.OK
 
     async def cancel_session(self, session_id: str) -> None:
         async with self._lock:
-            for entry in self._pending.values():
-                if entry.session_id == session_id and entry.decision is None:
-                    entry.decision = ApprovalDecision(
-                        status=DecisionStatus.REJECTED,
-                        reason="session_evicted",
-                    )
-                    entry.event.set()
+            to_cancel = [
+                aid
+                for aid, entry in self._pending.items()
+                if entry.session_id == session_id and entry.decision is None
+            ]
+            for aid in to_cancel:
+                entry = self._pending.pop(aid)
+                entry.decision = ApprovalDecision(
+                    status=DecisionStatus.REJECTED,
+                    reason="session_evicted",
+                )
+                entry.event.set()

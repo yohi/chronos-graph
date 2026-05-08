@@ -73,10 +73,11 @@ class TestWaitForDecision:
         assert d.status is DecisionStatus.TIMEOUT
 
     @pytest.mark.asyncio
-    async def test_unknown_id_raises_keyerror(self) -> None:
+    async def test_unknown_id_returns_rejected(self) -> None:
         reg = PendingApprovalRegistry()
-        with pytest.raises(KeyError):
-            await reg.wait_for_decision("does-not-exist", timeout=0.05)
+        d = await reg.wait_for_decision("does-not-exist", timeout=0.05)
+        assert d.status is DecisionStatus.REJECTED
+        assert d.reason == "not_found_or_evicted"
 
 
 class TestResolve:

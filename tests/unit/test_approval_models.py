@@ -41,5 +41,5 @@ class TestApprovalDecision:
 
     def test_is_frozen(self) -> None:
         d = ApprovalDecision(status=DecisionStatus.APPROVED)
-        with pytest.raises((AttributeError, Exception)):
+        with pytest.raises(AttributeError):
             d.status = DecisionStatus.REJECTED  # type: ignore[misc]

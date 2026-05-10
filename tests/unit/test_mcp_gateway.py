@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import textwrap
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -2172,6 +2173,36 @@ class TestBuildRouterApprovalPrecondition:
                 approval_registry=None,
             )
 
+    def test_build_router_raises_when_timeout_is_non_positive(self) -> None:
+        from mcp_gateway.server import build_router
+
+        with pytest.raises(ValueError, match="approval_timeout_seconds must be positive"):
+            build_router(
+                handshake=object(),  # type: ignore[arg-type]
+                sessions=object(),  # type: ignore[arg-type]
+                tool_registry=object(),  # type: ignore[arg-type]
+                upstream=object(),
+                policy=object(),  # type: ignore[arg-type]
+                audit=object(),  # type: ignore[arg-type]
+                engine=object(),  # type: ignore[arg-type]
+                approval_blocking_mode=True,
+                approval_registry=object(),  # type: ignore[arg-type]
+                approval_timeout_seconds=0,
+            )
+        with pytest.raises(ValueError, match="approval_timeout_seconds must be positive"):
+            build_router(
+                handshake=object(),  # type: ignore[arg-type]
+                sessions=object(),  # type: ignore[arg-type]
+                tool_registry=object(),  # type: ignore[arg-type]
+                upstream=object(),
+                policy=object(),  # type: ignore[arg-type]
+                audit=object(),  # type: ignore[arg-type]
+                engine=object(),  # type: ignore[arg-type]
+                approval_blocking_mode=True,
+                approval_registry=object(),  # type: ignore[arg-type]
+                approval_timeout_seconds=-1.0,
+            )
+
 
 class TestBlockingModeHandlerDirect:
     """Direct router-level tests for the blocking-mode REQUIRES_APPROVAL handler."""
@@ -2248,6 +2279,14 @@ class TestBlockingModeHandlerDirect:
         )
         return app, registry, sessions, handshake, upstream
 
+    async def _wait_for_approval_id(self, registry: Any, timeout: float = 2.0) -> str:
+        """Helper to poll for a pending approval ID with timeout."""
+        for _ in range(int(timeout / 0.05)):
+            if registry._pending:  # type: ignore[attr-defined]
+                return next(iter(registry._pending.keys()))  # type: ignore[attr-defined]
+            await asyncio.sleep(0.05)
+        pytest.fail("timed out waiting for pending approval id")
+
     @pytest.mark.asyncio
     async def test_blocking_mode_returns_32003_on_timeout(self, router_with_registry):
         app, _registry, _sessions, handshake, _upstream = router_with_registry
@@ -2298,11 +2337,7 @@ class TestBlockingModeHandlerDirect:
                     },
                 )
             )
-            for _ in range(20):
-                if registry._pending:  # type: ignore[attr-defined]
-                    break
-                await asyncio.sleep(0.01)
-            approval_id = next(iter(registry._pending.keys()))  # type: ignore[attr-defined]
+            approval_id = await self._wait_for_approval_id(registry)
             from mcp_gateway.approval.models import DecisionStatus
 
             await registry.resolve(
@@ -2337,11 +2372,7 @@ class TestBlockingModeHandlerDirect:
                     },
                 )
             )
-            for _ in range(20):
-                if registry._pending:  # type: ignore[attr-defined]
-                    break
-                await asyncio.sleep(0.01)
-            approval_id = next(iter(registry._pending.keys()))  # type: ignore[attr-defined]
+            approval_id = await self._wait_for_approval_id(registry)
             from mcp_gateway.approval.models import DecisionStatus
 
             await registry.resolve(
@@ -2414,7 +2445,7 @@ class TestBlockingModeHandlerDirect:
                 engine=engine,
                 approval_registry=registry,
                 approval_blocking_mode=True,
-                approval_timeout_seconds=2.0,
+                approval_timeout_seconds=0.1,
             )
         )
 
@@ -2444,10 +2475,7 @@ class TestBlockingModeHandlerDirect:
                     },
                 )
             )
-            for _ in range(20):
-                if registry._pending:  # type: ignore[attr-defined]
-                    break
-                await asyncio.sleep(0.01)
+            await self._wait_for_approval_id(registry)
             resp_b = await c.post(
                 f"/messages?session_id={rec_b.session_id}",
                 json={
@@ -2458,7 +2486,8 @@ class TestBlockingModeHandlerDirect:
                 },
             )
             assert resp_b.json()["error"]["code"] == -32603
-            await t_a
+            resp_a = await t_a
+            assert resp_a.json()["error"]["code"] == -32003
 
     @pytest.mark.asyncio
     async def test_audit_logs_truncate_approval_id(self, router_with_registry, capfd):
@@ -2512,13 +2541,9 @@ class TestBlockingModeHandlerDirect:
                     },
                 )
             )
-            for _ in range(20):
-                if registry._pending:  # type: ignore[attr-defined]
-                    break
-                await asyncio.sleep(0.01)
+            approval_id = await self._wait_for_approval_id(registry)
             from mcp_gateway.approval.models import DecisionStatus
 
-            approval_id = next(iter(registry._pending.keys()))  # type: ignore[attr-defined]
             await registry.resolve(
                 approval_id,
                 resolver_agent_id="operator",

@@ -4280,58 +4280,136 @@ class TestMaxBodySizeMiddleware:
     @pytest.mark.asyncio
     async def test_rejects_oversized_body(self):
         import httpx
-        from fastapi import FastAPI, Response
+        from fastapi import FastAPI
         from httpx import ASGITransport
+        from starlette.types import Receive, Scope, Send
 
         from mcp_gateway.middleware import MaxBodySizeMiddleware
 
         app = FastAPI()
         app.add_middleware(MaxBodySizeMiddleware, max_size_bytes=10)
 
-        @app.post("/test")
-        async def handle():
-            return Response(status_code=200)
+        async def dummy_app(scope: Scope, receive: Receive, send: Send):
+            if scope["type"] == "http":
+                # Trigger stream reading
+                body = b""
+                while True:
+                    message = await receive()
+                    if message["type"] == "http.request":
+                        body += message.get("body", b"")
+                        if not message.get("more_body", False):
+                            break
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 200,
+                        "headers": [(b"content-type", b"text/plain")],
+                    }
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b"ok",
+                    }
+                )
+
+        app.mount("/test", dummy_app)
 
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            # 11 bytes should be rejected (Content-Length is automatically set)
-            resp = await c.post("/test", content="x" * 11)
+            # 11 bytes should be rejected (Content-Length header path)
+            resp = await c.post("/test/", content=b"x" * 11)
             assert resp.status_code == 413
             assert resp.json() == {"error": "payload_too_large"}
 
             # 10 bytes should be allowed
-            resp = await c.post("/test", content="x" * 10)
+            resp = await c.post("/test/", content=b"x" * 10)
             assert resp.status_code == 200
 
     @pytest.mark.asyncio
-    async def test_400_for_missing_content_length(self):
+    async def test_allows_missing_content_length_within_limit(self):
         import httpx
-        from fastapi import FastAPI, Response
+        from fastapi import FastAPI
         from httpx import ASGITransport
+        from starlette.types import Receive, Scope, Send
 
         from mcp_gateway.middleware import MaxBodySizeMiddleware
 
         app = FastAPI()
         app.add_middleware(MaxBodySizeMiddleware, max_size_bytes=100)
 
-        @app.post("/test")
-        async def handle():
-            return Response(status_code=200)
+        async def dummy_app(scope: Scope, receive: Receive, send: Send):
+            if scope["type"] == "http":
+                body = b""
+                while True:
+                    message = await receive()
+                    if message["type"] == "http.request":
+                        body += message.get("body", b"")
+                        if not message.get("more_body", False):
+                            break
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 200,
+                        "headers": [(b"content-type", b"text/plain")],
+                    }
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": body,
+                    }
+                )
+
+        app.mount("/test", dummy_app)
 
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            # POST without content-length header should be rejected
-            # Note: httpx automatically adds content-length if content is provided.
-            # We can manually remove it or use a trick.
-            # This usually triggers ValueError or missing
-            resp = await c.post("/test", headers={"Content-Length": ""})
-            # Better to use a custom request to ensure it's missing
 
-            # Actually, the middleware checks if it's NOT in headers.
-            # Let's try to send a request where we specifically exclude it.
-            # ASGITransport might add it though.
+            async def gen():
+                yield b"hello"
 
-            # Let's test the 400 logic for non-int and negative as well.
-            resp = await c.post("/test", headers={"Content-Length": "-1"})
-            assert resp.status_code == 400
+            resp = await c.post("/test/", content=gen())
+            assert resp.status_code == 200
+            assert resp.content == b"hello"
+
+    @pytest.mark.asyncio
+    async def test_rejects_streaming_oversized_body(self):
+        import httpx
+        from fastapi import FastAPI
+        from httpx import ASGITransport
+        from starlette.types import Receive, Scope, Send
+
+        from mcp_gateway.middleware import MaxBodySizeMiddleware
+
+        app = FastAPI()
+        app.add_middleware(MaxBodySizeMiddleware, max_size_bytes=10)
+
+        async def dummy_app(scope: Scope, receive: Receive, send: Send):
+            if scope["type"] == "http":
+                while True:
+                    message = await receive()
+                    if message["type"] == "http.request":
+                        if not message.get("more_body", False):
+                            break
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 200,
+                        "headers": [],
+                    }
+                )
+                await send({"type": "http.response.body", "body": b""})
+
+        app.mount("/test", dummy_app)
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+
+            async def gen():
+                yield b"x" * 6
+                yield b"y" * 6  # total 12 > 10
+
+            resp = await c.post("/test/", content=gen())
+            assert resp.status_code == 413
+            assert resp.json() == {"error": "payload_too_large"}
 
     @pytest.mark.asyncio
     async def test_400_for_invalid_content_length(self):
@@ -4345,6 +4423,12 @@ class TestMaxBodySizeMiddleware:
         app.add_middleware(MaxBodySizeMiddleware, max_size_bytes=100)
 
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            resp = await c.post("/test", headers={"Content-Length": "not-a-number"})
+            # Negative
+            resp = await c.post("/test/", headers={"Content-Length": "-1"})
+            assert resp.status_code == 400
+            assert resp.json() == {"error": "invalid_request"}
+
+            # Not a number
+            resp = await c.post("/test/", headers={"Content-Length": "not-a-number"})
             assert resp.status_code == 400
             assert resp.json() == {"error": "invalid_request"}

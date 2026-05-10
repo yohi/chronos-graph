@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import SecretStr, SerializationInfo, field_validator, model_serializer
+from pydantic import Field, SecretStr, SerializationInfo, field_validator, model_serializer
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -57,6 +57,11 @@ class GatewaySettings(BaseSettings):
 
     # ── audit ────────────────────────────────────────────────────
     audit_log_level: Literal["INFO", "DEBUG"] = "INFO"
+
+    # ── approval ─────────────────────────────────────────────────
+    approval_blocking_mode: bool = False
+    approval_timeout_seconds: float = Field(default=30.0, gt=0.0, le=600.0)
+    approval_max_pending: int = Field(default=1000, gt=0, le=100_000)
 
     @model_serializer(mode="wrap")
     def _mask_secrets(self, handler: Any, info: SerializationInfo) -> dict[str, Any]:

@@ -126,6 +126,7 @@ class GatewayPolicy(BaseModel):
     output_filters: dict[str, OutputFilterDef]
     intents: dict[str, IntentPolicy]
     agents: dict[str, AgentPolicy]
+    approvers: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _verify_references(self) -> Self:

@@ -31,6 +31,7 @@ class ApprovalRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     session_id: str
+    approval_id: str
     agent_id: str
     intent: str
     tool_name: str
@@ -44,7 +45,7 @@ class ApprovalRequest(BaseModel):
         return cast(Mapping[str, Any], _deep_freeze(v))
 
 
-def _sanitize_for_log(data: Any) -> Any:
+def sanitize_for_log(data: Any) -> Any:
     """ログ出力用に機密情報をマスクします。"""
     sensitive_tokens = {
         "api",
@@ -70,11 +71,11 @@ def _sanitize_for_log(data: Any) -> Any:
             if is_sensitive:
                 new_data[str(k)] = "**********"
             else:
-                new_data[str(k)] = _sanitize_for_log(v)
+                new_data[str(k)] = sanitize_for_log(v)
         return new_data
 
     if isinstance(data, (list, tuple, set, frozenset)):
-        sanitized = [_sanitize_for_log(i) for i in data]
+        sanitized = [sanitize_for_log(i) for i in data]
         if isinstance(data, list):
             return sanitized
         if isinstance(data, tuple):
@@ -125,6 +126,6 @@ class LogOnlyApprovalNotifier(ApprovalNotifier):
             request.agent_id,
             request.intent,
             request.tool_name,
-            _sanitize_for_log(request.arguments),
+            sanitize_for_log(request.arguments),
             request.requested_at.isoformat(),
         )

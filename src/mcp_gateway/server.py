@@ -11,13 +11,19 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
+from mcp_gateway.approval.models import DecisionStatus
 from mcp_gateway.approval.notifier import (
     ApprovalNotifier,
     ApprovalRequest,
     LogOnlyApprovalNotifier,
-    _sanitize_for_log,
 )
+from mcp_gateway.approval.notifier import (
+    sanitize_for_log as _sanitize_for_log,
+)
+from mcp_gateway.approval.registry import PendingApprovalRegistry
+from mcp_gateway.approval.sanitize import sanitize_reason
 from mcp_gateway.audit.logger import AuditLogger
+from mcp_gateway.auth.api_key import ApiKeyAuthenticator
 from mcp_gateway.auth.handshake import HandshakeService
 from mcp_gateway.auth.session import SessionRegistry
 from mcp_gateway.errors import AuthError, PolicyError, SessionError, UpstreamError
@@ -94,6 +100,11 @@ def _is_validation_deny(reason: str | None) -> bool:
     return reason.startswith("param_") or reason.startswith("forbidden_param:")
 
 
+def _approval_id_for_log(approval_id: str) -> str:
+    """Return the truncated, non-recoverable form of an approval_id for audit logging."""
+    return approval_id[:8] + "..."
+
+
 def build_router(
     *,
     handshake: HandshakeService,
@@ -104,7 +115,18 @@ def build_router(
     audit: AuditLogger,
     engine: PolicyEngine,
     approval_notifier: ApprovalNotifier | None = None,
+    approval_registry: PendingApprovalRegistry | None = None,
+    approval_blocking_mode: bool = False,
+    approval_timeout_seconds: float = 30.0,
+    api_authenticator: ApiKeyAuthenticator | None = None,
 ) -> APIRouter:
+    if approval_blocking_mode and approval_registry is None:
+        raise ValueError("approval_registry must be provided when approval_blocking_mode=True")
+    if approval_registry is not None and api_authenticator is None:
+        raise ValueError("api_authenticator must be provided when approval_registry is provided")
+    if approval_blocking_mode and approval_timeout_seconds <= 0:
+        raise ValueError("approval_timeout_seconds must be positive")
+
     router = APIRouter()
     if approval_notifier is None:
         approval_notifier = LogOnlyApprovalNotifier()
@@ -239,6 +261,7 @@ def build_router(
                 tool_name=tool_name,
                 arguments=arguments,
             )
+            was_approved = False
 
             match decision.status:
                 case "DENY":
@@ -279,37 +302,219 @@ def build_router(
                         }
                     )
                 case "REQUIRES_APPROVAL":
-                    audit.log(
-                        ev="call",
-                        decision="requires_approval",
-                        agent=record.agent_id,
-                        sid=sid,
-                        tool=tool_name,
-                    )
-                    _schedule_approval_request(
-                        approval_notifier=approval_notifier,
-                        audit=audit,
-                        sid=sid,
-                        request=ApprovalRequest(
+                    if approval_blocking_mode and approval_registry is None:
+                        raise RuntimeError("approval_registry precondition was not enforced")
+
+                    if approval_registry is None:
+                        # Non-blocking mode without HITL registry (legacy behavior)
+                        request_payload = ApprovalRequest(
                             session_id=record.session_id,
+                            approval_id="N/A",
                             agent_id=record.agent_id,
                             intent=record.intent,
                             tool_name=tool_name,
                             arguments=_sanitize_for_log(arguments),
                             requested_at=datetime.now(UTC),
-                        ),
+                        )
+                        audit.log(
+                            ev="call",
+                            decision="requires_approval",
+                            agent=record.agent_id,
+                            sid=sid,
+                            tool=tool_name,
+                        )
+                        _schedule_approval_request(
+                            approval_notifier=approval_notifier,
+                            audit=audit,
+                            sid=sid,
+                            request=request_payload,
+                        )
+                        return JSONResponse(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": rpc_id,
+                                "error": {
+                                    "code": -32001,
+                                    "message": "approval_required",
+                                    "data": {"session_id": record.session_id},
+                                },
+                            }
+                        )
+
+                    # Generate and register approval_id to include it in notification and responses
+                    try:
+                        # Dummy payload to get ID, will be updated/replaced if needed,
+                        # but register() just takes the fields.
+                        # We need to construct the payload with a dummy ID then replace it,
+                        # or allow register to generate it. Registry.register does generate it.
+                        # Wait, we need to pass a payload to register(), but the payload
+                        # needs the ID. Let's fix the Registry or the flow.
+                        # Looking at registry.py: register(..., request: ApprovalRequest) -> str
+                        # The request.approval_id will be empty or dummy initially.
+
+                        # Step 1: Register to get the final ID
+                        approval_id = await approval_registry.register(
+                            session_id=record.session_id,
+                            requester_agent_id=record.agent_id,
+                            request=ApprovalRequest(
+                                session_id=record.session_id,
+                                approval_id="PENDING",  # Placeholder
+                                agent_id=record.agent_id,
+                                intent=record.intent,
+                                tool_name=tool_name,
+                                arguments=_sanitize_for_log(arguments),
+                                requested_at=datetime.now(UTC),
+                            ),
+                        )
+                    except PolicyError:
+                        audit.log(
+                            ev="call",
+                            decision="deny",
+                            reason="approval_registry_full",
+                            agent=record.agent_id,
+                            sid=sid,
+                            tool=tool_name,
+                        )
+                        return JSONResponse(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": rpc_id,
+                                "error": {"code": -32603, "message": "internal_error"},
+                            }
+                        )
+
+                    # Step 2: Create the real payload with the actual approval_id
+                    request_payload = ApprovalRequest(
+                        session_id=record.session_id,
+                        approval_id=approval_id,
+                        agent_id=record.agent_id,
+                        intent=record.intent,
+                        tool_name=tool_name,
+                        arguments=_sanitize_for_log(arguments),
+                        requested_at=datetime.now(UTC),
                     )
-                    return JSONResponse(
-                        {
-                            "jsonrpc": "2.0",
-                            "id": rpc_id,
-                            "error": {
-                                "code": -32001,
-                                "message": "approval_required",
-                                "data": {"session_id": record.session_id},
-                            },
-                        }
+
+                    # Update registry entry with the real payload
+                    # (optional but good for consistency)
+                    # For now, registry just holds it. The important part is notifier gets the ID.
+
+                    if not approval_blocking_mode:
+                        audit.log(
+                            ev="call",
+                            decision="requires_approval",
+                            agent=record.agent_id,
+                            sid=sid,
+                            tool=tool_name,
+                            approval_ref=_approval_id_for_log(approval_id),
+                        )
+                        _schedule_approval_request(
+                            approval_notifier=approval_notifier,
+                            audit=audit,
+                            sid=sid,
+                            request=request_payload,
+                        )
+                        return JSONResponse(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": rpc_id,
+                                "error": {
+                                    "code": -32001,
+                                    "message": "approval_required",
+                                    "data": {
+                                        "session_id": record.session_id,
+                                        "approval_id": approval_id,
+                                    },
+                                },
+                            }
+                        )
+
+                    approval_ref = _approval_id_for_log(approval_id)
+                    _schedule_approval_request(
+                        approval_notifier=approval_notifier,
+                        audit=audit,
+                        sid=sid,
+                        request=request_payload,
                     )
+                    audit.log(
+                        ev="call",
+                        decision="approval_pending",
+                        agent=record.agent_id,
+                        sid=sid,
+                        tool=tool_name,
+                        approval_ref=approval_ref,
+                    )
+
+                    approval_decision = await approval_registry.wait_for_decision(
+                        approval_id,
+                        timeout=approval_timeout_seconds,
+                    )
+
+                    # Re-validate session after long wait to prevent TOCTOU
+                    try:
+                        record = sessions.lookup(sid)
+                        sessions.touch(sid)
+                    except SessionError:
+                        audit.log(
+                            ev="message",
+                            decision="deny",
+                            reason="session_invalid_after_approval",
+                            sid=sid,
+                        )
+                        return JSONResponse(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": rpc_id,
+                                "error": {
+                                    "code": -32004,
+                                    "message": "session_expired",
+                                    "data": {"approval_id": approval_id},
+                                },
+                            }
+                        )
+
+                    if approval_decision.status is DecisionStatus.APPROVED:
+                        was_approved = True
+                    elif approval_decision.status is DecisionStatus.REJECTED:
+                        audit.log(
+                            ev="call",
+                            decision="approval_rejected",
+                            agent=record.agent_id,
+                            sid=sid,
+                            tool=tool_name,
+                            approval_ref=approval_ref,
+                            reason=approval_decision.reason,
+                        )
+                        return JSONResponse(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": rpc_id,
+                                "error": {
+                                    "code": -32002,
+                                    "message": "approval_rejected",
+                                    "data": {"approval_id": approval_id},
+                                },
+                            }
+                        )
+                    else:
+                        audit.log(
+                            ev="call",
+                            decision="approval_timeout",
+                            agent=record.agent_id,
+                            sid=sid,
+                            tool=tool_name,
+                            approval_ref=approval_ref,
+                        )
+                        return JSONResponse(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": rpc_id,
+                                "error": {
+                                    "code": -32003,
+                                    "message": "approval_timeout",
+                                    "data": {"approval_id": approval_id},
+                                },
+                            }
+                        )
                 case "ALLOW":
                     pass
 
@@ -369,7 +574,7 @@ def build_router(
 
             audit.log(
                 ev="call",
-                decision="allow",
+                decision="allow_after_approval" if was_approved else "allow",
                 agent=record.agent_id,
                 sid=sid,
                 tool=tool_name,
@@ -383,6 +588,88 @@ def build_router(
                 "error": {"code": -32601, "message": f"unknown method {method!r}"},
             }
         )
+
+    if approval_registry is not None:
+
+        @router.post("/approvals")
+        async def approvals(request: Request) -> Any:
+            authz = request.headers.get("authorization") or ""
+            scheme, _, raw = authz.partition(" ")
+            if scheme.lower() != "bearer" or not raw:
+                return JSONResponse({"error": "auth_failed"}, status_code=401)
+
+            if api_authenticator is None:
+                raise RuntimeError("api_authenticator precondition was not enforced")
+            try:
+                resolver_agent_id = api_authenticator.authenticate(raw)
+            except AuthError:
+                return JSONResponse({"error": "auth_failed"}, status_code=401)
+
+            # Authorization check: Does this agent have the approver role?
+            # If approvers list is empty, we might want to allow all for migration,
+            # but usually it should be explicit. Let's assume explicit for security.
+            if policy.approvers and resolver_agent_id not in policy.approvers:
+                audit.log(
+                    ev="approval_decision",
+                    outcome="forbidden_role",
+                    resolver=resolver_agent_id,
+                    approval_id="unknown",
+                )
+                return JSONResponse({"error": "forbidden"}, status_code=403)
+
+            raw_body = bytearray()
+            async for chunk in request.stream():
+                raw_body.extend(chunk)
+                if len(raw_body) > 1024:
+                    return JSONResponse({"error": "payload_too_large"}, status_code=413)
+            try:
+                body = json.loads(raw_body)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return JSONResponse({"error": "invalid_request"}, status_code=400)
+            if not isinstance(body, dict):
+                return JSONResponse({"error": "invalid_request"}, status_code=400)
+
+            approval_id = body.get("approval_id")
+            raw_decision = body.get("decision")
+            if (
+                not isinstance(approval_id, str)
+                or len(approval_id) != 32
+                or not all(c in "0123456789abcdef" for c in approval_id)
+                or raw_decision not in {"approve", "reject"}
+            ):
+                return JSONResponse({"error": "invalid_request"}, status_code=400)
+
+            raw_reason = body.get("reason")
+            if raw_reason is not None and not isinstance(raw_reason, str):
+                return JSONResponse({"error": "invalid_request"}, status_code=400)
+            normalized_reason = sanitize_reason(raw_reason)
+            status = (
+                DecisionStatus.APPROVED if raw_decision == "approve" else DecisionStatus.REJECTED
+            )
+            outcome = await approval_registry.resolve(
+                approval_id,
+                resolver_agent_id=resolver_agent_id,
+                status=status,
+                reason=normalized_reason,
+            )
+
+            audit_fields: dict[str, Any] = {
+                "outcome": outcome.value,
+                "resolver": resolver_agent_id,
+                "approval_ref": _approval_id_for_log(approval_id),
+            }
+            if outcome.value == "ok":
+                audit_fields["reason"] = normalized_reason
+            audit.log(ev="approval_decision", **audit_fields)
+
+            if outcome.value == "ok":
+                return JSONResponse(
+                    {"status": "resolved", "approval_id": approval_id},
+                    status_code=200,
+                )
+            if outcome.value == "forbidden":
+                return JSONResponse({"error": "self_approval_forbidden"}, status_code=403)
+            return JSONResponse({"error": "approval_not_found"}, status_code=404)
 
     @router.get("/healthz")
     async def healthz() -> dict[str, str]:

@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from pydantic import ValidationError
 
 from mcp_gateway.approval.notifier import LogOnlyApprovalNotifier
+from mcp_gateway.approval.registry import PendingApprovalRegistry
 from mcp_gateway.audit.logger import AuditLogger
 from mcp_gateway.auth.api_key import ApiKeyAuthenticator
 from mcp_gateway.auth.handshake import HandshakeService
@@ -67,9 +68,24 @@ def build_app(
     audit = AuditLogger(level=settings.audit_log_level)
     auth = ApiKeyAuthenticator(_decode_keys(settings))
     engine = PolicyEngine(policy)
+    approval_registry = PendingApprovalRegistry(max_pending=settings.approval_max_pending)
+
+    async def _on_session_evicted(sid: str, reason: str) -> None:
+        try:
+            await approval_registry.cancel_session(sid)
+        except Exception as exc:
+            audit.log(
+                ev="session_evict_failed",
+                error_type=exc.__class__.__name__,
+                sid=sid,
+                reason=reason,
+            )
+            raise
+
     sessions = InMemorySessionRegistry(
         ttl_seconds=settings.session_ttl_seconds,
         idle_timeout_seconds=settings.session_idle_timeout_seconds,
+        on_session_evicted=_on_session_evicted,
     )
     handshake = HandshakeService(
         authenticator=auth,
@@ -113,6 +129,8 @@ def build_app(
 
     app = FastAPI(title="ChronosGraph MCP Gateway", lifespan=lifespan)
     app.state.tool_registry = registry
+    app.state.approval_registry = approval_registry
+    app.state.sessions = sessions
 
     app.include_router(
         build_router(
@@ -124,6 +142,10 @@ def build_app(
             audit=audit,
             engine=engine,
             approval_notifier=LogOnlyApprovalNotifier(),
+            approval_registry=approval_registry if settings.approval_blocking_mode else None,
+            approval_blocking_mode=settings.approval_blocking_mode,
+            approval_timeout_seconds=settings.approval_timeout_seconds,
+            api_authenticator=auth,
         )
     )
 

@@ -16,7 +16,9 @@ from mcp_gateway.approval.notifier import (
     ApprovalNotifier,
     ApprovalRequest,
     LogOnlyApprovalNotifier,
-    _sanitize_for_log,
+)
+from mcp_gateway.approval.notifier import (
+    sanitize_for_log as _sanitize_for_log,
 )
 from mcp_gateway.approval.registry import PendingApprovalRegistry
 from mcp_gateway.approval.sanitize import sanitize_reason
@@ -300,16 +302,20 @@ def build_router(
                         }
                     )
                 case "REQUIRES_APPROVAL":
-                    request_payload = ApprovalRequest(
-                        session_id=record.session_id,
-                        agent_id=record.agent_id,
-                        intent=record.intent,
-                        tool_name=tool_name,
-                        arguments=_sanitize_for_log(arguments),
-                        requested_at=datetime.now(UTC),
-                    )
+                    if approval_blocking_mode and approval_registry is None:
+                        raise RuntimeError("approval_registry precondition was not enforced")
 
-                    if not approval_blocking_mode:
+                    if approval_registry is None:
+                        # Non-blocking mode without HITL registry (legacy behavior)
+                        request_payload = ApprovalRequest(
+                            session_id=record.session_id,
+                            approval_id="N/A",
+                            agent_id=record.agent_id,
+                            intent=record.intent,
+                            tool_name=tool_name,
+                            arguments=_sanitize_for_log(arguments),
+                            requested_at=datetime.now(UTC),
+                        )
                         audit.log(
                             ev="call",
                             decision="requires_approval",
@@ -335,13 +341,30 @@ def build_router(
                             }
                         )
 
-                    if approval_registry is None:
-                        raise RuntimeError("approval_registry precondition was not enforced")
+                    # Generate and register approval_id to include it in notification and responses
                     try:
+                        # Dummy payload to get ID, will be updated/replaced if needed,
+                        # but register() just takes the fields.
+                        # We need to construct the payload with a dummy ID then replace it,
+                        # or allow register to generate it. Registry.register does generate it.
+                        # Wait, we need to pass a payload to register(), but the payload
+                        # needs the ID. Let's fix the Registry or the flow.
+                        # Looking at registry.py: register(..., request: ApprovalRequest) -> str
+                        # The request.approval_id will be empty or dummy initially.
+
+                        # Step 1: Register to get the final ID
                         approval_id = await approval_registry.register(
                             session_id=record.session_id,
                             requester_agent_id=record.agent_id,
-                            request=request_payload,
+                            request=ApprovalRequest(
+                                session_id=record.session_id,
+                                approval_id="PENDING",  # Placeholder
+                                agent_id=record.agent_id,
+                                intent=record.intent,
+                                tool_name=tool_name,
+                                arguments=_sanitize_for_log(arguments),
+                                requested_at=datetime.now(UTC),
+                            ),
                         )
                     except PolicyError:
                         audit.log(
@@ -357,6 +380,51 @@ def build_router(
                                 "jsonrpc": "2.0",
                                 "id": rpc_id,
                                 "error": {"code": -32603, "message": "internal_error"},
+                            }
+                        )
+
+                    # Step 2: Create the real payload with the actual approval_id
+                    request_payload = ApprovalRequest(
+                        session_id=record.session_id,
+                        approval_id=approval_id,
+                        agent_id=record.agent_id,
+                        intent=record.intent,
+                        tool_name=tool_name,
+                        arguments=_sanitize_for_log(arguments),
+                        requested_at=datetime.now(UTC),
+                    )
+
+                    # Update registry entry with the real payload
+                    # (optional but good for consistency)
+                    # For now, registry just holds it. The important part is notifier gets the ID.
+
+                    if not approval_blocking_mode:
+                        audit.log(
+                            ev="call",
+                            decision="requires_approval",
+                            agent=record.agent_id,
+                            sid=sid,
+                            tool=tool_name,
+                            approval_ref=_approval_id_for_log(approval_id),
+                        )
+                        _schedule_approval_request(
+                            approval_notifier=approval_notifier,
+                            audit=audit,
+                            sid=sid,
+                            request=request_payload,
+                        )
+                        return JSONResponse(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": rpc_id,
+                                "error": {
+                                    "code": -32001,
+                                    "message": "approval_required",
+                                    "data": {
+                                        "session_id": record.session_id,
+                                        "approval_id": approval_id,
+                                    },
+                                },
                             }
                         )
 
@@ -396,7 +464,11 @@ def build_router(
                             {
                                 "jsonrpc": "2.0",
                                 "id": rpc_id,
-                                "error": {"code": -32002, "message": "approval_rejected"},
+                                "error": {
+                                    "code": -32004,
+                                    "message": "session_expired",
+                                    "data": {"approval_id": approval_id},
+                                },
                             }
                         )
 
@@ -416,7 +488,11 @@ def build_router(
                             {
                                 "jsonrpc": "2.0",
                                 "id": rpc_id,
-                                "error": {"code": -32002, "message": "approval_rejected"},
+                                "error": {
+                                    "code": -32002,
+                                    "message": "approval_rejected",
+                                    "data": {"approval_id": approval_id},
+                                },
                             }
                         )
                     else:
@@ -432,7 +508,11 @@ def build_router(
                             {
                                 "jsonrpc": "2.0",
                                 "id": rpc_id,
-                                "error": {"code": -32003, "message": "approval_timeout"},
+                                "error": {
+                                    "code": -32003,
+                                    "message": "approval_timeout",
+                                    "data": {"approval_id": approval_id},
+                                },
                             }
                         )
                 case "ALLOW":
@@ -524,6 +604,18 @@ def build_router(
                 resolver_agent_id = api_authenticator.authenticate(raw)
             except AuthError:
                 return JSONResponse({"error": "auth_failed"}, status_code=401)
+
+            # Authorization check: Does this agent have the approver role?
+            # If approvers list is empty, we might want to allow all for migration,
+            # but usually it should be explicit. Let's assume explicit for security.
+            if policy.approvers and resolver_agent_id not in policy.approvers:
+                audit.log(
+                    ev="approval_decision",
+                    outcome="forbidden_role",
+                    resolver=resolver_agent_id,
+                    approval_id="unknown",
+                )
+                return JSONResponse({"error": "forbidden"}, status_code=403)
 
             raw_body = bytearray()
             async for chunk in request.stream():

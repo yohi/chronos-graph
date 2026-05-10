@@ -16,6 +16,7 @@ from mcp_gateway.errors import PolicyError
 def _req(sid: str = "s1", agent: str = "agent-a") -> ApprovalRequest:
     return ApprovalRequest(
         session_id=sid,
+        approval_id="0" * 32,
         agent_id=agent,
         intent="curate_memories",
         tool_name="memory_delete",

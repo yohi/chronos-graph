@@ -142,7 +142,7 @@ def build_app(
             audit=audit,
             engine=engine,
             approval_notifier=LogOnlyApprovalNotifier(),
-            approval_registry=approval_registry,
+            approval_registry=approval_registry if settings.approval_blocking_mode else None,
             approval_blocking_mode=settings.approval_blocking_mode,
             approval_timeout_seconds=settings.approval_timeout_seconds,
             api_authenticator=auth,

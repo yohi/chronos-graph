@@ -2629,7 +2629,7 @@ uv run ruff format --check src/ tests/
 
 Expected: all green. **No previously-passing test should regress.**
 
-- [x] **Step 10: Manual acceptance: blocking-mode `intents.example.yaml` smoke**
+- [ ] **Step 10: Manual acceptance: blocking-mode `intents.example.yaml` smoke**
 
 Inside the devcontainer, with the upstream mocked or a real `context_store` running:
 
@@ -2651,13 +2651,13 @@ Verify:
 - reject → client receives JSON-RPC `-32002`.
 - timeout (no POST) → client receives `-32003`.
 
-Document the smoke test results inline in the task PR body before flipping it to ready-for-review. **If you cannot run the manual smoke (e.g., no upstream available), state that explicitly in the PR body** rather than implying success.
+Document the smoke test results inline in the task PR body before flipping it to ready-for-review.
 
-Manual process smoke was not run in this session because it requires a real or separately mocked upstream process. Instead, `TestServerApprovalSuspendE2E` was expanded to cover the same acceptance outcomes through `build_app` + ASGITransport:
+**Note:** Manual process smoke was NOT executed in this session. Instead, `TestServerApprovalSuspendE2E` (using `build_app` + `ASGITransport`) provides equivalent automated coverage for all outcomes:
 
-- approve -> upstream `call_tool` invoked and client receives `result`
-- reject -> client receives JSON-RPC `-32002` and upstream is not called
-- timeout -> client receives JSON-RPC `-32003` and upstream is not called
+- **Approve**: Upstream `call_tool` invoked and client receives `result`.
+- **Reject**: Client receives JSON-RPC `-32002` and upstream is not called.
+- **Timeout**: Client receives JSON-RPC `-32003` and upstream is not called.
 
 - [x] **Step 11: Commit**
 

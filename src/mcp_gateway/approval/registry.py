@@ -157,4 +157,8 @@ class PendingApprovalRegistry:
     async def get_pending_ids_for_session(self, session_id: str) -> list[str]:
         """特定のセッションに関連付けられた保留中の承認 ID のリストを返す。"""
         async with self._lock:
-            return [aid for aid, entry in self._pending.items() if entry.session_id == session_id]
+            return [
+                aid
+                for aid, entry in self._pending.items()
+                if entry.session_id == session_id and entry.decision is None
+            ]

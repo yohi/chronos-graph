@@ -2724,6 +2724,7 @@ class TestApprovalsEndpoint:
             requester_agent_id="agent-a",
             request=ApprovalRequest(
                 session_id="s1",
+                approval_id="0" * 32,
                 agent_id="agent-a",
                 intent="curate_memories",
                 tool_name="memory_delete",
@@ -2762,6 +2763,7 @@ class TestApprovalsEndpoint:
             requester_agent_id="agent-a",
             request=ApprovalRequest(
                 session_id="s1",
+                approval_id="0" * 32,
                 agent_id="agent-a",
                 intent="curate_memories",
                 tool_name="memory_delete",
@@ -2825,6 +2827,7 @@ class TestApprovalsEndpoint:
             requester_agent_id="agent-a",
             request=ApprovalRequest(
                 session_id="s1",
+                approval_id="0" * 32,
                 agent_id="agent-a",
                 intent="curate_memories",
                 tool_name="memory_delete",
@@ -3107,8 +3110,8 @@ class TestServerApprovalSuspendE2E:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["error"]["code"] == -32002
-        assert body["error"]["message"] == "approval_rejected"
+        assert body["error"]["code"] == -32004
+        assert body["error"]["message"] == "session_expired"
 
 
 class TestServerValidationDeny:
@@ -3785,6 +3788,7 @@ class TestApprovalNotifier:
         notifier = LogOnlyApprovalNotifier()
         req = ApprovalRequest(
             session_id="sid-001",
+            approval_id="0" * 32,
             agent_id="agent-a",
             intent="curate_memories",
             tool_name="memory_delete",
@@ -3802,6 +3806,7 @@ class TestApprovalNotifier:
 
         req = ApprovalRequest(
             session_id="s",
+            approval_id="0" * 32,
             agent_id="a",
             intent="i",
             tool_name="t",
@@ -3827,6 +3832,7 @@ class TestApprovalNotifier:
         notifier = LogOnlyApprovalNotifier()
         req = ApprovalRequest(
             session_id="sid-log",
+            approval_id="0" * 32,
             agent_id="agent-b",
             intent="curate_memories",
             tool_name="memory_delete",
@@ -3848,6 +3854,7 @@ class TestApprovalNotifier:
         notifier = LogOnlyApprovalNotifier()
         req = ApprovalRequest(
             session_id="sid-mask",
+            approval_id="0" * 32,
             agent_id="agent-c",
             intent="sensitive_op",
             tool_name="auth_tool",

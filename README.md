@@ -216,23 +216,27 @@ uv run python -m mcp_gateway
 
 ---
 
-## エージェントごとの Hook (フック) 設定
+## エージェントごとの Hook (フック) と ccgate 思想の統合
 
-各AIエージェント（Claude Code / Gemini CLI / OpenCode）に対して、ツールの実行前後やセッションのライフサイクルで自動処理を割り込ませる「フック（Hook）」を設定できます。これを活用することで、ChronosGraph のツール（`memory_delete` や `memory_save` 等）の実行前に独自のガードレールや確認処理をクライアント側（エージェント側）で強制することが可能です。
+ChronosGraph の **MCP Gateway** は、LayerX社が提唱する「[ccgate (Server-defined Prompts / Permission Hook)](https://zenn.dev/layerx/articles/20260428-ccgate)」の設計思想を MCP プロトコル層に持ち込んだものです。
 
-### Claude Code のフック設定
-`.claude/settings.json`（または `~/.claude/settings.json`）の `hooks` セクションで、特定のイベント時に実行するシェルコマンドを定義します。終了コード `2` を返すと実行をブロックできます。
+ツール実行をクライアント側の正規表現で決め打ちブロックするのではなく、**「ツール実行前に必ず小さなゲート（Permission Hook）を通過させ、ポリシー（`intents.yaml`）や人間の承認（HITL）によって動的かつ安全に評価する」**というアプローチを採用しています。
+
+このため、本来はクライアント（エージェント）側に複雑なフック設定を書く必要はありませんが、クライアント側でローカルのコマンド実行や外部ツール呼び出しに対しても同等の「小さなゲート」を設ける場合、以下のエージェントごとの Hook 機能を利用して外部のバリデータ（`ccgate` など）に委譲する設定が推奨されます。
+
+### Claude Code のフック設定（ccgate 連携例）
+特定のツール名でハードコードするのではなく、`PreToolUse` で実行されるコマンドを包括的にフックし、`ccgate` のような評価ツールに判断を委譲します。
 
 ```json
 {
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "memory_delete",
+        "matcher": ".*",
         "hooks": [
           {
             "type": "command",
-            "command": "echo '記憶の削除が要求されました。' >&2"
+            "command": "ccgate evaluate --command \"$CLAUDE_TOOL_ARGS\""
           }
         ]
       }
@@ -241,20 +245,20 @@ uv run python -m mcp_gateway
 }
 ```
 
-### Gemini CLI のフック設定
-`.gemini/settings.json`（または `~/.gemini/settings.json`）で設定します。標準入力（stdin）でコンテキストを受け取り、標準出力（stdout）へ JSON を返す形式でより詳細な制御が可能です。終了コード `2` でシステムブロックを行えます。
+### Gemini CLI のフック設定（動的バリデータへの委譲）
+正規表現による決め打ちではなく、すべてのツール呼び出し（`.*`）を小さなゲートとなるスクリプト（JSONベースでLLM評価などを行う）に転送します。
 
 ```json
 {
   "hooks": {
     "BeforeTool": [
       {
-        "matcher": "memory_save.*",
+        "matcher": ".*",
         "hooks": [
           {
-            "name": "validate-memory",
+            "name": "dynamic-permission-gate",
             "type": "command",
-            "command": "node .gemini/hooks/validate_memory.js"
+            "command": "node .gemini/hooks/permission_gate.js"
           }
         ]
       }
@@ -264,20 +268,21 @@ uv run python -m mcp_gateway
 ```
 
 ### OpenCode のフック設定
-OpenCode では宣言的な JSON ではなく、TypeScript/JavaScript の**プラグインシステム**を使用してフックを命令的に実装します。型安全な非同期処理が可能です。
+TypeScript/JavaScript のプラグインシステムを利用し、ツール実行前に LLM や外部ポリシーエンジンを用いた動的な許可・拒否判定（小さなゲート）を実装します。
 
-1. `.opencode/plugins/` などのパスにプラグインスクリプトを作成します：
 ```typescript
 import type { Plugin } from "@opencode-ai/plugin";
 
-export const MemoryHookPlugin: Plugin = async ({ client }) => {
+export const PermissionGatePlugin: Plugin = async ({ client }) => {
   return {
     tool: {
       execute: {
         before: async (input, output) => {
-          if (input.tool === "memory_delete") {
-            // 条件に合致する場合は Error を投げて実行をブロック可能
-            // throw new Error("memory_delete は現在ロックされています。");
+          // 正規表現による決め打ちではなく、外部のポリシーエンジンや
+          // LLM に input.args を渡して動的にリスクを評価する
+          const isSafe = await evaluateWithGate(input.tool, input.args);
+          if (!isSafe) {
+            throw new Error("Permission Gate: 安全性の確認ができませんでした。");
           }
         }
       }
@@ -285,7 +290,6 @@ export const MemoryHookPlugin: Plugin = async ({ client }) => {
   };
 };
 ```
-2. プロジェクトの `opencode.json`（またはグローバルの `~/.config/opencode/opencode.json`）の `plugins` セクションで有効化します。
 
 ---
 

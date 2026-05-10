@@ -148,27 +148,33 @@ def generate_postgres_config(
     python_path: str,
     embedding: str,
     graph: bool,
+    ssl: bool,
     method: str = "python",
     uv_from: str | None = None,
 ) -> dict[str, Any]:
     """PostgreSQL + Neo4j + Redis フルモードの設定を生成する。"""
     env = {
         "STORAGE_BACKEND": "postgres",
-        "POSTGRES_HOST": "localhost",
+        "POSTGRES_HOST": "your-project-id.supabase.co",
         "POSTGRES_PORT": "5432",
-        "POSTGRES_DB": "context_store",
-        "POSTGRES_USER": "context_store",
+        "POSTGRES_DB": "postgres",
+        "POSTGRES_USER": "postgres",
         "POSTGRES_PASSWORD": "<your-postgres-password>",
+        "POSTGRES_SSL": "true" if ssl else "false",
         "GRAPH_ENABLED": "true" if graph else "false",
-        "NEO4J_URI": "bolt://localhost:7687",
+        "NEO4J_URI": "neo4j+s://your-instance.databases.neo4j.io",
         "NEO4J_USER": "neo4j",
         "NEO4J_PASSWORD": "<your-neo4j-password>",
-        "CACHE_BACKEND": "redis",
-        "REDIS_URL": "redis://localhost:6379",
+        "CACHE_BACKEND": "inmemory",
+        "REDIS_URL": "rediss://default:your-password@your-instance.upstash.io:6379",
+        "REDIS_SSL": "true" if ssl else "false",
         "DECAY_HALF_LIFE_DAYS": "30",
         "SIMILARITY_THRESHOLD": "0.70",
         "DEDUP_THRESHOLD": "0.90",
     }
+    # Cache configuration:
+    # - Single instance / Local: CACHE_BACKEND=inmemory
+    # - Multi-instance / Cloud: CACHE_BACKEND=redis (e.g., Upstash)
     env.update(get_embedding_envs(embedding))
 
     command, args = build_start_command(method, uv_from, python_path)
@@ -211,12 +217,16 @@ def main() -> None:
         help=f"Embedding provider (default: {default_embedding})",
     )
     parser.add_argument("--graph", type=str_to_bool, default=True, help="Enable graph features")
+    parser.add_argument("--ssl", action="store_true", help="Enable SSL for PostgreSQL/Redis")
     parser.add_argument(
         "--method", choices=["python", "uv", "uvx"], default="python", help="Execution method"
     )
     parser.add_argument("--uv-from", help="Package to run with uv (e.g. chronos-graph)")
     parser.add_argument(
-        "--output", choices=["claude", "cursor"], default="claude", help="Config output format"
+        "--output",
+        choices=["claude", "cursor", "generic"],
+        default="claude",
+        help="Config output format",
     )
     parser.add_argument("--indent", type=int, default=2, help="JSON indentation")
 
@@ -230,7 +240,7 @@ def main() -> None:
         )
     else:
         config = generate_postgres_config(
-            python_path, args.embedding, args.graph, args.method, args.uv_from
+            python_path, args.embedding, args.graph, args.ssl, args.method, args.uv_from
         )
 
     if args.output == "cursor":

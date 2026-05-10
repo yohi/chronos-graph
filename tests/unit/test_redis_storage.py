@@ -7,9 +7,40 @@ redis.asyncio.Redis をモックして get/set/invalidate/invalidate_prefix/clea
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
+
+
+class TestCreate:
+    @pytest.mark.asyncio
+    async def test_create_passes_ssl_true_when_requested(self):
+        from context_store.storage.redis import RedisCacheAdapter
+
+        with patch("redis.asyncio.from_url") as mock_from_url:
+            mock_from_url.return_value = AsyncMock()
+            await RedisCacheAdapter.create("redis://localhost", ssl=True)
+
+            mock_from_url.assert_called_once()
+            kwargs = mock_from_url.call_args[1]
+            assert kwargs["ssl"] is True
+
+    @pytest.mark.asyncio
+    async def test_create_does_not_pass_ssl_when_not_requested(self):
+        from context_store.storage.redis import RedisCacheAdapter
+
+        with patch("redis.asyncio.from_url") as mock_from_url:
+            mock_from_url.return_value = AsyncMock()
+            await RedisCacheAdapter.create("redis://localhost", ssl=False)
+
+            mock_from_url.assert_called_once()
+            kwargs = mock_from_url.call_args[1]
+            assert "ssl" not in kwargs
+
 
 # ---------------------------------------------------------------------------
 # Fixture

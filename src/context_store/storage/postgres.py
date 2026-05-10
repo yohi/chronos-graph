@@ -84,10 +84,15 @@ class PostgresStorageAdapter:
     @classmethod
     async def create(cls, settings: Settings) -> "PostgresStorageAdapter":
         """Create a new adapter by connecting to PostgreSQL."""
+        # asyncpg creates a default SSL context when ssl=True.
+        # Use None explicitly when SSL is disabled to avoid any ambiguous behavior.
+        ssl_opt = True if settings.postgres_ssl else None
+
         pool = await asyncpg.create_pool(
             dsn=settings.postgres_dsn,
             min_size=1,
             max_size=10,
+            ssl=ssl_opt,
         )
         adapter = cls(pool)
         try:

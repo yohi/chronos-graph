@@ -26,11 +26,15 @@ class RedisCacheAdapter:
     # ------------------------------------------------------------------
 
     @classmethod
-    async def create(cls, url: str) -> "RedisCacheAdapter":
+    async def create(cls, url: str, ssl: bool = False) -> "RedisCacheAdapter":
         """Create a new adapter connected to Redis."""
         import redis.asyncio as aioredis
 
-        r = aioredis.from_url(url, decode_responses=False)
+        kwargs: dict[str, Any] = {"decode_responses": False}
+        if ssl:
+            kwargs["ssl"] = True
+
+        r = aioredis.from_url(url, **kwargs)
         return cls(r)
 
     # ------------------------------------------------------------------

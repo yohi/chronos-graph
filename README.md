@@ -78,28 +78,31 @@ https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
 
 あなたがターミナル操作可能なAIエージェントであるなら、以下の手順でインストールとセットアップを自律的に遂行してください：
 
-1.  **[ ] 依存関係の解決:**
+1.  **[ ] モード選択の確認 (Interactive Ask):**
+    インストールを開始する前に、ユーザーに以下の構成を選択してもらってください：
+    - **A) ライトウェイトモード (推奨)**: SQLite + sqlite-vec を使用。追加のインフラ不要。
+    - **B) フルモード (Docker利用)**: PostgreSQL + Neo4j + Redis をローカルの Docker Compose で実行。
+    - **C) フルモード (クラウド利用)**: Supabase (PostgreSQL) + Neo4j Aura を使用（キャッシュはインメモリ）。
+    - **D) フルモード (クラウド利用 + Upstash Redis)**: データベースに加え、キャッシュもクラウド (Upstash) で一元管理。
+2.  **[ ] 依存関係の解決:**
     *   `uv` (推奨) または `pip` を使用して、開発用依存関係をインストールしてください。
     *   `uv sync --all-extras` または `pip install -e ".[all]"`
-2.  **[ ] 環境設定:**
-    *   `.env.example` を `.env` にコピーし、必要な環境変数を設定してください。
-    *   `EMBEDDING_PROVIDER` は `openai` がデフォルトですが、必要に応じて `local-model` などに切り替えてください。
-3.  **[ ] 動作確認:**
+3.  **[ ] 環境設定:**
+    *   `.env.example` を `.env` にコピーし、選択された構成に合わせて環境変数を設定してください。
+    *   `bootstrap.sh` を使用すると、基本設定を自動化できます：
+        - **ライトウェイト (A)**: `bash scripts/bootstrap.sh --backend sqlite`
+        - **フルモード (B)**: `bash scripts/bootstrap.sh --backend postgres`
+        - **フルモード (C/D)**: `bash scripts/bootstrap.sh --backend postgres --ssl`
+    *   **重要**: クラウド利用（Supabase/Aura/Upstash）の場合は、`.env` の接続情報を適宜編集してください。Upstash を使用する場合は `REDIS_SSL=true` を設定してください。
+4.  **[ ] 動作確認:**
     *   ユニットテストを実行して、環境が正しく構築されているか確認してください。
     *   `uv run pytest tests/unit/ -v`
-4.  **[ ] MCP設定の生成:**
+5.  **[ ] MCP設定の生成:**
     *   `uv run python scripts/generate_config.py > mcp_config.json` を実行し、MCPクライアント用の設定ファイルを生成してください。
-5.  **[ ] エージェントへの指示の追加 (Personal/Global):**
+6.  **[ ] エージェントへの指示の追加 (Personal/Global):**
     *   `docs/agent-prompts/memory-save-system-prompt.md` の内容を、あなたのエージェントの**グローバル設定**（`~/.gemini/GEMINI.md`, `~/.clauderules`, または Cursor の `Rules for AI`）に追加してください。
-    *   **注記**: チーム共有のプロジェクトルート（`.cursorrules` 等）に追記すると、他のメンバーのエージェントの挙動にも影響するため、個人のグローバル設定に配置することを強く推奨します。
 
-上記の全手順を、ユーザーと対話しながら一括で行うには `bash scripts/bootstrap.sh` を実行してください。
-
-フラグを使用して非対話的に実行することも可能です：
-```bash
-bash scripts/bootstrap.sh --backend sqlite --embedding openai --graph true --mcp-output cursor
-```
-各フラグの詳細は [AGENTS.md](AGENTS.md) を参照してください。
+上記の全手順（手順1を除く）を自律的に行うには、`bash scripts/bootstrap.sh` に適切なフラグを渡して実行してください。
 </details>
 
 ---

@@ -15,11 +15,18 @@ class MaxBodySizeMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        if "content-length" in request.headers:
+        if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+            if "content-length" not in request.headers:
+                return JSONResponse({"error": "invalid_request"}, status_code=400)
+
             try:
                 content_length = int(request.headers["content-length"])
+                if content_length < 0:
+                    raise ValueError
             except ValueError:
                 return JSONResponse({"error": "invalid_request"}, status_code=400)
+
             if content_length > self.max_size_bytes:
                 return JSONResponse({"error": "payload_too_large"}, status_code=413)
+
         return await call_next(request)

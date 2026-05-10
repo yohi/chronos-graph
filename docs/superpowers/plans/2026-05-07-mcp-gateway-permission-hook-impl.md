@@ -2013,7 +2013,7 @@ result on APPROVED, -32002 on REJECTED, -32003 on TIMEOUT, and
 8-char approval_ref, never the raw 32-char id."
 ```
 
-- [ ] **Step 17: Push and open a Draft PR targeting the Phase 3 base**
+- [x] **Step 17: Push and open a Draft PR targeting the Phase 3 base**
 
 ```bash
 git push -u origin feature/phase3-task1_server_blocking_mode
@@ -2350,7 +2350,7 @@ sanitize_reason. Self-approval is rejected with 403; NOT_FOUND and
 ALREADY_RESOLVED collapse to 404 to avoid existence oracles."
 ```
 
-- [ ] **Step 10: Push and open a Draft PR targeting the Phase 3 base**
+- [x] **Step 10: Push and open a Draft PR targeting the Phase 3 base**
 
 ```bash
 git push -u origin feature/phase3-task2_approvals_endpoint
@@ -2676,7 +2676,7 @@ returns -32002, timeout returns -32003, and session expiry resolves
 pending entries to REJECTED."
 ```
 
-- [ ] **Step 12: Push and open a Draft PR targeting the Phase 3 base**
+- [x] **Step 12: Push and open a Draft PR targeting the Phase 3 base**
 
 ```bash
 git push -u origin feature/phase3-task3_app_wiring
@@ -2711,7 +2711,7 @@ EOF
 
 ### Phase 3 Completion
 
-- [ ] **Step P3.1: Verify all three task PRs merged into `feature/phase3_blocking_mode__base`**
+- [x] **Step P3.1: Verify all three task PRs merged into `feature/phase3_blocking_mode__base`**
 
 ```bash
 gh pr list --base feature/phase3_blocking_mode__base --state merged
@@ -2719,7 +2719,7 @@ gh pr list --base feature/phase3_blocking_mode__base --state merged
 
 Expected: three merged PRs (Tasks 3.1, 3.2, 3.3).
 
-- [ ] **Step P3.2: Run the full devcontainer suite on the phase base**
+- [x] **Step P3.2: Run the full devcontainer suite on the phase base**
 
 ```bash
 git checkout feature/phase3_blocking_mode__base
@@ -2741,7 +2741,7 @@ Open the Phase 3 PR description and check off:
 - §10.3 `uv run ruff check src/ tests/` clean ✅
 - §10.4 `intents.example.yaml`'s `memory_delete` (`requires_approval: true`) under blocking mode: approve → upstream invoked; reject → `-32002`; timeout → `-32003`. (Pull from manual smoke or expand `TestServerApprovalSuspendE2E` to cover all three branches via `build_app` + ASGI client.)
 
-- [ ] **Step P3.4: Lift the Draft flag on the Phase 3 base PR and request review**
+- [x] **Step P3.4: Lift the Draft flag on the Phase 3 base PR and request review**
 
 Once review is complete and the PR is merged into `master`, the suspend/resume approval flow is live (opt-in via env var).
 

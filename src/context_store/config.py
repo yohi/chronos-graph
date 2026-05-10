@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     postgres_user: str = "context_store"
     postgres_password: SecretStr = SecretStr("")
     postgres_ssl: bool = False
+    postgres_ssl_no_verify: bool = False
 
     # --- Neo4j (graph_enabled=true の場合) ---
     neo4j_uri: str = "bolt://localhost:7687"

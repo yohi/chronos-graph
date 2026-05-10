@@ -1,6 +1,6 @@
 -- Initial schema for PostgreSQL
 CREATE EXTENSION IF NOT EXISTS "vector";
-CREATE EXTENSION IF NOT EXISTS "pg_bigm";
+CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
 -- memories table
 CREATE TABLE memories (
@@ -26,30 +26,6 @@ CREATE TABLE memories (
     content_hash       TEXT         NOT NULL UNIQUE
 );
 
--- lifecycle_state table (Singleton)
-CREATE TABLE lifecycle_state (
-    id                      INT          PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-    save_count              INT          NOT NULL DEFAULT 0,
-    last_cleanup_at         TIMESTAMPTZ,
-    last_cleanup_cursor_at  TIMESTAMPTZ,
-    last_cleanup_id         TEXT,
-    cleanup_lock_owner      TEXT,
-    cleanup_lock_touched_at TIMESTAMPTZ,
-    updated_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-);
-
--- lifecycle_wal_state table (Singleton)
--- Note: WAL state is mostly relevant for SQLite, but kept for schema parity
-CREATE TABLE lifecycle_wal_state (
-    id                               INT   PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-    wal_failure_count                INT   NOT NULL DEFAULT 0,
-    wal_last_failure_ts              TIMESTAMPTZ,
-    wal_last_checkpoint_result       TEXT,
-    wal_last_observed_size_bytes     BIGINT,
-    wal_consecutive_passive_failures INT   NOT NULL DEFAULT 0,
-    wal_failure_window               JSONB NOT NULL DEFAULT '[]'
-);
-
 -- Insert default rows if not exist
 -- Note: Mixing DDL and DML in the same migration file is safe here because
 -- the runner (migrations/runner.py) wraps each migration in a single
@@ -71,6 +47,6 @@ CREATE INDEX idx_memories_tags_gin     ON memories USING gin (tags);
 CREATE INDEX idx_memories_embedding_hnsw
     ON memories USING hnsw (embedding vector_cosine_ops);
 
--- Full-text search index with pg_bigm (requires pg_bigm extension)
+-- Full-text search index with pg_trgm (Supabase compatible fallback for pg_bigm)
 CREATE INDEX idx_memories_content_fts
-    ON memories USING gin (content gin_bigm_ops);
+    ON memories USING gin (content gin_trgm_ops);

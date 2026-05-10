@@ -76,29 +76,43 @@ https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
 <details>
 <summary><b>For Agents (AIエージェント向け手順)</b></summary>
 
+> [!CAUTION]
+> **重要 (CRITICAL):** あなたが自律モードで動作しているAIエージェントであっても、**手順1（モード選択の確認）を決してスキップしないでください。** ユーザーの環境や意図に反する構成（例：Docker不要な環境でのフルモード構築）を避けるため、必ず最初に問いかけを行ってください。
+>
+> **エージェントへの行動規範:** セットアップやテストの実行中に失敗が発生した場合、**安易に既存のコアソースコード（`src/` 配下）を編集して解決を図らないでください。** ほとんどの失敗は環境変数（`.env`）、ネットワーク接続、または外部サービスの権限設定に起因します。まずは設定の整合性を徹底的に疑い、コードの修正が必要と判断した場合は、必ずユーザーにその理由と影響を説明し、許可を得てください。
+
 あなたがターミナル操作可能なAIエージェントであるなら、以下の手順でインストールとセットアップを自律的に遂行してください：
 
-1.  **[ ] モード選択の確認 (Interactive Ask):**
-    インストールを開始する前に、ユーザーに以下の構成を選択してもらってください：
-    - **A) ライトウェイトモード (推奨)**: SQLite + sqlite-vec を使用。追加のインフラ不要。
-    - **B) フルモード (Docker利用)**: PostgreSQL + Neo4j + Redis をローカルの Docker Compose で実行。
-    - **C) フルモード (クラウド利用)**: Supabase (PostgreSQL) + Neo4j Aura を使用（キャッシュはインメモリ）。
-    - **D) フルモード (クラウド利用 + Upstash Redis)**: データベースに加え、キャッシュもクラウド (Upstash) で一元管理。
-2.  **[ ] 依存関係の解決:**
+1.  **[ ] 構成・実行方法の確認 (Interactive Ask):**
+    **このステップは必須です。** インストールを開始する前に、ユーザーに以下の構成を選択してもらってください：
+    - **A) モードの選択**:
+        - **(A) ライトウェイトモード (推奨)**: SQLite + sqlite-vec。
+        - **(B) フルモード (Docker利用)**: PostgreSQL + Neo4j + Redis (Docker Compose)。
+        - **(C) フルモード (クラウド利用)**: Supabase + Neo4j Aura 等。
+    - **B) 実行方法の選択**:
+        - **uv (推奨)**: `uv run` を使用して依存関係を管理。
+        - **python**: システムまたは仮想環境の `python` を直接使用。
+    - **C) ソースコードの取得元**:
+        - **ローカル**: 現在のディレクトリのソースを使用。
+        - **リモート (git+https)**: GitHub から最新のソースを直接取得して実行。
+    2.  **[ ] 依存関係の解決:**
     *   `uv` (推奨) または `pip` を使用して、開発用依存関係をインストールしてください。
     *   `uv sync --all-extras` または `pip install -e ".[all]"`
-3.  **[ ] 環境設定:**
+    3.  **[ ] 環境設定:**
     *   `.env.example` を `.env` にコピーし、選択された構成に合わせて環境変数を設定してください。
     *   `bootstrap.sh` を使用すると、基本設定を自動化できます：
         - **ライトウェイト (A)**: `bash scripts/bootstrap.sh --backend sqlite`
         - **フルモード (B)**: `bash scripts/bootstrap.sh --backend postgres`
-        - **フルモード (C/D)**: `bash scripts/bootstrap.sh --backend postgres --ssl`
+        - **フルモード (C)**: `bash scripts/bootstrap.sh --backend postgres --ssl`
+
     *   **重要**: クラウド利用（Supabase/Aura/Upstash）の場合は、`.env` の接続情報を適宜編集してください。Upstash を使用する場合は `REDIS_SSL=true` を設定してください。
 4.  **[ ] 動作確認:**
+    *   DB/Redis/Neo4j を使用する構成の場合、各サービスへの疎通（Connectivity）が取れるか確認してください。
     *   ユニットテストを実行して、環境が正しく構築されているか確認してください。
     *   `uv run pytest tests/unit/ -v`
 5.  **[ ] MCP設定の生成:**
     *   `uv run python scripts/generate_config.py > mcp_config.json` を実行し、MCPクライアント用の設定ファイルを生成してください。
+    *   **重要**: ユーザーが使用している各エージェント（ClaudeCode, GeminiCLI, Codex, OpenCode 等）に合わせた設定例を出力し、適用方法を説明してください。
 6.  **[ ] エージェントへの指示の追加 (Personal/Global):**
     *   `docs/agent-prompts/memory-save-system-prompt.md` の内容を、あなたのエージェントの**グローバル設定**（`~/.gemini/GEMINI.md`, `~/.clauderules`, または Cursor の `Rules for AI`）に追加してください。
 

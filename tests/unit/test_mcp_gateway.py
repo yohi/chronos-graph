@@ -129,6 +129,63 @@ class TestSettings:
         assert python_data["api_keys_json"].get_secret_value() == raw_key
 
 
+class TestGatewaySettingsApprovalFields:
+    _MINIMAL_POLICY = "version: 1\noutput_filters: {f: {type: none}}\nintents: {}\nagents: {}\n"
+
+    def test_defaults(self, monkeypatch, tmp_path):
+        policy = tmp_path / "p.yaml"
+        policy.write_text(self._MINIMAL_POLICY)
+        monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy))
+        from mcp_gateway.config import GatewaySettings
+
+        settings = GatewaySettings()
+        assert settings.approval_blocking_mode is False
+        assert settings.approval_timeout_seconds == 30.0
+        assert settings.approval_max_pending == 1000
+
+    def test_env_overrides(self, monkeypatch, tmp_path):
+        policy = tmp_path / "p.yaml"
+        policy.write_text(self._MINIMAL_POLICY)
+        monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy))
+        monkeypatch.setenv("MCP_GATEWAY_APPROVAL_BLOCKING_MODE", "true")
+        monkeypatch.setenv("MCP_GATEWAY_APPROVAL_TIMEOUT_SECONDS", "5")
+        monkeypatch.setenv("MCP_GATEWAY_APPROVAL_MAX_PENDING", "10")
+        from mcp_gateway.config import GatewaySettings
+
+        settings = GatewaySettings()
+        assert settings.approval_blocking_mode is True
+        assert settings.approval_timeout_seconds == 5.0
+        assert settings.approval_max_pending == 10
+
+    def test_validation_bounds(self, monkeypatch, tmp_path):
+        policy = tmp_path / "p.yaml"
+        policy.write_text(self._MINIMAL_POLICY)
+        monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy))
+
+        from mcp_gateway.config import GatewaySettings
+
+        # timeout <= 0
+        monkeypatch.setenv("MCP_GATEWAY_APPROVAL_TIMEOUT_SECONDS", "0")
+        with pytest.raises(ValidationError):
+            GatewaySettings()
+
+        # timeout > 600
+        monkeypatch.setenv("MCP_GATEWAY_APPROVAL_TIMEOUT_SECONDS", "601")
+        with pytest.raises(ValidationError):
+            GatewaySettings()
+
+        # max_pending <= 0
+        monkeypatch.setenv("MCP_GATEWAY_APPROVAL_TIMEOUT_SECONDS", "30")
+        monkeypatch.setenv("MCP_GATEWAY_APPROVAL_MAX_PENDING", "0")
+        with pytest.raises(ValidationError):
+            GatewaySettings()
+
+        # max_pending > 100,000
+        monkeypatch.setenv("MCP_GATEWAY_APPROVAL_MAX_PENDING", "100001")
+        with pytest.raises(ValidationError):
+            GatewaySettings()
+
+
 class TestPolicyLoader:
     def _write(self, tmp_path, body: str):
         p = tmp_path / "intents.yaml"
@@ -2844,6 +2901,214 @@ class TestApprovalsEndpoint:
         assert len(log_lines) == 1
         assert '"reason":"should_not_be_logged"' not in log_lines[0]
         assert '"outcome":"not_found"' in log_lines[0]
+
+
+class TestServerApprovalSuspendE2E:
+    @pytest.fixture
+    def blocking_app(self, tmp_path, monkeypatch):
+        policy = tmp_path / "intents.yaml"
+        policy.write_text(
+            textwrap.dedent(
+                """
+                version: 1
+                output_filters: {f: {type: none}}
+                intents:
+                  curate_memories:
+                    description: x
+                    allowed_tools: [memory_delete]
+                    output_filter: f
+                    guardrails: {memory_delete: {requires_approval: true}}
+                agents:
+                  agent-a: {allowed_intents: [curate_memories]}
+                  operator: {allowed_intents: [curate_memories]}
+                """
+            ).lstrip()
+        )
+        monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy))
+        monkeypatch.setenv(
+            "MCP_GATEWAY_API_KEYS_JSON",
+            '{"agent-a":"ck_x","operator":"ck_o"}',
+        )
+        monkeypatch.setenv("MCP_GATEWAY_APPROVAL_BLOCKING_MODE", "true")
+        monkeypatch.setenv("MCP_GATEWAY_APPROVAL_TIMEOUT_SECONDS", "5")
+
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.app import build_app
+
+        upstream = AsyncMock()
+        upstream.list_tools.return_value = [{"name": "memory_delete"}]
+        upstream.call_tool.return_value = {"ok": True}
+        app = build_app(
+            upstream_override=upstream,
+            initial_tools=upstream.list_tools.return_value,
+        )
+        app.state.upstream = upstream
+        return app
+
+    async def _start_pending_call(self, client, sid: str, registry):
+        call_task = asyncio.create_task(
+            client.post(
+                f"/messages?session_id={sid}",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "memory_delete", "arguments": {}},
+                },
+            )
+        )
+        for _ in range(100):
+            await asyncio.sleep(0.01)
+            # 特定の sid に対する保留中のリクエストが登録されるのを待つ
+            if any(p.session_id == sid for p in registry._pending.values()):
+                return call_task
+            if call_task.done():
+                # すでに終了している場合はエラー（サスペンドしなかった）
+                break
+
+        raise AssertionError(f"tools/call did not suspend for approval (sid={sid})")
+
+    @pytest.mark.asyncio
+    async def test_approve_invokes_upstream_and_returns_result(self, blocking_app):
+        import httpx
+        from httpx import ASGITransport
+
+        registry = blocking_app.state.approval_registry
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=blocking_app),
+            base_url="http://t",
+        ) as client:
+            sid = await _get_sse_session_id(client, intent="curate_memories")
+            call_task = await self._start_pending_call(client, sid, registry)
+            approval_ids = await registry.get_pending_ids_for_session(sid)
+            approval_id = approval_ids[0]
+            resp = await client.post(
+                "/approvals",
+                headers={"Authorization": "Bearer ck_o"},
+                json={"approval_id": approval_id, "decision": "approve"},
+            )
+            assert resp.status_code == 200
+            call_resp = await call_task
+
+        assert call_resp.json()["result"] == {"ok": True}
+        blocking_app.state.upstream.call_tool.assert_called_once_with("memory_delete", {})
+
+    @pytest.mark.asyncio
+    async def test_reject_returns_32002_without_upstream_call(self, blocking_app):
+        import httpx
+        from httpx import ASGITransport
+
+        registry = blocking_app.state.approval_registry
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=blocking_app),
+            base_url="http://t",
+        ) as client:
+            sid = await _get_sse_session_id(client, intent="curate_memories")
+            call_task = await self._start_pending_call(client, sid, registry)
+            approval_ids = await registry.get_pending_ids_for_session(sid)
+            approval_id = approval_ids[0]
+            resp = await client.post(
+                "/approvals",
+                headers={"Authorization": "Bearer ck_o"},
+                json={"approval_id": approval_id, "decision": "reject"},
+            )
+            assert resp.status_code == 200
+            call_resp = await call_task
+
+        body = call_resp.json()
+        assert body["error"]["code"] == -32002
+        assert body["error"]["message"] == "approval_rejected"
+        blocking_app.state.upstream.call_tool.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_timeout_returns_32003_without_upstream_call(self, tmp_path, monkeypatch):
+        policy = tmp_path / "intents.yaml"
+        policy.write_text(
+            textwrap.dedent(
+                """
+                version: 1
+                output_filters: {f: {type: none}}
+                intents:
+                  curate_memories:
+                    description: x
+                    allowed_tools: [memory_delete]
+                    output_filter: f
+                    guardrails: {memory_delete: {requires_approval: true}}
+                agents:
+                  agent-a: {allowed_intents: [curate_memories]}
+                """
+            ).lstrip()
+        )
+        monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy))
+        monkeypatch.setenv("MCP_GATEWAY_API_KEYS_JSON", '{"agent-a":"ck_x"}')
+        monkeypatch.setenv("MCP_GATEWAY_APPROVAL_BLOCKING_MODE", "true")
+        monkeypatch.setenv("MCP_GATEWAY_APPROVAL_TIMEOUT_SECONDS", "0.05")
+
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.app import build_app
+
+        upstream = AsyncMock()
+        upstream.list_tools.return_value = [{"name": "memory_delete"}]
+        upstream.call_tool.return_value = {"ok": True}
+        app = build_app(
+            upstream_override=upstream,
+            initial_tools=upstream.list_tools.return_value,
+        )
+
+        import httpx
+        from httpx import ASGITransport
+
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://t"
+        ) as client:
+            sid = await _get_sse_session_id(client, intent="curate_memories")
+            resp = await client.post(
+                f"/messages?session_id={sid}",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "memory_delete", "arguments": {}},
+                },
+            )
+
+        body = resp.json()
+        assert body["error"]["code"] == -32003
+        assert body["error"]["message"] == "approval_timeout"
+        upstream.call_tool.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_session_eviction_cancels_pending(self, blocking_app):
+        import httpx
+        from httpx import ASGITransport
+
+        registry = blocking_app.state.approval_registry
+        sessions = blocking_app.state.sessions
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=blocking_app),
+            base_url="http://t",
+        ) as client:
+            sid = await _get_sse_session_id(client, intent="curate_memories")
+            call_task = await self._start_pending_call(client, sid, registry)
+
+            sessions.remove(sid)
+            # 退避処理（cancel_session）が非同期に完了するのを待機
+            for _ in range(50):
+                ids = await registry.get_pending_ids_for_session(sid)
+                if not ids:
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                raise AssertionError(f"Session {sid} was not evicted from registry")
+
+            resp = await call_task
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["error"]["code"] == -32002
+        assert body["error"]["message"] == "approval_rejected"
 
 
 class TestServerValidationDeny:

@@ -385,14 +385,20 @@ def build_router(
                     try:
                         record = sessions.lookup(sid)
                         sessions.touch(sid)
-                    except SessionError as exc:
+                    except SessionError:
                         audit.log(
                             ev="message",
                             decision="deny",
                             reason="session_invalid_after_approval",
                             sid=sid,
                         )
-                        raise HTTPException(status_code=404, detail="session_invalid") from exc
+                        return JSONResponse(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": rpc_id,
+                                "error": {"code": -32002, "message": "approval_rejected"},
+                            }
+                        )
 
                     if approval_decision.status is DecisionStatus.APPROVED:
                         was_approved = True

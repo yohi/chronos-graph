@@ -216,80 +216,24 @@ uv run python -m mcp_gateway
 
 ---
 
-## エージェントごとの Hook (フック) と ccgate 思想の統合
+## クライアント側のフック設定が不要な理由（ccgate 思想のサーバーサイド統合）
 
-ChronosGraph の **MCP Gateway** は、LayerX社が提唱する「[ccgate (Server-defined Prompts / Permission Hook)](https://zenn.dev/layerx/articles/20260428-ccgate)」の設計思想を MCP プロトコル層に持ち込んだものです。
+ChronosGraph の **MCP Gateway** は、LayerX社が提唱する「[ccgate (Server-defined Prompts / Permission Hook)](https://zenn.dev/layerx/articles/20260428-ccgate)」の設計思想を、**MCP プロトコル層（サーバー側）**に直接組み込んだものです。
 
-ツール実行をクライアント側の正規表現で決め打ちブロックするのではなく、**「ツール実行前に必ず小さなゲート（Permission Hook）を通過させ、ポリシー（`intents.yaml`）や人間の承認（HITL）によって動的かつ安全に評価する」**というアプローチを採用しています。
+Claude Code や Gemini CLI などのエージェントには、ツール実行前に介入するためのクライアントサイドのフック機能（`hooks` 設定など）が存在します。しかし、ChronosGraph を利用する場合、**エージェント側に複雑なフック設定や正規表現の決め打ちルールを記述する必要は一切ありません。**
 
-このため、本来はクライアント（エージェント）側に複雑なフック設定を書く必要はありませんが、クライアント側でローカルのコマンド実行や外部ツール呼び出しに対しても同等の「小さなゲート」を設ける場合、以下のエージェントごとの Hook 機能を利用して外部のバリデータ（`ccgate` など）に委譲する設定が推奨されます。
+### Gateway が「小さなゲート」として機能する仕組み
 
-### Claude Code のフック設定（ccgate 連携例）
-特定のツール名でハードコードするのではなく、`PreToolUse` で実行されるコマンドを包括的にフックし、`ccgate` のような評価ツールに判断を委譲します。
+ccgate の「ツール実行前に必ず小さなゲート（Permission Hook）を通過させ、動的かつ安全に評価する」という哲学を、ChronosGraph は自らの Gateway 内で完結させています。
 
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": ".*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "ccgate evaluate --command \"$CLAUDE_TOOL_ARGS\""
-          }
-        ]
-      }
-    ]
-  }
-}
-```
+1. **インターセプト**: エージェントが MCP 経由で `tools/call` を要求した瞬間、Gateway がプロトコルレベルでこれを捕捉します。
+2. **ポリシーエンジンによる決定論的評価**: 外部のバリデータ（LLMやクライアント側のccgateバイナリ）に問い合わせるのではなく、Gateway 内部の **Policy Engine** が `intents.yaml` と照合します。
+    - インテント（用途）と権限の合致
+    - 引数の型、文字列長、許容パターン（Semantic Guardrails）
+    - 機密情報の混入チェック
+3. **HITL (Human-In-The-Loop) による最終判断**: `requires_approval: true` のツール（`memory_delete` 等）が呼ばれた場合、Gateway 自身が実行を一時停止（Suspend）し、運用者からの承認を待機します。
 
-### Gemini CLI のフック設定（動的バリデータへの委譲）
-正規表現による決め打ちではなく、すべてのツール呼び出し（`.*`）を小さなゲートとなるスクリプト（JSONベースでLLM評価などを行う）に転送します。
-
-```json
-{
-  "hooks": {
-    "BeforeTool": [
-      {
-        "matcher": ".*",
-        "hooks": [
-          {
-            "name": "dynamic-permission-gate",
-            "type": "command",
-            "command": "node .gemini/hooks/permission_gate.js"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-### OpenCode のフック設定
-TypeScript/JavaScript のプラグインシステムを利用し、ツール実行前に LLM や外部ポリシーエンジンを用いた動的な許可・拒否判定（小さなゲート）を実装します。
-
-```typescript
-import type { Plugin } from "@opencode-ai/plugin";
-
-export const PermissionGatePlugin: Plugin = async ({ client }) => {
-  return {
-    tool: {
-      execute: {
-        before: async (input, output) => {
-          // 正規表現による決め打ちではなく、外部のポリシーエンジンや
-          // LLM に input.args を渡して動的にリスクを評価する
-          const isSafe = await evaluateWithGate(input.tool, input.args);
-          if (!isSafe) {
-            throw new Error("Permission Gate: 安全性の確認ができませんでした。");
-          }
-        }
-      }
-    }
-  };
-};
-```
+このように、判断を下すのは外部ツールではなく **ChronosGraph 自身（の Gateway）** です。クライアント側の設定を肥大化させることなく、中央集権的で強固なガードレール（ZSP: Zero Standing Privileges / IBAC: Intent-Based Access Control）を実現しています。
 
 ---
 

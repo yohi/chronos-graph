@@ -555,15 +555,14 @@ def build_router(
                 reason=normalized_reason,
             )
 
-            audit_kwargs = {
-                "ev": "approval_decision",
+            audit_fields: dict[str, Any] = {
                 "outcome": outcome.value,
                 "resolver": resolver_agent_id,
                 "approval_ref": _approval_id_for_log(approval_id),
             }
             if outcome.value == "ok":
-                audit_kwargs["reason"] = normalized_reason
-            audit.log(**audit_kwargs)
+                audit_fields["reason"] = normalized_reason
+            audit.log(ev="approval_decision", **audit_fields)
 
             if outcome.value == "ok":
                 return JSONResponse(

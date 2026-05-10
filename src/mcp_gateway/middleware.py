@@ -15,6 +15,14 @@ class MaxBodySizeMiddleware:
             await self.app(scope, receive, send)
             return
 
+        response_started = False
+
+        async def wrapped_send(message: Message) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
         # Fast path
         headers = dict(scope["headers"])
         if b"content-length" in headers:
@@ -47,11 +55,15 @@ class MaxBodySizeMiddleware:
             return message
 
         try:
-            await self.app(scope, wrapped_receive, send)
+            await self.app(scope, wrapped_receive, wrapped_send)
         except RuntimeError as exc:
             if str(exc) == "payload_too_large":
-                await self._send_413(send)
-                return
+                if not response_started:
+                    await self._send_413(send)
+                    return
+                # If response started, re-raise to let the server handle the error
+                # (e.g. by closing the connection or trying to send a 500 if possible)
+                raise
             raise
 
     async def _send_400(self, send: Send) -> None:

@@ -4432,3 +4432,53 @@ class TestMaxBodySizeMiddleware:
             resp = await c.post("/test/", headers={"Content-Length": "not-a-number"})
             assert resp.status_code == 400
             assert resp.json() == {"error": "invalid_request"}
+
+            # Empty string
+            resp = await c.post("/test/", headers={"Content-Length": ""})
+            assert resp.status_code == 400
+            assert resp.json() == {"error": "invalid_request"}
+
+    @pytest.mark.asyncio
+    async def test_no_413_if_response_started(self):
+        import httpx
+        from fastapi import FastAPI
+        from httpx import ASGITransport
+        from starlette.types import Receive, Scope, Send
+
+        from mcp_gateway.middleware import MaxBodySizeMiddleware
+
+        app = FastAPI()
+        app.add_middleware(MaxBodySizeMiddleware, max_size_bytes=5)
+
+        async def dummy_app(scope: Scope, receive: Receive, send: Send):
+            if scope["type"] == "http":
+                # Start response before reading body
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 200,
+                        "headers": [(b"content-type", b"text/plain")],
+                    }
+                )
+                # Now try to read which will trigger the limit
+                try:
+                    while True:
+                        await receive()
+                except RuntimeError:
+                    # The middleware will raise RuntimeError("payload_too_large")
+                    # but we catch it here or it bubbles up.
+                    # In our case, wrapped_receive raises it.
+                    raise
+
+        app.mount("/test", dummy_app)
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+
+            async def gen():
+                yield b"too-long-payload"
+
+            # If the middleware tries to send 413 after 200 OK, it would crash or
+            # httpx would see a protocol error.
+            # With our fix, it should just propagate the error or stop.
+            with pytest.raises((httpx.RemoteProtocolError, RuntimeError)):
+                await c.post("/test/", content=gen())

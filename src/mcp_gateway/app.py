@@ -70,7 +70,7 @@ def build_app(
     engine = PolicyEngine(policy)
     approval_registry = PendingApprovalRegistry(max_pending=settings.approval_max_pending)
 
-    async def _on_session_evicted(sid: str) -> None:
+    async def _on_session_evicted(sid: str, reason: str) -> None:
         try:
             await approval_registry.cancel_session(sid)
         except Exception as exc:
@@ -78,6 +78,7 @@ def build_app(
                 ev="session_evict_failed",
                 error_type=exc.__class__.__name__,
                 sid=sid,
+                reason=reason,
             )
             raise
 

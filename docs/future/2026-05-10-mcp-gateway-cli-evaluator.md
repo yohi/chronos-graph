@@ -73,12 +73,15 @@ intents:
             type: string
             max_length: 2000
             pattern: "^(?!.*rm -rf).*$" # 危険なコマンドの簡易ブロック
+            # 注記: 正規表現のみによるガードレールは回避が容易なため、実運用では
+            # AST 解析や許可リスト方式など、より厳密な検証ロジックへの置き換えを推奨。
             
       write_file:
         params:
           file_path:
             type: string
             pattern: "^(?!.*\\.env).*$" # シークレットファイルへの書き込み禁止
+            # 注記: 大文字小文字の差異や相対パス指定によるバイパスに注意。
 ```
 
 ### 3.3 クライアント側のフック設定の公式サポート
@@ -143,4 +146,4 @@ Gemini CLI は stdin/stdout を用いた JSON ベースのやり取りを好む�
    - サブプロセスとして `python -m mcp_gateway evaluate` を実行し、許可されるケースで exit 0、ブロックされるケースで exit 2 が返ることを検証するテストを `tests/integration/` に追加。
 
 5. **[ ] Task 5: ドキュメントの更新**
-   - `README.md` に「Universal Evaluator (ccgate代替モード)」のセクションを新設し、各クライアントの設定例を記載する。
+   - `README.md` に「Universal Evaluator (ccgate代替モード)」のセクションを新設し、各クライアントの設定例を記載する。設定例を記載する。

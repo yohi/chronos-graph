@@ -1421,6 +1421,9 @@ Blocking モードで待機中の承認を解決するための REST エンド�
 | `-32601` | tool not found | 権限不足、または承認対象にシークレットが含まれる場合 |
 | `-32602` | (reason) | パラメータ制約違反（`param_too_long` 等） |
 | `-32001` | approval_required | 承認待ち。`data.session_id` を含む |
+| `-32002` | approval_rejected | 拒否時 |
+| `-32003` | approval_timeout | タイムアウト時 |
+| `-32603` | internal_error | 待機上限（`approval_max_pending`）超過時 |
 
 ---
 

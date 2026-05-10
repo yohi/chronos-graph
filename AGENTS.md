@@ -10,7 +10,6 @@ Do not guess. Always read these files for domain knowledge before acting:
 - **Architecture, Models, & Core Logic**: `SPEC.md`
 - **Setup & Agent Configuration**: `README.md`
 - **System Prompts**: `docs/agent-prompts/memory-save-system-prompt.md`
-- **Superpowers Specs/Plans**: `docs/superpowers/` (for multi-step agent plans)
 
 ## HOW (Commands)
 *Note: All commands must be run inside the project Devcontainer.*

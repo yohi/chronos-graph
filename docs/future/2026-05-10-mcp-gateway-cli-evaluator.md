@@ -88,17 +88,21 @@ intents:
 
 CLI が実装された後、各エージェントの設定ファイル（`settings.json` など）で ChronosGraph の評価コマンドを呼び出す方法を公式にドキュメント化します。
 
-#### Claude Code (`.claude/settings.json`)
+#### Claude Code ([Official Hooks Docs](https://modelcontextprotocol.io/docs/concepts/architecture#hooks))
+Claude Code は `PreToolUse` フックをサポートしており、`stdin` 経由でツール呼び出し情報を JSON として渡します。
+
 ```json
 {
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": ".*",
+        "matcher": "Bash|Write|Edit",
         "hooks": [
           {
             "type": "command",
-            "command": "uv run --directory /path/to/chronos-graph python -m mcp_gateway evaluate --tool \"$CLAUDE_TOOL_NAME\" --args \"$CLAUDE_TOOL_ARGS\""
+            "command": "uv run --directory /path/to/chronos-graph python -m mcp_gateway evaluate --json-io"
+            // 注: stdin から JSON を読み取り、stdout に {"decision": "allow"|"block"} を返す。
+            // 以前の環境変数展開方式はシェルインジェクションのリスクがあるため、JSON I/O を推奨。
           }
         ]
       }
@@ -107,8 +111,8 @@ CLI が実装された後、各エージェントの設定ファイル（`settin
 }
 ```
 
-#### Gemini CLI (`.gemini/settings.json`)
-Gemini CLI は stdin/stdout を用いた JSON ベースのやり取りを好むため、CLI 側に `--json-io` モード（標準入力から JSON を受け取り、`{"decision": "deny", "reason": "..."}` を標準出力に返すモード）を追加すると親和性が高まります。
+#### Gemini CLI ([Hook System Specs](https://github.com/google/gemini-cli))
+Gemini CLI の `BeforeTool` フックは `stdin`/`stdout` を用いた JSON ベースのやり取りを前提としています。
 
 ```json
 {
@@ -129,6 +133,12 @@ Gemini CLI は stdin/stdout を用いた JSON ベースのやり取りを好む�
 }
 ```
 
+**JSON I/O 仕様 (Golden Rule):**
+- **Input (stdin):** `{"tool_name": "...", "tool_input": {...}, "context": {...}}`
+- **Output (stdout):** `{"decision": "allow"}` または `{"decision": "deny", "reason": "..."}`
+- **Exit Code:** `0` (Success/Decision returned), `2` (System Block/Error)
+
+
 ## 4. 次期セッション向けの実装タスクリスト (Implementation Plan)
 
 1. **[ ] Task 1: CLI エンドポイントの作成**
@@ -146,4 +156,4 @@ Gemini CLI は stdin/stdout を用いた JSON ベースのやり取りを好む�
    - サブプロセスとして `python -m mcp_gateway evaluate` を実行し、許可されるケースで exit 0、ブロックされるケースで exit 2 が返ることを検証するテストを `tests/integration/` に追加。
 
 5. **[ ] Task 5: ドキュメントの更新**
-   - `README.md` に「Universal Evaluator (ccgate代替モード)」のセクションを新設し、各クライアントの設定例を記載する。設定例を記載する。
+   - `README.md` に「Universal Evaluator (ccgate代替モード)」のセクションを新設し、各クライアントの設定例を記載する。

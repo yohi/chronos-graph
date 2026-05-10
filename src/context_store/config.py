@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     postgres_db: str = "context_store"
     postgres_user: str = "context_store"
     postgres_password: SecretStr = SecretStr("")
+    postgres_ssl: bool = False
 
     # --- Neo4j (graph_enabled=true の場合) ---
     neo4j_uri: str = "bolt://localhost:7687"
@@ -75,6 +76,7 @@ class Settings(BaseSettings):
 
     # --- Redis (cache_backend=redis の場合) ---
     redis_url: str = "redis://localhost:6379"
+    redis_ssl: bool = False
 
     # --- Embedding ---
     embedding_provider: Literal["openai", "local-model", "litellm", "custom-api"] = "local-model"

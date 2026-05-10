@@ -15,17 +15,22 @@ MCP_OUTPUT="generic"
 MCP_METHOD="python"
 UV_FROM=""
 GRAPH_ENABLED=true  # bootstrap.sh では利便性のためデフォルトで有効（アプリデフォルトは false）
+POSTGRES_SSL=false
+
+# Track which flags were explicitly set to allow overwriting .env
+EXPLICIT_FLAGS=""
 
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --backend)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --backend requires a value (sqlite|postgres)"; exit 1; fi
-            BACKEND="$2"; shift ;;
+            BACKEND="$2"; EXPLICIT_FLAGS="$EXPLICIT_FLAGS STORAGE_BACKEND"; shift ;;
         --embedding)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --embedding requires a value (openai|litellm|local|custom)"; exit 1; fi
-            EMBEDDING_PROVIDER="$2"; shift ;;
+            EMBEDDING_PROVIDER="$2"; EXPLICIT_FLAGS="$EXPLICIT_FLAGS EMBEDDING_PROVIDER"; shift ;;
         --skip-tests) SKIP_TESTS=true ;;
+        --ssl) POSTGRES_SSL=true; EXPLICIT_FLAGS="$EXPLICIT_FLAGS POSTGRES_SSL" ;;
         --mcp-output)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --mcp-output requires a value (claude|cursor|generic)"; exit 1; fi
             MCP_OUTPUT="$2"; shift ;;
@@ -42,13 +47,14 @@ while [[ "$#" -gt 0 ]]; do
             UV_FROM="$2"; shift ;;
         --graph)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --graph requires a value (true|false)"; exit 1; fi
-            GRAPH_ENABLED="$2"; shift ;;
+            GRAPH_ENABLED="$2"; EXPLICIT_FLAGS="$EXPLICIT_FLAGS GRAPH_ENABLED"; shift ;;
         -h|--help)
             echo "Usage: $0 [options]"
             echo "Options:"
             echo "  --backend [sqlite|postgres]      Set storage backend (default: sqlite)"
             echo "  --embedding [openai|litellm|local|custom] Set embedding provider (default: openai)"
             echo "  --skip-tests                      Skip running unit tests"
+            echo "  --ssl                             Enable SSL for PostgreSQL (default: false)"
             echo "  --mcp-output [claude|cursor|generic] Set MCP configuration output format (default: generic)"
             echo "  --mcp-method [python|uv|uvx]         Set MCP activation method (default: python)"
             echo "  --uv-from [source]                Set source for uvx (e.g. git URL or PyPI package)"
@@ -96,16 +102,26 @@ if [ ! -f .env ]; then
     cp .env.example .env
 fi
 
-# Update .env variables regardless of file creation
-for VAR in "STORAGE_BACKEND" "EMBEDDING_PROVIDER" "GRAPH_ENABLED"; do
+# Update .env variables
+for VAR in "STORAGE_BACKEND" "EMBEDDING_PROVIDER" "GRAPH_ENABLED" "POSTGRES_SSL"; do
     case $VAR in
-        STORAGE_BACKEND) VAL=$BACKEND ;;
-        EMBEDDING_PROVIDER) VAL=$EMBEDDING_PROVIDER ;;
-        GRAPH_ENABLED) VAL=$GRAPH_ENABLED ;;
+        STORAGE_BACKEND) VAL=$BACKEND; EXPLICIT_VAR="STORAGE_BACKEND" ;;
+        EMBEDDING_PROVIDER) VAL=$EMBEDDING_PROVIDER; EXPLICIT_VAR="EMBEDDING_PROVIDER" ;;
+        GRAPH_ENABLED) VAL=$GRAPH_ENABLED; EXPLICIT_VAR="GRAPH_ENABLED" ;;
+        POSTGRES_SSL) VAL=$POSTGRES_SSL; EXPLICIT_VAR="POSTGRES_SSL" ;;
     esac
-    
+
+    # Only update if the variable doesn't exist OR if it's different from the default
+    # This prevents overwriting user-defined values in .env when re-running without flags.
     if grep -q "^$VAR=" .env; then
-        "${SED_INPLACE[@]}" "s/^$VAR=.*/$VAR=$VAL/" .env
+        CURRENT_VAL=$(grep "^$VAR=" .env | cut -d'=' -f2)
+        if [[ "$CURRENT_VAL" != "$VAL" ]]; then
+            # Only override if the flag was explicitly passed in the command line
+            if [[ "$EXPLICIT_FLAGS" == *"$EXPLICIT_VAR"* ]]; then
+                echo -e "${BLUE}Updating $VAR in .env: $CURRENT_VAL -> $VAL${NC}"
+                "${SED_INPLACE[@]}" "s/^$VAR=.*/$VAR=$VAL/" .env
+            fi
+        fi
     else
         echo "$VAR=$VAL" >> .env
     fi

@@ -154,21 +154,26 @@ def generate_postgres_config(
     """PostgreSQL + Neo4j + Redis フルモードの設定を生成する。"""
     env = {
         "STORAGE_BACKEND": "postgres",
-        "POSTGRES_HOST": "localhost",
+        "POSTGRES_HOST": "your-project-id.supabase.co",
         "POSTGRES_PORT": "5432",
-        "POSTGRES_DB": "context_store",
-        "POSTGRES_USER": "context_store",
+        "POSTGRES_DB": "postgres",
+        "POSTGRES_USER": "postgres",
         "POSTGRES_PASSWORD": "<your-postgres-password>",
+        "POSTGRES_SSL": "true",
         "GRAPH_ENABLED": "true" if graph else "false",
-        "NEO4J_URI": "bolt://localhost:7687",
+        "NEO4J_URI": "neo4j+s://your-instance.databases.neo4j.io",
         "NEO4J_USER": "neo4j",
         "NEO4J_PASSWORD": "<your-neo4j-password>",
-        "CACHE_BACKEND": "redis",
-        "REDIS_URL": "redis://localhost:6379",
+        "CACHE_BACKEND": "inmemory",
+        "REDIS_URL": "rediss://default:your-password@your-instance.upstash.io:6379",
+        "REDIS_SSL": "true",
         "DECAY_HALF_LIFE_DAYS": "30",
         "SIMILARITY_THRESHOLD": "0.70",
         "DEDUP_THRESHOLD": "0.90",
     }
+    # Cache configuration:
+    # - Single instance / Local: CACHE_BACKEND=inmemory
+    # - Multi-instance / Cloud: CACHE_BACKEND=redis (e.g., Upstash)
     env.update(get_embedding_envs(embedding))
 
     command, args = build_start_command(method, uv_from, python_path)

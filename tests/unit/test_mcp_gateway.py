@@ -2552,7 +2552,7 @@ class TestBlockingModeHandlerDirect:
 
     @pytest.mark.asyncio
     async def test_audit_logs_truncate_approval_id(self, router_with_registry, capfd):
-        app, _registry, _sessions, handshake, _upstream = router_with_registry
+        app, registry, _sessions, handshake, _upstream = router_with_registry
         rec = handshake.handshake(
             authorization_header="Bearer ck_a",
             intent_header="curate_memories",
@@ -2562,18 +2562,38 @@ class TestBlockingModeHandlerDirect:
         from httpx import ASGITransport
 
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            await c.post(
-                f"/messages?session_id={rec.session_id}",
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "tools/call",
-                    "params": {"name": "memory_delete", "arguments": {}},
-                },
+            task = asyncio.create_task(
+                c.post(
+                    f"/messages?session_id={rec.session_id}",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {"name": "memory_delete", "arguments": {}},
+                    },
+                )
             )
+            approval_id = await self._wait_for_approval_id(registry)
+            from mcp_gateway.approval.models import DecisionStatus
+
+            await registry.resolve(
+                approval_id,
+                resolver_agent_id="operator",
+                status=DecisionStatus.APPROVED,
+            )
+            await task
+
         _, err = capfd.readouterr()
         assert '"decision":"approval_pending"' in err
+        assert '"decision":"allow_after_approval"' in err
         assert '"approval_ref":"' in err
+        # Verify approval_ref is in allow_after_approval log too
+        allow_log = [
+            line for line in err.splitlines() if '"decision":"allow_after_approval"' in line
+        ]
+        assert len(allow_log) == 1
+        assert '"approval_ref":"' in allow_log[0]
+
         import re
 
         full_hex = re.findall(r"[0-9a-f]{32}", err)

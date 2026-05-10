@@ -262,6 +262,7 @@ def build_router(
                 arguments=arguments,
             )
             was_approved = False
+            approval_ref: str | None = None
 
             match decision.status:
                 case "DENY":
@@ -572,13 +573,16 @@ def build_router(
                     }
                 )
 
-            audit.log(
-                ev="call",
-                decision="allow_after_approval" if was_approved else "allow",
-                agent=record.agent_id,
-                sid=sid,
-                tool=tool_name,
-            )
+            audit_kwargs = {
+                "ev": "call",
+                "decision": "allow_after_approval" if was_approved else "allow",
+                "agent": record.agent_id,
+                "sid": sid,
+                "tool": tool_name,
+            }
+            if was_approved and approval_ref is not None:
+                audit_kwargs["approval_ref"] = approval_ref
+            audit.log(**audit_kwargs)
             return JSONResponse({"jsonrpc": "2.0", "id": rpc_id, "result": payload})
 
         return JSONResponse(

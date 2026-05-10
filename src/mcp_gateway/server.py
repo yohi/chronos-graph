@@ -19,7 +19,9 @@ from mcp_gateway.approval.notifier import (
     _sanitize_for_log,
 )
 from mcp_gateway.approval.registry import PendingApprovalRegistry
+from mcp_gateway.approval.sanitize import sanitize_reason
 from mcp_gateway.audit.logger import AuditLogger
+from mcp_gateway.auth.api_key import ApiKeyAuthenticator
 from mcp_gateway.auth.handshake import HandshakeService
 from mcp_gateway.auth.session import SessionRegistry
 from mcp_gateway.errors import AuthError, PolicyError, SessionError, UpstreamError
@@ -114,9 +116,12 @@ def build_router(
     approval_registry: PendingApprovalRegistry | None = None,
     approval_blocking_mode: bool = False,
     approval_timeout_seconds: float = 30.0,
+    api_authenticator: ApiKeyAuthenticator | None = None,
 ) -> APIRouter:
     if approval_blocking_mode and approval_registry is None:
         raise ValueError("approval_registry must be provided when approval_blocking_mode=True")
+    if approval_registry is not None and api_authenticator is None:
+        raise ValueError("api_authenticator must be provided when approval_registry is provided")
 
     router = APIRouter()
     if approval_notifier is None:
@@ -481,6 +486,72 @@ def build_router(
                 "error": {"code": -32601, "message": f"unknown method {method!r}"},
             }
         )
+
+    if approval_registry is not None:
+
+        @router.post("/approvals")
+        async def approvals(request: Request) -> Any:
+            authz = request.headers.get("authorization") or ""
+            scheme, _, raw = authz.partition(" ")
+            if scheme.lower() != "bearer" or not raw:
+                return JSONResponse({"error": "auth_failed"}, status_code=401)
+
+            if api_authenticator is None:
+                raise RuntimeError("api_authenticator precondition was not enforced")
+            try:
+                resolver_agent_id = api_authenticator.authenticate(raw)
+            except AuthError:
+                return JSONResponse({"error": "auth_failed"}, status_code=401)
+
+            raw_body = await request.body()
+            if len(raw_body) > 1024:
+                return JSONResponse({"error": "payload_too_large"}, status_code=413)
+            try:
+                body = json.loads(raw_body)
+            except json.JSONDecodeError:
+                return JSONResponse({"error": "invalid_request"}, status_code=400)
+            if not isinstance(body, dict):
+                return JSONResponse({"error": "invalid_request"}, status_code=400)
+
+            approval_id = body.get("approval_id")
+            raw_decision = body.get("decision")
+            if (
+                not isinstance(approval_id, str)
+                or len(approval_id) != 32
+                or raw_decision not in {"approve", "reject"}
+            ):
+                return JSONResponse({"error": "invalid_request"}, status_code=400)
+
+            raw_reason = body.get("reason")
+            if raw_reason is not None and not isinstance(raw_reason, str):
+                return JSONResponse({"error": "invalid_request"}, status_code=400)
+            normalized_reason = sanitize_reason(raw_reason)
+            status = (
+                DecisionStatus.APPROVED if raw_decision == "approve" else DecisionStatus.REJECTED
+            )
+            outcome = await approval_registry.resolve(
+                approval_id,
+                resolver_agent_id=resolver_agent_id,
+                status=status,
+                reason=normalized_reason,
+            )
+
+            audit.log(
+                ev="approval_decision",
+                outcome=outcome.value,
+                resolver=resolver_agent_id,
+                approval_ref=_approval_id_for_log(approval_id),
+                reason=normalized_reason,
+            )
+
+            if outcome.value == "ok":
+                return JSONResponse(
+                    {"status": "resolved", "approval_id": approval_id},
+                    status_code=200,
+                )
+            if outcome.value == "forbidden":
+                return JSONResponse({"error": "self_approval_forbidden"}, status_code=403)
+            return JSONResponse({"error": "approval_not_found"}, status_code=404)
 
     @router.get("/healthz")
     async def healthz() -> dict[str, str]:

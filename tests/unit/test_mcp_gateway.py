@@ -2244,6 +2244,7 @@ class TestBlockingModeHandlerDirect:
                 approval_registry=registry,
                 approval_blocking_mode=True,
                 approval_timeout_seconds=0.5,
+                api_authenticator=auth,
             )
         )
         return app, registry, sessions, handshake, upstream
@@ -2415,6 +2416,7 @@ class TestBlockingModeHandlerDirect:
                 approval_registry=registry,
                 approval_blocking_mode=True,
                 approval_timeout_seconds=2.0,
+                api_authenticator=auth,
             )
         )
 
@@ -2527,6 +2529,204 @@ class TestBlockingModeHandlerDirect:
             resp = await task
         assert resp.json()["error"]["code"] == -32002
         upstream.call_tool.assert_not_called()
+
+
+class TestApprovalsEndpoint:
+    @pytest.fixture
+    def router_with_registry(self, tmp_path):
+        from unittest.mock import AsyncMock
+
+        from fastapi import FastAPI
+
+        from mcp_gateway.approval.registry import PendingApprovalRegistry
+        from mcp_gateway.audit.logger import AuditLogger
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+        from mcp_gateway.auth.handshake import HandshakeService
+        from mcp_gateway.auth.session import InMemorySessionRegistry
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.loader import load_policy
+        from mcp_gateway.server import build_router
+        from mcp_gateway.tools.registry import ToolRegistry
+
+        policy_file = tmp_path / "intents.yaml"
+        policy_file.write_text(
+            textwrap.dedent(
+                """
+                version: 1
+                output_filters: {f: {type: none}}
+                intents:
+                  curate_memories:
+                    description: x
+                    allowed_tools: [memory_delete]
+                    output_filter: f
+                    guardrails: {memory_delete: {requires_approval: true}}
+                agents:
+                  agent-a: {allowed_intents: [curate_memories]}
+                  operator: {allowed_intents: [curate_memories]}
+                """
+            ).lstrip()
+        )
+        policy = load_policy(policy_file)
+        engine = PolicyEngine(policy)
+        sessions = InMemorySessionRegistry(ttl_seconds=900, idle_timeout_seconds=300)
+        auth = ApiKeyAuthenticator({"agent-a": "ck_a", "operator": "ck_o"})
+        handshake = HandshakeService(
+            authenticator=auth,
+            policy_engine=engine,
+            session_registry=sessions,
+        )
+        registry = PendingApprovalRegistry(max_pending=4)
+        upstream = AsyncMock()
+        upstream.call_tool.return_value = {"ok": True}
+        tools = ToolRegistry([{"name": "memory_delete"}])
+        audit = AuditLogger()
+        app = FastAPI()
+        app.include_router(
+            build_router(
+                handshake=handshake,
+                sessions=sessions,
+                tool_registry=tools,
+                upstream=upstream,
+                policy=policy,
+                audit=audit,
+                engine=engine,
+                approval_registry=registry,
+                approval_blocking_mode=True,
+                approval_timeout_seconds=10.0,
+                api_authenticator=auth,
+            )
+        )
+        return app, registry, auth, handshake
+
+    @pytest.mark.asyncio
+    async def test_401_without_auth(self, router_with_registry):
+        app, _registry, _auth, _handshake = router_with_registry
+        import httpx
+        from httpx import ASGITransport
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            resp = await c.post(
+                "/approvals",
+                json={"approval_id": "x" * 32, "decision": "approve"},
+            )
+        assert resp.status_code == 401
+        assert resp.json() == {"error": "auth_failed"}
+
+    @pytest.mark.asyncio
+    async def test_404_for_unknown_id(self, router_with_registry):
+        app, _registry, _auth, _handshake = router_with_registry
+        import httpx
+        from httpx import ASGITransport
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            resp = await c.post(
+                "/approvals",
+                headers={"Authorization": "Bearer ck_o"},
+                json={"approval_id": "0" * 32, "decision": "approve"},
+            )
+        assert resp.status_code == 404
+        assert resp.json() == {"error": "approval_not_found"}
+
+    @pytest.mark.asyncio
+    async def test_404_for_already_resolved(self, router_with_registry):
+        app, registry, _auth, _handshake = router_with_registry
+        from datetime import UTC, datetime
+
+        from mcp_gateway.approval.models import DecisionStatus
+        from mcp_gateway.approval.notifier import ApprovalRequest
+
+        approval_id = await registry.register(
+            session_id="s1",
+            requester_agent_id="agent-a",
+            request=ApprovalRequest(
+                session_id="s1",
+                agent_id="agent-a",
+                intent="curate_memories",
+                tool_name="memory_delete",
+                arguments={},
+                requested_at=datetime.now(UTC),
+            ),
+        )
+        await registry.resolve(
+            approval_id,
+            resolver_agent_id="operator",
+            status=DecisionStatus.APPROVED,
+        )
+        await registry.wait_for_decision(approval_id, timeout=0.1)
+
+        import httpx
+        from httpx import ASGITransport
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            resp = await c.post(
+                "/approvals",
+                headers={"Authorization": "Bearer ck_o"},
+                json={"approval_id": approval_id, "decision": "approve"},
+            )
+        assert resp.status_code == 404
+        assert resp.json() == {"error": "approval_not_found"}
+
+    @pytest.mark.asyncio
+    async def test_403_for_self_approval(self, router_with_registry):
+        app, registry, _auth, _handshake = router_with_registry
+        from datetime import UTC, datetime
+
+        from mcp_gateway.approval.notifier import ApprovalRequest
+
+        approval_id = await registry.register(
+            session_id="s1",
+            requester_agent_id="agent-a",
+            request=ApprovalRequest(
+                session_id="s1",
+                agent_id="agent-a",
+                intent="curate_memories",
+                tool_name="memory_delete",
+                arguments={},
+                requested_at=datetime.now(UTC),
+            ),
+        )
+
+        import httpx
+        from httpx import ASGITransport
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            resp = await c.post(
+                "/approvals",
+                headers={"Authorization": "Bearer ck_a"},
+                json={"approval_id": approval_id, "decision": "approve"},
+            )
+        assert resp.status_code == 403
+        assert resp.json() == {"error": "self_approval_forbidden"}
+
+    @pytest.mark.asyncio
+    async def test_400_for_invalid_decision(self, router_with_registry):
+        app, _registry, _auth, _handshake = router_with_registry
+        import httpx
+        from httpx import ASGITransport
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            resp = await c.post(
+                "/approvals",
+                headers={"Authorization": "Bearer ck_o"},
+                json={"approval_id": "a" * 32, "decision": "maybe"},
+            )
+        assert resp.status_code == 400
+        assert resp.json() == {"error": "invalid_request"}
+
+    @pytest.mark.asyncio
+    async def test_413_for_oversized_body(self, router_with_registry):
+        app, _registry, _auth, _handshake = router_with_registry
+        import httpx
+        from httpx import ASGITransport
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            resp = await c.post(
+                "/approvals",
+                headers={"Authorization": "Bearer ck_o"},
+                content="x" * 1100,
+            )
+        assert resp.status_code == 413
+        assert resp.json() == {"error": "payload_too_large"}
 
 
 class TestServerValidationDeny:

@@ -149,6 +149,7 @@ def generate_postgres_config(
     embedding: str,
     graph: bool,
     ssl: bool,
+    cache: str,
     method: str = "python",
     uv_from: str | None = None,
 ) -> dict[str, Any]:
@@ -165,7 +166,7 @@ def generate_postgres_config(
         "NEO4J_URI": "neo4j+s://your-instance.databases.neo4j.io",
         "NEO4J_USER": "neo4j",
         "NEO4J_PASSWORD": "<your-neo4j-password>",
-        "CACHE_BACKEND": "inmemory",
+        "CACHE_BACKEND": cache,
         "REDIS_URL": "rediss://default:your-password@your-instance.upstash.io:6379",
         "REDIS_SSL": "true" if ssl else "false",
         "DECAY_HALF_LIFE_DAYS": "30",
@@ -211,6 +212,12 @@ def main() -> None:
         "--backend", choices=["sqlite", "postgres"], default="sqlite", help="Storage backend"
     )
     parser.add_argument(
+        "--cache",
+        choices=["inmemory", "redis"],
+        default=None,
+        help="Cache backend (default: inmemory, or redis if --ssl is set)",
+    )
+    parser.add_argument(
         "--embedding",
         choices=embedding_choices,
         default=default_embedding,
@@ -239,8 +246,20 @@ def main() -> None:
             python_path, args.embedding, args.graph, args.method, args.uv_from
         )
     else:
+        # ユーザーが指定していない場合のみ、デフォルト値を決定する
+        # --ssl があれば redis、なければ inmemory をデフォルトにする
+        cache_backend = args.cache
+        if cache_backend is None:
+            cache_backend = "redis" if args.ssl else "inmemory"
+
         config = generate_postgres_config(
-            python_path, args.embedding, args.graph, args.ssl, args.method, args.uv_from
+            python_path,
+            args.embedding,
+            args.graph,
+            args.ssl,
+            cache_backend,
+            args.method,
+            args.uv_from,
         )
 
     if args.output == "cursor":

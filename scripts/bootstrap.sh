@@ -16,6 +16,7 @@ MCP_METHOD="python"
 UV_FROM=""
 GRAPH_ENABLED=true  # bootstrap.sh では利便性のためデフォルトで有効（アプリデフォルトは false）
 POSTGRES_SSL=false
+CACHE_BACKEND=""
 
 # Track which flags were explicitly set to allow overwriting .env
 EXPLICIT_FLAGS=""
@@ -31,6 +32,9 @@ while [[ "$#" -gt 0 ]]; do
             EMBEDDING_PROVIDER="$2"; EXPLICIT_FLAGS="$EXPLICIT_FLAGS EMBEDDING_PROVIDER"; shift ;;
         --skip-tests) SKIP_TESTS=true ;;
         --ssl) POSTGRES_SSL=true; EXPLICIT_FLAGS="$EXPLICIT_FLAGS POSTGRES_SSL" ;;
+        --cache)
+            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --cache requires a value (inmemory|redis)"; exit 1; fi
+            CACHE_BACKEND="$2"; EXPLICIT_FLAGS="$EXPLICIT_FLAGS CACHE_BACKEND"; shift ;;
         --mcp-output)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --mcp-output requires a value (claude|cursor|generic)"; exit 1; fi
             MCP_OUTPUT="$2"; shift ;;
@@ -55,6 +59,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --embedding [openai|litellm|local|custom] Set embedding provider (default: openai)"
             echo "  --skip-tests                      Skip running unit tests"
             echo "  --ssl                             Enable SSL for PostgreSQL (default: false)"
+            echo "  --cache [inmemory|redis]          Set cache backend (default: inmemory)"
             echo "  --mcp-output [claude|cursor|generic] Set MCP configuration output format (default: generic)"
             echo "  --mcp-method [python|uv|uvx]         Set MCP activation method (default: python)"
             echo "  --uv-from [source]                Set source for uvx (e.g. git URL or PyPI package)"
@@ -105,13 +110,19 @@ if [ ! -f .env ]; then
 fi
 
 # Update .env variables
-for VAR in "STORAGE_BACKEND" "EMBEDDING_PROVIDER" "GRAPH_ENABLED" "POSTGRES_SSL"; do
+for VAR in "STORAGE_BACKEND" "EMBEDDING_PROVIDER" "GRAPH_ENABLED" "POSTGRES_SSL" "CACHE_BACKEND"; do
     case $VAR in
         STORAGE_BACKEND) VAL=$BACKEND; EXPLICIT_VAR="STORAGE_BACKEND" ;;
         EMBEDDING_PROVIDER) VAL=$EMBEDDING_PROVIDER; EXPLICIT_VAR="EMBEDDING_PROVIDER" ;;
         GRAPH_ENABLED) VAL=$GRAPH_ENABLED; EXPLICIT_VAR="GRAPH_ENABLED" ;;
         POSTGRES_SSL) VAL=$POSTGRES_SSL; EXPLICIT_VAR="POSTGRES_SSL" ;;
+        CACHE_BACKEND) VAL=$CACHE_BACKEND; EXPLICIT_VAR="CACHE_BACKEND" ;;
     esac
+
+    # Skip if variable is empty (e.g. CACHE_BACKEND not provided)
+    if [[ -z "$VAL" && "$VAR" == "CACHE_BACKEND" ]]; then
+        continue
+    fi
 
     # Only update if the variable doesn't exist OR if it's different from the default
     # This prevents overwriting user-defined values in .env when re-running without flags.
@@ -150,6 +161,12 @@ TMP_CONFIG=$(mktemp)
 trap 'rm -f "$TMP_CONFIG"' EXIT
 
 GEN_CONFIG_ARGS=("scripts/generate_config.py" "--backend" "$BACKEND" "--embedding" "$EMBEDDING_PROVIDER" "--graph" "$GRAPH_ENABLED" "--output" "$MCP_OUTPUT" "--method" "$MCP_METHOD")
+if [ "$POSTGRES_SSL" = "true" ]; then
+    GEN_CONFIG_ARGS+=("--ssl")
+fi
+if [[ -n "$CACHE_BACKEND" ]]; then
+    GEN_CONFIG_ARGS+=("--cache" "$CACHE_BACKEND")
+fi
 if [[ -n "$UV_FROM" ]]; then
     GEN_CONFIG_ARGS+=("--uv-from" "$UV_FROM")
 fi

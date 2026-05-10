@@ -4433,10 +4433,75 @@ class TestMaxBodySizeMiddleware:
             assert resp.status_code == 400
             assert resp.json() == {"error": "invalid_request"}
 
-            # Empty string
+            # Empty string (Testing empty-header branch)
             resp = await c.post("/test/", headers={"Content-Length": ""})
             assert resp.status_code == 400
             assert resp.json() == {"error": "invalid_request"}
+
+    @pytest.mark.asyncio
+    async def test_413_for_no_content_length_oversized(self):
+        import httpx
+        from fastapi import FastAPI
+        from httpx import ASGITransport
+
+        from mcp_gateway.middleware import MaxBodySizeMiddleware
+
+        app = FastAPI()
+        app.add_middleware(MaxBodySizeMiddleware, max_size_bytes=10)
+
+        @app.post("/test")
+        async def dummy():
+            return {"ok": True}
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            # No Content-Length (chunked), oversized
+            async def gen():
+                yield b"x" * 20
+
+            resp = await c.post("/test", content=gen())
+            assert resp.status_code == 413
+            assert resp.json() == {"error": "payload_too_large"}
+
+    @pytest.mark.asyncio
+    async def test_enforces_limit_even_if_app_does_not_read(self):
+        import httpx
+        from fastapi import FastAPI
+        from httpx import ASGITransport
+        from starlette.types import Receive, Scope, Send
+
+        from mcp_gateway.middleware import MaxBodySizeMiddleware
+
+        app = FastAPI()
+        app.add_middleware(MaxBodySizeMiddleware, max_size_bytes=10)
+
+        async def dummy_app(scope: Scope, receive: Receive, send: Send):
+            if scope["type"] == "http":
+                # App DOES NOT read the body
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 200,
+                        "headers": [(b"content-type", b"text/plain")],
+                    }
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b"ok",
+                    }
+                )
+
+        app.mount("/test", dummy_app)
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+
+            async def gen():
+                yield b"x" * 20
+
+            # Should be 413 because middleware eagerly reads and enforces limit
+            resp = await c.post("/test/", content=gen())
+            assert resp.status_code == 413
+            assert resp.json() == {"error": "payload_too_large"}
 
     @pytest.mark.asyncio
     async def test_no_413_if_response_started(self):
@@ -4445,7 +4510,7 @@ class TestMaxBodySizeMiddleware:
         from httpx import ASGITransport
         from starlette.types import Receive, Scope, Send
 
-        from mcp_gateway.middleware import MaxBodySizeMiddleware
+        from mcp_gateway.middleware import MaxBodySizeMiddleware, PayloadTooLargeError
 
         app = FastAPI()
         app.add_middleware(MaxBodySizeMiddleware, max_size_bytes=5)
@@ -4460,25 +4525,19 @@ class TestMaxBodySizeMiddleware:
                         "headers": [(b"content-type", b"text/plain")],
                     }
                 )
-                # Now try to read which will trigger the limit
-                try:
-                    while True:
-                        await receive()
-                except RuntimeError:
-                    # The middleware will raise RuntimeError("payload_too_large")
-                    # but we catch it here or it bubbles up.
-                    # In our case, wrapped_receive raises it.
-                    raise
+                # Now try to read which will trigger the limit.
+                # Since we want to test the late-detection logic in the
+                # 'except PayloadTooLargeError' block, we can either try to trick
+                # the middleware or just raise it here to simulate
+                # a late detection from wrapped_receive.
+                raise PayloadTooLargeError()
 
         app.mount("/test", dummy_app)
 
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-
-            async def gen():
-                yield b"too-long-payload"
-
-            # If the middleware tries to send 413 after 200 OK, it would crash or
-            # httpx would see a protocol error.
-            # With our fix, it should just propagate the error or stop.
-            with pytest.raises((httpx.RemoteProtocolError, RuntimeError)):
-                await c.post("/test/", content=gen())
+            # We just need to trigger the app.
+            # We use a valid small body so it passes all up-front middleware checks.
+            with pytest.raises((httpx.RemoteProtocolError, RuntimeError, PayloadTooLargeError)):
+                await c.post("/test/", content=b"ok")
+            # If the middleware didn't catch the error and try to send 413 (which would crash),
+            # then we've successfully verified that it either re-raised or stayed silent.

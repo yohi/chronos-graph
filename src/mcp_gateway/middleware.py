@@ -5,6 +5,10 @@ from typing import Any
 from starlette.types import Message, Receive, Scope, Send
 
 
+class PayloadTooLargeError(RuntimeError):
+    """Raised when the request body exceeds the maximum allowed size."""
+
+
 class MaxBodySizeMiddleware:
     def __init__(self, app: Any, max_size_bytes: int):
         self.app = app
@@ -23,7 +27,7 @@ class MaxBodySizeMiddleware:
                 response_started = True
             await send(message)
 
-        # Fast path
+        # Fast path: Check Content-Length if present
         headers = dict(scope["headers"])
         if b"content-length" in headers:
             try:
@@ -37,8 +41,35 @@ class MaxBodySizeMiddleware:
             except ValueError:
                 await self._send_400(send)
                 return
+        else:
+            # Robust path: Eagerly read and buffer up to max_size_bytes + 1
+            # to enforce limit even if the app doesn't read the body.
+            buffered_messages = []
+            count = 0
+            while True:
+                message = await receive()
+                buffered_messages.append(message)
+                if message["type"] == "http.request":
+                    body = message.get("body", b"")
+                    count += len(body)
+                    if count > self.max_size_bytes:
+                        if not response_started:
+                            await self._send_413(send)
+                        return
+                    if not message.get("more_body", False):
+                        break
+                elif message["type"] == "http.disconnect":
+                    break
 
-        # Robust path: cumulative counting
+            async def buffered_receive() -> Message:
+                if buffered_messages:
+                    return buffered_messages.pop(0)
+                return await receive()
+
+            await self.app(scope, buffered_receive, wrapped_send)
+            return
+
+        # Path for requests with valid Content-Length header
         count = 0
 
         async def wrapped_receive() -> Message:
@@ -48,22 +79,15 @@ class MaxBodySizeMiddleware:
                 body = message.get("body", b"")
                 count += len(body)
                 if count > self.max_size_bytes:
-                    # We can't easily send 413 here because the app might have started sending
-                    # but for request phase, we can raise and let middleware catch or just
-                    # send 413 if app hasn't started.
-                    raise RuntimeError("payload_too_large")
+                    raise PayloadTooLargeError()
             return message
 
         try:
             await self.app(scope, wrapped_receive, wrapped_send)
-        except RuntimeError as exc:
-            if str(exc) == "payload_too_large":
-                if not response_started:
-                    await self._send_413(send)
-                    return
-                # If response started, re-raise to let the server handle the error
-                # (e.g. by closing the connection or trying to send a 500 if possible)
-                raise
+        except PayloadTooLargeError:
+            if not response_started:
+                await self._send_413(send)
+                return
             raise
 
     async def _send_400(self, send: Send) -> None:

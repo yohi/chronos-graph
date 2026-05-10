@@ -3091,23 +3091,7 @@ class TestServerApprovalSuspendE2E:
             base_url="http://t",
         ) as client:
             sid = await _get_sse_session_id(client, intent="curate_memories")
-            call_task = asyncio.create_task(
-                client.post(
-                    f"/messages?session_id={sid}",
-                    json={
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "tools/call",
-                        "params": {"name": "memory_delete", "arguments": {}},
-                    },
-                )
-            )
-            for _ in range(100):
-                if any(p.session_id == sid for p in registry._pending.values()):
-                    break
-                await asyncio.sleep(0.01)
-            else:
-                raise AssertionError(f"tools/call did not suspend for approval (sid={sid})")
+            call_task = await self._start_pending_call(client, sid, registry)
 
             sessions.remove(sid)
             # 退避処理（cancel_session）が非同期に完了するのを待機

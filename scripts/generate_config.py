@@ -77,17 +77,23 @@ def get_embedding_envs(provider: str) -> dict[str, str]:
     """プロバイダーに応じた埋め込み設定の環境変数を返す。"""
     envs = {"EMBEDDING_PROVIDER": provider}
     if provider == "openai":
-        envs["OPENAI_API_KEY"] = "<your-openai-api-key>"
+        api_key = "<your-openai-api-key>"
+        if hasattr(settings, "openai_api_key"):
+            val = settings.openai_api_key.get_secret_value()
+            if val:
+                api_key = val
+        envs["OPENAI_API_KEY"] = api_key
     elif provider == "local-model":
-        envs["LOCAL_MODEL_NAME"] = "cl-nagoya/ruri-v3-310m"
+        envs["LOCAL_MODEL_NAME"] = getattr(settings, "local_model_name", "cl-nagoya/ruri-v3-310m")
+        envs["EMBEDDING_DIMENSION"] = str(getattr(settings, "embedding_dimension", "1024"))
     elif provider == "litellm":
-        envs["LITELLM_API_BASE"] = "http://localhost:4000"
-        envs["LITELLM_MODEL"] = "openai/text-embedding-3-small"
+        envs["LITELLM_API_BASE"] = getattr(settings, "litellm_api_base", "http://localhost:4000")
+        envs["LITELLM_MODEL"] = getattr(settings, "litellm_model", "openai/text-embedding-3-small")
     elif provider == "custom-api":
-        envs["CUSTOM_API_ENDPOINT"] = os.environ.get(
-            "CUSTOM_API_ENDPOINT", "http://localhost:8080/embed"
+        envs["CUSTOM_API_ENDPOINT"] = getattr(
+            settings, "custom_api_endpoint", "http://localhost:8080/embed"
         )
-        envs["CUSTOM_API_MODEL_NAME"] = os.environ.get("CUSTOM_API_MODEL_NAME", "custom-model")
+        envs["CUSTOM_API_MODEL_NAME"] = getattr(settings, "custom_api_model_name", "custom-model")
     return envs
 
 
@@ -123,11 +129,11 @@ def generate_sqlite_config(
     """SQLite ライトウェイトモードの設定を生成する。"""
     env = {
         "STORAGE_BACKEND": "sqlite",
-        "SQLITE_DB_PATH": "~/.context-store/memories.db",
+        "SQLITE_DB_PATH": getattr(settings, "sqlite_db_path", "~/.context-store/memories.db"),
         "GRAPH_ENABLED": "true" if graph else "false",
-        "DECAY_HALF_LIFE_DAYS": "30",
-        "SIMILARITY_THRESHOLD": "0.70",
-        "DEDUP_THRESHOLD": "0.90",
+        "DECAY_HALF_LIFE_DAYS": str(getattr(settings, "decay_half_life_days", "30")),
+        "SIMILARITY_THRESHOLD": f"{getattr(settings, 'similarity_threshold', 0.70):.2f}",
+        "DEDUP_THRESHOLD": f"{getattr(settings, 'dedup_threshold', 0.90):.2f}",
     }
     env.update(get_embedding_envs(embedding))
 
@@ -154,24 +160,35 @@ def generate_postgres_config(
     uv_from: str | None = None,
 ) -> dict[str, Any]:
     """PostgreSQL + Neo4j + Redis フルモードの設定を生成する。"""
+
+    # helper for secret strings
+    def get_secret(name: str, default: str) -> str:
+        if hasattr(settings, name):
+            val = getattr(settings, name).get_secret_value()
+            if val:
+                return val
+        return default
+
     env = {
         "STORAGE_BACKEND": "postgres",
-        "POSTGRES_HOST": "your-project-id.supabase.co",
-        "POSTGRES_PORT": "5432",
-        "POSTGRES_DB": "postgres",
-        "POSTGRES_USER": "postgres",
-        "POSTGRES_PASSWORD": "<your-postgres-password>",
+        "POSTGRES_HOST": getattr(settings, "postgres_host", "your-project-id.supabase.co"),
+        "POSTGRES_PORT": str(getattr(settings, "postgres_port", "5432")),
+        "POSTGRES_DB": getattr(settings, "postgres_db", "postgres"),
+        "POSTGRES_USER": getattr(settings, "postgres_user", "postgres"),
+        "POSTGRES_PASSWORD": get_secret("postgres_password", "<your-postgres-password>"),
         "POSTGRES_SSL": "true" if ssl else "false",
         "GRAPH_ENABLED": "true" if graph else "false",
-        "NEO4J_URI": "neo4j+s://your-instance.databases.neo4j.io",
-        "NEO4J_USER": "neo4j",
-        "NEO4J_PASSWORD": "<your-neo4j-password>",
+        "NEO4J_URI": getattr(settings, "neo4j_uri", "neo4j+s://your-instance.databases.neo4j.io"),
+        "NEO4J_USER": getattr(settings, "neo4j_user", "neo4j"),
+        "NEO4J_PASSWORD": get_secret("neo4j_password", "<your-neo4j-password>"),
         "CACHE_BACKEND": cache,
-        "REDIS_URL": "rediss://default:your-password@your-instance.upstash.io:6379",
-        "REDIS_SSL": "true" if ssl else "false",
-        "DECAY_HALF_LIFE_DAYS": "30",
-        "SIMILARITY_THRESHOLD": "0.70",
-        "DEDUP_THRESHOLD": "0.90",
+        "REDIS_URL": getattr(
+            settings, "redis_url", "rediss://default:your-password@your-instance.upstash.io:6379"
+        ),
+        "REDIS_SSL": "true" if ssl or getattr(settings, "redis_ssl", False) else "false",
+        "DECAY_HALF_LIFE_DAYS": str(getattr(settings, "decay_half_life_days", "30")),
+        "SIMILARITY_THRESHOLD": f"{getattr(settings, 'similarity_threshold', 0.70):.2f}",
+        "DEDUP_THRESHOLD": f"{getattr(settings, 'dedup_threshold', 0.90):.2f}",
     }
     # Cache configuration:
     # - Single instance / Local: CACHE_BACKEND=inmemory

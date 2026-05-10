@@ -31,7 +31,9 @@ class RedisCacheAdapter:
         import redis.asyncio as aioredis
 
         kwargs: dict[str, Any] = {"decode_responses": False}
-        if ssl:
+        # If url starts with rediss://, SSL is already enabled by from_url.
+        # Adding ssl=True explicitly can cause errors in some redis-py versions.
+        if ssl and not url.startswith("rediss://"):
             kwargs["ssl"] = True
 
         r = aioredis.from_url(url, **kwargs)

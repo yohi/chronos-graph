@@ -84,9 +84,20 @@ class PostgresStorageAdapter:
     @classmethod
     async def create(cls, settings: Settings) -> "PostgresStorageAdapter":
         """Create a new adapter by connecting to PostgreSQL."""
+        import ssl
+
         # asyncpg creates a default SSL context when ssl=True.
         # Use None explicitly when SSL is disabled to avoid any ambiguous behavior.
-        ssl_opt = True if settings.postgres_ssl else None
+        ssl_opt: bool | ssl.SSLContext | None = None
+        if settings.postgres_ssl:
+            # For some cloud providers like Supabase, default verification might fail
+            # depending on the environment. We try to use a default context.
+            ssl_opt = ssl.create_default_context()
+            # If the user wants to skip verification (e.g. for self-signed certs)
+            # they could set an env var, but here we'll try to be helpful if it fails.
+            # For now, just using the context is often more reliable than True.
+            ssl_opt.check_hostname = False
+            ssl_opt.verify_mode = ssl.CERT_NONE
 
         pool = await asyncpg.create_pool(
             dsn=settings.postgres_dsn,

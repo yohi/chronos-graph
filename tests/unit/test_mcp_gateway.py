@@ -161,9 +161,27 @@ class TestGatewaySettingsApprovalFields:
         policy = tmp_path / "p.yaml"
         policy.write_text(self._MINIMAL_POLICY)
         monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy))
-        monkeypatch.setenv("MCP_GATEWAY_APPROVAL_TIMEOUT_SECONDS", "0")
+
         from mcp_gateway.config import GatewaySettings
 
+        # timeout <= 0
+        monkeypatch.setenv("MCP_GATEWAY_APPROVAL_TIMEOUT_SECONDS", "0")
+        with pytest.raises(ValidationError):
+            GatewaySettings()
+
+        # timeout > 600
+        monkeypatch.setenv("MCP_GATEWAY_APPROVAL_TIMEOUT_SECONDS", "601")
+        with pytest.raises(ValidationError):
+            GatewaySettings()
+
+        # max_pending <= 0
+        monkeypatch.setenv("MCP_GATEWAY_APPROVAL_TIMEOUT_SECONDS", "30")
+        monkeypatch.setenv("MCP_GATEWAY_APPROVAL_MAX_PENDING", "0")
+        with pytest.raises(ValidationError):
+            GatewaySettings()
+
+        # max_pending > 100,000
+        monkeypatch.setenv("MCP_GATEWAY_APPROVAL_MAX_PENDING", "100001")
         with pytest.raises(ValidationError):
             GatewaySettings()
 
@@ -2928,7 +2946,7 @@ class TestServerApprovalSuspendE2E:
         app.state.upstream = upstream
         return app
 
-    async def _start_pending_call(self, client, sid: str):
+    async def _start_pending_call(self, client, sid: str, registry):
         call_task = asyncio.create_task(
             client.post(
                 f"/messages?session_id={sid}",
@@ -2940,11 +2958,16 @@ class TestServerApprovalSuspendE2E:
                 },
             )
         )
-        for _ in range(40):
+        for _ in range(100):
             await asyncio.sleep(0.01)
-            if not call_task.done():
+            # 特定の sid に対する保留中のリクエストが登録されるのを待つ
+            if any(p.session_id == sid for p in registry._pending.values()):
                 return call_task
-        raise AssertionError("tools/call did not suspend for approval")
+            if call_task.done():
+                # すでに終了している場合はエラー（サスペンドしなかった）
+                break
+
+        raise AssertionError(f"tools/call did not suspend for approval (sid={sid})")
 
     @pytest.mark.asyncio
     async def test_approve_invokes_upstream_and_returns_result(self, blocking_app):
@@ -2957,8 +2980,9 @@ class TestServerApprovalSuspendE2E:
             base_url="http://t",
         ) as client:
             sid = await _get_sse_session_id(client, intent="curate_memories")
-            call_task = await self._start_pending_call(client, sid)
-            approval_id = next(iter(registry._pending.keys()))  # type: ignore[attr-defined]
+            call_task = await self._start_pending_call(client, sid, registry)
+            approval_ids = await registry.get_pending_ids_for_session(sid)
+            approval_id = approval_ids[0]
             resp = await client.post(
                 "/approvals",
                 headers={"Authorization": "Bearer ck_o"},
@@ -2981,8 +3005,9 @@ class TestServerApprovalSuspendE2E:
             base_url="http://t",
         ) as client:
             sid = await _get_sse_session_id(client, intent="curate_memories")
-            call_task = await self._start_pending_call(client, sid)
-            approval_id = next(iter(registry._pending.keys()))  # type: ignore[attr-defined]
+            call_task = await self._start_pending_call(client, sid, registry)
+            approval_ids = await registry.get_pending_ids_for_session(sid)
+            approval_id = approval_ids[0]
             resp = await client.post(
                 "/approvals",
                 headers={"Authorization": "Bearer ck_o"},
@@ -3077,15 +3102,26 @@ class TestServerApprovalSuspendE2E:
                     },
                 )
             )
-            for _ in range(40):
-                if registry._pending:  # type: ignore[attr-defined]
+            for _ in range(100):
+                if any(p.session_id == sid for p in registry._pending.values()):
                     break
                 await asyncio.sleep(0.01)
+            else:
+                raise AssertionError(f"tools/call did not suspend for approval (sid={sid})")
 
             sessions.remove(sid)
-            await asyncio.sleep(0)
+            # 退避処理（cancel_session）が非同期に完了するのを待機
+            for _ in range(50):
+                ids = await registry.get_pending_ids_for_session(sid)
+                if not ids:
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                raise AssertionError(f"Session {sid} was not evicted from registry")
+
             resp = await call_task
 
+        assert resp.status_code == 200
         body = resp.json()
         assert body["error"]["code"] == -32002
         assert body["error"]["message"] == "approval_rejected"

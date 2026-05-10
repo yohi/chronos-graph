@@ -1,28 +1,30 @@
 # ChronosGraph Agent Guidelines
 
-## 🎯 WHAT & WHY
-ChronosGraph is a Model Context Protocol (MCP) server providing persistent long-term memory for AI agents using a multi-layered temporal knowledge graph. 
-- **Goal**: Give agents persistent memory across sessions to track state changes and knowledge evolution.
-- **Architecture**: Pipeline-oriented backend (Ingestion/Retrieval) and a Read-Only React Dashboard.
+## WHAT & WHY
+**ChronosGraph** is an MCP server providing persistent, multi-layered long-term memory for AI agents via a temporal knowledge graph.
+- **Goal**: Track state changes and knowledge evolution across sessions.
+- **Architecture**: Pipeline-oriented backend (FastAPI/MCP) with a Read-Only React Dashboard.
 
-## 📁 Progressive Disclosure (Where to look)
-- **Architecture, Data Models, & Core Logic**: ALWAYS refer to `SPEC.md` as the Single Source of Truth before making architectural decisions.
-- **Setup & Agent Configuration**: See `README.md`.
-- **System Prompts**: See `docs/agent-prompts/memory-save-system-prompt.md`.
+## PROGRESSIVE DISCLOSURE (Map)
+Do not guess. Always read these files for domain knowledge before acting:
+- **Architecture, Models, & Core Logic**: `SPEC.md`
+- **Setup & Agent Configuration**: `README.md`
+- **System Prompts**: `docs/agent-prompts/memory-save-system-prompt.md`
 
-## 🛠️ HOW (Tech Stack & Workflow)
-- **Environment**: All tests and static analysis should run inside the provided Devcontainer (or a strictly equivalent local environment).
-- **Backend (Python 3.12+, uv, FastAPI, FastMCP)**
-  - Install: `uv sync --all-extras`
-  - Test: `uv run pytest tests/unit/ -v`
-  - Lint / Format: `uv run ruff check src/ tests/` / `uv run ruff format src/ tests/`
-  - Type Check: `uv run mypy src/`
-- **Frontend (React 18, Vite, Tailwind, Cytoscape.js)**
-  - Working directory: `cd frontend`
-  - Install & Build: `npm install && npm run build`
-  - E2E Tests: `npx playwright test`
+## HOW (Commands)
+*Note: All commands must be run inside the project Devcontainer.*
 
-## 🧠 Essential Rules
-- **Stop on Errors**: If you encounter errors (e.g., test failures) during environment setup, do not attempt autonomous fixes. Report them to the user and wait for instructions.
-- **Database Migrations**: NEVER hardcode DDL (`CREATE`, `ALTER`, etc.) in application code. Always add `.sql` migration files to `src/context_store/storage/migrations/{sqlite,postgres}/`.
-- **Memory Strategy**: Use `memory_save` autonomously for Semantic/Procedural insights. Use `session_flush` for Episodic batch saving (note: this is asynchronous and returns immediately). Prefix inputs with `[📜 Episodic]`, `[🧠 Semantic]`, or `[🕒 Procedural]`.
+**Backend (Python 3.12+, uv)**
+- Install: `uv sync --all-extras`
+- Test: `uv run pytest tests/unit/ -v`
+- Lint/Format: `uv run ruff check src/ tests/` / `uv run ruff format src/ tests/`
+- Type Check: `uv run mypy src/`
+
+**Frontend (React 18, Vite)** (Run from `frontend/` directory)
+- Install & Build: `npm install && npm run build`
+- E2E Tests: `npx playwright test`
+
+## ESSENTIAL RULES
+- **Stop on Errors**: If you encounter errors during environment setup, do not attempt autonomous fixes. Report to the user and wait.
+- **Migrations**: NEVER hardcode DDL (`CREATE`, `ALTER`). Always add `.sql` migration files to `src/context_store/storage/migrations/{sqlite,postgres}/`.
+- **Memory Strategy**: Use `memory_save` autonomously for Semantic/Procedural insights. Use `session_flush` for Episodic batch saving. Prefix inputs with `[📜 Episodic]`, `[🧠 Semantic]`, or `[🕒 Procedural]`.

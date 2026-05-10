@@ -180,7 +180,9 @@ intents:
 ```
 
 #### 2. HITL (Human-In-The-Loop) 承認
-`requires_approval: true` が設定されたツールが呼び出されると、Gateway は `-32001` (`approval_required`) エラーを返し、バックグラウンドで承認通知を発行します。これにより、破壊的な操作や機密性の高い操作を人間が事前にチェックすることが可能です。
+`requires_approval: true` が設定されたツールが呼び出されると、Gateway は承認通知を発行します。設定（`approval_blocking_mode`）に応じて以下の2つの挙動を選択可能です：
+- **Immediate モード（デフォルト）**: 即座に `-32001` (`approval_required`) エラーを返し、クライアントに処理を委ねます。
+- **Blocking モード**: ツール呼び出しを一時停止し、オペレーターからの `POST /approvals` エンドポイントへの承認応答を待ってから実行を再開/中断する「Suspend/Resume フロー」を実行します。これにより、破壊的な操作や機密性の高い操作を人間が安全に事前チェックできます。
 
 #### 3. クライアント側の接続設定
 エージェント側の設定（`mcp.json` や `claude_desktop_config.json` 等）には、環境変数ではなくヘッダを付与してエンドポイントを指定するだけです。これにより、エージェントごとに役割とアクセス権を安全に切り替えることができます。
@@ -211,6 +213,27 @@ MCP_GATEWAY_POLICY_PATH=src/mcp_gateway/policies/intents.example.yaml \
 MCP_GATEWAY_API_KEYS_JSON='{"my-agent":"ck_super_secret_key"}' \
 uv run python -m mcp_gateway
 ```
+
+---
+
+## クライアント側のフック設定が不要な理由（ccgate 思想のサーバーサイド統合）
+
+ChronosGraph の **MCP Gateway** は、LayerX社が提唱する「[ccgate (Server-defined Prompts / Permission Hook)](https://zenn.dev/layerx/articles/20260428-ccgate)」の設計思想を、**MCP プロトコル層（サーバー側）**に直接組み込んだものです。
+
+Claude Code や Gemini CLI などのエージェントには、ツール実行前に介入するためのクライアントサイドのフック機能（`hooks` 設定など）が存在します。しかし、ChronosGraph を利用する場合、**エージェント側に複雑なフック設定や正規表現の決め打ちルールを記述する必要は一切ありません。**
+
+### Gateway が「小さなゲート」として機能する仕組み
+
+ccgate の「ツール実行前に必ず小さなゲート（Permission Hook）を通過させ、動的かつ安全に評価する」という哲学を、ChronosGraph は自らの Gateway 内で完結させています。
+
+1. **インターセプト**: エージェントが MCP 経由で `tools/call` を要求した瞬間、Gateway がプロトコルレベルでこれを捕捉します。
+2. **ポリシーエンジンによる決定論的評価**: 外部のバリデータ（LLMやクライアント側のccgateバイナリ）に問い合わせるのではなく、Gateway 内部の **Policy Engine** が `intents.yaml` と照合します。
+    - インテント（用途）と権限の合致
+    - 引数の型、文字列長、許容パターン（Semantic Guardrails）
+    - 機密情報の混入チェック
+3. **HITL (Human-In-The-Loop) による最終判断**: `requires_approval: true` のツール（`memory_delete` 等）が呼ばれた場合、Gateway 自身が実行を一時停止（Suspend）し、運用者からの承認を待機します。
+
+このように、判断を下すのは外部ツールではなく **ChronosGraph 自身（の Gateway）** です。クライアント側の設定を肥大化させることなく、中央集権的で強固なガードレール（ZSP: Zero Standing Privileges / IBAC: Intent-Based Access Control）を実現しています。
 
 ---
 

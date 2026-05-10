@@ -1371,11 +1371,48 @@ MCP Gateway は、エージェントへの過剰権限付与を防ぐための�
 
 ### 15.5 HITL 承認フロー（`REQUIRES_APPROVAL`）
 
-承認が必要な操作が検知された場合、ゲートウェイは以下の挙動をとります：
+承認が必要な操作が検知された場合、ゲートウェイは `approval_blocking_mode` の設定に応じて2つの挙動のいずれかをとります。
 
+#### 15.5.1 Immediate モード（デフォルト: `approval_blocking_mode: false`）
 1. **通知**: `_schedule_approval_request` を通じて `ApprovalNotifier` を非同期タスクとして安全に分離起動し、承認要求を発行（現在は `LogOnlyApprovalNotifier` により、サニタイズされた安全なログを出力）。
-2. **エラー応答**: クライアントへ JSON-RPC エラーコード `-32001` (`approval_required`) を返却。
-3. **相関 ID**: エラーデータの `session_id` を用いて、後の承認操作と紐付けを可能にします。
+2. **エラー応答**: クライアントへ JSON-RPC エラーコード `-32001` (`approval_required`) を即座に返却。クライアントは後で再試行する必要がある。
+3. **相関 ID**: エラーデータの `session_id` を用いて紐付け。
+
+#### 15.5.2 Blocking モード（`approval_blocking_mode: true`）
+ツール呼び出しを一時停止し、オペレーターからの `POST /approvals` エンドポイントへの承認応答を待機するSuspend/Resumeフローを実行します。
+
+1. `PendingApprovalRegistry` にリクエストを登録し、`approval_id` を発行して待機状態（Suspend）に入る。
+2. 同様に通知を発行。
+3. 外部のオペレーター・管理者が API 経由で承認/拒否を判断。
+   - 承認時：アップストリームのツールを実行し、結果を返す。
+   - 拒否時：`-32002` (`approval_rejected`) エラーを返す。
+   - タイムアウト時：`-32003` (`approval_timeout`) エラーを返す。
+   - 待機上限（`approval_max_pending`）超過時：`-32603` (`internal_error`) エラーを返す。
+
+**セキュリティ考慮（Defense-in-Depth）**
+- **自己承認の禁止**: 要求元エージェントと承認者エージェントが同一（`resolver_agent_id == requester_agent_id`）の場合、`403 Forbidden` として拒否され自己承認を防ぎます。ただし現在の認可モデルは要求元と承認者が異なることのみを確認しており、別のエージェント権限を用いた横断的な承認（Lateral Approval）は防いでいません（将来の高度な Role ベース認可の導入を予定）。
+- **監査ログの安全化**: ログ漏洩経由の総当たりを防ぐため、元の32文字の `approval_id` は監査ログに出力せず、先頭8文字の切り詰め（`approval_ref`）のみを記録します。
+- **DoS防御**: `PendingApprovalRegistry` に対する `max_pending` の上限制御と、セッション切断時（TTL・Idle タイムアウト）の自動回収フック（`on_session_evicted`）により、メモリ枯渇を防ぎます。
+- **ReDoS / ボディサイズ制限 / 機密情報**: `POST /approvals` のリクエストボディはストリーミングレベルで 1KB に制限され即座に413を返します。また、承認理由 (`reason`) はサニタイズ（制御文字の除去、空白の正規化、256バイトへの切り詰め）が行われます。
+
+#### 15.5.3 `POST /approvals` エンドポイント
+Blocking モードで待機中の承認を解決するための REST エンドポイント。
+- 認証: `Authorization: Bearer <API_KEY>`
+- リクエストボディ (最大 1KB):
+  ```json
+  {
+    "approval_id": "32-char-uuid-hex",
+    "decision": "approve", // または "reject"
+    "reason": "explanation (optional)"
+  }
+  ```
+- 応答:
+  - 200 OK: 解決成功
+  - 400 Bad Request: リクエスト不備
+  - 401 Unauthorized: 認証失敗
+  - 403 Forbidden: 自己承認エラーまたは権限不足
+  - 404 Not Found: `approval_id` 未登録または既に解決済み（存在判定のオラクルを防ぐため統合）
+  - 413 Payload Too Large: ボディが 1KB 超過
 
 ### 15.6 エラーコード定義
 
@@ -1384,12 +1421,15 @@ MCP Gateway は、エージェントへの過剰権限付与を防ぐための�
 | `-32601` | tool not found | 権限不足、または承認対象にシークレットが含まれる場合 |
 | `-32602` | (reason) | パラメータ制約違反（`param_too_long` 等） |
 | `-32001` | approval_required | 承認待ち。`data.session_id` を含む |
+| `-32002` | approval_rejected | 拒否時 |
+| `-32003` | approval_timeout | タイムアウト時 |
+| `-32603` | internal_error | 待機上限（`approval_max_pending`）超過時 |
 
 ---
 
 ## 16. ロードマップ
 
-### 16.1 実装済み（2026-04-14 時点）
+### 16.1 実装済み（2026-05-10 時点）
 
 | 機能 | 備考 |
 |------|------|
@@ -1405,6 +1445,7 @@ MCP Gateway は、エージェントへの過剰権限付与を防ぐための�
 | Docker Compose 統合（chronos-dashboard サービス） | `127.0.0.1:8000:8000` バインド |
 | pre-commit フック（ruff / mypy / shellcheck） | |
 | Playwright E2E テスト（6 テストグループ + axe-core） | |
+| MCP Gateway: Permission Hook (Suspend/Resume) | Blocking モードによる承認待機、`POST /approvals` エンドポイント、JSON-RPCエラー拡張 |
 
 ### 16.2 近期予定（1-2 ヶ月）
 
@@ -1446,8 +1487,5 @@ MCP Gateway は、エージェントへの過剰権限付与を防ぐための�
 - [MCP 仕様](https://modelcontextprotocol.io/) — Model Context Protocol
 - [CrewAI Memory](https://docs.crewai.com/en/concepts/memory) — 複合スコアリングの参照実装
 - AIエージェントの長期記憶と強化学習プラグイン開発 — コグニティブアーキテクチャ / 複合スコアリング / RL
-ngram](https://zenn.dev/kimmaru/articles/3dbd92dea9ede8) — sui-memory の MCP サーバー化
-- [MAGMA](https://arxiv.org/html/2601.03236v1) — Multi-Graph based Agentic Memory Architecture
-- [MCP 仕様](https://modelcontextprotocol.io/) — Model Context Protocol
-- [CrewAI Memory](https://docs.crewai.com/en/concepts/memory) — 複合スコアリングの参照実装
-- AIエージェントの長期記憶と強化学習プラグイン開発 — コグニティブアーキテクチャ / 複合スコアリング / RL
+- [LayerX ccgate (Zenn)](https://zenn.dev/layerx/articles/20260428-ccgate) — Server-defined Prompts / Permission Hook 概念の基礎
+- [tak848/ccgate (GitHub)](https://github.com/tak848/ccgate) — ccgate 参照実装

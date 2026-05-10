@@ -519,12 +519,14 @@ def build_router(
             except AuthError:
                 return JSONResponse({"error": "auth_failed"}, status_code=401)
 
-            raw_body = await request.body()
-            if len(raw_body) > 1024:
-                return JSONResponse({"error": "payload_too_large"}, status_code=413)
+            raw_body = bytearray()
+            async for chunk in request.stream():
+                raw_body.extend(chunk)
+                if len(raw_body) > 1024:
+                    return JSONResponse({"error": "payload_too_large"}, status_code=413)
             try:
                 body = json.loads(raw_body)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 return JSONResponse({"error": "invalid_request"}, status_code=400)
             if not isinstance(body, dict):
                 return JSONResponse({"error": "invalid_request"}, status_code=400)
@@ -534,6 +536,7 @@ def build_router(
             if (
                 not isinstance(approval_id, str)
                 or len(approval_id) != 32
+                or not all(c in "0123456789abcdef" for c in approval_id)
                 or raw_decision not in {"approve", "reject"}
             ):
                 return JSONResponse({"error": "invalid_request"}, status_code=400)
@@ -552,13 +555,15 @@ def build_router(
                 reason=normalized_reason,
             )
 
-            audit.log(
-                ev="approval_decision",
-                outcome=outcome.value,
-                resolver=resolver_agent_id,
-                approval_ref=_approval_id_for_log(approval_id),
-                reason=normalized_reason,
-            )
+            audit_kwargs = {
+                "ev": "approval_decision",
+                "outcome": outcome.value,
+                "resolver": resolver_agent_id,
+                "approval_ref": _approval_id_for_log(approval_id),
+            }
+            if outcome.value == "ok":
+                audit_kwargs["reason"] = normalized_reason
+            audit.log(**audit_kwargs)
 
             if outcome.value == "ok":
                 return JSONResponse(

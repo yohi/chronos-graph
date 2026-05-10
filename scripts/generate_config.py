@@ -148,6 +148,7 @@ def generate_postgres_config(
     python_path: str,
     embedding: str,
     graph: bool,
+    ssl: bool,
     method: str = "python",
     uv_from: str | None = None,
 ) -> dict[str, Any]:
@@ -159,14 +160,14 @@ def generate_postgres_config(
         "POSTGRES_DB": "postgres",
         "POSTGRES_USER": "postgres",
         "POSTGRES_PASSWORD": "<your-postgres-password>",
-        "POSTGRES_SSL": "true",
+        "POSTGRES_SSL": "true" if ssl else "false",
         "GRAPH_ENABLED": "true" if graph else "false",
         "NEO4J_URI": "neo4j+s://your-instance.databases.neo4j.io",
         "NEO4J_USER": "neo4j",
         "NEO4J_PASSWORD": "<your-neo4j-password>",
         "CACHE_BACKEND": "inmemory",
         "REDIS_URL": "rediss://default:your-password@your-instance.upstash.io:6379",
-        "REDIS_SSL": "true",
+        "REDIS_SSL": "true" if ssl else "false",
         "DECAY_HALF_LIFE_DAYS": "30",
         "SIMILARITY_THRESHOLD": "0.70",
         "DEDUP_THRESHOLD": "0.90",
@@ -216,6 +217,7 @@ def main() -> None:
         help=f"Embedding provider (default: {default_embedding})",
     )
     parser.add_argument("--graph", type=str_to_bool, default=True, help="Enable graph features")
+    parser.add_argument("--ssl", action="store_true", help="Enable SSL for PostgreSQL/Redis")
     parser.add_argument(
         "--method", choices=["python", "uv", "uvx"], default="python", help="Execution method"
     )
@@ -238,7 +240,7 @@ def main() -> None:
         )
     else:
         config = generate_postgres_config(
-            python_path, args.embedding, args.graph, args.method, args.uv_from
+            python_path, args.embedding, args.graph, args.ssl, args.method, args.uv_from
         )
 
     if args.output == "cursor":

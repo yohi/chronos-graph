@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import textwrap
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -2211,6 +2212,38 @@ class TestBuildRouterApprovalPrecondition:
                 approval_registry=None,
             )
 
+    def test_build_router_raises_when_timeout_is_non_positive(self) -> None:
+        from mcp_gateway.server import build_router
+
+        with pytest.raises(ValueError, match="approval_timeout_seconds must be positive"):
+            build_router(
+                handshake=object(),  # type: ignore[arg-type]
+                sessions=object(),  # type: ignore[arg-type]
+                tool_registry=object(),  # type: ignore[arg-type]
+                upstream=object(),
+                policy=object(),  # type: ignore[arg-type]
+                audit=object(),  # type: ignore[arg-type]
+                engine=object(),  # type: ignore[arg-type]
+                approval_blocking_mode=True,
+                approval_registry=object(),  # type: ignore[arg-type]
+                approval_timeout_seconds=0,
+                api_authenticator=object(),  # type: ignore[arg-type]
+            )
+        with pytest.raises(ValueError, match="approval_timeout_seconds must be positive"):
+            build_router(
+                handshake=object(),  # type: ignore[arg-type]
+                sessions=object(),  # type: ignore[arg-type]
+                tool_registry=object(),  # type: ignore[arg-type]
+                upstream=object(),
+                policy=object(),  # type: ignore[arg-type]
+                audit=object(),  # type: ignore[arg-type]
+                engine=object(),  # type: ignore[arg-type]
+                approval_blocking_mode=True,
+                approval_registry=object(),  # type: ignore[arg-type]
+                approval_timeout_seconds=-1.0,
+                api_authenticator=object(),  # type: ignore[arg-type]
+            )
+
 
 class TestBlockingModeHandlerDirect:
     """Direct router-level tests for the blocking-mode REQUIRES_APPROVAL handler."""
@@ -2288,6 +2321,14 @@ class TestBlockingModeHandlerDirect:
         )
         return app, registry, sessions, handshake, upstream
 
+    async def _wait_for_approval_id(self, registry: Any, timeout: float = 2.0) -> str:
+        """Helper to poll for a pending approval ID with timeout."""
+        for _ in range(int(timeout / 0.05)):
+            if registry._pending:  # type: ignore[attr-defined]
+                return next(iter(registry._pending.keys()))  # type: ignore[attr-defined]
+            await asyncio.sleep(0.05)
+        pytest.fail("timed out waiting for pending approval id")
+
     @pytest.mark.asyncio
     async def test_blocking_mode_returns_32003_on_timeout(self, router_with_registry):
         app, _registry, _sessions, handshake, _upstream = router_with_registry
@@ -2338,11 +2379,7 @@ class TestBlockingModeHandlerDirect:
                     },
                 )
             )
-            for _ in range(20):
-                if registry._pending:  # type: ignore[attr-defined]
-                    break
-                await asyncio.sleep(0.01)
-            approval_id = next(iter(registry._pending.keys()))  # type: ignore[attr-defined]
+            approval_id = await self._wait_for_approval_id(registry)
             from mcp_gateway.approval.models import DecisionStatus
 
             await registry.resolve(
@@ -2377,11 +2414,7 @@ class TestBlockingModeHandlerDirect:
                     },
                 )
             )
-            for _ in range(20):
-                if registry._pending:  # type: ignore[attr-defined]
-                    break
-                await asyncio.sleep(0.01)
-            approval_id = next(iter(registry._pending.keys()))  # type: ignore[attr-defined]
+            approval_id = await self._wait_for_approval_id(registry)
             from mcp_gateway.approval.models import DecisionStatus
 
             await registry.resolve(
@@ -2485,10 +2518,7 @@ class TestBlockingModeHandlerDirect:
                     },
                 )
             )
-            for _ in range(20):
-                if registry._pending:  # type: ignore[attr-defined]
-                    break
-                await asyncio.sleep(0.01)
+            await self._wait_for_approval_id(registry)
             resp_b = await c.post(
                 f"/messages?session_id={rec_b.session_id}",
                 json={
@@ -2499,7 +2529,8 @@ class TestBlockingModeHandlerDirect:
                 },
             )
             assert resp_b.json()["error"]["code"] == -32603
-            await t_a
+            resp_a = await t_a
+            assert resp_a.json()["error"]["code"] == -32003
 
     @pytest.mark.asyncio
     async def test_audit_logs_truncate_approval_id(self, router_with_registry, capfd):
@@ -2553,13 +2584,9 @@ class TestBlockingModeHandlerDirect:
                     },
                 )
             )
-            for _ in range(20):
-                if registry._pending:  # type: ignore[attr-defined]
-                    break
-                await asyncio.sleep(0.01)
+            approval_id = await self._wait_for_approval_id(registry)
             from mcp_gateway.approval.models import DecisionStatus
 
-            approval_id = next(iter(registry._pending.keys()))  # type: ignore[attr-defined]
             await registry.resolve(
                 approval_id,
                 resolver_agent_id="operator",
@@ -2766,6 +2793,96 @@ class TestApprovalsEndpoint:
             )
         assert resp.status_code == 413
         assert resp.json() == {"error": "payload_too_large"}
+
+    @pytest.mark.asyncio
+    async def test_200_success_resolution(self, router_with_registry):
+        app, registry, _auth, _handshake = router_with_registry
+        from datetime import UTC, datetime
+
+        from mcp_gateway.approval.models import DecisionStatus
+        from mcp_gateway.approval.notifier import ApprovalRequest
+
+        approval_id = await registry.register(
+            session_id="s1",
+            requester_agent_id="agent-a",
+            request=ApprovalRequest(
+                session_id="s1",
+                agent_id="agent-a",
+                intent="curate_memories",
+                tool_name="memory_delete",
+                arguments={},
+                requested_at=datetime.now(UTC),
+            ),
+        )
+
+        import httpx
+        from httpx import ASGITransport
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            resp = await c.post(
+                "/approvals",
+                headers={"Authorization": "Bearer ck_o"},
+                json={"approval_id": approval_id, "decision": "approve", "reason": "verified"},
+            )
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "resolved", "approval_id": approval_id}
+
+        # Verify outcome via registry
+        decision = await registry.wait_for_decision(approval_id, timeout=1.0)
+        assert decision.status == DecisionStatus.APPROVED
+
+    @pytest.mark.asyncio
+    async def test_400_for_invalid_utf8(self, router_with_registry):
+        app, _registry, _auth, _handshake = router_with_registry
+        import httpx
+        from httpx import ASGITransport
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            resp = await c.post(
+                "/approvals",
+                headers={"Authorization": "Bearer ck_o"},
+                content=b"\xff\xfe\xfd",  # Invalid UTF-8
+            )
+        assert resp.status_code == 400
+        assert resp.json() == {"error": "invalid_request"}
+
+    @pytest.mark.asyncio
+    async def test_400_for_non_hex_id(self, router_with_registry):
+        app, _registry, _auth, _handshake = router_with_registry
+        import httpx
+        from httpx import ASGITransport
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            resp = await c.post(
+                "/approvals",
+                headers={"Authorization": "Bearer ck_o"},
+                json={"approval_id": "Z" * 32, "decision": "approve"},
+            )
+        assert resp.status_code == 400
+        assert resp.json() == {"error": "invalid_request"}
+
+    @pytest.mark.asyncio
+    async def test_audit_log_no_reason_on_failure(self, router_with_registry, capsys):
+        app, _registry, _auth, _handshake = router_with_registry
+        import httpx
+        from httpx import ASGITransport
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            await c.post(
+                "/approvals",
+                headers={"Authorization": "Bearer ck_o"},
+                json={
+                    "approval_id": "0" * 32,
+                    "decision": "approve",
+                    "reason": "should_not_be_logged",
+                },
+            )
+        # outcome: not_found should not have "reason" in log
+        captured = capsys.readouterr()
+        log_lines = [ln for ln in captured.err.splitlines() if '"ev":"approval_decision"' in ln]
+        assert len(log_lines) == 1
+        assert '"reason":"should_not_be_logged"' not in log_lines[0]
+        assert '"outcome":"not_found"' in log_lines[0]
 
 
 class TestServerApprovalSuspendE2E:

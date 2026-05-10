@@ -122,6 +122,8 @@ def build_router(
         raise ValueError("approval_registry must be provided when approval_blocking_mode=True")
     if approval_registry is not None and api_authenticator is None:
         raise ValueError("api_authenticator must be provided when approval_registry is provided")
+    if approval_blocking_mode and approval_timeout_seconds <= 0:
+        raise ValueError("approval_timeout_seconds must be positive")
 
     router = APIRouter()
     if approval_notifier is None:
@@ -378,6 +380,20 @@ def build_router(
                         approval_id,
                         timeout=approval_timeout_seconds,
                     )
+
+                    # Re-validate session after long wait to prevent TOCTOU
+                    try:
+                        record = sessions.lookup(sid)
+                        sessions.touch(sid)
+                    except SessionError as exc:
+                        audit.log(
+                            ev="message",
+                            decision="deny",
+                            reason="session_invalid_after_approval",
+                            sid=sid,
+                        )
+                        raise HTTPException(status_code=404, detail="session_invalid") from exc
+
                     if approval_decision.status is DecisionStatus.APPROVED:
                         was_approved = True
                     elif approval_decision.status is DecisionStatus.REJECTED:
@@ -503,12 +519,14 @@ def build_router(
             except AuthError:
                 return JSONResponse({"error": "auth_failed"}, status_code=401)
 
-            raw_body = await request.body()
-            if len(raw_body) > 1024:
-                return JSONResponse({"error": "payload_too_large"}, status_code=413)
+            raw_body = bytearray()
+            async for chunk in request.stream():
+                raw_body.extend(chunk)
+                if len(raw_body) > 1024:
+                    return JSONResponse({"error": "payload_too_large"}, status_code=413)
             try:
                 body = json.loads(raw_body)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 return JSONResponse({"error": "invalid_request"}, status_code=400)
             if not isinstance(body, dict):
                 return JSONResponse({"error": "invalid_request"}, status_code=400)
@@ -518,6 +536,7 @@ def build_router(
             if (
                 not isinstance(approval_id, str)
                 or len(approval_id) != 32
+                or not all(c in "0123456789abcdef" for c in approval_id)
                 or raw_decision not in {"approve", "reject"}
             ):
                 return JSONResponse({"error": "invalid_request"}, status_code=400)
@@ -536,13 +555,14 @@ def build_router(
                 reason=normalized_reason,
             )
 
-            audit.log(
-                ev="approval_decision",
-                outcome=outcome.value,
-                resolver=resolver_agent_id,
-                approval_ref=_approval_id_for_log(approval_id),
-                reason=normalized_reason,
-            )
+            audit_fields: dict[str, Any] = {
+                "outcome": outcome.value,
+                "resolver": resolver_agent_id,
+                "approval_ref": _approval_id_for_log(approval_id),
+            }
+            if outcome.value == "ok":
+                audit_fields["reason"] = normalized_reason
+            audit.log(ev="approval_decision", **audit_fields)
 
             if outcome.value == "ok":
                 return JSONResponse(

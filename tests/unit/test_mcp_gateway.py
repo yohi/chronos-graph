@@ -4274,3 +4274,46 @@ class TestEvaluateCall:
         )
         assert result.status == "DENY"
         assert result.reason == "param_too_long:query"
+
+
+class TestMaxBodySizeMiddleware:
+    @pytest.mark.asyncio
+    async def test_rejects_oversized_body(self):
+        import httpx
+        from fastapi import FastAPI, Response
+        from httpx import ASGITransport
+
+        from mcp_gateway.middleware import MaxBodySizeMiddleware
+
+        app = FastAPI()
+        app.add_middleware(MaxBodySizeMiddleware, max_size_bytes=10)
+
+        @app.post("/test")
+        async def handle():
+            return Response(status_code=200)
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            # 11 bytes should be rejected (Content-Length is automatically set)
+            resp = await c.post("/test", content="x" * 11)
+            assert resp.status_code == 413
+            assert resp.json() == {"error": "payload_too_large"}
+
+            # 10 bytes should be allowed
+            resp = await c.post("/test", content="x" * 10)
+            assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_400_for_invalid_content_length(self):
+        import httpx
+        from fastapi import FastAPI
+        from httpx import ASGITransport
+
+        from mcp_gateway.middleware import MaxBodySizeMiddleware
+
+        app = FastAPI()
+        app.add_middleware(MaxBodySizeMiddleware, max_size_bytes=100)
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            resp = await c.post("/test", headers={"Content-Length": "not-a-number"})
+            assert resp.status_code == 400
+            assert resp.json() == {"error": "invalid_request"}

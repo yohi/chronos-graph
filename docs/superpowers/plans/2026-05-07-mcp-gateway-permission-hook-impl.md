@@ -2392,7 +2392,7 @@ EOF
 
 Implements design §4.4 and §4.5.
 
-- [ ] **Step 1: Cut the task branch from Task 3.2**
+- [x] **Step 1: Cut the task branch from Task 3.2**
 
 ```bash
 git checkout feature/phase3-task2_approvals_endpoint
@@ -2400,7 +2400,7 @@ git pull origin feature/phase3-task2_approvals_endpoint
 git checkout -b feature/phase3-task3_app_wiring
 ```
 
-- [ ] **Step 2: Write the failing config-validation tests**
+- [x] **Step 2: Write the failing config-validation tests**
 
 Append to `tests/unit/test_mcp_gateway.py` (or `tests/unit/test_config.py` if it covers `GatewaySettings`):
 
@@ -2440,13 +2440,13 @@ class TestGatewaySettingsApprovalFields:
             GatewaySettings()
 ```
 
-- [ ] **Step 3: Run; expect failures (fields don't exist)**
+- [x] **Step 3: Run; expect failures (fields don't exist)**
 
 ```bash
 uv run pytest tests/unit/test_mcp_gateway.py::TestGatewaySettingsApprovalFields -v
 ```
 
-- [ ] **Step 4: Add the three settings to `GatewaySettings`**
+- [x] **Step 4: Add the three settings to `GatewaySettings`**
 
 Edit `src/mcp_gateway/config.py`:
 
@@ -2461,13 +2461,13 @@ class GatewaySettings(BaseSettings):
     approval_max_pending: int = Field(default=1000, gt=0, le=100_000)
 ```
 
-- [ ] **Step 5: Run config tests; expect pass**
+- [x] **Step 5: Run config tests; expect pass**
 
 ```bash
 uv run pytest tests/unit/test_mcp_gateway.py::TestGatewaySettingsApprovalFields -v
 ```
 
-- [ ] **Step 6: Wire the registry and eviction wrapper into `app.py`**
+- [x] **Step 6: Wire the registry and eviction wrapper into `app.py`**
 
 Edit `src/mcp_gateway/app.py`. Apply this diff conceptually — the goals are:
 
@@ -2529,7 +2529,7 @@ def build_app(...) -> FastAPI:
 
 If `build_router` does not yet accept `api_authenticator` (per the note in Task 3.2 / Step 4), add the parameter to `build_router`'s signature here in this task and remove the `_authenticator` reach-around in Task 3.2's code.
 
-- [ ] **Step 7: Add the failing E2E session-eviction test**
+- [x] **Step 7: Add the failing E2E session-eviction test**
 
 Append to `tests/unit/test_mcp_gateway.py`:
 
@@ -2612,13 +2612,13 @@ class TestServerApprovalSuspendE2E:
 
 To make `app.state.sessions` available, also add `app.state.sessions = sessions` in `app.py` next to `app.state.tool_registry`.
 
-- [ ] **Step 8: Run; expect pass**
+- [x] **Step 8: Run; expect pass**
 
 ```bash
 uv run pytest tests/unit/test_mcp_gateway.py::TestServerApprovalSuspendE2E -v
 ```
 
-- [ ] **Step 9: Run the full unit suite + mypy + ruff (final regression check)**
+- [x] **Step 9: Run the full unit suite + mypy + ruff (final regression check)**
 
 ```bash
 uv run pytest tests/unit/test_mcp_gateway.py tests/unit/test_approval_models.py tests/unit/test_approval_registry.py tests/unit/test_approval_sanitize.py tests/unit/test_session_eviction_hook.py -v
@@ -2653,7 +2653,7 @@ Verify:
 
 Document the smoke test results inline in the task PR body before flipping it to ready-for-review. **If you cannot run the manual smoke (e.g., no upstream available), state that explicitly in the PR body** rather than implying success.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add src/mcp_gateway/config.py src/mcp_gateway/app.py tests/unit/test_mcp_gateway.py

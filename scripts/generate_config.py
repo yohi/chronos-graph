@@ -79,9 +79,11 @@ def get_embedding_envs(provider: str) -> dict[str, str]:
     if provider == "openai":
         api_key = "<your-openai-api-key>"
         if hasattr(settings, "openai_api_key"):
-            val = settings.openai_api_key.get_secret_value()
-            if val:
-                api_key = val
+            raw = settings.openai_api_key
+            if raw is not None:
+                val = raw.get_secret_value()
+                if val:
+                    api_key = val
         envs["OPENAI_API_KEY"] = api_key
     elif provider == "local-model":
         envs["LOCAL_MODEL_NAME"] = getattr(settings, "local_model_name", "cl-nagoya/ruri-v3-310m")
@@ -164,9 +166,11 @@ def generate_postgres_config(
     # helper for secret strings
     def get_secret(name: str, default: str) -> str:
         if hasattr(settings, name):
-            val = getattr(settings, name).get_secret_value()
-            if val:
-                return val
+            raw = getattr(settings, name)
+            if raw is not None:
+                val = raw.get_secret_value()
+                if val:
+                    return val
         return default
 
     env = {

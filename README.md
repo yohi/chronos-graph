@@ -86,24 +86,25 @@ https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
 1.  **[ ] 構成・実行方法の確認 (Interactive Ask):**
     **このステップは必須です。** インストールを開始する前に、ユーザーに以下の構成を選択してもらってください：
     - **A) モードの選択**:
-        - **ライトウェイトモード (推奨)**: SQLite + sqlite-vec。
-        - **フルモード (Docker利用)**: PostgreSQL + Neo4j + Redis (Docker Compose)。
-        - **フルモード (クラウド利用)**: Supabase + Neo4j Aura 等。
+        - **(A) ライトウェイトモード (推奨)**: SQLite + sqlite-vec。
+        - **(B) フルモード (Docker利用)**: PostgreSQL + Neo4j + Redis (Docker Compose)。
+        - **(C) フルモード (クラウド利用)**: Supabase + Neo4j Aura 等。
     - **B) 実行方法の選択**:
         - **uv (推奨)**: `uv run` を使用して依存関係を管理。
         - **python**: システムまたは仮想環境の `python` を直接使用。
     - **C) ソースコードの取得元**:
         - **ローカル**: 現在のディレクトリのソースを使用。
         - **リモート (git+https)**: GitHub から最新のソースを直接取得して実行。
-2.  **[ ] 依存関係の解決:**
+    2.  **[ ] 依存関係の解決:**
     *   `uv` (推奨) または `pip` を使用して、開発用依存関係をインストールしてください。
     *   `uv sync --all-extras` または `pip install -e ".[all]"`
-3.  **[ ] 環境設定:**
+    3.  **[ ] 環境設定:**
     *   `.env.example` を `.env` にコピーし、選択された構成に合わせて環境変数を設定してください。
     *   `bootstrap.sh` を使用すると、基本設定を自動化できます：
         - **ライトウェイト (A)**: `bash scripts/bootstrap.sh --backend sqlite`
         - **フルモード (B)**: `bash scripts/bootstrap.sh --backend postgres`
-        - **フルモード (C/D)**: `bash scripts/bootstrap.sh --backend postgres --ssl`
+        - **フルモード (C)**: `bash scripts/bootstrap.sh --backend postgres --ssl`
+
     *   **重要**: クラウド利用（Supabase/Aura/Upstash）の場合は、`.env` の接続情報を適宜編集してください。Upstash を使用する場合は `REDIS_SSL=true` を設定してください。
 4.  **[ ] 動作確認:**
     *   DB/Redis/Neo4j を使用する構成の場合、各サービスへの疎通（Connectivity）が取れるか確認してください。

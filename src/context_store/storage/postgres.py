@@ -93,11 +93,11 @@ class PostgresStorageAdapter:
             # For some cloud providers like Supabase, default verification might fail
             # depending on the environment. We try to use a default context.
             ssl_opt = ssl.create_default_context()
-            # If the user wants to skip verification (e.g. for self-signed certs)
-            # they could set an env var, but here we'll try to be helpful if it fails.
-            # For now, just using the context is often more reliable than True.
-            ssl_opt.check_hostname = False
-            ssl_opt.verify_mode = ssl.CERT_NONE
+            # Only disable verification when explicitly requested via settings,
+            # e.g. for self-signed certs in dev/staging environments.
+            if settings.postgres_ssl_no_verify:
+                ssl_opt.check_hostname = False
+                ssl_opt.verify_mode = ssl.CERT_NONE
 
         pool = await asyncpg.create_pool(
             dsn=settings.postgres_dsn,

@@ -35,9 +35,9 @@ async def check_connectivity():
         postgres = await PostgresStorageAdapter.create(settings)
         try:
             stats = await postgres.list_projects()
-            print(f"✅ PostgreSQL connected! Projects: {stats}")
         finally:
             await postgres.dispose()
+        print(f"✅ PostgreSQL connected! Projects count: {len(stats)}")
     except Exception as e:
         print(f"❌ PostgreSQL failed: {sanitize_error(e)}")
         success = False
@@ -51,9 +51,9 @@ async def check_connectivity():
             )
             try:
                 count = await neo4j.count_edges()
-                print(f"✅ Neo4j connected! Edge count: {count}")
             finally:
                 await neo4j.dispose()
+            print(f"✅ Neo4j connected! Edge count: {count}")
         except Exception as e:
             print(f"❌ Neo4j failed: {sanitize_error(e)}")
             success = False
@@ -66,9 +66,9 @@ async def check_connectivity():
             try:
                 await redis.set("chronos_check", "ok", ttl=10)
                 val = await redis.get("chronos_check")
-                print(f"✅ Redis connected! Check value: {val}")
             finally:
                 await redis.dispose()
+            print(f"✅ Redis connected! Check value: {val}")
         except Exception as e:
             print(f"❌ Redis failed: {sanitize_error(e)}")
             success = False

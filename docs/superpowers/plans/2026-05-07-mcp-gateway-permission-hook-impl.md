@@ -2053,7 +2053,7 @@ EOF
 
 Implements design §4.3.3 and §8.5 (1KB body cap).
 
-- [ ] **Step 1: Cut the task branch from Task 3.1**
+- [x] **Step 1: Cut the task branch from Task 3.1**
 
 ```bash
 git checkout feature/phase3-task1_server_blocking_mode
@@ -2061,7 +2061,7 @@ git pull origin feature/phase3-task1_server_blocking_mode
 git checkout -b feature/phase3-task2_approvals_endpoint
 ```
 
-- [ ] **Step 2: Write the failing 401 test**
+- [x] **Step 2: Write the failing 401 test**
 
 Append to `tests/unit/test_mcp_gateway.py`:
 
@@ -2134,13 +2134,13 @@ class TestApprovalsEndpoint:
         assert resp.json() == {"error": "auth_failed"}
 ```
 
-- [ ] **Step 3: Run; expect failure (route not registered)**
+- [x] **Step 3: Run; expect failure (route not registered)**
 
 ```bash
 uv run pytest tests/unit/test_mcp_gateway.py::TestApprovalsEndpoint::test_401_without_auth -v
 ```
 
-- [ ] **Step 4: Implement `POST /approvals` skeleton (auth + body parse + size cap)**
+- [x] **Step 4: Implement `POST /approvals` skeleton (auth + body parse + size cap)**
 
 Inside `build_router` in `src/mcp_gateway/server.py`, after the `/messages` handler, add:
 
@@ -2217,13 +2217,13 @@ Inside `build_router` in `src/mcp_gateway/server.py`, after the `/messages` hand
 
 > **Note on `_authenticator` access:** if `HandshakeService` does not currently expose `_authenticator`, do NOT add a public attribute reach-around. Instead, extend `build_router` to accept a separate `api_authenticator: ApiKeyAuthenticator` parameter and pass it explicitly from `app.py` (Task 3.3). Update Task 3.1's signature accordingly. **Make this decision now**: prefer adding the explicit parameter for cleanliness. Update Step 4 of Task 3.1's signature to include `api_authenticator: ApiKeyAuthenticator` and update Task 3.3 to pass `auth` (the existing `ApiKeyAuthenticator`) when calling `build_router`. If you skipped that in Task 3.1, amend it in this task with a follow-up commit.
 
-- [ ] **Step 5: Run the 401 test; expect pass**
+- [x] **Step 5: Run the 401 test; expect pass**
 
 ```bash
 uv run pytest tests/unit/test_mcp_gateway.py::TestApprovalsEndpoint::test_401_without_auth -v
 ```
 
-- [ ] **Step 6: Append failing tests for the remaining outcomes**
+- [x] **Step 6: Append failing tests for the remaining outcomes**
 
 Append to `TestApprovalsEndpoint`:
 
@@ -2320,7 +2320,7 @@ Append to `TestApprovalsEndpoint`:
         assert resp.status_code == 413
 ```
 
-- [ ] **Step 7: Run all endpoint tests**
+- [x] **Step 7: Run all endpoint tests**
 
 ```bash
 uv run pytest tests/unit/test_mcp_gateway.py::TestApprovalsEndpoint -v
@@ -2328,7 +2328,7 @@ uv run pytest tests/unit/test_mcp_gateway.py::TestApprovalsEndpoint -v
 
 Expected: 6 passed. Fix any implementation gaps.
 
-- [ ] **Step 8: Run full test suite + mypy + ruff**
+- [x] **Step 8: Run full test suite + mypy + ruff**
 
 ```bash
 uv run pytest tests/unit/test_mcp_gateway.py -v
@@ -2338,7 +2338,7 @@ uv run ruff check src/ tests/
 
 Expected: all green.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add src/mcp_gateway/server.py tests/unit/test_mcp_gateway.py

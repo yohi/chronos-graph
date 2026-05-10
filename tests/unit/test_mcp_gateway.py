@@ -2804,10 +2804,138 @@ class TestServerApprovalSuspendE2E:
         upstream = AsyncMock()
         upstream.list_tools.return_value = [{"name": "memory_delete"}]
         upstream.call_tool.return_value = {"ok": True}
-        return build_app(
+        app = build_app(
             upstream_override=upstream,
             initial_tools=upstream.list_tools.return_value,
         )
+        app.state.upstream = upstream
+        return app
+
+    async def _start_pending_call(self, client, sid: str):
+        call_task = asyncio.create_task(
+            client.post(
+                f"/messages?session_id={sid}",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "memory_delete", "arguments": {}},
+                },
+            )
+        )
+        for _ in range(40):
+            await asyncio.sleep(0.01)
+            if not call_task.done():
+                return call_task
+        raise AssertionError("tools/call did not suspend for approval")
+
+    @pytest.mark.asyncio
+    async def test_approve_invokes_upstream_and_returns_result(self, blocking_app):
+        import httpx
+        from httpx import ASGITransport
+
+        registry = blocking_app.state.approval_registry
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=blocking_app),
+            base_url="http://t",
+        ) as client:
+            sid = await _get_sse_session_id(client, intent="curate_memories")
+            call_task = await self._start_pending_call(client, sid)
+            approval_id = next(iter(registry._pending.keys()))  # type: ignore[attr-defined]
+            resp = await client.post(
+                "/approvals",
+                headers={"Authorization": "Bearer ck_o"},
+                json={"approval_id": approval_id, "decision": "approve"},
+            )
+            assert resp.status_code == 200
+            call_resp = await call_task
+
+        assert call_resp.json()["result"] == {"ok": True}
+        blocking_app.state.upstream.call_tool.assert_called_once_with("memory_delete", {})
+
+    @pytest.mark.asyncio
+    async def test_reject_returns_32002_without_upstream_call(self, blocking_app):
+        import httpx
+        from httpx import ASGITransport
+
+        registry = blocking_app.state.approval_registry
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=blocking_app),
+            base_url="http://t",
+        ) as client:
+            sid = await _get_sse_session_id(client, intent="curate_memories")
+            call_task = await self._start_pending_call(client, sid)
+            approval_id = next(iter(registry._pending.keys()))  # type: ignore[attr-defined]
+            resp = await client.post(
+                "/approvals",
+                headers={"Authorization": "Bearer ck_o"},
+                json={"approval_id": approval_id, "decision": "reject"},
+            )
+            assert resp.status_code == 200
+            call_resp = await call_task
+
+        body = call_resp.json()
+        assert body["error"]["code"] == -32002
+        assert body["error"]["message"] == "approval_rejected"
+        blocking_app.state.upstream.call_tool.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_timeout_returns_32003_without_upstream_call(self, tmp_path, monkeypatch):
+        policy = tmp_path / "intents.yaml"
+        policy.write_text(
+            textwrap.dedent(
+                """
+                version: 1
+                output_filters: {f: {type: none}}
+                intents:
+                  curate_memories:
+                    description: x
+                    allowed_tools: [memory_delete]
+                    output_filter: f
+                    guardrails: {memory_delete: {requires_approval: true}}
+                agents:
+                  agent-a: {allowed_intents: [curate_memories]}
+                """
+            ).lstrip()
+        )
+        monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy))
+        monkeypatch.setenv("MCP_GATEWAY_API_KEYS_JSON", '{"agent-a":"ck_x"}')
+        monkeypatch.setenv("MCP_GATEWAY_APPROVAL_BLOCKING_MODE", "true")
+        monkeypatch.setenv("MCP_GATEWAY_APPROVAL_TIMEOUT_SECONDS", "0.05")
+
+        from unittest.mock import AsyncMock
+
+        from mcp_gateway.app import build_app
+
+        upstream = AsyncMock()
+        upstream.list_tools.return_value = [{"name": "memory_delete"}]
+        upstream.call_tool.return_value = {"ok": True}
+        app = build_app(
+            upstream_override=upstream,
+            initial_tools=upstream.list_tools.return_value,
+        )
+
+        import httpx
+        from httpx import ASGITransport
+
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://t"
+        ) as client:
+            sid = await _get_sse_session_id(client, intent="curate_memories")
+            resp = await client.post(
+                f"/messages?session_id={sid}",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "memory_delete", "arguments": {}},
+                },
+            )
+
+        body = resp.json()
+        assert body["error"]["code"] == -32003
+        assert body["error"]["message"] == "approval_timeout"
+        upstream.call_tool.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_session_eviction_cancels_pending(self, blocking_app):

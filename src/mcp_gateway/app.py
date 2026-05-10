@@ -18,6 +18,7 @@ from mcp_gateway.auth.api_key import ApiKeyAuthenticator
 from mcp_gateway.auth.handshake import HandshakeService
 from mcp_gateway.auth.session import InMemorySessionRegistry
 from mcp_gateway.config import GatewaySettings
+from mcp_gateway.middleware import MaxBodySizeMiddleware
 from mcp_gateway.policy.engine import PolicyEngine
 from mcp_gateway.policy.loader import load_policy
 from mcp_gateway.server import build_router
@@ -128,6 +129,7 @@ def build_app(
                 await upstream.stop()
 
     app = FastAPI(title="ChronosGraph MCP Gateway", lifespan=lifespan)
+    app.add_middleware(MaxBodySizeMiddleware, max_size_bytes=settings.max_request_body_size_bytes)
     app.state.tool_registry = registry
     app.state.approval_registry = approval_registry
     app.state.sessions = sessions

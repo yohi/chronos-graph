@@ -62,6 +62,7 @@ class GatewaySettings(BaseSettings):
     approval_blocking_mode: bool = False
     approval_timeout_seconds: float = Field(default=30.0, gt=0.0, le=600.0)
     approval_max_pending: int = Field(default=1000, gt=0, le=100_000)
+    max_request_body_size_bytes: int = Field(default=10485760, gt=0)
 
     @model_serializer(mode="wrap")
     def _mask_secrets(self, handler: Any, info: SerializationInfo) -> dict[str, Any]:

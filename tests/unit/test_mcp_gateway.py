@@ -2552,7 +2552,7 @@ class TestBlockingModeHandlerDirect:
 
     @pytest.mark.asyncio
     async def test_audit_logs_truncate_approval_id(self, router_with_registry, capfd):
-        app, _registry, _sessions, handshake, _upstream = router_with_registry
+        app, registry, _sessions, handshake, _upstream = router_with_registry
         rec = handshake.handshake(
             authorization_header="Bearer ck_a",
             intent_header="curate_memories",
@@ -2562,18 +2562,38 @@ class TestBlockingModeHandlerDirect:
         from httpx import ASGITransport
 
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            await c.post(
-                f"/messages?session_id={rec.session_id}",
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "tools/call",
-                    "params": {"name": "memory_delete", "arguments": {}},
-                },
+            task = asyncio.create_task(
+                c.post(
+                    f"/messages?session_id={rec.session_id}",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {"name": "memory_delete", "arguments": {}},
+                    },
+                )
             )
+            approval_id = await self._wait_for_approval_id(registry)
+            from mcp_gateway.approval.models import DecisionStatus
+
+            await registry.resolve(
+                approval_id,
+                resolver_agent_id="operator",
+                status=DecisionStatus.APPROVED,
+            )
+            await task
+
         _, err = capfd.readouterr()
         assert '"decision":"approval_pending"' in err
+        assert '"decision":"allow_after_approval"' in err
         assert '"approval_ref":"' in err
+        # Verify approval_ref is in allow_after_approval log too
+        allow_log = [
+            line for line in err.splitlines() if '"decision":"allow_after_approval"' in line
+        ]
+        assert len(allow_log) == 1
+        assert '"approval_ref":"' in allow_log[0]
+
         import re
 
         full_hex = re.findall(r"[0-9a-f]{32}", err)
@@ -2883,27 +2903,46 @@ class TestApprovalsEndpoint:
         assert resp.json() == {"error": "invalid_request"}
 
     @pytest.mark.asyncio
-    async def test_audit_log_no_reason_on_failure(self, router_with_registry, capsys):
-        app, _registry, _auth, _handshake = router_with_registry
+    async def test_audit_log_includes_reason_on_rejection(self, router_with_registry, capsys):
+        app, registry, _auth, _handshake = router_with_registry
+        from datetime import UTC, datetime
+
+        from mcp_gateway.approval.notifier import ApprovalRequest
+
+        aid = await registry.register(
+            session_id="s1",
+            requester_agent_id="agent-a",
+            request=ApprovalRequest(
+                session_id="s1",
+                approval_id="PENDING",
+                agent_id="agent-a",
+                intent="curate_memories",
+                tool_name="memory_delete",
+                arguments={},
+                requested_at=datetime.now(UTC),
+            ),
+        )
+
         import httpx
         from httpx import ASGITransport
 
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            await c.post(
+            resp = await c.post(
                 "/approvals",
                 headers={"Authorization": "Bearer ck_o"},
                 json={
-                    "approval_id": "0" * 32,
-                    "decision": "approve",
-                    "reason": "should_not_be_logged",
+                    "approval_id": aid,
+                    "decision": "reject",
+                    "reason": "policy violation",
                 },
             )
-        # outcome: not_found should not have "reason" in log
+        assert resp.status_code == 200
+
         captured = capsys.readouterr()
         log_lines = [ln for ln in captured.err.splitlines() if '"ev":"approval_decision"' in ln]
         assert len(log_lines) == 1
-        assert '"reason":"should_not_be_logged"' not in log_lines[0]
-        assert '"outcome":"not_found"' in log_lines[0]
+        assert '"reason":"policy violation"' in log_lines[0]
+        assert '"outcome":"ok"' in log_lines[0]
 
 
 class TestServerApprovalSuspendE2E:
@@ -4235,3 +4274,270 @@ class TestEvaluateCall:
         )
         assert result.status == "DENY"
         assert result.reason == "param_too_long:query"
+
+
+class TestMaxBodySizeMiddleware:
+    @pytest.mark.asyncio
+    async def test_rejects_oversized_body(self):
+        import httpx
+        from fastapi import FastAPI
+        from httpx import ASGITransport
+        from starlette.types import Receive, Scope, Send
+
+        from mcp_gateway.middleware import MaxBodySizeMiddleware
+
+        app = FastAPI()
+        app.add_middleware(MaxBodySizeMiddleware, max_size_bytes=10)
+
+        async def dummy_app(scope: Scope, receive: Receive, send: Send):
+            if scope["type"] == "http":
+                # Trigger stream reading
+                body = b""
+                while True:
+                    message = await receive()
+                    if message["type"] == "http.request":
+                        body += message.get("body", b"")
+                        if not message.get("more_body", False):
+                            break
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 200,
+                        "headers": [(b"content-type", b"text/plain")],
+                    }
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b"ok",
+                    }
+                )
+
+        app.mount("/test", dummy_app)
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            # 11 bytes should be rejected (Content-Length header path)
+            resp = await c.post("/test/", content=b"x" * 11)
+            assert resp.status_code == 413
+            assert resp.json() == {"error": "payload_too_large"}
+
+            # 10 bytes should be allowed
+            resp = await c.post("/test/", content=b"x" * 10)
+            assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_allows_missing_content_length_within_limit(self):
+        import httpx
+        from fastapi import FastAPI
+        from httpx import ASGITransport
+        from starlette.types import Receive, Scope, Send
+
+        from mcp_gateway.middleware import MaxBodySizeMiddleware
+
+        app = FastAPI()
+        app.add_middleware(MaxBodySizeMiddleware, max_size_bytes=100)
+
+        async def dummy_app(scope: Scope, receive: Receive, send: Send):
+            if scope["type"] == "http":
+                body = b""
+                while True:
+                    message = await receive()
+                    if message["type"] == "http.request":
+                        body += message.get("body", b"")
+                        if not message.get("more_body", False):
+                            break
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 200,
+                        "headers": [(b"content-type", b"text/plain")],
+                    }
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": body,
+                    }
+                )
+
+        app.mount("/test", dummy_app)
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+
+            async def gen():
+                yield b"hello"
+
+            resp = await c.post("/test/", content=gen())
+            assert resp.status_code == 200
+            assert resp.content == b"hello"
+
+    @pytest.mark.asyncio
+    async def test_rejects_streaming_oversized_body(self):
+        import httpx
+        from fastapi import FastAPI
+        from httpx import ASGITransport
+        from starlette.types import Receive, Scope, Send
+
+        from mcp_gateway.middleware import MaxBodySizeMiddleware
+
+        app = FastAPI()
+        app.add_middleware(MaxBodySizeMiddleware, max_size_bytes=10)
+
+        async def dummy_app(scope: Scope, receive: Receive, send: Send):
+            if scope["type"] == "http":
+                while True:
+                    message = await receive()
+                    if message["type"] == "http.request":
+                        if not message.get("more_body", False):
+                            break
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 200,
+                        "headers": [],
+                    }
+                )
+                await send({"type": "http.response.body", "body": b""})
+
+        app.mount("/test", dummy_app)
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+
+            async def gen():
+                yield b"x" * 6
+                yield b"y" * 6  # total 12 > 10
+
+            resp = await c.post("/test/", content=gen())
+            assert resp.status_code == 413
+            assert resp.json() == {"error": "payload_too_large"}
+
+    @pytest.mark.asyncio
+    async def test_400_for_invalid_content_length(self):
+        import httpx
+        from fastapi import FastAPI
+        from httpx import ASGITransport
+
+        from mcp_gateway.middleware import MaxBodySizeMiddleware
+
+        app = FastAPI()
+        app.add_middleware(MaxBodySizeMiddleware, max_size_bytes=100)
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            # Negative
+            resp = await c.post("/test/", headers={"Content-Length": "-1"})
+            assert resp.status_code == 400
+            assert resp.json() == {"error": "invalid_request"}
+
+            # Not a number
+            resp = await c.post("/test/", headers={"Content-Length": "not-a-number"})
+            assert resp.status_code == 400
+            assert resp.json() == {"error": "invalid_request"}
+
+            # Empty string (Testing empty-header branch)
+            resp = await c.post("/test/", headers={"Content-Length": ""})
+            assert resp.status_code == 400
+            assert resp.json() == {"error": "invalid_request"}
+
+    @pytest.mark.asyncio
+    async def test_413_for_no_content_length_oversized(self):
+        import httpx
+        from fastapi import FastAPI
+        from httpx import ASGITransport
+
+        from mcp_gateway.middleware import MaxBodySizeMiddleware
+
+        app = FastAPI()
+        app.add_middleware(MaxBodySizeMiddleware, max_size_bytes=10)
+
+        @app.post("/test")
+        async def dummy():
+            return {"ok": True}
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            # No Content-Length (chunked), oversized
+            async def gen():
+                yield b"x" * 20
+
+            resp = await c.post("/test", content=gen())
+            assert resp.status_code == 413
+            assert resp.json() == {"error": "payload_too_large"}
+
+    @pytest.mark.asyncio
+    async def test_enforces_limit_even_if_app_does_not_read(self):
+        import httpx
+        from fastapi import FastAPI
+        from httpx import ASGITransport
+        from starlette.types import Receive, Scope, Send
+
+        from mcp_gateway.middleware import MaxBodySizeMiddleware
+
+        app = FastAPI()
+        app.add_middleware(MaxBodySizeMiddleware, max_size_bytes=10)
+
+        async def dummy_app(scope: Scope, receive: Receive, send: Send):
+            if scope["type"] == "http":
+                # App DOES NOT read the body
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 200,
+                        "headers": [(b"content-type", b"text/plain")],
+                    }
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b"ok",
+                    }
+                )
+
+        app.mount("/test", dummy_app)
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+
+            async def gen():
+                yield b"x" * 20
+
+            # Should be 413 because middleware eagerly reads and enforces limit
+            resp = await c.post("/test/", content=gen())
+            assert resp.status_code == 413
+            assert resp.json() == {"error": "payload_too_large"}
+
+    @pytest.mark.asyncio
+    async def test_no_413_if_response_started(self):
+        import httpx
+        from fastapi import FastAPI
+        from httpx import ASGITransport
+        from starlette.types import Receive, Scope, Send
+
+        from mcp_gateway.middleware import MaxBodySizeMiddleware, PayloadTooLargeError
+
+        app = FastAPI()
+        app.add_middleware(MaxBodySizeMiddleware, max_size_bytes=5)
+
+        async def dummy_app(scope: Scope, receive: Receive, send: Send):
+            if scope["type"] == "http":
+                # Start response before reading body
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 200,
+                        "headers": [(b"content-type", b"text/plain")],
+                    }
+                )
+                # Now try to read which will trigger the limit.
+                # Since we want to test the late-detection logic in the
+                # 'except PayloadTooLargeError' block, we can either try to trick
+                # the middleware or just raise it here to simulate
+                # a late detection from wrapped_receive.
+                raise PayloadTooLargeError()
+
+        app.mount("/test", dummy_app)
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            # We just need to trigger the app.
+            # We use a valid small body so it passes all up-front middleware checks.
+            with pytest.raises((httpx.RemoteProtocolError, RuntimeError, PayloadTooLargeError)):
+                await c.post("/test/", content=b"ok")
+            # If the middleware didn't catch the error and try to send 413 (which would crash),
+            # then we've successfully verified that it either re-raised or stayed silent.

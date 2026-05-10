@@ -212,7 +212,10 @@ def main() -> None:
         "--backend", choices=["sqlite", "postgres"], default="sqlite", help="Storage backend"
     )
     parser.add_argument(
-        "--cache", choices=["inmemory", "redis"], default="inmemory", help="Cache backend"
+        "--cache",
+        choices=["inmemory", "redis"],
+        default=None,
+        help="Cache backend (default: inmemory, or redis if --ssl is set)",
     )
     parser.add_argument(
         "--embedding",
@@ -243,11 +246,11 @@ def main() -> None:
             python_path, args.embedding, args.graph, args.method, args.uv_from
         )
     else:
-        # postgres モードで --cache が指定されていない場合、
+        # ユーザーが指定していない場合のみ、デフォルト値を決定する
         # --ssl があれば redis、なければ inmemory をデフォルトにする
         cache_backend = args.cache
-        if cache_backend == "inmemory" and args.ssl:
-            cache_backend = "redis"
+        if cache_backend is None:
+            cache_backend = "redis" if args.ssl else "inmemory"
 
         config = generate_postgres_config(
             python_path,

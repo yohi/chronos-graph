@@ -30,9 +30,11 @@ class RedisCacheAdapter:
         """Create a new adapter connected to Redis."""
         import redis.asyncio as aioredis
 
-        # Use SSL if requested (defaults to None for non-SSL)
-        ssl_opt = True if ssl else None
-        r = aioredis.from_url(url, decode_responses=False, ssl=ssl_opt)
+        kwargs: dict[str, Any] = {"decode_responses": False}
+        if ssl:
+            kwargs["ssl"] = True
+
+        r = aioredis.from_url(url, **kwargs)
         return cls(r)
 
     # ------------------------------------------------------------------

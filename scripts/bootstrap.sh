@@ -154,6 +154,9 @@ GEN_CONFIG_ARGS=("scripts/generate_config.py" "--backend" "$BACKEND" "--embeddin
 if [ "$POSTGRES_SSL" = "true" ]; then
     GEN_CONFIG_ARGS+=("--ssl")
 fi
+if [[ -n "$CACHE_BACKEND" ]]; then
+    GEN_CONFIG_ARGS+=("--cache" "$CACHE_BACKEND")
+fi
 if [[ -n "$UV_FROM" ]]; then
     GEN_CONFIG_ARGS+=("--uv-from" "$UV_FROM")
 fi
@@ -203,12 +206,6 @@ if [[ "$MCP_METHOD" == "uvx" ]]; then
     echo -e "4. Start the server with: ${BLUE}uv tool run context-store${NC}"
 elif [[ "$MCP_METHOD" == "uv" ]]; then
     echo -e "4. Start the server with: ${BLUE}uv run context-store${NC}"
-else
-    echo -e "4. Start the server with: ${BLUE}python -m context_store${NC}"
-fi
- echo -e "4. Start the server with: ${BLUE}python -m context_store${NC}"
-fi
-erver with: ${BLUE}uv run context-store${NC}"
 else
     echo -e "4. Start the server with: ${BLUE}python -m context_store${NC}"
 fi

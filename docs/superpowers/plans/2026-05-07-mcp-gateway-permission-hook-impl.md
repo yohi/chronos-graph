@@ -1325,7 +1325,7 @@ Open a Draft PR `feature/phase3_blocking_mode__base → master`.
 
 Implements design §4.3.1 / §4.3.2 and §8.2 (audit truncation).
 
-- [ ] **Step 1: Cut the task branch**
+- [x] **Step 1: Cut the task branch**
 
 ```bash
 git checkout feature/phase3_blocking_mode__base
@@ -1333,7 +1333,7 @@ git pull origin feature/phase3_blocking_mode__base
 git checkout -b feature/phase3-task1_server_blocking_mode
 ```
 
-- [ ] **Step 2: Write the failing precondition test**
+- [x] **Step 2: Write the failing precondition test**
 
 Append to `tests/unit/test_mcp_gateway.py` (place after `TestServerRequiresApproval`):
 
@@ -1356,13 +1356,13 @@ class TestBuildRouterApprovalPrecondition:
             )
 ```
 
-- [ ] **Step 3: Run; expect failure (kwargs not accepted)**
+- [x] **Step 3: Run; expect failure (kwargs not accepted)**
 
 ```bash
 uv run pytest tests/unit/test_mcp_gateway.py::TestBuildRouterApprovalPrecondition -v
 ```
 
-- [ ] **Step 4: Extend `build_router` signature with the new parameters and precondition**
+- [x] **Step 4: Extend `build_router` signature with the new parameters and precondition**
 
 In `src/mcp_gateway/server.py`, modify `build_router`:
 
@@ -1403,13 +1403,13 @@ def _approval_id_for_log(approval_id: str) -> str:
     return approval_id[:8] + "..."
 ```
 
-- [ ] **Step 5: Run the precondition test; expect pass**
+- [x] **Step 5: Run the precondition test; expect pass**
 
 ```bash
 uv run pytest tests/unit/test_mcp_gateway.py::TestBuildRouterApprovalPrecondition -v
 ```
 
-- [ ] **Step 6: Add the failing suspend/resume test fixture and APPROVED test**
+- [x] **Step 6: Add the failing suspend/resume test fixture and APPROVED test**
 
 Append to `tests/unit/test_mcp_gateway.py`:
 
@@ -1562,13 +1562,13 @@ class TestBlockingModeHandlerDirect:
         assert body["error"]["message"] == "approval_timeout"
 ```
 
-- [ ] **Step 7: Run; expect failure (`build_router` does not yet implement the blocking handler)**
+- [x] **Step 7: Run; expect failure (`build_router` does not yet implement the blocking handler)**
 
 ```bash
 uv run pytest tests/unit/test_mcp_gateway.py::TestBlockingModeHandlerDirect -v
 ```
 
-- [ ] **Step 8: Implement the blocking-mode REQUIRES_APPROVAL handler**
+- [x] **Step 8: Implement the blocking-mode REQUIRES_APPROVAL handler**
 
 In `src/mcp_gateway/server.py`, replace the existing `case "REQUIRES_APPROVAL":` block with a guard that branches on `approval_blocking_mode`:
 
@@ -1695,13 +1695,13 @@ In `src/mcp_gateway/server.py`, replace the existing `case "REQUIRES_APPROVAL":`
 
 When the APPROVED branch falls through, it will run the existing ALLOW path (filter + proxy.call). Add a follow-up audit log for the post-approval execution: change the existing trailing `audit.log(ev="call", decision="allow", ...)` to use `decision="allow_after_approval"` *only* when the call was approved. The simplest approach: capture a flag `was_approved = (decision.status is DecisionStatus.APPROVED)` and select the audit decision string accordingly, e.g. `decision="allow_after_approval" if was_approved else "allow"`.
 
-- [ ] **Step 9: Run the timeout test; expect pass**
+- [x] **Step 9: Run the timeout test; expect pass**
 
 ```bash
 uv run pytest tests/unit/test_mcp_gateway.py::TestBlockingModeHandlerDirect::test_blocking_mode_returns_32003_on_timeout -v
 ```
 
-- [ ] **Step 10: Add and run the APPROVED-path test**
+- [x] **Step 10: Add and run the APPROVED-path test**
 
 Append to `TestBlockingModeHandlerDirect`:
 
@@ -1749,7 +1749,7 @@ uv run pytest tests/unit/test_mcp_gateway.py::TestBlockingModeHandlerDirect::tes
 
 Expected: pass.
 
-- [ ] **Step 11: Add and run the REJECTED-path test**
+- [x] **Step 11: Add and run the REJECTED-path test**
 
 Append:
 
@@ -1796,7 +1796,7 @@ uv run pytest tests/unit/test_mcp_gateway.py::TestBlockingModeHandlerDirect -v
 
 Expected: 3 passed.
 
-- [ ] **Step 12: Add and run the registry-overflow test**
+- [x] **Step 12: Add and run the registry-overflow test**
 
 Append:
 
@@ -1896,7 +1896,7 @@ uv run pytest tests/unit/test_mcp_gateway.py::TestBlockingModeHandlerDirect -v
 
 Expected: 4 passed.
 
-- [ ] **Step 13: Add and run the audit-id-truncation test**
+- [x] **Step 13: Add and run the audit-id-truncation test**
 
 Append:
 
@@ -1936,7 +1936,7 @@ uv run pytest tests/unit/test_mcp_gateway.py::TestBlockingModeHandlerDirect::tes
 
 Expected: pass.
 
-- [ ] **Step 14: Add and run the upstream-not-called-on-reject test**
+- [x] **Step 14: Add and run the upstream-not-called-on-reject test**
 
 Append:
 
@@ -1989,7 +1989,7 @@ uv run pytest tests/unit/test_mcp_gateway.py::TestBlockingModeHandlerDirect -v
 
 Expected: 6 passed.
 
-- [ ] **Step 15: Run the existing immediate-mode test class to confirm zero regression**
+- [x] **Step 15: Run the existing immediate-mode test class to confirm zero regression**
 
 ```bash
 uv run pytest tests/unit/test_mcp_gateway.py::TestServerRequiresApproval -v
@@ -1999,7 +1999,7 @@ uv run ruff check src/ tests/
 
 Expected: still green. Default-`False` flag preserves immediate-mode behavior.
 
-- [ ] **Step 16: Commit**
+- [x] **Step 16: Commit**
 
 ```bash
 git add src/mcp_gateway/server.py tests/unit/test_mcp_gateway.py

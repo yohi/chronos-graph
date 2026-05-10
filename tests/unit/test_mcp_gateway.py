@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import textwrap
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -2153,6 +2154,404 @@ class TestServerRequiresApproval:
         body = resp.json()
         assert body["error"]["code"] == -32601
         assert body["error"]["message"] == "tool not found"
+
+
+class TestBuildRouterApprovalPrecondition:
+    def test_build_router_raises_when_blocking_without_registry(self) -> None:
+        from mcp_gateway.server import build_router
+
+        with pytest.raises(ValueError, match="approval_registry"):
+            build_router(
+                handshake=object(),  # type: ignore[arg-type]
+                sessions=object(),  # type: ignore[arg-type]
+                tool_registry=object(),  # type: ignore[arg-type]
+                upstream=object(),
+                policy=object(),  # type: ignore[arg-type]
+                audit=object(),  # type: ignore[arg-type]
+                engine=object(),  # type: ignore[arg-type]
+                approval_blocking_mode=True,
+                approval_registry=None,
+            )
+
+    def test_build_router_raises_when_timeout_is_non_positive(self) -> None:
+        from mcp_gateway.server import build_router
+
+        with pytest.raises(ValueError, match="approval_timeout_seconds must be positive"):
+            build_router(
+                handshake=object(),  # type: ignore[arg-type]
+                sessions=object(),  # type: ignore[arg-type]
+                tool_registry=object(),  # type: ignore[arg-type]
+                upstream=object(),
+                policy=object(),  # type: ignore[arg-type]
+                audit=object(),  # type: ignore[arg-type]
+                engine=object(),  # type: ignore[arg-type]
+                approval_blocking_mode=True,
+                approval_registry=object(),  # type: ignore[arg-type]
+                approval_timeout_seconds=0,
+            )
+        with pytest.raises(ValueError, match="approval_timeout_seconds must be positive"):
+            build_router(
+                handshake=object(),  # type: ignore[arg-type]
+                sessions=object(),  # type: ignore[arg-type]
+                tool_registry=object(),  # type: ignore[arg-type]
+                upstream=object(),
+                policy=object(),  # type: ignore[arg-type]
+                audit=object(),  # type: ignore[arg-type]
+                engine=object(),  # type: ignore[arg-type]
+                approval_blocking_mode=True,
+                approval_registry=object(),  # type: ignore[arg-type]
+                approval_timeout_seconds=-1.0,
+            )
+
+
+class TestBlockingModeHandlerDirect:
+    """Direct router-level tests for the blocking-mode REQUIRES_APPROVAL handler."""
+
+    @pytest.fixture
+    def router_with_registry(self, tmp_path):
+        from unittest.mock import AsyncMock
+
+        from fastapi import FastAPI
+
+        from mcp_gateway.approval.registry import PendingApprovalRegistry
+        from mcp_gateway.audit.logger import AuditLogger
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+        from mcp_gateway.auth.handshake import HandshakeService
+        from mcp_gateway.auth.session import InMemorySessionRegistry
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.loader import load_policy
+        from mcp_gateway.server import build_router
+        from mcp_gateway.tools.registry import ToolRegistry
+
+        policy_file = tmp_path / "intents.yaml"
+        policy_file.write_text(
+            textwrap.dedent(
+                """
+                version: 1
+                output_filters:
+                  f:
+                    type: none
+                intents:
+                  curate_memories:
+                    description: "x"
+                    allowed_tools: [memory_delete]
+                    output_filter: f
+                    guardrails:
+                      memory_delete:
+                        requires_approval: true
+                agents:
+                  agent-a:
+                    allowed_intents: [curate_memories]
+                  operator:
+                    allowed_intents: [curate_memories]
+                """
+            ).lstrip()
+        )
+        policy = load_policy(policy_file)
+        engine = PolicyEngine(policy)
+        sessions = InMemorySessionRegistry(ttl_seconds=900, idle_timeout_seconds=300)
+        auth = ApiKeyAuthenticator({"agent-a": "ck_a", "operator": "ck_o"})
+        handshake = HandshakeService(
+            authenticator=auth,
+            policy_engine=engine,
+            session_registry=sessions,
+        )
+        registry = PendingApprovalRegistry(max_pending=4)
+        upstream = AsyncMock()
+        upstream.call_tool.return_value = {"ok": True}
+        tools = ToolRegistry([{"name": "memory_delete"}])
+        audit = AuditLogger()
+
+        app = FastAPI()
+        app.include_router(
+            build_router(
+                handshake=handshake,
+                sessions=sessions,
+                tool_registry=tools,
+                upstream=upstream,
+                policy=policy,
+                audit=audit,
+                engine=engine,
+                approval_registry=registry,
+                approval_blocking_mode=True,
+                approval_timeout_seconds=0.5,
+            )
+        )
+        return app, registry, sessions, handshake, upstream
+
+    async def _wait_for_approval_id(self, registry: Any, timeout: float = 2.0) -> str:
+        """Helper to poll for a pending approval ID with timeout."""
+        for _ in range(int(timeout / 0.05)):
+            if registry._pending:  # type: ignore[attr-defined]
+                return next(iter(registry._pending.keys()))  # type: ignore[attr-defined]
+            await asyncio.sleep(0.05)
+        pytest.fail("timed out waiting for pending approval id")
+
+    @pytest.mark.asyncio
+    async def test_blocking_mode_returns_32003_on_timeout(self, router_with_registry):
+        app, _registry, _sessions, handshake, _upstream = router_with_registry
+        rec = handshake.handshake(
+            authorization_header="Bearer ck_a",
+            intent_header="curate_memories",
+            requested_tools_header="memory_delete",
+        )
+
+        import httpx
+        from httpx import ASGITransport
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            resp = await c.post(
+                f"/messages?session_id={rec.session_id}",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "memory_delete", "arguments": {}},
+                },
+            )
+        body = resp.json()
+        assert body["error"]["code"] == -32003
+        assert body["error"]["message"] == "approval_timeout"
+
+    @pytest.mark.asyncio
+    async def test_blocking_mode_suspends_until_approve(self, router_with_registry):
+        app, registry, _sessions, handshake, _upstream = router_with_registry
+        rec = handshake.handshake(
+            authorization_header="Bearer ck_a",
+            intent_header="curate_memories",
+            requested_tools_header="memory_delete",
+        )
+
+        import httpx
+        from httpx import ASGITransport
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            call_task = asyncio.create_task(
+                c.post(
+                    f"/messages?session_id={rec.session_id}",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {"name": "memory_delete", "arguments": {}},
+                    },
+                )
+            )
+            approval_id = await self._wait_for_approval_id(registry)
+            from mcp_gateway.approval.models import DecisionStatus
+
+            await registry.resolve(
+                approval_id,
+                resolver_agent_id="operator",
+                status=DecisionStatus.APPROVED,
+            )
+            resp = await call_task
+        body = resp.json()
+        assert body["result"] == {"ok": True}
+
+    @pytest.mark.asyncio
+    async def test_blocking_mode_returns_32002_on_reject(self, router_with_registry):
+        app, registry, _sessions, handshake, _upstream = router_with_registry
+        rec = handshake.handshake(
+            authorization_header="Bearer ck_a",
+            intent_header="curate_memories",
+            requested_tools_header="memory_delete",
+        )
+        import httpx
+        from httpx import ASGITransport
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            call_task = asyncio.create_task(
+                c.post(
+                    f"/messages?session_id={rec.session_id}",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {"name": "memory_delete", "arguments": {}},
+                    },
+                )
+            )
+            approval_id = await self._wait_for_approval_id(registry)
+            from mcp_gateway.approval.models import DecisionStatus
+
+            await registry.resolve(
+                approval_id,
+                resolver_agent_id="operator",
+                status=DecisionStatus.REJECTED,
+                reason="not authorized",
+            )
+            resp = await call_task
+        body = resp.json()
+        assert body["error"]["code"] == -32002
+        assert body["error"]["message"] == "approval_rejected"
+
+    @pytest.mark.asyncio
+    async def test_blocking_mode_returns_32603_when_registry_full(self, tmp_path):
+        from unittest.mock import AsyncMock
+
+        from fastapi import FastAPI
+
+        from mcp_gateway.approval.registry import PendingApprovalRegistry
+        from mcp_gateway.audit.logger import AuditLogger
+        from mcp_gateway.auth.api_key import ApiKeyAuthenticator
+        from mcp_gateway.auth.handshake import HandshakeService
+        from mcp_gateway.auth.session import InMemorySessionRegistry
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.loader import load_policy
+        from mcp_gateway.server import build_router
+        from mcp_gateway.tools.registry import ToolRegistry
+
+        policy_file = tmp_path / "intents.yaml"
+        policy_file.write_text(
+            textwrap.dedent(
+                """
+                version: 1
+                output_filters: {f: {type: none}}
+                intents:
+                  curate_memories:
+                    description: x
+                    allowed_tools: [memory_delete]
+                    output_filter: f
+                    guardrails: {memory_delete: {requires_approval: true}}
+                agents:
+                  agent-a: {allowed_intents: [curate_memories]}
+                  agent-b: {allowed_intents: [curate_memories]}
+                """
+            ).lstrip()
+        )
+        policy = load_policy(policy_file)
+        engine = PolicyEngine(policy)
+        sessions = InMemorySessionRegistry(ttl_seconds=900, idle_timeout_seconds=300)
+        auth = ApiKeyAuthenticator({"agent-a": "ck_a", "agent-b": "ck_b"})
+        handshake = HandshakeService(
+            authenticator=auth,
+            policy_engine=engine,
+            session_registry=sessions,
+        )
+        registry = PendingApprovalRegistry(max_pending=1)
+        upstream = AsyncMock()
+        tools = ToolRegistry([{"name": "memory_delete"}])
+        audit = AuditLogger()
+        app = FastAPI()
+        app.include_router(
+            build_router(
+                handshake=handshake,
+                sessions=sessions,
+                tool_registry=tools,
+                upstream=upstream,
+                policy=policy,
+                audit=audit,
+                engine=engine,
+                approval_registry=registry,
+                approval_blocking_mode=True,
+                approval_timeout_seconds=0.1,
+            )
+        )
+
+        rec_a = handshake.handshake(
+            authorization_header="Bearer ck_a",
+            intent_header="curate_memories",
+            requested_tools_header="memory_delete",
+        )
+        rec_b = handshake.handshake(
+            authorization_header="Bearer ck_b",
+            intent_header="curate_memories",
+            requested_tools_header="memory_delete",
+        )
+
+        import httpx
+        from httpx import ASGITransport
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            t_a = asyncio.create_task(
+                c.post(
+                    f"/messages?session_id={rec_a.session_id}",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {"name": "memory_delete", "arguments": {}},
+                    },
+                )
+            )
+            await self._wait_for_approval_id(registry)
+            resp_b = await c.post(
+                f"/messages?session_id={rec_b.session_id}",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {"name": "memory_delete", "arguments": {}},
+                },
+            )
+            assert resp_b.json()["error"]["code"] == -32603
+            resp_a = await t_a
+            assert resp_a.json()["error"]["code"] == -32003
+
+    @pytest.mark.asyncio
+    async def test_audit_logs_truncate_approval_id(self, router_with_registry, capfd):
+        app, _registry, _sessions, handshake, _upstream = router_with_registry
+        rec = handshake.handshake(
+            authorization_header="Bearer ck_a",
+            intent_header="curate_memories",
+            requested_tools_header="memory_delete",
+        )
+        import httpx
+        from httpx import ASGITransport
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            await c.post(
+                f"/messages?session_id={rec.session_id}",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "memory_delete", "arguments": {}},
+                },
+            )
+        _, err = capfd.readouterr()
+        assert '"decision":"approval_pending"' in err
+        assert '"approval_ref":"' in err
+        import re
+
+        full_hex = re.findall(r"[0-9a-f]{32}", err)
+        assert not full_hex
+
+    @pytest.mark.asyncio
+    async def test_does_not_call_upstream_on_reject(self, router_with_registry):
+        app, registry, _sessions, handshake, upstream = router_with_registry
+        rec = handshake.handshake(
+            authorization_header="Bearer ck_a",
+            intent_header="curate_memories",
+            requested_tools_header="memory_delete",
+        )
+        import httpx
+        from httpx import ASGITransport
+
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+            task = asyncio.create_task(
+                c.post(
+                    f"/messages?session_id={rec.session_id}",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 9,
+                        "method": "tools/call",
+                        "params": {"name": "memory_delete", "arguments": {}},
+                    },
+                )
+            )
+            approval_id = await self._wait_for_approval_id(registry)
+            from mcp_gateway.approval.models import DecisionStatus
+
+            await registry.resolve(
+                approval_id,
+                resolver_agent_id="operator",
+                status=DecisionStatus.REJECTED,
+            )
+            resp = await task
+        assert resp.json()["error"]["code"] == -32002
+        upstream.call_tool.assert_not_called()
 
 
 class TestServerValidationDeny:

@@ -24,7 +24,7 @@
 
 **No new CI or devcontainer scaffolding is required by this plan.** Do NOT switch the existing `ubuntu-latest` runner to `ubuntu-slim`; that is out of scope.
 
-- [ ] **Step 0.1: Open the project devcontainer and verify the baseline is green**
+- [x] **Step 0.1: Open the project devcontainer and verify the baseline is green**
 
 Inside the devcontainer (VS Code Reopen-in-Container, or `devcontainer up && devcontainer exec`), run:
 
@@ -65,7 +65,7 @@ git push -u origin feature/phase1_approval_foundation__base
 - Modify: `src/mcp_gateway/approval/__init__.py` (re-export the new symbols)
 - Test: `tests/unit/test_approval_models.py` (new)
 
-- [ ] **Step 1: Cut the task branch**
+- [x] **Step 1: Cut the task branch**
 
 ```bash
 git checkout feature/phase1_approval_foundation__base
@@ -73,7 +73,7 @@ git pull origin feature/phase1_approval_foundation__base
 git checkout -b feature/phase1-task1_approval_models
 ```
 
-- [ ] **Step 2: Write the failing test for `DecisionStatus` and `ApprovalDecision`**
+- [x] **Step 2: Write the failing test for `DecisionStatus` and `ApprovalDecision`**
 
 Create `tests/unit/test_approval_models.py`:
 
@@ -125,7 +125,7 @@ class TestApprovalDecision:
             d.status = DecisionStatus.REJECTED  # type: ignore[misc]
 ```
 
-- [ ] **Step 3: Run the test to confirm it fails (module missing)**
+- [x] **Step 3: Run the test to confirm it fails (module missing)**
 
 ```bash
 uv run pytest tests/unit/test_approval_models.py -v
@@ -133,7 +133,7 @@ uv run pytest tests/unit/test_approval_models.py -v
 
 Expected: `ModuleNotFoundError: No module named 'mcp_gateway.approval.models'`.
 
-- [ ] **Step 4: Implement `src/mcp_gateway/approval/models.py`**
+- [x] **Step 4: Implement `src/mcp_gateway/approval/models.py`**
 
 ```python
 """Approval decision models shared between registry, server, and notifier."""
@@ -169,7 +169,7 @@ class ApprovalDecision:
     reason: str | None = None
 ```
 
-- [ ] **Step 5: Re-export from package `__init__.py`**
+- [x] **Step 5: Re-export from package `__init__.py`**
 
 Modify `src/mcp_gateway/approval/__init__.py`:
 
@@ -187,7 +187,7 @@ __all__ = [
 ]
 ```
 
-- [ ] **Step 6: Run the test to confirm it passes**
+- [x] **Step 6: Run the test to confirm it passes**
 
 ```bash
 uv run pytest tests/unit/test_approval_models.py -v
@@ -195,7 +195,7 @@ uv run pytest tests/unit/test_approval_models.py -v
 
 Expected: 5 passed.
 
-- [ ] **Step 7: Run the full type-check and lint inside the devcontainer**
+- [x] **Step 7: Run the full type-check and lint inside the devcontainer**
 
 ```bash
 uv run mypy src/
@@ -205,7 +205,7 @@ uv run ruff format --check src/ tests/
 
 Expected: all clean. Fix any violations before continuing.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/mcp_gateway/approval/models.py src/mcp_gateway/approval/__init__.py tests/unit/test_approval_models.py
@@ -215,7 +215,7 @@ Introduce DecisionStatus, ResolveOutcome enums and frozen
 ApprovalDecision dataclass to support the upcoming PendingApprovalRegistry."
 ```
 
-- [ ] **Step 9: Push and open a Draft PR targeting the Phase 1 base**
+- [x] **Step 9: Push and open a Draft PR targeting the Phase 1 base**
 
 ```bash
 git push -u origin feature/phase1-task1_approval_models
@@ -254,7 +254,7 @@ EOF
 
 Implements §8.6 of the design (control-char strip, whitespace normalize, 256-byte UTF-8 truncation).
 
-- [ ] **Step 1: Cut the task branch**
+- [x] **Step 1: Cut the task branch**
 
 ```bash
 git checkout feature/phase1_approval_foundation__base
@@ -262,7 +262,7 @@ git pull origin feature/phase1_approval_foundation__base
 git checkout -b feature/phase1-task2_sanitize_reason
 ```
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 Create `tests/unit/test_approval_sanitize.py`:
 
@@ -311,7 +311,7 @@ class TestSanitizeReason:
         assert sanitize_reason("理由: テスト") == "理由: テスト"
 ```
 
-- [ ] **Step 3: Run the test to confirm it fails (module missing)**
+- [x] **Step 3: Run the test to confirm it fails (module missing)**
 
 ```bash
 uv run pytest tests/unit/test_approval_sanitize.py -v
@@ -319,7 +319,7 @@ uv run pytest tests/unit/test_approval_sanitize.py -v
 
 Expected: `ModuleNotFoundError`.
 
-- [ ] **Step 4: Implement `src/mcp_gateway/approval/sanitize.py`**
+- [x] **Step 4: Implement `src/mcp_gateway/approval/sanitize.py`**
 
 ```python
 """Reason field sanitizer (control-char strip, whitespace normalize, 256-byte truncate)."""
@@ -359,7 +359,7 @@ def sanitize_reason(reason: str | None) -> str | None:
     return truncated.decode("utf-8", errors="ignore")
 ```
 
-- [ ] **Step 5: Re-export from package `__init__.py`**
+- [x] **Step 5: Re-export from package `__init__.py`**
 
 Modify `src/mcp_gateway/approval/__init__.py` to add `sanitize_reason`:
 
@@ -381,7 +381,7 @@ __all__ = [
 
 (If Task 1.1 has not yet merged into the phase base, edit `__init__.py` defensively: only add `sanitize_reason` re-export plus preserving whatever symbols already exist on the branch. Keep alphabetical order.)
 
-- [ ] **Step 6: Run tests, mypy, ruff**
+- [x] **Step 6: Run tests, mypy, ruff**
 
 ```bash
 uv run pytest tests/unit/test_approval_sanitize.py -v
@@ -391,7 +391,7 @@ uv run ruff check src/ tests/
 
 Expected: all green.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/mcp_gateway/approval/sanitize.py src/mcp_gateway/approval/__init__.py tests/unit/test_approval_sanitize.py
@@ -401,7 +401,7 @@ Strips control chars, normalizes whitespace, and truncates the
 audit reason field to 256 UTF-8 bytes on a character boundary."
 ```
 
-- [ ] **Step 8: Push and open a Draft PR targeting the Phase 1 base**
+- [x] **Step 8: Push and open a Draft PR targeting the Phase 1 base**
 
 ```bash
 git push -u origin feature/phase1-task2_sanitize_reason
@@ -439,7 +439,7 @@ EOF
 
 Implements design §4.2 (`PendingApprovalRegistry` invariants and the test matrix in §7.1).
 
-- [ ] **Step 1: Cut the task branch from Task 1.1**
+- [x] **Step 1: Cut the task branch from Task 1.1**
 
 ```bash
 git checkout feature/phase1-task1_approval_models
@@ -447,7 +447,7 @@ git pull origin feature/phase1-task1_approval_models
 git checkout -b feature/phase1-task3_approval_registry
 ```
 
-- [ ] **Step 2: Write the failing tests for `register()` (uniqueness + overflow)**
+- [x] **Step 2: Write the failing tests for `register()` (uniqueness + overflow)**
 
 Create `tests/unit/test_approval_registry.py`:
 
@@ -495,7 +495,7 @@ class TestRegister:
             await reg.register(session_id="s2", requester_agent_id="agent-a", request=_req("s2"))
 ```
 
-- [ ] **Step 3: Run the test to confirm it fails (module missing)**
+- [x] **Step 3: Run the test to confirm it fails (module missing)**
 
 ```bash
 uv run pytest tests/unit/test_approval_registry.py -v
@@ -503,7 +503,7 @@ uv run pytest tests/unit/test_approval_registry.py -v
 
 Expected: `ModuleNotFoundError`.
 
-- [ ] **Step 4: Implement `register()` skeleton in `src/mcp_gateway/approval/registry.py`**
+- [x] **Step 4: Implement `register()` skeleton in `src/mcp_gateway/approval/registry.py`**
 
 ```python
 """In-memory registry of pending approvals (asyncio.Event based)."""
@@ -562,7 +562,7 @@ class PendingApprovalRegistry:
             return approval_id
 ```
 
-- [ ] **Step 5: Run the tests; expect both pass**
+- [x] **Step 5: Run the tests; expect both pass**
 
 ```bash
 uv run pytest tests/unit/test_approval_registry.py -v
@@ -570,7 +570,7 @@ uv run pytest tests/unit/test_approval_registry.py -v
 
 Expected: 2 passed.
 
-- [ ] **Step 6: Append failing tests for `wait_for_decision()`**
+- [x] **Step 6: Append failing tests for `wait_for_decision()`**
 
 Add to `tests/unit/test_approval_registry.py`:
 
@@ -615,7 +615,7 @@ class TestWaitForDecision:
             await reg.wait_for_decision("does-not-exist", timeout=0.05)
 ```
 
-- [ ] **Step 7: Run; expect failures (`resolve` / `wait_for_decision` undefined or missing)**
+- [x] **Step 7: Run; expect failures (`resolve` / `wait_for_decision` undefined or missing)**
 
 ```bash
 uv run pytest tests/unit/test_approval_registry.py -v
@@ -623,7 +623,7 @@ uv run pytest tests/unit/test_approval_registry.py -v
 
 Expected: 4 failures with `AttributeError` on the missing methods.
 
-- [ ] **Step 8: Implement `wait_for_decision()` and a stub `resolve()` to support the tests**
+- [x] **Step 8: Implement `wait_for_decision()` and a stub `resolve()` to support the tests**
 
 Append to `src/mcp_gateway/approval/registry.py`:
 
@@ -672,7 +672,7 @@ Append to `src/mcp_gateway/approval/registry.py`:
             return ResolveOutcome.OK
 ```
 
-- [ ] **Step 9: Run; all wait_for_decision tests should pass**
+- [x] **Step 9: Run; all wait_for_decision tests should pass**
 
 ```bash
 uv run pytest tests/unit/test_approval_registry.py -v
@@ -680,7 +680,7 @@ uv run pytest tests/unit/test_approval_registry.py -v
 
 Expected: 6 passed (Register: 2 + WaitForDecision: 4).
 
-- [ ] **Step 10: Append failing tests for `resolve()` outcomes**
+- [x] **Step 10: Append failing tests for `resolve()` outcomes**
 
 Add to `tests/unit/test_approval_registry.py`:
 
@@ -730,7 +730,7 @@ class TestResolve:
         assert already_count == 2
 ```
 
-- [ ] **Step 11: Run; expect all to pass (already implemented in Step 8)**
+- [x] **Step 11: Run; expect all to pass (already implemented in Step 8)**
 
 ```bash
 uv run pytest tests/unit/test_approval_registry.py::TestResolve -v
@@ -738,7 +738,7 @@ uv run pytest tests/unit/test_approval_registry.py::TestResolve -v
 
 Expected: 4 passed. If `test_concurrent_resolve_is_safe` is flaky, the lock placement in `resolve()` is wrong — re-read Step 8's implementation.
 
-- [ ] **Step 12: Append failing tests for `cancel_session()`**
+- [x] **Step 12: Append failing tests for `cancel_session()`**
 
 Add to `tests/unit/test_approval_registry.py`:
 
@@ -774,13 +774,13 @@ class TestCancelSession:
         await reg.cancel_session("unknown")  # must not raise
 ```
 
-- [ ] **Step 13: Run; expect failure (`cancel_session` undefined)**
+- [x] **Step 13: Run; expect failure (`cancel_session` undefined)**
 
 ```bash
 uv run pytest tests/unit/test_approval_registry.py::TestCancelSession -v
 ```
 
-- [ ] **Step 14: Implement `cancel_session()`**
+- [x] **Step 14: Implement `cancel_session()`**
 
 Append to `src/mcp_gateway/approval/registry.py`:
 
@@ -796,7 +796,7 @@ Append to `src/mcp_gateway/approval/registry.py`:
                     entry.event.set()
 ```
 
-- [ ] **Step 15: Re-export from `__init__.py`**
+- [x] **Step 15: Re-export from `__init__.py`**
 
 Modify `src/mcp_gateway/approval/__init__.py` to add `PendingApprovalRegistry`:
 
@@ -820,7 +820,7 @@ __all__ = [
 
 (If Task 1.2 has not yet merged: keep the file consistent with whatever already exists on this branch — only ensure `PendingApprovalRegistry` is exported.)
 
-- [ ] **Step 16: Run the full registry suite + lint + mypy**
+- [x] **Step 16: Run the full registry suite + lint + mypy**
 
 ```bash
 uv run pytest tests/unit/test_approval_registry.py -v
@@ -830,7 +830,7 @@ uv run ruff check src/ tests/
 
 Expected: 12 passed (matches the §7.1 matrix), mypy clean, ruff clean.
 
-- [ ] **Step 17: Commit**
+- [x] **Step 17: Commit**
 
 ```bash
 git add src/mcp_gateway/approval/registry.py src/mcp_gateway/approval/__init__.py tests/unit/test_approval_registry.py
@@ -842,7 +842,7 @@ ban (FORBIDDEN), max_pending overflow guard (PolicyError), and
 session-scoped cancellation."
 ```
 
-- [ ] **Step 18: Push and open a Draft PR targeting the Phase 1 base**
+- [x] **Step 18: Push and open a Draft PR targeting the Phase 1 base**
 
 ```bash
 git push -u origin feature/phase1-task3_approval_registry
@@ -873,7 +873,7 @@ EOF
 
 ### Phase 1 Completion
 
-- [ ] **Step P1.1: Confirm all three task PRs are merged into `feature/phase1_approval_foundation__base`**
+- [x] **Step P1.1: Confirm all three task PRs are merged into `feature/phase1_approval_foundation__base`**
 
 ```bash
 gh pr list --base feature/phase1_approval_foundation__base --state merged
@@ -881,7 +881,7 @@ gh pr list --base feature/phase1_approval_foundation__base --state merged
 
 Expected: three merged PRs (Tasks 1.1, 1.2, 1.3).
 
-- [ ] **Step P1.2: Confirm the Phase 1 Draft PR (against master) shows the consolidated diff**
+- [x] **Step P1.2: Confirm the Phase 1 Draft PR (against master) shows the consolidated diff**
 
 ```bash
 gh pr view --web   # for the feature/phase1_approval_foundation__base → master PR
@@ -928,7 +928,7 @@ Open a Draft PR `feature/phase2_session_eviction_hook__base → master`.
 
 Implements design §4.5 (eviction hook + exception observability via `logger.error`). The `AuditLogger` integration is intentionally *not* added at this layer — it lives in `app.py` (Phase 3 / Task 3.3).
 
-- [ ] **Step 1: Cut the task branch**
+- [x] **Step 1: Cut the task branch**
 
 ```bash
 git checkout feature/phase2_session_eviction_hook__base
@@ -936,7 +936,7 @@ git pull origin feature/phase2_session_eviction_hook__base
 git checkout -b feature/phase2-task1_session_eviction_hook
 ```
 
-- [ ] **Step 2: Write failing tests for hook invocation on each eviction path**
+- [x] **Step 2: Write failing tests for hook invocation on each eviction path**
 
 Create `tests/unit/test_session_eviction_hook.py`:
 
@@ -1099,7 +1099,7 @@ async def test_eviction_callback_does_not_block_caller() -> None:
     await asyncio.wait_for(started.wait(), timeout=0.5)
 ```
 
-- [ ] **Step 3: Run; expect failures (constructor rejects `on_session_evicted`)**
+- [x] **Step 3: Run; expect failures (constructor rejects `on_session_evicted`)**
 
 ```bash
 uv run pytest tests/unit/test_session_eviction_hook.py -v
@@ -1107,7 +1107,7 @@ uv run pytest tests/unit/test_session_eviction_hook.py -v
 
 Expected: every test errors at construction.
 
-- [ ] **Step 4: Update `InMemorySessionRegistry` constructor and add the dispatch helper**
+- [x] **Step 4: Update `InMemorySessionRegistry` constructor and add the dispatch helper**
 
 Edit `src/mcp_gateway/auth/session.py`. Apply the diff conceptually (preserving existing behaviour exactly when `on_session_evicted is None`):
 
@@ -1223,11 +1223,11 @@ In `remove`:
             self._fire_evicted(session_id)
 ```
 
-- [ ] **Step 5: Update `SessionRegistry` Protocol if it changed signature**
+- [x] **Step 5: Update `SessionRegistry` Protocol if it changed signature**
 
 Re-read `src/mcp_gateway/auth/session.py` and confirm the `Protocol` class still matches the new constructor. The `Protocol` does not declare `__init__`, so no change is needed.
 
-- [ ] **Step 6: Run the eviction hook tests**
+- [x] **Step 6: Run the eviction hook tests**
 
 ```bash
 uv run pytest tests/unit/test_session_eviction_hook.py -v
@@ -1235,7 +1235,7 @@ uv run pytest tests/unit/test_session_eviction_hook.py -v
 
 Expected: 6 passed.
 
-- [ ] **Step 7: Run the rest of the existing session-related tests to confirm no regression**
+- [x] **Step 7: Run the rest of the existing session-related tests to confirm no regression**
 
 ```bash
 uv run pytest tests/unit/test_mcp_gateway.py -v
@@ -1245,7 +1245,7 @@ uv run ruff check src/ tests/
 
 Expected: all green. `TestServerRequiresApproval` still passes because `on_session_evicted` defaults to `None`.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/mcp_gateway/auth/session.py tests/unit/test_session_eviction_hook.py
@@ -1256,7 +1256,7 @@ exception logging via logger.error. Default off (None) preserves the
 existing constructor contract."
 ```
 
-- [ ] **Step 9: Push and open a Draft PR targeting the Phase 2 base**
+- [x] **Step 9: Push and open a Draft PR targeting the Phase 2 base**
 
 ```bash
 git push -u origin feature/phase2-task1_session_eviction_hook
@@ -1284,7 +1284,7 @@ EOF
 
 ### Phase 2 Completion
 
-- [ ] **Step P2.1: Verify the phase base diff and lift the Draft flag on the Phase 2 PR**
+- [x] **Step P2.1: Verify the phase base diff and lift the Draft flag on the Phase 2 PR**
 
 ```bash
 git checkout feature/phase2_session_eviction_hook__base
@@ -1325,7 +1325,7 @@ Open a Draft PR `feature/phase3_blocking_mode__base → master`.
 
 Implements design §4.3.1 / §4.3.2 and §8.2 (audit truncation).
 
-- [ ] **Step 1: Cut the task branch**
+- [x] **Step 1: Cut the task branch**
 
 ```bash
 git checkout feature/phase3_blocking_mode__base
@@ -1333,7 +1333,7 @@ git pull origin feature/phase3_blocking_mode__base
 git checkout -b feature/phase3-task1_server_blocking_mode
 ```
 
-- [ ] **Step 2: Write the failing precondition test**
+- [x] **Step 2: Write the failing precondition test**
 
 Append to `tests/unit/test_mcp_gateway.py` (place after `TestServerRequiresApproval`):
 
@@ -1356,13 +1356,13 @@ class TestBuildRouterApprovalPrecondition:
             )
 ```
 
-- [ ] **Step 3: Run; expect failure (kwargs not accepted)**
+- [x] **Step 3: Run; expect failure (kwargs not accepted)**
 
 ```bash
 uv run pytest tests/unit/test_mcp_gateway.py::TestBuildRouterApprovalPrecondition -v
 ```
 
-- [ ] **Step 4: Extend `build_router` signature with the new parameters and precondition**
+- [x] **Step 4: Extend `build_router` signature with the new parameters and precondition**
 
 In `src/mcp_gateway/server.py`, modify `build_router`:
 
@@ -1403,13 +1403,13 @@ def _approval_id_for_log(approval_id: str) -> str:
     return approval_id[:8] + "..."
 ```
 
-- [ ] **Step 5: Run the precondition test; expect pass**
+- [x] **Step 5: Run the precondition test; expect pass**
 
 ```bash
 uv run pytest tests/unit/test_mcp_gateway.py::TestBuildRouterApprovalPrecondition -v
 ```
 
-- [ ] **Step 6: Add the failing suspend/resume test fixture and APPROVED test**
+- [x] **Step 6: Add the failing suspend/resume test fixture and APPROVED test**
 
 Append to `tests/unit/test_mcp_gateway.py`:
 
@@ -1562,13 +1562,13 @@ class TestBlockingModeHandlerDirect:
         assert body["error"]["message"] == "approval_timeout"
 ```
 
-- [ ] **Step 7: Run; expect failure (`build_router` does not yet implement the blocking handler)**
+- [x] **Step 7: Run; expect failure (`build_router` does not yet implement the blocking handler)**
 
 ```bash
 uv run pytest tests/unit/test_mcp_gateway.py::TestBlockingModeHandlerDirect -v
 ```
 
-- [ ] **Step 8: Implement the blocking-mode REQUIRES_APPROVAL handler**
+- [x] **Step 8: Implement the blocking-mode REQUIRES_APPROVAL handler**
 
 In `src/mcp_gateway/server.py`, replace the existing `case "REQUIRES_APPROVAL":` block with a guard that branches on `approval_blocking_mode`:
 
@@ -1695,13 +1695,13 @@ In `src/mcp_gateway/server.py`, replace the existing `case "REQUIRES_APPROVAL":`
 
 When the APPROVED branch falls through, it will run the existing ALLOW path (filter + proxy.call). Add a follow-up audit log for the post-approval execution: change the existing trailing `audit.log(ev="call", decision="allow", ...)` to use `decision="allow_after_approval"` *only* when the call was approved. The simplest approach: capture a flag `was_approved = (decision.status is DecisionStatus.APPROVED)` and select the audit decision string accordingly, e.g. `decision="allow_after_approval" if was_approved else "allow"`.
 
-- [ ] **Step 9: Run the timeout test; expect pass**
+- [x] **Step 9: Run the timeout test; expect pass**
 
 ```bash
 uv run pytest tests/unit/test_mcp_gateway.py::TestBlockingModeHandlerDirect::test_blocking_mode_returns_32003_on_timeout -v
 ```
 
-- [ ] **Step 10: Add and run the APPROVED-path test**
+- [x] **Step 10: Add and run the APPROVED-path test**
 
 Append to `TestBlockingModeHandlerDirect`:
 
@@ -1749,7 +1749,7 @@ uv run pytest tests/unit/test_mcp_gateway.py::TestBlockingModeHandlerDirect::tes
 
 Expected: pass.
 
-- [ ] **Step 11: Add and run the REJECTED-path test**
+- [x] **Step 11: Add and run the REJECTED-path test**
 
 Append:
 
@@ -1796,7 +1796,7 @@ uv run pytest tests/unit/test_mcp_gateway.py::TestBlockingModeHandlerDirect -v
 
 Expected: 3 passed.
 
-- [ ] **Step 12: Add and run the registry-overflow test**
+- [x] **Step 12: Add and run the registry-overflow test**
 
 Append:
 
@@ -1896,7 +1896,7 @@ uv run pytest tests/unit/test_mcp_gateway.py::TestBlockingModeHandlerDirect -v
 
 Expected: 4 passed.
 
-- [ ] **Step 13: Add and run the audit-id-truncation test**
+- [x] **Step 13: Add and run the audit-id-truncation test**
 
 Append:
 
@@ -1936,7 +1936,7 @@ uv run pytest tests/unit/test_mcp_gateway.py::TestBlockingModeHandlerDirect::tes
 
 Expected: pass.
 
-- [ ] **Step 14: Add and run the upstream-not-called-on-reject test**
+- [x] **Step 14: Add and run the upstream-not-called-on-reject test**
 
 Append:
 
@@ -1989,7 +1989,7 @@ uv run pytest tests/unit/test_mcp_gateway.py::TestBlockingModeHandlerDirect -v
 
 Expected: 6 passed.
 
-- [ ] **Step 15: Run the existing immediate-mode test class to confirm zero regression**
+- [x] **Step 15: Run the existing immediate-mode test class to confirm zero regression**
 
 ```bash
 uv run pytest tests/unit/test_mcp_gateway.py::TestServerRequiresApproval -v
@@ -1999,7 +1999,7 @@ uv run ruff check src/ tests/
 
 Expected: still green. Default-`False` flag preserves immediate-mode behavior.
 
-- [ ] **Step 16: Commit**
+- [x] **Step 16: Commit**
 
 ```bash
 git add src/mcp_gateway/server.py tests/unit/test_mcp_gateway.py

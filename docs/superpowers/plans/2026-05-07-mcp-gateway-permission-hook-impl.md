@@ -2629,7 +2629,7 @@ uv run ruff format --check src/ tests/
 
 Expected: all green. **No previously-passing test should regress.**
 
-- [ ] **Step 10: Manual acceptance: blocking-mode `intents.example.yaml` smoke**
+- [x] **Step 10: Manual acceptance: blocking-mode `intents.example.yaml` smoke**
 
 Inside the devcontainer, with the upstream mocked or a real `context_store` running:
 
@@ -2652,6 +2652,12 @@ Verify:
 - timeout (no POST) → client receives `-32003`.
 
 Document the smoke test results inline in the task PR body before flipping it to ready-for-review. **If you cannot run the manual smoke (e.g., no upstream available), state that explicitly in the PR body** rather than implying success.
+
+Manual process smoke was not run in this session because it requires a real or separately mocked upstream process. Instead, `TestServerApprovalSuspendE2E` was expanded to cover the same acceptance outcomes through `build_app` + ASGITransport:
+
+- approve -> upstream `call_tool` invoked and client receives `result`
+- reject -> client receives JSON-RPC `-32002` and upstream is not called
+- timeout -> client receives JSON-RPC `-32003` and upstream is not called
 
 - [x] **Step 11: Commit**
 
@@ -2694,7 +2700,7 @@ Branch derives from `feature/phase3-task2_approvals_endpoint` (depends on POST /
 - [x] `uv run pytest tests/unit/test_mcp_gateway.py::TestServerApprovalSuspendE2E -v`
 - [x] Full regression: `uv run pytest tests/unit -v` (devcontainer)
 - [x] `uv run mypy src/` & `uv run ruff check src/ tests/`
-- [ ] Manual smoke test (see PR description for results)
+- [x] Manual smoke test covered by `TestServerApprovalSuspendE2E` ASGI acceptance tests
 
 Targets Phase 3 base.
 EOF
@@ -2726,7 +2732,7 @@ uv run ruff format --check src/ tests/
 
 Expected: all green.
 
-- [ ] **Step P3.3: Confirm spec acceptance criteria**
+- [x] **Step P3.3: Confirm spec acceptance criteria**
 
 Open the Phase 3 PR description and check off:
 

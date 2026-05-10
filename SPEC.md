@@ -1426,7 +1426,7 @@ Blocking モードで待機中の承認を解決するための REST エンド�
 
 ## 16. ロードマップ
 
-### 16.1 実装済み（2026-04-14 時点）
+### 16.1 実装済み（2026-05-10 時点）
 
 | 機能 | 備考 |
 |------|------|
@@ -1442,6 +1442,7 @@ Blocking モードで待機中の承認を解決するための REST エンド�
 | Docker Compose 統合（chronos-dashboard サービス） | `127.0.0.1:8000:8000` バインド |
 | pre-commit フック（ruff / mypy / shellcheck） | |
 | Playwright E2E テスト（6 テストグループ + axe-core） | |
+| MCP Gateway: Permission Hook (Suspend/Resume) | Blocking モードによる承認待機、`POST /approvals` エンドポイント、JSON-RPCエラー拡張 |
 
 ### 16.2 近期予定（1-2 ヶ月）
 
@@ -1483,8 +1484,5 @@ Blocking モードで待機中の承認を解決するための REST エンド�
 - [MCP 仕様](https://modelcontextprotocol.io/) — Model Context Protocol
 - [CrewAI Memory](https://docs.crewai.com/en/concepts/memory) — 複合スコアリングの参照実装
 - AIエージェントの長期記憶と強化学習プラグイン開発 — コグニティブアーキテクチャ / 複合スコアリング / RL
-ngram](https://zenn.dev/kimmaru/articles/3dbd92dea9ede8) — sui-memory の MCP サーバー化
-- [MAGMA](https://arxiv.org/html/2601.03236v1) — Multi-Graph based Agentic Memory Architecture
-- [MCP 仕様](https://modelcontextprotocol.io/) — Model Context Protocol
-- [CrewAI Memory](https://docs.crewai.com/en/concepts/memory) — 複合スコアリングの参照実装
-- AIエージェントの長期記憶と強化学習プラグイン開発 — コグニティブアーキテクチャ / 複合スコアリング / RL
+- [LayerX ccgate (Zenn)](https://zenn.dev/layerx/articles/20260428-ccgate) — Server-defined Prompts / Permission Hook 概念の基礎
+- [tak848/ccgate (GitHub)](https://github.com/tak848/ccgate) — ccgate 参照実装

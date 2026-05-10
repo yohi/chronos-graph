@@ -216,6 +216,79 @@ uv run python -m mcp_gateway
 
 ---
 
+## エージェントごとの Hook (フック) 設定
+
+各AIエージェント（Claude Code / Gemini CLI / OpenCode）に対して、ツールの実行前後やセッションのライフサイクルで自動処理を割り込ませる「フック（Hook）」を設定できます。これを活用することで、ChronosGraph のツール（`memory_delete` や `memory_save` 等）の実行前に独自のガードレールや確認処理をクライアント側（エージェント側）で強制することが可能です。
+
+### Claude Code のフック設定
+`.claude/settings.json`（または `~/.claude/settings.json`）の `hooks` セクションで、特定のイベント時に実行するシェルコマンドを定義します。終了コード `2` を返すと実行をブロックできます。
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "memory_delete",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '記憶の削除が要求されました。' >&2"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Gemini CLI のフック設定
+`.gemini/settings.json`（または `~/.gemini/settings.json`）で設定します。標準入力（stdin）でコンテキストを受け取り、標準出力（stdout）へ JSON を返す形式でより詳細な制御が可能です。終了コード `2` でシステムブロックを行えます。
+
+```json
+{
+  "hooks": {
+    "BeforeTool": [
+      {
+        "matcher": "memory_save.*",
+        "hooks": [
+          {
+            "name": "validate-memory",
+            "type": "command",
+            "command": "node .gemini/hooks/validate_memory.js"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### OpenCode のフック設定
+OpenCode では宣言的な JSON ではなく、TypeScript/JavaScript の**プラグインシステム**を使用してフックを命令的に実装します。型安全な非同期処理が可能です。
+
+1. `.opencode/plugins/` などのパスにプラグインスクリプトを作成します：
+```typescript
+import type { Plugin } from "@opencode-ai/plugin";
+
+export const MemoryHookPlugin: Plugin = async ({ client }) => {
+  return {
+    tool: {
+      execute: {
+        before: async (input, output) => {
+          if (input.tool === "memory_delete") {
+            // 条件に合致する場合は Error を投げて実行をブロック可能
+            // throw new Error("memory_delete は現在ロックされています。");
+          }
+        }
+      }
+    }
+  };
+};
+```
+2. プロジェクトの `opencode.json`（またはグローバルの `~/.config/opencode/opencode.json`）の `plugins` セクションで有効化します。
+
+---
+
 ## マイグレーション (Migration)
 
 ### ベクトル次元数の変更

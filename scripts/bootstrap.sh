@@ -16,6 +16,7 @@ MCP_METHOD="python"
 UV_FROM=""
 GRAPH_ENABLED=true  # bootstrap.sh では利便性のためデフォルトで有効（アプリデフォルトは false）
 POSTGRES_SSL=false
+CACHE_BACKEND=""
 
 # Track which flags were explicitly set to allow overwriting .env
 EXPLICIT_FLAGS=""
@@ -202,6 +203,12 @@ if [[ "$MCP_METHOD" == "uvx" ]]; then
     echo -e "4. Start the server with: ${BLUE}uv tool run context-store${NC}"
 elif [[ "$MCP_METHOD" == "uv" ]]; then
     echo -e "4. Start the server with: ${BLUE}uv run context-store${NC}"
+else
+    echo -e "4. Start the server with: ${BLUE}python -m context_store${NC}"
+fi
+ echo -e "4. Start the server with: ${BLUE}python -m context_store${NC}"
+fi
+erver with: ${BLUE}uv run context-store${NC}"
 else
     echo -e "4. Start the server with: ${BLUE}python -m context_store${NC}"
 fi

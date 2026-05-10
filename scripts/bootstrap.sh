@@ -150,6 +150,9 @@ TMP_CONFIG=$(mktemp)
 trap 'rm -f "$TMP_CONFIG"' EXIT
 
 GEN_CONFIG_ARGS=("scripts/generate_config.py" "--backend" "$BACKEND" "--embedding" "$EMBEDDING_PROVIDER" "--graph" "$GRAPH_ENABLED" "--output" "$MCP_OUTPUT" "--method" "$MCP_METHOD")
+if [ "$POSTGRES_SSL" = "true" ]; then
+    GEN_CONFIG_ARGS+=("--ssl")
+fi
 if [[ -n "$UV_FROM" ]]; then
     GEN_CONFIG_ARGS+=("--uv-from" "$UV_FROM")
 fi

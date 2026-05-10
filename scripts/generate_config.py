@@ -221,7 +221,10 @@ def main() -> None:
     )
     parser.add_argument("--uv-from", help="Package to run with uv (e.g. chronos-graph)")
     parser.add_argument(
-        "--output", choices=["claude", "cursor"], default="claude", help="Config output format"
+        "--output",
+        choices=["claude", "cursor", "generic"],
+        default="claude",
+        help="Config output format",
     )
     parser.add_argument("--indent", type=int, default=2, help="JSON indentation")
 

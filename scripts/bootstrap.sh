@@ -97,9 +97,11 @@ case $EMBEDDING_PROVIDER in
     custom) EMBEDDING_PROVIDER="custom-api" ;;
 esac
 
+ENV_JUST_CREATED=false
 if [ ! -f .env ]; then
     echo -e "${GREEN}Creating .env from .env.example...${NC}"
     cp .env.example .env
+    ENV_JUST_CREATED=true
 fi
 
 # Update .env variables
@@ -117,7 +119,8 @@ for VAR in "STORAGE_BACKEND" "EMBEDDING_PROVIDER" "GRAPH_ENABLED" "POSTGRES_SSL"
         CURRENT_VAL=$(grep "^$VAR=" .env | cut -d'=' -f2)
         if [[ "$CURRENT_VAL" != "$VAL" ]]; then
             # Only override if the flag was explicitly passed in the command line
-            if [[ "$EXPLICIT_FLAGS" == *"$EXPLICIT_VAR"* ]]; then
+            # OR if we just created the .env file (to ensure defaults are applied)
+            if [[ "$EXPLICIT_FLAGS" == *"$EXPLICIT_VAR"* || "$ENV_JUST_CREATED" == "true" ]]; then
                 echo -e "${BLUE}Updating $VAR in .env: $CURRENT_VAL -> $VAL${NC}"
                 "${SED_INPLACE[@]}" "s/^$VAR=.*/$VAR=$VAL/" .env
             fi

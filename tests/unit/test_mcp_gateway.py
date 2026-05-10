@@ -2903,27 +2903,46 @@ class TestApprovalsEndpoint:
         assert resp.json() == {"error": "invalid_request"}
 
     @pytest.mark.asyncio
-    async def test_audit_log_no_reason_on_failure(self, router_with_registry, capsys):
-        app, _registry, _auth, _handshake = router_with_registry
+    async def test_audit_log_includes_reason_on_rejection(self, router_with_registry, capsys):
+        app, registry, _auth, handshake = router_with_registry
+        from datetime import UTC, datetime
+
+        from mcp_gateway.approval.notifier import ApprovalRequest
+
+        aid = await registry.register(
+            session_id="s1",
+            requester_agent_id="agent-a",
+            request=ApprovalRequest(
+                session_id="s1",
+                approval_id="PENDING",
+                agent_id="agent-a",
+                intent="curate_memories",
+                tool_name="memory_delete",
+                arguments={},
+                requested_at=datetime.now(UTC),
+            ),
+        )
+
         import httpx
         from httpx import ASGITransport
 
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            await c.post(
+            resp = await c.post(
                 "/approvals",
                 headers={"Authorization": "Bearer ck_o"},
                 json={
-                    "approval_id": "0" * 32,
-                    "decision": "approve",
-                    "reason": "should_not_be_logged",
+                    "approval_id": aid,
+                    "decision": "reject",
+                    "reason": "policy violation",
                 },
             )
-        # outcome: not_found should not have "reason" in log
+        assert resp.status_code == 200
+
         captured = capsys.readouterr()
         log_lines = [ln for ln in captured.err.splitlines() if '"ev":"approval_decision"' in ln]
         assert len(log_lines) == 1
-        assert '"reason":"should_not_be_logged"' not in log_lines[0]
-        assert '"outcome":"not_found"' in log_lines[0]
+        assert '"reason":"policy violation"' in log_lines[0]
+        assert '"outcome":"ok"' in log_lines[0]
 
 
 class TestServerApprovalSuspendE2E:

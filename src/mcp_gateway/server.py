@@ -662,7 +662,7 @@ def build_router(
                 "resolver": resolver_agent_id,
                 "approval_ref": _approval_id_for_log(approval_id),
             }
-            if outcome.value == "ok":
+            if normalized_reason is not None:
                 audit_fields["reason"] = normalized_reason
             audit.log(ev="approval_decision", **audit_fields)
 

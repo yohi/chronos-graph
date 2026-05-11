@@ -82,7 +82,7 @@
 **Files:**
 - Modify: `.github/workflows/ci.yml`
 
-- [ ] **Step 1: ブランチ作成**
+- [x] **Step 1: ブランチ作成**
 
 ```bash
 git fetch origin master
@@ -91,7 +91,7 @@ git push -u origin feature/phase0_evaluator_env__base
 git checkout -b feature/phase0-task1_ci_workflow
 ```
 
-- [ ] **Step 2: 既存 ci.yml を新仕様に書き換え**
+- [x] **Step 2: 既存 ci.yml を新仕様に書き換え**
 
 `.github/workflows/ci.yml` の全文を以下に置き換える:
 
@@ -137,7 +137,7 @@ jobs:
           OPENAI_API_KEY: sk-dummy-key-for-ci-validation
 ```
 
-- [ ] **Step 3: YAML をローカル parse して妥当性を確認 (Devcontainer 内)**
+- [x] **Step 3: YAML をローカル parse して妥当性を確認 (Devcontainer 内)**
 
 Run:
 
@@ -154,7 +154,7 @@ python -c 'import yaml,sys; yaml.safe_load(open(".github/workflows/ci.yml")); pr
 
 Expected: `ok`
 
-- [ ] **Step 4: コミット**
+- [x] **Step 4: コミット**
 
 ```bash
 git add .github/workflows/ci.yml
@@ -162,7 +162,7 @@ git commit -m "ci: target master only and run on ubuntu-slim"
 git push -u origin feature/phase0-task1_ci_workflow
 ```
 
-- [ ] **Step 5: Phase Base 向け Draft PR 作成**
+- [x] **Step 5: Phase Base 向け Draft PR 作成**
 
 ```bash
 gh pr create --draft \
@@ -190,7 +190,7 @@ EOF
 **Files:**
 - Modify: `.devcontainer/setup.sh`
 
-- [ ] **Step 1: ブランチ作成**
+- [x] **Step 1: ブランチ作成**
 
 ```bash
 git fetch origin
@@ -199,7 +199,7 @@ git pull --ff-only origin feature/phase0_evaluator_env__base
 git checkout -b feature/phase0-task2_devcontainer_env
 ```
 
-- [ ] **Step 2: setup.sh を編集して `~/.bashrc` 追記を idempotent に行う**
+- [x] **Step 2: setup.sh を編集して `~/.bashrc` 追記を idempotent に行う**
 
 `.devcontainer/setup.sh` の末尾に以下を追加 (置き換えではなく追加):
 
@@ -247,7 +247,7 @@ shellcheck .devcontainer/setup.sh || uv run python -m shellcheck .devcontainer/s
 
 Expected: shellcheck が未導入なら警告のみ。導入されている場合は exit code 0。
 
-- [ ] **Step 6: コミット**
+- [x] **Step 6: コミット**
 
 ```bash
 git add .devcontainer/setup.sh
@@ -255,7 +255,7 @@ git commit -m "chore(devcontainer): export DEVCONTAINER=1 in ~/.bashrc for evalu
 git push -u origin feature/phase0-task2_devcontainer_env
 ```
 
-- [ ] **Step 7: Phase Base 向け Draft PR 作成**
+- [x] **Step 7: Phase Base 向け Draft PR 作成**
 
 ```bash
 gh pr create --draft \
@@ -323,7 +323,7 @@ EOF
 - Create: `src/mcp_gateway/policy/models_evaluator.py`
 - Test: `tests/unit/test_mcp_gateway_evaluator_models.py`
 
-- [ ] **Step 1: ブランチ作成**
+- [x] **Step 1: ブランチ作成**
 
 ```bash
 git fetch origin master
@@ -332,7 +332,7 @@ git push -u origin feature/phase1_evaluator_foundation__base
 git checkout -b feature/phase1-task1_evaluator_models
 ```
 
-- [ ] **Step 2: 失敗するテストを書く**
+- [x] **Step 2: 失敗するテストを書く**
 
 `tests/unit/test_mcp_gateway_evaluator_models.py` を新規作成:
 
@@ -433,7 +433,7 @@ class TestMemoryItem:
             m.content = "y"  # type: ignore[misc]
 ```
 
-- [ ] **Step 3: テストが失敗することを確認 (Devcontainer 内)**
+- [x] **Step 3: テストが失敗することを確認 (Devcontainer 内)**
 
 Run:
 
@@ -443,7 +443,7 @@ uv run pytest tests/unit/test_mcp_gateway_evaluator_models.py -v
 
 Expected: `ModuleNotFoundError: No module named 'mcp_gateway.policy.models_evaluator'` で FAIL
 
-- [ ] **Step 4: 実装ファイルを作成**
+- [x] **Step 4: 実装ファイルを作成**
 
 `src/mcp_gateway/policy/models_evaluator.py`:
 
@@ -543,7 +543,7 @@ class Decision:
         return out
 ```
 
-- [ ] **Step 5: テストが通ることを確認 (Devcontainer 内)**
+- [x] **Step 5: テストが通ることを確認 (Devcontainer 内)**
 
 Run:
 
@@ -553,7 +553,7 @@ uv run pytest tests/unit/test_mcp_gateway_evaluator_models.py -v
 
 Expected: 全テスト PASS
 
-- [ ] **Step 6: ruff / ruff format / mypy をローカル実行**
+- [x] **Step 6: ruff / ruff format / mypy をローカル実行**
 
 Run (Devcontainer 内):
 
@@ -565,7 +565,7 @@ uv run mypy src/mcp_gateway/policy/models_evaluator.py
 
 Expected: いずれも exit 0
 
-- [ ] **Step 7: コミット**
+- [x] **Step 7: コミット**
 
 ```bash
 git add src/mcp_gateway/policy/models_evaluator.py tests/unit/test_mcp_gateway_evaluator_models.py
@@ -573,7 +573,7 @@ git commit -m "feat(mcp_gateway): add evaluator models and redaction utilities"
 git push -u origin feature/phase1-task1_evaluator_models
 ```
 
-- [ ] **Step 8: Phase Base 向け Draft PR 作成**
+- [x] **Step 8: Phase Base 向け Draft PR 作成**
 
 ```bash
 gh pr create --draft \
@@ -602,7 +602,7 @@ EOF
 **Files:**
 - Modify: `pyproject.toml`
 
-- [ ] **Step 1: ブランチ作成**
+- [x] **Step 1: ブランチ作成**
 
 ```bash
 git fetch origin
@@ -611,7 +611,7 @@ git pull --ff-only
 git checkout -b feature/phase1-task2_pyproject_extras
 ```
 
-- [ ] **Step 2: `[project.optional-dependencies]` に `evaluator` を追加**
+- [x] **Step 2: `[project.optional-dependencies]` に `evaluator` を追加**
 
 `pyproject.toml` の `embedding-litellm = [...]` の直下に挿入:
 
@@ -630,7 +630,7 @@ all = [
 ]
 ```
 
-- [ ] **Step 3: ruff lint 設定を更新**
+- [x] **Step 3: ruff lint 設定を更新**
 
 `pyproject.toml` の `[tool.ruff.lint]` ブロックを以下に書き換え:
 
@@ -644,7 +644,7 @@ extend-select = ["T20"]
 
 `[tool.ruff.lint.per-file-ignores]` ブロックは `tests/**/*.py` のみ残し、`T201` を許可するエントリーを **追加しない** (設計書 §6.5)。
 
-- [ ] **Step 4: lock 更新**
+- [x] **Step 4: lock 更新**
 
 Run (Devcontainer 内):
 
@@ -654,7 +654,7 @@ uv lock
 
 Expected: `uv.lock` が更新される (新規依存追加は無いので変更が最小になる可能性)
 
-- [ ] **Step 5: ruff が T20 を認識することを確認**
+- [x] **Step 5: ruff が T20 を認識することを確認**
 
 `/tmp/_t20_probe.py` を作成:
 
@@ -666,7 +666,7 @@ rm /tmp/_t20_probe.py
 
 Expected: `T201 [*] \`print\` found` を含む lint エラー
 
-- [ ] **Step 6: 既存ソースが T20 違反していないことを確認**
+- [x] **Step 6: 既存ソースが T20 違反していないことを確認**
 
 Run:
 
@@ -676,7 +676,7 @@ uv run ruff check src/ tests/
 
 Expected: exit 0 (もし違反があれば該当箇所を個別タスクで修正するが、設計書 §6.6 の通り既存 mcp_gateway は不変前提なので 0 想定)
 
-- [ ] **Step 7: コミット**
+- [x] **Step 7: コミット**
 
 ```bash
 git add pyproject.toml uv.lock
@@ -684,7 +684,7 @@ git commit -m "build(pyproject): add evaluator extras and enable ruff T20 global
 git push -u origin feature/phase1-task2_pyproject_extras
 ```
 
-- [ ] **Step 8: Phase Base 向け Draft PR 作成**
+- [x] **Step 8: Phase Base 向け Draft PR 作成**
 
 ```bash
 gh pr create --draft \

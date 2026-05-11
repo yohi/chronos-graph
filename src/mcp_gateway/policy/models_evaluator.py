@@ -84,7 +84,9 @@ class Decision:
 
     def __post_init__(self) -> None:
         if self.decision not in ("allow", "deny", "ask"):
-            raise ValueError(f"Invalid decision: {self.decision}. Must be 'allow', 'deny', or 'ask'.")
+            raise ValueError(
+                f"Invalid decision: {self.decision}. Must be 'allow', 'deny', or 'ask'."
+            )
         if self.decision == "deny" and not (self.reason and self.reason.strip()):
             raise ValueError("reason is required and must be non-empty for decision=deny")
         if self.decision == "ask" and not (self.ask_message and self.ask_message.strip()):

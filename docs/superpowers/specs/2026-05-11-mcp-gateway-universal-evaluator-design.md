@@ -590,7 +590,7 @@ def _configure_stderr_logging(level: str = "WARNING") -> None:
 | `CHRONOS_EVALUATOR_POLICY_PATH` | (必須) | **設定必須** | intents.yaml のパス |
 | `CHRONOS_EVALUATOR_DEFAULT_INTENT` | `default` | (環境次第) | input.context.intent 未指定時の既定 |
 | `CHRONOS_EVALUATOR_DEFAULT_AGENT_ID` | `claude-code` | (環境次第) | input.context.agent_id 未指定時の既定 |
-| `CHRONOS_EVALUATOR_LOG_LEVEL` | `WARNING` | stderr ログレベル |
+| `CHRONOS_EVALUATOR_LOG_LEVEL` | `WARNING` | (デフォルト可) | stderr ログレベル |
 
 **設計判断**: `--policy-path` 等の argparse オプションも提供するが、env を優先することで hook 設定がコマンドラインを汚さずに済む (settings.json の保守性 ↑)。
 

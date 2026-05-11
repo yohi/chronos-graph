@@ -1322,6 +1322,7 @@ git checkout -b feature/phase3-task1_memory_client
 
 from __future__ import annotations
 
+import json
 import os
 from unittest.mock import AsyncMock, patch
 
@@ -1344,8 +1345,11 @@ async def test_retrieve_returns_memory_items() -> None:
     ]
 
     async def handler(request: httpx.Request) -> httpx.Response:
+        # Verify the POST body (httpx sends JSON in body, not URL params)
+        assert request.method == "POST"
         assert request.url.path == "/api/memories/semantic-search"
-        body = httpx.URL(str(request.url)).params
+        body = json.loads(request.content)
+        assert body == {"query": "tool:bash command=ls", "project": "demo", "top_k": 3}
         return httpx.Response(200, json=payload)
 
     transport = httpx.MockTransport(handler)
@@ -1416,7 +1420,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from mcp_gateway.policy.models_evaluator import MemoryItem
@@ -1433,7 +1437,8 @@ class MemoryClient:
     dashboard_url: str
     timeout_seconds: float = 3.0
     top_k: int = 5
-    _api_key: str | None = None
+    # repr=False: APIキーが __repr__ / assertion diff / 例外トレースに平文で漏れないようにする
+    _api_key: str | None = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls) -> "MemoryClient | None":
@@ -2832,13 +2837,21 @@ def main(argv: list[str] | None = None) -> int:
     _configure_stderr_logging(os.getenv("CHRONOS_EVALUATOR_LOG_LEVEL", "WARNING"))
 
     parser = argparse.ArgumentParser(prog="mcp_gateway evaluate")
-    parser.add_argument("--json-io", action="store_true", default=True)
+    # 設計書 §4.1 で CLI 契約として明示されている `--json-io` を required にして
+    # 呼び出し側が明示的に JSON I/O モードを宣言することを強制する。値自体は
+    # 参照しない (将来モード追加時の forward-compatible なマーカー)。
+    parser.add_argument(
+        "--json-io",
+        action="store_true",
+        required=True,
+        help="enable JSON I/O mode (currently the only supported mode; required for forward compatibility)",
+    )
     parser.add_argument(
         "--policy-path",
         type=Path,
         default=Path(os.getenv("CHRONOS_EVALUATOR_POLICY_PATH", "intents.yaml")),
     )
-    parser.parse_args(argv if argv is not None else sys.argv[1:])
+    args = parser.parse_args(argv if argv is not None else sys.argv[1:])
 
     try:
         input_ = _read_input(sys.stdin)
@@ -2852,7 +2865,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        evaluator = _build_composite_evaluator(parser.parse_args(argv).policy_path)
+        evaluator = _build_composite_evaluator(args.policy_path)
         decision = asyncio.run(evaluator.evaluate(input_))
         _write_decision(decision, sys.stdout)
         return 0

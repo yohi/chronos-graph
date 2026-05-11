@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 SENSITIVE_KEY_PATTERN = re.compile(
-    r"(password|passwd|secret|token|api[_-]?key|authorization|bearer|credential|private[_-]?key|passphrase|private|cert|ssh)",
+    r"(password|passwd|secret|token|api[_-]?key|authorization|bearer|credential|private[_-]?key|passphrase|\bprivate\b|\bcert\b|\bssh\b)",
     re.IGNORECASE,
 )
 MAX_VALUE_LENGTH = 200
@@ -94,8 +94,9 @@ class Decision:
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"decision": self.decision}
-        if self.decision == "deny":
-            out["reason"] = self.reason
+        if self.decision in ("allow", "deny"):
+            if self.reason is not None:
+                out["reason"] = self.reason
         elif self.decision == "ask":
             out["ask_message"] = self.ask_message
         return out

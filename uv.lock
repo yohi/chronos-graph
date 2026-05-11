@@ -412,7 +412,6 @@ all = [
     { name = "anthropic" },
     { name = "asyncpg" },
     { name = "fastapi" },
-    { name = "httpx" },
     { name = "litellm" },
     { name = "mypy" },
     { name = "neo4j" },
@@ -453,7 +452,6 @@ embedding-openai = [
 ]
 evaluator = [
     { name = "anthropic" },
-    { name = "httpx" },
 ]
 storage-postgres = [
     { name = "asyncpg" },
@@ -478,7 +476,6 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'dashboard'", specifier = ">=0.115.0" },
     { name = "filelock", specifier = ">=3.13.0" },
     { name = "httpx", specifier = ">=0.27.0" },
-    { name = "httpx", marker = "extra == 'evaluator'", specifier = ">=0.27.0" },
     { name = "litellm", marker = "extra == 'embedding-litellm'", specifier = ">=1.0.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10.0" },

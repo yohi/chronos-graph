@@ -71,10 +71,10 @@ class TestSummarizeToolInput:
 
     def test_redacts_sensitive_keys_in_nested_input(self) -> None:
         # Verify Issue 1: nested sensitive keys are redacted
-        token = "DUMMY_TOKEN"
-        out = _summarize_tool_input({"headers": {"authorization": token}, "cmd": "ls"})
+        auth_header_value = "DUMMY_TOKEN"
+        out = _summarize_tool_input({"headers": {"authorization": auth_header_value}, "cmd": "ls"})
         # Do not rely on exact dict repr: just check that token is gone and marker is present
-        assert token not in out
+        assert auth_header_value not in out
         assert REDACTED_MARKER in out
         assert "authorization" in out
         assert "cmd=ls" in out

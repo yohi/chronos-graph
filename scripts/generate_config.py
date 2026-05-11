@@ -167,10 +167,13 @@ def generate_postgres_config(
     def get_secret(name: str, default: str) -> str:
         if hasattr(settings, name):
             raw = getattr(settings, name)
-            if raw is not None and hasattr(raw, "get_secret_value"):
-                val = raw.get_secret_value()
-                if isinstance(val, str) and val:
-                    return val
+            if raw is not None:
+                if hasattr(raw, "get_secret_value"):
+                    val = raw.get_secret_value()
+                    if isinstance(val, str) and val:
+                        return val
+                elif isinstance(raw, str) and raw:
+                    return raw
         return default
 
     env = {

@@ -779,14 +779,16 @@ from context_store.retrieval.pipeline import RetrievalPipeline
 async def test_create_for_dashboard_returns_pipeline_with_search() -> None:
     storage = MagicMock(name="StorageAdapter")
     graph = MagicMock(name="GraphAdapter")
-    # settings はテスト用に最小値だけ持つ MagicMock。実装側で参照する属性は
-    # graph_max_logical_depth / graph_fanout_limit / graph_max_physical_hops のみ。
+    # settings はテスト用に属性を持つ MagicMock。
+    # create_embedding_provider が参照する最低限の属性を揃える。
     settings = MagicMock(
+        embedding_provider="openai",
+        openai_api_key=MagicMock(get_secret_value=MagicMock(return_value="fake-key")),
         graph_max_logical_depth=2,
         graph_fanout_limit=10,
         graph_max_physical_hops=4,
     )
-    # create_embedding_provider は settings の属性を詳細に参照するためモック化する
+    # 実 I/O を伴う provider 生成を避けるため、関数自体はモック化を継続する
     with patch("context_store.embedding.create_embedding_provider") as mock_create:
         mock_create.return_value = MagicMock()
         pipeline = await RetrievalPipeline.create_for_dashboard(
@@ -1239,7 +1241,7 @@ async def semantic_search_memories(
                 graph=graph,
                 settings=settings,
             )
-        except Exception as exc:  # noqa: BLE001
+        except (ImportError, RuntimeError, ValueError) as exc:
             logger.warning(
                 "RetrievalPipeline could not be initialized for dashboard "
                 "(semantic-search endpoint will return 503): %s",

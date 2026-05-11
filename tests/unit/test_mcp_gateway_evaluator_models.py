@@ -51,7 +51,9 @@ class TestDecisionToDict:
 
 class TestSummarizeToolInput:
     def test_redacts_sensitive_keys(self) -> None:
-        out = _summarize_tool_input({"password": "hunter2", "api_key": "sk-123", "command": "ls"})
+        out = _summarize_tool_input(
+            {"password": "TEST_PASSWORD", "api_key": "TEST_API_KEY", "command": "ls"}
+        )
         assert f"password={REDACTED_MARKER}" in out
         assert f"api_key={REDACTED_MARKER}" in out
         assert "command=ls" in out
@@ -69,7 +71,7 @@ class TestSummarizeToolInput:
 
     def test_redacts_sensitive_keys_in_nested_input(self) -> None:
         # Verify Issue 1: nested sensitive keys are redacted
-        secret = "Bearer sk-123"
+        secret = "Bearer TEST_TOKEN"
         out = _summarize_tool_input({"headers": {"authorization": secret}, "cmd": "ls"})
         # Do not rely on exact dict repr: just check that secret is gone and marker is present
         assert secret not in out

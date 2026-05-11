@@ -807,9 +807,9 @@ uv run pytest tests/unit/test_retrieval_pipeline_factory.py -v
 
 Expected: `AttributeError: type object 'RetrievalPipeline' has no attribute 'create_for_dashboard'` で FAIL
 
-- [ ] **Step 4: `create_for_dashboard` classmethod を追加**
+- [ ] **Step 4: `create_for_dashboard` と共有ビルダーを追加し、Orchestrator をリファクタリング**
 
-`src/context_store/retrieval/pipeline.py` の `RetrievalPipeline` クラス内に classmethod を追加。中身は `orchestrator.py:490-620` の retrieval セクションを dashboard 用に最小化したもの (embedding provider が必要な場合は `create_embedding_provider(settings)` で生成する)。
+`src/context_store/retrieval/pipeline.py` に共有ビルダー `create_from_parts` と、そのラッパー `create_for_dashboard` を追加。その後、`src/context_store/orchestrator.py` の組み立てロジックをこの共有ビルダーを使うように書き換える。
 
 ```python
     @classmethod
@@ -820,12 +820,26 @@ Expected: `AttributeError: type object 'RetrievalPipeline' has no attribute 'cre
         graph: "GraphAdapter | None",
         settings: "Settings",
     ) -> "RetrievalPipeline":
-        """Build a RetrievalPipeline for the read-only dashboard.
-
-        This avoids spinning up the full Orchestrator (which would pull in
-        ingestion / lifecycle / batch processing) for dashboard-only callers.
-        """
+        """Build a RetrievalPipeline for the read-only dashboard."""
         from context_store.embedding import create_embedding_provider
+        embedding_provider = create_embedding_provider(settings)
+        return cls.create_from_parts(
+            storage=storage,
+            graph=graph,
+            embedding_provider=embedding_provider,
+            settings=settings,
+        )
+
+    @classmethod
+    def create_from_parts(
+        cls,
+        *,
+        storage: "StorageAdapter",
+        graph: "GraphAdapter | None",
+        embedding_provider: "EmbeddingProvider",
+        settings: "Settings",
+    ) -> "RetrievalPipeline":
+        """Shared builder for RetrievalPipeline used by Orchestrator and Dashboard."""
         from context_store.retrieval.graph_traversal import GraphTraversal
         from context_store.retrieval.keyword_search import KeywordSearch
         from context_store.retrieval.post_processor import PostProcessor
@@ -833,7 +847,6 @@ Expected: `AttributeError: type object 'RetrievalPipeline' has no attribute 'cre
         from context_store.retrieval.result_fusion import ResultFusion
         from context_store.retrieval.vector_search import VectorSearch
 
-        embedding_provider = create_embedding_provider(settings)
         return cls(
             query_analyzer=QueryAnalyzer(),
             vector_search=VectorSearch(
@@ -853,6 +866,10 @@ Expected: `AttributeError: type object 'RetrievalPipeline' has no attribute 'cre
             storage_adapter=storage,
         )
 ```
+
+`src/context_store/orchestrator.py`:
+`retrieval_pipeline = RetrievalPipeline(...)` の直接構築箇所を `RetrievalPipeline.create_from_parts(...)` 呼び出しに置き換え。
+
 
 - [ ] **Step 5: テスト通過確認**
 
@@ -1104,7 +1121,7 @@ gh pr create --draft \
 
 ### Task 2-3: /memories/semantic-search ルート + api_server で retrieval_pipeline 注入
 
-**派生元:** `feature/phase2-task2_dashboard_service` (依存タスク・Task 2-2 の `DashboardService.semantic_search` と Task 2-1 の `RetrievalPipeline.create_for_dashboard` を物理的に必要とする)
+**派生元:** `feature/phase2-task2_dashboard_service` + `feature/phase2-task1_pipeline_factory` (Task 2-2 の `DashboardService.semantic_search` と Task 2-1 の `RetrievalPipeline.create_for_dashboard` を両方必要とする)
 
 **ブランチ:** `feature/phase2-task3_memories_route`
 
@@ -1113,12 +1130,13 @@ gh pr create --draft \
 - Modify: `src/context_store/dashboard/api_server.py`
 - Test: `tests/unit/test_dashboard_semantic_search.py` (Task 2-2 で作成・拡張)
 
-- [ ] **Step 1: ブランチ作成 (Task 2-2 から派生)**
+- [ ] **Step 1: ブランチ作成 (Task 2-1 と 2-2 を統合)**
 
 ```bash
 git fetch origin
 git checkout feature/phase2-task2_dashboard_service
 git pull --ff-only
+git merge origin/feature/phase2-task1_pipeline_factory
 git checkout -b feature/phase2-task3_memories_route
 ```
 
@@ -1241,11 +1259,12 @@ async def semantic_search_memories(
                 graph=graph,
                 settings=settings,
             )
-        except (ImportError, RuntimeError, ValueError) as exc:
+        except Exception as exc:
             logger.warning(
                 "RetrievalPipeline could not be initialized for dashboard "
                 "(semantic-search endpoint will return 503): %s",
                 exc,
+                exc_info=True,
             )
 
         app.state.service = DashboardService(

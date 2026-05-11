@@ -501,8 +501,8 @@ app.state.service = DashboardService(
 
 **実装の前提**:
 
-- `src/context_store/retrieval/pipeline.py` に **新規ファクトリ `RetrievalPipeline.create_for_dashboard()` を追加** する。中身は `Orchestrator` 構築ロジック (`orchestrator.py:490-620` 周辺) の retrieval セクション (query_analyzer / vector_search / keyword_search / graph_traversal / result_fusion / post_processor) と同等の組み立てを行う、dashboard 用の最小ファクトリ (`storage`, `graph`, `settings` を引数に取り `RetrievalPipeline` を返す)。
-  - **WARNING**: 将来的な `Orchestrator` 側の初期化ロジック変更に伴う同期漏れに注意が必要。`Orchestrator` の retrieval 構成に変更があれば、必ず本ファクトリも更新すること。
+- `src/context_store/retrieval/pipeline.py` に **共通ビルダー `RetrievalPipeline.create_from_parts()` (または `create()`) を実装** し、`Orchestrator` (`orchestrator.py`) の組み立てロジックをここに集約・リファクタリングする。
+- ダッシュボード用の `RetrievalPipeline.create_for_dashboard()` は、この共通ビルダーを呼び出す薄いラッパーとして実装する。これにより、将来的なコンポーネント構成変更時の同期漏れを物理的に防止する。
 - 初期化に失敗した場合は `retrieval_pipeline=None` のまま service を構築し、後続の `POST /api/memories/semantic-search` は HTTP 503 を返す (§4.6.3 の `RuntimeError → 503` 経路)。dashboard 自体の起動は阻害しない。
 - 当初案として検討された「`Orchestrator` に `retrieval_pipeline` を public property として公開し、dashboard から再利用する」アプローチは、**dashboard が現状 `Orchestrator` を import していないため new dependency を生む** こと、および `Orchestrator` 起動が ingestion / lifecycle まで巻き込み dashboard 単独起動を重くすることを理由に採用しない。本設計では `Orchestrator` 側コードは一切変更しない。
 

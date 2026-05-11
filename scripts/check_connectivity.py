@@ -24,7 +24,7 @@ def sanitize_error(e: Exception) -> str:
     return re.sub(r":([^@/ ]+)@", ":****@", msg)
 
 
-async def check_connectivity():
+async def check_connectivity() -> None:
     settings = Settings()
     print(f"Checking connectivity for storage_backend={settings.storage_backend}...")
     success = True

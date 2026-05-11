@@ -64,6 +64,7 @@ class TestWaitForDecision:
         )
         d = await reg.wait_for_decision(aid, timeout=0.1)
         assert d.status is DecisionStatus.REJECTED
+        assert d.reason is not None
         assert d.reason == "policy violation"
 
     @pytest.mark.asyncio
@@ -78,6 +79,7 @@ class TestWaitForDecision:
         reg = PendingApprovalRegistry()
         d = await reg.wait_for_decision("does-not-exist", timeout=0.05)
         assert d.status is DecisionStatus.REJECTED
+        assert d.reason is not None
         assert d.reason == "not_found_or_evicted"
 
     @pytest.mark.asyncio
@@ -169,6 +171,7 @@ class TestResolve:
         )
         d = await reg.wait_for_decision(aid, timeout=0.1)
         assert d.status is DecisionStatus.REJECTED
+        assert d.reason is not None
         assert len(d.reason) == 256
         assert "\x00" not in d.reason
         assert d.reason == "X" * 256
@@ -225,6 +228,7 @@ class TestCancelSession:
         await reg.cancel_session("s1", reason="custom_reason")
         d = await reg.wait_for_decision(aid, timeout=0.05)
         assert d.status is DecisionStatus.REJECTED
+        assert d.reason is not None
         assert d.reason == "custom_reason"
 
     @pytest.mark.asyncio

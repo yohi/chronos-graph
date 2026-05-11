@@ -1,0 +1,742 @@
+# ChronosGraph MCP Gateway — Universal Evaluator (LLM拡張) 設計書
+
+- 作成日: 2026-05-11
+- 対象: `src/mcp_gateway/`, `src/context_store/dashboard/routes/`
+- 関連既存ドラフト: `docs/future/2026-05-10-mcp-gateway-cli-evaluator.md`
+- 設計手法: superpowers/brainstorming スキルによる構造化ブレインストーミング
+- ステータス: ユーザー承認済み (design 段階)
+
+## 0. サマリー
+
+ChronosGraph MCP Gateway に、AIエージェント（Claude Code / Gemini CLI 等）の `PreToolUse` Hook から呼び出される **Universal Evaluator CLI** を実装する。既存ドラフト (`2026-05-10-mcp-gateway-cli-evaluator.md`) の deterministic-only な構想に対し、本設計は以下の3点を新規に追加する。
+
+1. **`"ask"` decision** + `ask_message` フィールド (allow/deny に加えて第3の判定)
+2. **LLM 評価層** (Anthropic Claude 4.7 系、XMLタグ構造化プロンプト、adaptive thinking)
+3. **ChronosGraph 長期記憶との統合** (chronos-dashboard 経由でセマンティック検索)
+
+判定は **二層構造** で実施: Tier 1 で既存 deterministic `PolicyEngine` (intents.yaml + guardrails) を評価し、ALLOW の場合のみ Tier 2 で LLM が記憶を踏まえた最終判定を下す。
+
+## 1. 設計判断 (ブレインストーミング結果)
+
+ユーザーとの対話で確定した4つの基本方針:
+
+| # | 判断項目 | 採択案 | 理由 |
+|---|---------|--------|------|
+| 1 | LLMと既存PolicyEngineの関係 | **二層**: deterministic 先行 → LLM 詳細判定 | 既存資産を温存しつつ拡張可能 |
+| 2 | ContextStore 記憶取得手段 | **HTTP経由**: chronos-dashboard API | 起動高速・DB接続プール共有 |
+| 3 | LLM SDK 依存 | **オプション依存**: anthropic 未導入時は警告して allow | dev 環境の UX を破壊しない |
+| 4 | コード組織 | **モジュラー分離**: cli/composite/llm/memory を独立ファイル化 | 単一責任・テスト容易性・lazy import 境界明確 |
+
+## 2. アーキテクチャ全体図
+
+```text
+┌──────────────────────────────────────────────────────────────┐
+│  AI Agent (Claude Code / Gemini CLI)                          │
+│  PreToolUse Hook → JSON to stdin                              │
+└──────────────────┬───────────────────────────────────────────┘
+                   ▼
+┌──────────────────────────────────────────────────────────────┐
+│  $ uv run python -m mcp_gateway evaluate --json-io            │
+│                                                               │
+│  __main__.py (≤20 行・lazy router)                           │
+│    └─→ if argv[1]=='evaluate': from cli import main           │
+│        else:                  from app import build_app       │
+└──────────────────┬───────────────────────────────────────────┘
+                   ▼
+┌──────────────────────────────────────────────────────────────┐
+│  cli.py                                                       │
+│   1. configure_logging(stream=sys.stderr)  ← stdout純度確保  │
+│   2. parse stdin JSON  → ToolCallInput                       │
+│   3. await composite.evaluate(input) → Decision              │
+│   4. json.dump(Decision, sys.stdout); print("")               │
+│   5. sys.exit(0)   ← 評価成功時。例外時のみ exit(2)            │
+└──────────────────┬───────────────────────────────────────────┘
+                   ▼
+┌──────────────────────────────────────────────────────────────┐
+│  composite.py (CompositeEvaluator)                            │
+│  ┌─ Tier 1: deterministic ──────────────────────────────┐    │
+│  │  PolicyEngine.evaluate_call() (既存・不変)           │    │
+│  │   ├─ DENY    → 即返却                                │    │
+│  │   ├─ REQUIRES_APPROVAL → ask に正規化               │    │
+│  │   └─ ALLOW   → Tier 2 へ                             │    │
+│  └──────────────────────────────────────────────────────┘    │
+│  ┌─ Tier 2: LLM (Anthropic 任意) ────────────────────── ┐    │
+│  │  1. memory_client.retrieve(query) ← dashboard HTTP   │    │
+│  │  2. llm_evaluator.judge(input, rules, memory)        │    │
+│  │  3. parse → Decision                                 │    │
+│  │  fallback: SDK未導入/キー無し/timeout → ask          │    │
+│  └──────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### 2.1 Lazy Import 境界 (クリティカル)
+
+| モジュール | import 可能なもの |
+|-----------|------------------|
+| `__main__.py` | stdlib のみ (`sys`, `argparse`) |
+| `cli.py` | `composite`, `models`, `policy.loader` |
+| `composite.py` | `policy.engine` (既存), `llm_evaluator`, `memory_client` |
+| `llm_evaluator.py` | 関数内で `import anthropic` (ImportError → ask fallback) |
+| `memory_client.py` | 関数内で `import httpx` |
+
+**evaluate サブコマンド経路では、`app.py` / `server.py` / `uvicorn` / `fastapi` は決して import されない。**
+
+### 2.2 stdout 純度の二重保証
+
+1. `logging.basicConfig(stream=sys.stderr, level=...)` をプロセス起動直後に実行
+2. Anthropic SDK の `httpx` ロガーも明示的に stderr へ再構成
+3. 例外時は `traceback.print_exc(file=sys.stderr)` → `print(json.dumps({"decision":"ask","ask_message":"System evaluation failed."}))` → `sys.exit(2)` のフォーマットで「stdout に必ず JSON」を担保
+
+## 3. LLM 評価プロンプト設計
+
+Claude 4.7 のベストプラクティス (XMLタグ構造化、明示的役割定義、JSON-only 出力強制、adaptive thinking) に準拠。
+
+### 3.1 System Prompt (固定・prompt caching対象)
+
+```xml
+<role>
+You are the ChronosGraph Universal Evaluator — a security-and-intent gate
+that judges whether a proposed local tool call is safe and aligned with the
+project's policy and the user's accumulated preferences.
+</role>
+
+<task>
+Given a tool invocation (already passing deterministic guardrails), inspect:
+  1. The tool intent (<tool_intent>): what the agent wants to do
+  2. The project's hard rules (<rules>): immutable constraints
+  3. Long-term memory (<memory>): user preferences and past decisions
+
+Decide one of:
+  - "allow": clearly safe and aligned. Proceed without bothering the user.
+  - "deny":  clearly unsafe, destructive, or violates a hard rule.
+  - "ask":   ambiguous, unusual, or contradicts recalled preference.
+             Default to "ask" when in doubt — false-allow is the worst outcome.
+</task>
+
+<output_format>
+Respond with EXACTLY one JSON object. No prose, no markdown fences, no
+preamble. Schema:
+  {"decision": "allow"}
+  {"decision": "deny",  "reason":       "<≤200 chars, why blocked>"}
+  {"decision": "ask",   "ask_message":  "<≤300 chars, what to confirm>"}
+Any other output will be treated as a parse failure and downgraded to "ask".
+</output_format>
+
+<priorities>
+1. Hard rules in <rules> are absolute. Violation → "deny".
+2. Explicit user preferences in <memory> override defaults.
+3. When <memory> is empty or irrelevant, judge on tool semantics alone.
+4. Never invent facts not present in the provided context.
+</priorities>
+```
+
+### 3.2 User Prompt Template (動的)
+
+```xml
+<tool_intent>
+  <tool_name>{tool_name}</tool_name>
+  <tool_input>{json.dumps(tool_input, ensure_ascii=False)}</tool_input>
+  <cwd>{context.cwd or "unknown"}</cwd>
+  <agent_id>{context.agent_id or "unknown"}</agent_id>
+</tool_intent>
+
+<rules source="intents.yaml" intent="{intent_name}">
+  {rendered_guardrail_summary}
+</rules>
+
+<memory source="chronos-graph" top_k="{n}">
+  {for m in memories:}
+  <item type="{m.memory_type}" importance="{m.importance:.2f}">
+    {m.content}
+  </item>
+  {endfor}
+</memory>
+
+Decide now. Output JSON only.
+```
+
+### 3.3 Anthropic API 呼び出し設定
+
+```python
+response = client.messages.create(
+    model="claude-haiku-4-5-20251001",   # Hook はミリ秒〜秒オーダー要求 → Haiku 既定
+                                          # 環境変数 CHRONOS_EVALUATOR_MODEL で上書き可
+    max_tokens=512,
+    system=[{
+        "type": "text",
+        "text": SYSTEM_PROMPT,
+        "cache_control": {"type": "ephemeral"},  # 固定 system は prompt-cache
+    }],
+    messages=[{"role": "user", "content": user_prompt}],
+    # adaptive thinking: 複雑な判定だけ深く考えさせる
+    thinking={"type": "enabled", "budget_tokens": 1024},
+    timeout=httpx.Timeout(10.0, connect=2.0),
+)
+```
+
+**モデル選定根拠**:
+
+- デフォルト Haiku 4.5: PreToolUse hook は応答が遅いと UX を破壊する (Claude Code は ~60s タイムアウトだが体感1-2秒が許容上限)。Haiku の応答速度が要件にマッチ。
+- 環境変数で `claude-sonnet-4-6` / `claude-opus-4-7` に切替可能 (重要環境用)。
+
+**prompt caching**:
+
+- system プロンプトは固定 → `cache_control: ephemeral` でヒット率最大化
+- 2回目以降の hook 呼び出しで入力トークンを ~90% 削減
+
+**thinking の効果**:
+
+- "rm -rf" のような明白な denial は thinking 不要 → モデルが短時間で応答
+- "user wants to delete config but memory says 'always confirm config edits'" のような葛藤は thinking budget が活きる
+
+## 4. コンポーネント詳細仕様
+
+### 4.1 `src/mcp_gateway/cli.py` (新規)
+
+**責務**: stdin から JSON 読取、`composite.evaluate()` 呼び出し、stdout に JSON 出力、終了コード制御。
+
+```python
+def main(argv: list[str] | None = None) -> int:
+    """argparse で --json-io / --policy-path / --intent を受け、評価結果を返す。
+    返り値はそのまま sys.exit() に渡される (0 or 2)。
+    """
+
+# 内部関数 (テスト容易性のため分離)
+def _configure_stderr_logging(level: str) -> None: ...
+def _read_input(stream: IO[str]) -> ToolCallInput: ...
+def _write_decision(decision: Decision, stream: IO[str]) -> None: ...
+def _emit_fallback_ask(message: str, stream: IO[str]) -> None: ...
+```
+
+**起動時の固定処理順**:
+
+1. `_configure_stderr_logging()` → 全 logger を stderr へ
+2. argv パース (最小限の argparse、subparser なし、`evaluate` は `__main__` 側で振り分け済み)
+3. stdin 全読取 → JSON parse → `ToolCallInput` (pydantic)
+4. parse 失敗 → fallback ask、`exit(2)`
+5. `asyncio.run(composite.evaluate(input))` → `Decision`
+6. `_write_decision()` → stdout に JSON + 改行
+7. `exit(0)`
+8. try/except でこの全体を包み、未捕捉例外時は `_emit_fallback_ask()` + `exit(2)`
+
+**fail-safe 不変条件**:
+
+- どんなコードパスでも stdout には JSON 1 行のみ出力される
+- 例外時も `{"decision":"ask","ask_message":"System evaluation failed. Human confirmation required."}` を必ず吐く
+
+### 4.2 `src/mcp_gateway/__main__.py` (修正)
+
+**責務**: サブコマンドを見て `cli.main` or `serve` (現行 uvicorn 起動) に振り分け。
+
+```python
+def main() -> None:
+    # 1. 最低限の argv 検査 (stdlib のみ・lazy)
+    if len(sys.argv) >= 2 and sys.argv[1] == "evaluate":
+        from mcp_gateway.cli import main as cli_main
+        sys.exit(cli_main(sys.argv[2:]))
+
+    # 2. 旧来の動作 (uvicorn) は default として残す
+    _serve()  # 現行 main() の中身をここに移す
+```
+
+**後方互換性**: `python -m mcp_gateway` (引数なし) は従来通り uvicorn 起動。evaluate サブコマンドは新規パスでのみ追加。
+
+### 4.3 `src/mcp_gateway/policy/composite.py` (新規)
+
+**責務**: Tier 1 (deterministic) と Tier 2 (LLM) を直列に実行し、最終 Decision を返す。
+
+```python
+@dataclass(frozen=True, slots=True)
+class ToolCallInput:
+    tool_name: str
+    tool_input: dict[str, Any]
+    context: dict[str, Any] = field(default_factory=dict)
+    # context は agent_id, cwd, session_id 等を含む任意dict
+
+@dataclass(frozen=True, slots=True)
+class Decision:
+    decision: Literal["allow", "deny", "ask"]
+    reason: str | None = None         # decision="deny" のみ
+    ask_message: str | None = None    # decision="ask" のみ
+
+    def to_dict(self) -> dict[str, Any]: ...  # None フィールドは除外
+
+class CompositeEvaluator:
+    def __init__(
+        self,
+        policy: GatewayPolicy,
+        memory_client: MemoryClient | None,
+        llm_evaluator: LlmEvaluator | None,
+        default_intent: str = "default",
+    ) -> None: ...
+
+    async def evaluate(self, input: ToolCallInput) -> Decision: ...
+```
+
+**判定フロー (擬似コード)**:
+
+```python
+async def evaluate(self, input):
+    # Tier 1
+    try:
+        grant = self._build_implicit_grant(input)  # 引数の agent_id + intent → Grant
+        tier1 = self._engine.evaluate_call(
+            grant=grant, tool_name=input.tool_name, arguments=input.tool_input
+        )
+    except PolicyError as exc:
+        return Decision(decision="deny", reason=exc.reason or "policy_violation")
+
+    if tier1.status == "DENY":
+        return Decision(decision="deny", reason=tier1.reason or "guardrail_violation")
+
+    if tier1.status == "REQUIRES_APPROVAL":
+        # ALLOW を待つまでもなく LLM に進む価値が低い → 直接 ask
+        return Decision(
+            decision="ask",
+            ask_message=f"Tool {input.tool_name!r} requires manual approval.",
+        )
+
+    # Tier 1 = ALLOW
+    if self._llm is None:  # LLM 構成なし (extras 未インストール / キー無し)
+        return Decision(decision="allow")  # deterministic が許可なら通す
+
+    # Tier 2
+    try:
+        memories = await self._fetch_memories(input)  # 失敗時は []
+        rules = self._render_rules_for_prompt(grant, input.tool_name)
+        return await self._llm.judge(input, rules, memories)
+    except (LlmUnavailableError, MemoryFetchError, ResponseParseError) as exc:
+        logger.warning("Tier-2 fallback to ask: %s", exc)
+        return Decision(
+            decision="ask",
+            ask_message="System evaluation failed. Human confirmation required.",
+        )
+```
+
+**設計判断**:
+
+- LLM 評価器が None の場合は deterministic ALLOW を尊重して allow を返す (fail-open ではなく "deterministic 判定への信頼" として明示)。`ask` への退避はあくまで LLM を呼ぼうとして失敗した時のみ。これにより API キー未設定の dev 環境で hook が常時 ask になって UX が破壊されることを防ぐ。
+- ただし「dev 環境でもより安全側に倒したい」場合は環境変数 `CHRONOS_EVALUATOR_FALLBACK=ask` で挙動切替可能。
+
+### 4.4 `src/mcp_gateway/policy/llm_evaluator.py` (新規)
+
+**責務**: Anthropic SDK 呼び出し + プロンプト構築 + 応答 parse。Lazy import で `anthropic` 未インストール時は `LlmUnavailableError` を投げる。
+
+```python
+class LlmUnavailableError(Exception): ...
+class ResponseParseError(Exception): ...
+
+class LlmEvaluator:
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "claude-haiku-4-5-20251001",
+        timeout_seconds: float = 10.0,
+        thinking_budget: int = 1024,
+    ) -> None: ...
+
+    @classmethod
+    def from_env(cls) -> "LlmEvaluator | None":
+        """env から構築。ANTHROPIC_API_KEY 未設定や anthropic 未導入時は None。"""
+
+    async def judge(
+        self,
+        input: ToolCallInput,
+        rules: str,
+        memories: Sequence[MemoryItem],
+    ) -> Decision: ...
+```
+
+**実装ポイント**:
+
+- `from_env()` 内で `import anthropic` を試み、ImportError → None
+- `judge()` 内で system prompt は固定文字列 (`cache_control: ephemeral`)
+- 応答 parse: `content[0].text` を `json.loads` → 失敗時 `ResponseParseError`
+- decision フィールド検証: `Literal["allow","deny","ask"]` 以外 → `ResponseParseError`
+- 全ログは `logger = logging.getLogger("chronos_evaluator.llm")` 経由 (cli.py で stderr に統一)
+
+### 4.5 `src/mcp_gateway/policy/memory_client.py` (新規)
+
+**責務**: chronos-dashboard の `POST /memories/semantic-search` (新規追加) を叩いて Top-K の関連記憶を取得。
+
+```python
+@dataclass(frozen=True, slots=True)
+class MemoryItem:
+    content: str
+    memory_type: str
+    importance: float
+
+class MemoryFetchError(Exception): ...
+
+class MemoryClient:
+    def __init__(
+        self,
+        dashboard_url: str,
+        timeout_seconds: float = 3.0,
+        top_k: int = 5,
+    ) -> None: ...
+
+    @classmethod
+    def from_env(cls) -> "MemoryClient | None":
+        """env CHRONOS_DASHBOARD_URL 未設定なら None (memory なしで進む)。"""
+
+    async def retrieve(self, query: str, project: str | None = None) -> list[MemoryItem]: ...
+```
+
+**クエリ構築規約** (composite.py で実施):
+
+```python
+query = f"tool:{input.tool_name} " + _summarize_tool_input(input.tool_input)
+# 例: "tool:bash command=rm -rf /tmp/foo"
+# tool_input は最大200文字に切り詰め、機微情報フィールド(password等)はマスク
+```
+
+### 4.6 `src/context_store/dashboard/routes/memories.py` (修正)
+
+**追加エンドポイント**:
+
+```python
+@router.post("/semantic-search", response_model=list[MemoryResponse])
+async def semantic_search_memories(
+    req: SemanticSearchRequest,  # 新規 schema: {query, project?, top_k=5}
+    request: Request,
+) -> list[MemoryResponse]:
+    """Orchestrator.search(query) をHTTPで公開する read-only エンドポイント。"""
+    orchestrator: Orchestrator = request.app.state.orchestrator
+    resp = await orchestrator.search(
+        query=req.query, project=req.project, top_k=req.top_k
+    )
+    return [MemoryResponse(...) for m in resp.memories]
+```
+
+**注意点**:
+
+- 既存 `/search` は filter-based なので破壊変更せず別エンドポイント
+- dashboard が `app.state.orchestrator` を持っているか要確認 (持っていなければ `services.py` 経由)
+- 認証: dashboard が `--auth` 起動時のみ認証要件あり。CLI は同じ認証を受け継ぐため、`CHRONOS_DASHBOARD_API_KEY` で送る
+
+## 5. エラー処理・フォールバック仕様
+
+### 5.1 stdout 純度の三重保証
+
+```python
+# cli.py の main() 冒頭、最初に実行
+import logging
+import sys
+
+def _configure_stderr_logging(level: str = "WARNING") -> None:
+    root = logging.getLogger()
+    # 既存ハンドラを全て撤去 (uvicorn / anthropic / httpx が後付けする stdout ハンドラを潰す)
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    handler = logging.StreamHandler(stream=sys.stderr)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+    root.addHandler(handler)
+    root.setLevel(level)
+
+    # 特に noisy なライブラリを WARNING に固定
+    for name in ("httpx", "httpcore", "anthropic", "asyncio"):
+        logging.getLogger(name).setLevel("WARNING")
+```
+
+**追加防御策**:
+
+1. **`print()` 禁止規約**: cli/composite/llm/memory モジュールでは `print` を使わず、ruff の `flake8-print` (`T201`) を per-file で有効化 (pyproject.toml 修正)
+2. **stdout flush 直前検証**: テストでは `capsys.readouterr().out` がちょうど1行の JSON であることをアサート
+3. **Anthropic SDK の thinking 出力**: `thinking` ブロックは `response.content[0]` ではなく別チャネル → text の `json.loads` だけ走らせれば自然と分離される。明示的に `[block for block in response.content if block.type == "text"]` でフィルタする
+
+### 5.2 fallback 状態遷移表
+
+| ケース | Tier 1 状態 | Tier 2 状態 | 返却 Decision | exit code |
+|--------|------------|------------|---------------|-----------|
+| stdin JSON parse失敗 | — | — | `ask` (System evaluation failed.) | **2** |
+| 未知の agent_id / intent | DENY 相当(PolicyError) | スキップ | `deny` (policy_violation) | 0 |
+| deterministic guardrail 違反 | DENY | スキップ | `deny` (理由文付き) | 0 |
+| guardrail で `requires_approval` | REQUIRES_APPROVAL | スキップ | `ask` (Tool X requires manual approval.) | 0 |
+| deterministic ALLOW + LLM 未構成 (anthropic未導入 or キー無し) | ALLOW | 構成なし | `allow` | 0 |
+| deterministic ALLOW + dashboard HTTP 失敗 | ALLOW | memory fetch失敗 | LLM 続行 (memory=[]) | 0 |
+| deterministic ALLOW + LLM タイムアウト | ALLOW | timeout | `ask` (System evaluation failed.) | 0 |
+| deterministic ALLOW + LLM 応答非JSON | ALLOW | parse 失敗 | `ask` (System evaluation failed.) | 0 |
+| deterministic ALLOW + LLM `{"decision":"foo"}` | ALLOW | 不明な decision | `ask` (System evaluation failed.) | 0 |
+| deterministic ALLOW + LLM 正常応答 | ALLOW | OK | LLM の Decision そのまま | 0 |
+| **想定外例外 (catch-all)** | — | — | `ask` (System evaluation failed.) | **2** |
+
+**exit code 設計の意図**:
+
+- **0** = 「評価プロセスは正常完了し、stdout の JSON を見て判断せよ」
+- **2** = 「評価プロセス自体が壊れた。hook 側は安全側に倒して block 扱いせよ」
+- `ask` でも基本 exit 0 (hook は stdout を信頼) だが、stdin parse 失敗・catch-all だけは「stdout 信頼できない可能性あり」として exit 2 を併用
+
+### 5.3 環境変数仕様
+
+| 環境変数 | デフォルト | 用途 |
+|---------|----------|------|
+| `ANTHROPIC_API_KEY` | (未設定) | 未設定なら LLM 評価をスキップ |
+| `CHRONOS_EVALUATOR_MODEL` | `claude-haiku-4-5-20251001` | LLM モデル切替 |
+| `CHRONOS_EVALUATOR_TIMEOUT_SECONDS` | `10.0` | LLM 呼び出しタイムアウト |
+| `CHRONOS_EVALUATOR_THINKING_BUDGET` | `1024` | adaptive thinking のトークン上限 |
+| `CHRONOS_DASHBOARD_URL` | (未設定) | 未設定なら memory 取得をスキップ |
+| `CHRONOS_DASHBOARD_API_KEY` | (未設定) | dashboard 認証ヘッダ |
+| `CHRONOS_EVALUATOR_FALLBACK` | `allow` | `ask` にすると LLM 未構成時も ask に倒す |
+| `CHRONOS_EVALUATOR_POLICY_PATH` | (必須) | intents.yaml のパス |
+| `CHRONOS_EVALUATOR_DEFAULT_INTENT` | `default` | input.context.intent 未指定時の既定 |
+| `CHRONOS_EVALUATOR_DEFAULT_AGENT_ID` | `claude-code` | input.context.agent_id 未指定時の既定 |
+| `CHRONOS_EVALUATOR_LOG_LEVEL` | `WARNING` | stderr ログレベル |
+
+**設計判断**: `--policy-path` 等の argparse オプションも提供するが、env を優先することで hook 設定がコマンドラインを汚さずに済む (settings.json の保守性 ↑)。
+
+### 5.4 機微情報マスキング (LLM プロンプト送信前)
+
+```python
+SENSITIVE_KEY_PATTERN = re.compile(
+    r"(password|passwd|secret|token|api[_-]?key|authorization|bearer)",
+    re.IGNORECASE,
+)
+MAX_VALUE_LENGTH = 200
+
+def _summarize_tool_input(d: dict[str, Any]) -> str:
+    parts = []
+    for k, v in d.items():
+        if SENSITIVE_KEY_PATTERN.search(k):
+            parts.append(f"{k}=<REDACTED>")
+            continue
+        val_str = str(v)
+        if len(val_str) > MAX_VALUE_LENGTH:
+            val_str = val_str[:MAX_VALUE_LENGTH] + "...[truncated]"
+        parts.append(f"{k}={val_str}")
+    return " ".join(parts)
+```
+
+**注意**: 機微パターンを完全には捕捉できないため、運用上は「機微情報を扱うツールは hook の対象から除外するか、別 hook で前段マスキングする」ことを推奨。
+
+### 5.5 LLM 応答パースの厳格化
+
+```python
+def _parse_decision(text: str) -> Decision:
+    # 1. JSON だけを抽出 (前後の空白/改行のみ許容)
+    text = text.strip()
+    if not text.startswith("{") or not text.endswith("}"):
+        raise ResponseParseError(f"non-JSON response: {text[:80]!r}")
+
+    # 2. 厳密 parse
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ResponseParseError(f"invalid JSON: {e}") from e
+
+    # 3. schema 検証
+    if not isinstance(obj, dict):
+        raise ResponseParseError(f"top-level must be object, got {type(obj).__name__}")
+    decision = obj.get("decision")
+    if decision not in ("allow", "deny", "ask"):
+        raise ResponseParseError(f"unknown decision: {decision!r}")
+
+    # 4. 整合性
+    if decision == "deny":
+        reason = obj.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ResponseParseError("deny requires non-empty 'reason'")
+        return Decision(decision="deny", reason=reason[:200])
+    if decision == "ask":
+        msg = obj.get("ask_message")
+        if not isinstance(msg, str) or not msg.strip():
+            raise ResponseParseError("ask requires non-empty 'ask_message'")
+        return Decision(decision="ask", ask_message=msg[:300])
+    return Decision(decision="allow")
+```
+
+## 6. テスト戦略 (Devcontainer 強制実行)
+
+### 6.1 テストファイル構成
+
+```text
+tests/
+├── unit/
+│   ├── test_mcp_gateway_cli.py             # 新規: argv/stdin/stdout/exit code 検証
+│   ├── test_mcp_gateway_composite.py       # 新規: Tier1+Tier2 のフロー (mock LLM, mock memory)
+│   ├── test_mcp_gateway_llm_evaluator.py   # 新規: プロンプト構築・応答 parse
+│   ├── test_mcp_gateway_memory_client.py   # 新規: httpx mock で dashboard 通信
+│   └── test_mcp_gateway.py                 # 既存: 変更なし
+└── integration/
+    └── test_evaluator_cli_subprocess.py    # 新規: subprocess.run で実プロセス E2E
+```
+
+### 6.2 ユニットテスト必須ケース
+
+**`test_mcp_gateway_cli.py`**:
+
+| ケース | 検証内容 |
+|--------|---------|
+| 正常 allow | stdin に valid JSON → stdout に `{"decision":"allow"}` 1行 + exit 0 |
+| 正常 deny | mock composite が deny 返却 → stdout に reason 付き JSON + exit 0 |
+| 正常 ask | mock composite が ask 返却 → stdout に ask_message 付き JSON + exit 0 |
+| stdin 空 | exit 2 + stdout に fallback ask JSON |
+| stdin 不正 JSON | exit 2 + stdout に fallback ask JSON |
+| composite が想定外例外 | exit 2 + stdout に fallback ask JSON + stderr に traceback |
+| stdout 純度 | `capsys.readouterr().out` がちょうど1行の JSON (logger 出力が混ざらない) |
+| logger が stderr へ流れる | `logger.warning("test")` が `capsys.readouterr().err` に出る |
+
+**`test_mcp_gateway_composite.py`** (Tier 1/2 マトリクス全網羅):
+
+- deterministic DENY → Tier 2 呼ばれない・LLM mock が0回呼ばれることを assert
+- deterministic ALLOW + LLM未構成 → allow 返却
+- deterministic ALLOW + LLM allow → allow 返却
+- deterministic ALLOW + LLM deny → deny 返却
+- deterministic ALLOW + LLM ask → ask 返却
+- deterministic ALLOW + memory_client が None → memories=[] で LLM 呼び出し
+- deterministic ALLOW + memory_client が例外 → memories=[] で LLM 呼び出し (失敗を握りつぶす)
+- deterministic ALLOW + LLM 例外 → fallback ask
+- deterministic REQUIRES_APPROVAL → 直接 ask、LLM呼ばない
+
+**`test_mcp_gateway_llm_evaluator.py`**:
+
+- system prompt に `cache_control: ephemeral` が含まれる
+- user prompt に `<tool_intent>`, `<rules>`, `<memory>` タグが含まれる
+- 機微キーがマスクされている (`password=<REDACTED>`)
+- 応答 `{"decision":"allow"}` → Decision allow
+- 応答 `{"decision":"deny","reason":"x"}` → Decision deny
+- 応答 `{"decision":"ask","ask_message":"x"}` → Decision ask
+- 応答 `{"decision":"foo"}` → ResponseParseError
+- 応答 `not json` → ResponseParseError
+- 応答 `{"decision":"deny"}` (reason 欠落) → ResponseParseError
+- `anthropic` 未 import → `from_env()` が None を返す
+- API キー未設定 → `from_env()` が None を返す
+
+### 6.3 統合テスト (subprocess E2E)
+
+```python
+import json, subprocess, sys
+
+def test_cli_evaluate_deny_path():
+    payload = {"tool_name": "bash", "tool_input": {"command": "rm -rf /"}}
+    result = subprocess.run(
+        [sys.executable, "-m", "mcp_gateway", "evaluate", "--json-io",
+         "--policy-path", str(POLICY_PATH)],
+        input=json.dumps(payload),
+        capture_output=True, text=True, timeout=15,
+        env={**os.environ, "ANTHROPIC_API_KEY": "", "CHRONOS_DASHBOARD_URL": ""},
+    )
+    assert result.returncode == 0
+    decision = json.loads(result.stdout.strip())
+    assert decision["decision"] == "deny"
+    # stdout に余計な出力がないこと
+    assert result.stdout.count("\n") == 1
+```
+
+API キーを `""` でクリアした状態で実行することで、LLM 未構成パスを CI で安定検証可能。
+
+### 6.4 Devcontainer 強制実行スクリプト
+
+新規ファイル `scripts/check_evaluator.sh`:
+
+```bash
+#!/usr/bin/env bash
+# 評価CLIに関する全静的解析・テストをDevcontainer内で実行する。
+# 既存 Devcontainer 環境 (.devcontainer/devcontainer.json) 内でのみ動作することを前提とする。
+set -euo pipefail
+
+if [ -z "${REMOTE_CONTAINERS:-}${CODESPACES:-}${DEVCONTAINER:-}" ]; then
+    echo "ERROR: must run inside Devcontainer (REMOTE_CONTAINERS / DEVCONTAINER env not set)" >&2
+    echo "       VSCode: 'Reopen in Container' or use 'devcontainer exec ...'" >&2
+    exit 1
+fi
+
+echo "==> ruff check"
+uv run ruff check src/mcp_gateway/cli.py \
+                  src/mcp_gateway/policy/composite.py \
+                  src/mcp_gateway/policy/llm_evaluator.py \
+                  src/mcp_gateway/policy/memory_client.py \
+                  tests/unit/test_mcp_gateway_cli.py \
+                  tests/unit/test_mcp_gateway_composite.py \
+                  tests/unit/test_mcp_gateway_llm_evaluator.py \
+                  tests/unit/test_mcp_gateway_memory_client.py \
+                  tests/integration/test_evaluator_cli_subprocess.py
+
+echo "==> ruff format --check"
+uv run ruff format --check src/mcp_gateway tests/unit/test_mcp_gateway_*.py
+
+echo "==> mypy"
+uv run mypy src/mcp_gateway
+
+echo "==> pytest (unit)"
+uv run pytest tests/unit/test_mcp_gateway_cli.py \
+              tests/unit/test_mcp_gateway_composite.py \
+              tests/unit/test_mcp_gateway_llm_evaluator.py \
+              tests/unit/test_mcp_gateway_memory_client.py -v
+
+echo "==> pytest (integration, subprocess E2E)"
+uv run pytest tests/integration/test_evaluator_cli_subprocess.py -v
+
+echo "==> all checks passed"
+```
+
+**Devcontainer 外実行を防ぐガード**: 冒頭の env check で `REMOTE_CONTAINERS` / `CODESPACES` / `DEVCONTAINER` のいずれも未設定なら exit 1。CLAUDE.md 制約3 への準拠。
+
+**ホスト側のドキュメント手順** (README に追記):
+
+```bash
+# (ホスト) Devcontainer を開く
+$ code .       # 「Reopen in Container」を選択
+# (Devcontainer 内)
+$ bash scripts/check_evaluator.sh
+```
+
+### 6.5 pyproject.toml 修正
+
+```toml
+[project.optional-dependencies]
+evaluator = [
+    "anthropic>=0.40.0",  # adaptive thinking 対応バージョン
+    "httpx>=0.27.0",      # memory_client 用 (既に dependencies に存在)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# print を禁止して stdout 純度を ruff レベルで強制
+"src/mcp_gateway/cli.py" = ["T201"]
+"src/mcp_gateway/policy/composite.py" = ["T201"]
+"src/mcp_gateway/policy/llm_evaluator.py" = ["T201"]
+"src/mcp_gateway/policy/memory_client.py" = ["T201"]
+
+[tool.ruff.lint]
+extend-select = ["T20"]  # flake8-print を追加
+```
+
+### 6.6 既存テストへの影響
+
+- `tests/unit/test_mcp_gateway.py` (既存): 変更なし — 既存 `PolicyEngine` は不変
+- `tests/unit/test_param_constraint.py` (既存): 変更なし
+- 新規モジュールは既存 import パスに影響しない (composite/llm/memory は新規ファイル)
+
+### 6.7 CI 統合 (将来課題)
+
+現状 `.github/workflows` は本リポジトリに無いため (bitbucket-pipelines.yml 不在も確認済み)、本デザインでは CI 統合は scope 外。手動 Devcontainer 実行スクリプトのみ提供し、将来 CI 化時は `scripts/check_evaluator.sh` を bitbucket-pipelines.yml から呼ぶ前提とする。
+
+## 7. 変更ファイル一覧
+
+| 種別 | パス | 規模 |
+|------|------|------|
+| 新規 | `src/mcp_gateway/cli.py` | ~150 行 |
+| 修正 | `src/mcp_gateway/__main__.py` | +5 / -0 行 |
+| 新規 | `src/mcp_gateway/policy/composite.py` | ~200 行 |
+| 新規 | `src/mcp_gateway/policy/llm_evaluator.py` | ~180 行 |
+| 新規 | `src/mcp_gateway/policy/memory_client.py` | ~100 行 |
+| 修正 | `src/context_store/dashboard/routes/memories.py` | +30 行 (新規 endpoint) |
+| 修正 | `src/context_store/dashboard/schemas.py` | +10 行 (`SemanticSearchRequest`) |
+| 修正 | `pyproject.toml` | +10 行 (extras + ruff 設定) |
+| 新規 | `tests/unit/test_mcp_gateway_cli.py` | ~200 行 |
+| 新規 | `tests/unit/test_mcp_gateway_composite.py` | ~250 行 |
+| 新規 | `tests/unit/test_mcp_gateway_llm_evaluator.py` | ~200 行 |
+| 新規 | `tests/unit/test_mcp_gateway_memory_client.py` | ~100 行 |
+| 新規 | `tests/integration/test_evaluator_cli_subprocess.py` | ~150 行 |
+| 新規 | `scripts/check_evaluator.sh` | ~50 行 |
+| 修正 | `README.md` | +30 行 (Universal Evaluator セクション + hook 設定例) |
+
+**既存ファイルへの破壊変更なし**。既存 `policy/engine.py` / `policy/models.py` / `policy/loader.py` は不変。
+
+## 8. 次ステップ
+
+1. このデザインドキュメントのユーザーレビュー
+2. レビュー後、writing-plans スキルで実装計画 (タスク分解) を作成
+3. 実装計画に基づき TDD で実装
+4. Devcontainer 内で `scripts/check_evaluator.sh` を実行し全テスト通過を確認
+5. PR 作成 (README 更新含む)

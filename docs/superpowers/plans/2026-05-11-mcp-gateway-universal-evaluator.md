@@ -1137,8 +1137,8 @@ gh pr create --draft \
 git fetch origin
 git checkout feature/phase2-task2_dashboard_service
 git pull --ff-only
-git merge origin/feature/phase2-task1_pipeline_factory
 git checkout -b feature/phase2-task3_memories_route
+git merge origin/feature/phase2-task1_pipeline_factory
 ```
 
 - [ ] **Step 2: route の失敗テストを追加**

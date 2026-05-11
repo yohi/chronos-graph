@@ -31,10 +31,18 @@ class TestDecisionToDict:
     def test_ask_without_message_raises(self) -> None:
         with pytest.raises(ValueError, match="ask_message is required"):
             Decision(decision="ask")
+        with pytest.raises(ValueError, match="ask_message is required"):
+            Decision(decision="ask", ask_message="")
+        with pytest.raises(ValueError, match="ask_message is required"):
+            Decision(decision="ask", ask_message="   ")
 
     def test_deny_without_reason_raises(self) -> None:
         with pytest.raises(ValueError, match="reason is required"):
             Decision(decision="deny")
+        with pytest.raises(ValueError, match="reason is required"):
+            Decision(decision="deny", reason="")
+        with pytest.raises(ValueError, match="reason is required"):
+            Decision(decision="deny", reason="   ")
 
     def test_invalid_decision_raises(self) -> None:
         with pytest.raises(ValueError, match="Invalid decision"):
@@ -61,8 +69,12 @@ class TestSummarizeToolInput:
 
     def test_redacts_sensitive_keys_in_nested_input(self) -> None:
         # Verify Issue 1: nested sensitive keys are redacted
-        out = _summarize_tool_input({"headers": {"authorization": "Bearer sk-123"}, "cmd": "ls"})
-        assert f"'authorization': '{REDACTED_MARKER}'" in out
+        secret = "Bearer sk-123"
+        out = _summarize_tool_input({"headers": {"authorization": secret}, "cmd": "ls"})
+        # Do not rely on exact dict repr: just check that secret is gone and marker is present
+        assert secret not in out
+        assert REDACTED_MARKER in out
+        assert "authorization" in out
         assert "cmd=ls" in out
 
     def test_redacts_new_sensitive_patterns(self) -> None:

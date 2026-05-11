@@ -319,6 +319,32 @@ async def evaluate(self, input):
 
 - LLM 評価器が None の場合は deterministic ALLOW を尊重して allow を返す (fail-open ではなく "deterministic 判定への信頼" として明示)。`ask` への退避はあくまで LLM を呼ぼうとして失敗した時のみ。これにより API キー未設定の dev 環境で hook が常時 ask になって UX が破壊されることを防ぐ。
 - ただし「dev 環境でもより安全側に倒したい」場合は環境変数 `CHRONOS_EVALUATOR_FALLBACK=ask` で挙動切替可能。
+- **本番環境では `CHRONOS_EVALUATOR_FALLBACK=ask` を推奨** (§5.3 環境変数表参照)。LLM 評価が黙って無効化されているリスクを排除するため。
+
+**起動時の構成ログ (必須)**:
+
+`CompositeEvaluator.__init__` の末尾で、評価器構成を **必ず stderr ロガーに 1 行出力** する。これにより運用者が hook 経由のログから「LLM 有効/無効」「フォールバック方針」を即座に検知できる。
+
+```python
+class CompositeEvaluator:
+    def __init__(self, policy, memory_client, llm_evaluator, default_intent="default",
+                 fallback_when_llm_unavailable: Literal["allow", "ask"] = "allow") -> None:
+        self._policy = policy
+        self._memory = memory_client
+        self._llm = llm_evaluator
+        self._default_intent = default_intent
+        self._fallback = fallback_when_llm_unavailable
+
+        # 構成サマリーを WARNING で出して必ず見えるようにする (INFO だと運用者が見落とす)
+        logger.warning(
+            "evaluator config: llm=%s memory=%s fallback_when_llm_unavailable=%s",
+            "enabled" if llm_evaluator is not None else "DISABLED",
+            "enabled" if memory_client is not None else "disabled",
+            self._fallback,
+        )
+```
+
+→ `self._llm is None` のとき、`evaluate()` 内では `self._fallback` を参照し、`"ask"` なら ask、`"allow"` (デフォルト) なら allow を返す。
 
 ### 4.4 `src/mcp_gateway/policy/llm_evaluator.py` (新規)
 
@@ -390,12 +416,72 @@ class MemoryClient:
 ```python
 query = f"tool:{input.tool_name} " + _summarize_tool_input(input.tool_input)
 # 例: "tool:bash command=rm -rf /tmp/foo"
-# tool_input は最大200文字に切り詰め、機微情報フィールド(password等)はマスク
+# 仕様 (§5.4 の _summarize_tool_input 実装と一致):
+#   - 各値 (str(v)) を MAX_VALUE_LENGTH (200文字) で切り詰め (全体長制限ではない)
+#   - 機微キー (password/passwd/secret/token/api_key/authorization/bearer/credential)
+#     にマッチする key の値は <REDACTED> で完全置換
+#   - 注意: キー名ベースのマスキングのため、value の内部に秘密が埋め込まれている
+#     ケースは検出不可。詳細は §5.4「限界の明記」参照
 ```
 
-### 4.6 `src/context_store/dashboard/routes/memories.py` (修正)
+### 4.6 dashboard 側の拡張 (3ファイル修正)
 
-**追加エンドポイント**:
+**前提コード調査結果**:
+
+- `api_server.py` に `app.state.orchestrator` は **存在しない** (`app.state.service: DashboardService` のみ)
+- 既存 `DashboardService.search_memories(MemoryFilters)` は **filter-based 検索** であり `query` 文字列を受け取れない (ベクトル類似度検索ではない)
+
+そのため、orchestrator を直接エンドポイントから参照する初期案は破棄し、**`DashboardService` に新メソッド `semantic_search()` を追加** して既存パターン (Service が読み取りロジックを集約) に合わせる。
+
+#### 4.6.1 `src/context_store/dashboard/services.py` (修正)
+
+`DashboardService` に retrieval_pipeline を注入し、`semantic_search()` メソッドを追加:
+
+```python
+class DashboardService:
+    def __init__(
+        self,
+        storage: StorageAdapter,
+        graph: GraphAdapter | None,
+        retrieval_pipeline: "RetrievalPipeline | None" = None,  # 新規 (任意)
+    ) -> None:
+        self._storage = storage
+        self._graph = graph
+        self._retrieval = retrieval_pipeline
+
+    # 新規メソッド
+    async def semantic_search(
+        self,
+        query: str,
+        project: str | None = None,
+        top_k: int = 5,
+    ) -> list[Memory]:
+        """ベクトル類似度ベースのセマンティック検索。
+        retrieval_pipeline が None なら HTTPException(503) を投げる。"""
+        if self._retrieval is None:
+            raise RuntimeError("retrieval_pipeline not configured for this dashboard")
+        resp = await self._retrieval.search(query=query, project=project, top_k=top_k)
+        return resp.memories
+```
+
+#### 4.6.2 `src/context_store/dashboard/api_server.py` (修正)
+
+`Orchestrator` から取り出した `retrieval_pipeline` を `DashboardService` に渡す:
+
+```python
+# 既存
+app.state.service = DashboardService(storage=storage, graph=graph)
+# ↓ 修正
+app.state.service = DashboardService(
+    storage=storage,
+    graph=graph,
+    retrieval_pipeline=orchestrator._retrieval_pipeline,  # 既存の orchestrator から取得
+)
+```
+
+注: `Orchestrator` 側で `retrieval_pipeline` を public property として公開するか、コンストラクタ受け渡しに変更するかは実装フェーズで判断。最小変更案としては `Orchestrator` に `@property retrieval_pipeline` を追加。
+
+#### 4.6.3 `src/context_store/dashboard/routes/memories.py` (修正・追加エンドポイント)
 
 ```python
 @router.post("/semantic-search", response_model=list[MemoryResponse])
@@ -403,19 +489,40 @@ async def semantic_search_memories(
     req: SemanticSearchRequest,  # 新規 schema: {query, project?, top_k=5}
     request: Request,
 ) -> list[MemoryResponse]:
-    """Orchestrator.search(query) をHTTPで公開する read-only エンドポイント。"""
-    orchestrator: Orchestrator = request.app.state.orchestrator
-    resp = await orchestrator.search(
-        query=req.query, project=req.project, top_k=req.top_k
-    )
-    return [MemoryResponse(...) for m in resp.memories]
+    """ベクトル類似度ベースのセマンティック検索を HTTP で公開する read-only エンドポイント。
+    内部で DashboardService.semantic_search() → RetrievalPipeline.search() に委譲する。
+    既存の filter-based `/search` とは別経路 (破壊変更なし)。"""
+    from context_store.dashboard.services import DashboardService
+
+    service: DashboardService = request.app.state.service
+    try:
+        memories = await service.semantic_search(
+            query=req.query, project=req.project, top_k=req.top_k
+        )
+    except RuntimeError as exc:
+        # retrieval_pipeline 未注入の dashboard (古い起動構成) は 503
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return [
+        MemoryResponse(
+            id=str(m.id),
+            content=m.content,
+            memory_type=m.memory_type,
+            importance=m.importance_score,
+            project=m.project,
+            access_count=m.access_count,
+            created_at=m.created_at.isoformat() if m.created_at else None,
+        )
+        for m in memories
+    ]
 ```
 
 **注意点**:
 
-- 既存 `/search` は filter-based なので破壊変更せず別エンドポイント
-- dashboard が `app.state.orchestrator` を持っているか要確認 (持っていなければ `services.py` 経由)
+- 既存 `/search` は filter-based 検索のため、破壊変更せず別エンドポイントとして追加
+- `DashboardService` に retrieval_pipeline を注入しない既存呼び出し箇所はデフォルト引数 `None` で互換性維持 (テスト等)
 - 認証: dashboard が `--auth` 起動時のみ認証要件あり。CLI は同じ認証を受け継ぐため、`CHRONOS_DASHBOARD_API_KEY` で送る
+- `SemanticSearchRequest` schema は `src/context_store/dashboard/schemas.py` に新設 (`query: str`, `project: str | None = None`, `top_k: int = 5`)
 
 ## 5. エラー処理・フォールバック仕様
 
@@ -471,18 +578,18 @@ def _configure_stderr_logging(level: str = "WARNING") -> None:
 
 ### 5.3 環境変数仕様
 
-| 環境変数 | デフォルト | 用途 |
-|---------|----------|------|
-| `ANTHROPIC_API_KEY` | (未設定) | 未設定なら LLM 評価をスキップ |
-| `CHRONOS_EVALUATOR_MODEL` | `claude-haiku-4-5-20251001` | LLM モデル切替 |
-| `CHRONOS_EVALUATOR_TIMEOUT_SECONDS` | `10.0` | LLM 呼び出しタイムアウト |
-| `CHRONOS_EVALUATOR_THINKING_BUDGET` | `1024` | adaptive thinking のトークン上限 |
-| `CHRONOS_DASHBOARD_URL` | (未設定) | 未設定なら memory 取得をスキップ |
-| `CHRONOS_DASHBOARD_API_KEY` | (未設定) | dashboard 認証ヘッダ |
-| `CHRONOS_EVALUATOR_FALLBACK` | `allow` | `ask` にすると LLM 未構成時も ask に倒す |
-| `CHRONOS_EVALUATOR_POLICY_PATH` | (必須) | intents.yaml のパス |
-| `CHRONOS_EVALUATOR_DEFAULT_INTENT` | `default` | input.context.intent 未指定時の既定 |
-| `CHRONOS_EVALUATOR_DEFAULT_AGENT_ID` | `claude-code` | input.context.agent_id 未指定時の既定 |
+| 環境変数 | デフォルト | 本番推奨値 | 用途 |
+|---------|----------|----------|------|
+| `ANTHROPIC_API_KEY` | (未設定) | **設定必須** | 未設定なら LLM 評価をスキップ |
+| `CHRONOS_EVALUATOR_MODEL` | `claude-haiku-4-5-20251001` | (デフォルト可) | LLM モデル切替 |
+| `CHRONOS_EVALUATOR_TIMEOUT_SECONDS` | `10.0` | (デフォルト可) | LLM 呼び出しタイムアウト |
+| `CHRONOS_EVALUATOR_THINKING_BUDGET` | `1024` | (デフォルト可) | adaptive thinking のトークン上限 |
+| `CHRONOS_DASHBOARD_URL` | (未設定) | **設定必須** | 未設定なら memory 取得をスキップ |
+| `CHRONOS_DASHBOARD_API_KEY` | (未設定) | **設定必須** (--auth 時) | dashboard 認証ヘッダ |
+| `CHRONOS_EVALUATOR_FALLBACK` | `allow` | **`ask` を強く推奨** | LLM 未構成時の挙動。`ask` にすると黙って無効化されるリスクを排除 |
+| `CHRONOS_EVALUATOR_POLICY_PATH` | (必須) | **設定必須** | intents.yaml のパス |
+| `CHRONOS_EVALUATOR_DEFAULT_INTENT` | `default` | (環境次第) | input.context.intent 未指定時の既定 |
+| `CHRONOS_EVALUATOR_DEFAULT_AGENT_ID` | `claude-code` | (環境次第) | input.context.agent_id 未指定時の既定 |
 | `CHRONOS_EVALUATOR_LOG_LEVEL` | `WARNING` | stderr ログレベル |
 
 **設計判断**: `--policy-path` 等の argparse オプションも提供するが、env を優先することで hook 設定がコマンドラインを汚さずに済む (settings.json の保守性 ↑)。
@@ -547,11 +654,34 @@ def _redact_tool_input_for_llm(obj: Any) -> Any:
 
 **限界の明記**:
 
-- キー名ベースのマスキングのため、`tool_input["command"] = "export AWS_SECRET=xxx"` のように **値の内部に秘密が埋め込まれているケースは検出不可**
-- 完全な秘匿性が必要なツール (例: `bash`) は、運用レベルで以下のいずれかを推奨:
-  - hook の対象から除外 (matcher で除外)
-  - 別 hook で前段マスキング (シェルコマンドの AST 解析等) を行い、本 evaluator にはサニタイズ済みデータを渡す
-- 設計書 §4.5 の `memory_client` クエリ構築コメントもこの規約に合わせて更新
+本マスキングは **キー名ベース** のため、**値 (value) の内部に秘密が埋め込まれているケースは任意のツールで検出不可**。これは `bash` 固有の問題ではなく、任意の文字列値を受け取るすべてのツールで発生しうる構造的限界。
+
+**典型的な値埋め込みパターン (検出不可)**:
+
+| ツール例 | 検出不可な入力 | 漏洩する内容 |
+|---------|--------------|------------|
+| `bash` | `{"command": "export AWS_SECRET_ACCESS_KEY=xxx"}` | コマンド文字列内の秘密 |
+| `python` / `node` 等の任意コード実行 | `{"script": "client = OpenAI(api_key='sk-...')"}` | スクリプト内のリテラル |
+| Slack / メール送信系 | `{"message": "API key is sk-..."}` | メッセージ本文に書かれた値 |
+| HTTP 系 (`curl` / `fetch`) | `{"url": "https://user:pass@host/path"}` | URL の userinfo 部 |
+| `write_file` / `replace` | `{"content": "DB_PASSWORD=..."}` | 書き込み内容 |
+
+**高リスクツール群** (運用レベルでの追加対策を**必須**とする):
+
+- **任意コマンド/コード実行系**: `bash`, `sh`, `zsh`, `python`, `node`, `ruby`, `perl`, `eval` など
+- **任意 HTTP 系**: `curl`, `wget`, `fetch`, `httpie`
+- **任意ファイル書き込み系**: `write_file`, `replace`, `Edit`, `Write`
+
+**追加対策の選択肢** (高リスクツールには以下のいずれかを必須適用):
+
+1. **hook 対象から除外**: クライアント側 `matcher` で該当ツールを評価対象外にする
+2. **前段マスキング hook**: 別 hook で値の AST 解析・URL parse・正規表現スキャン等を行い、本 evaluator にはサニタイズ済みデータを渡す
+3. **ツール側での秘密検出**: ツール実装側で値スキャナ (例: `truffleHog`, `gitleaks` の patterns) を組み込み、検出時は実行前に拒否
+
+**設計書内の連動箇所**:
+
+- §4.5 `memory_client` クエリ構築のコメント (line 388-397) でも本限界に言及済み (Inline 1 対応で更新済み)
+- README には「高リスクツール群の hook 構成例 (除外 or 前段マスキング)」を必ず記載する
 
 ### 5.5 LLM 応答パースの厳格化
 
@@ -679,9 +809,25 @@ API キーを `""` でクリアした状態で実行することで、LLM 未構
 # 既存 Devcontainer 環境 (.devcontainer/devcontainer.json) 内でのみ動作することを前提とする。
 set -euo pipefail
 
+# 検知ロジック (意図的に「特定の Devcontainer」のみ許可):
+#  - REMOTE_CONTAINERS=true : VS Code "Reopen in Container"
+#  - CODESPACES=true        : GitHub Codespaces
+#  - DEVCONTAINER=1         : devcontainer CLI 利用時に手動 export または
+#                             .devcontainer/setup.sh で自動 export される
+# 注意: /.dockerenv や /proc/1/cgroup の検知は使わない。
+#       それらは「任意の Docker コンテナ」で pass してしまい、本プロジェクトの
+#       devcontainer ではない環境 (例: docker run python:3.12 ...) でも通過するため、
+#       依存性が揃わない環境でのテスト誤実行を招く。
 if [ -z "${REMOTE_CONTAINERS:-}${CODESPACES:-}${DEVCONTAINER:-}" ]; then
-    echo "ERROR: must run inside Devcontainer (REMOTE_CONTAINERS / DEVCONTAINER env not set)" >&2
-    echo "       VSCode: 'Reopen in Container' or use 'devcontainer exec ...'" >&2
+    echo "ERROR: must run inside the project Devcontainer." >&2
+    echo "       REMOTE_CONTAINERS / CODESPACES / DEVCONTAINER のいずれも未設定です。" >&2
+    echo "" >&2
+    echo "  対処方法:" >&2
+    echo "    [VS Code]        'Reopen in Container' を選択" >&2
+    echo "    [Codespaces]     自動的に CODESPACES=true が設定される" >&2
+    echo "    [devcontainer CLI] 以下のいずれか:" >&2
+    echo "        - DEVCONTAINER=1 を手動 export" >&2
+    echo "        - .devcontainer/setup.sh が新しい場合は自動 export される" >&2
     exit 1
 fi
 
@@ -765,18 +911,23 @@ extend-select = ["T20"]
 | 新規 | `src/mcp_gateway/policy/composite.py` | ~200 行 |
 | 新規 | `src/mcp_gateway/policy/llm_evaluator.py` | ~180 行 |
 | 新規 | `src/mcp_gateway/policy/memory_client.py` | ~100 行 |
-| 修正 | `src/context_store/dashboard/routes/memories.py` | +30 行 (新規 endpoint) |
+| 修正 | `src/context_store/dashboard/routes/memories.py` | +35 行 (新規 endpoint) |
+| 修正 | `src/context_store/dashboard/services.py` | +20 行 (`semantic_search()` メソッド + コンストラクタ拡張) |
+| 修正 | `src/context_store/dashboard/api_server.py` | +5 行 (`retrieval_pipeline` 注入) |
 | 修正 | `src/context_store/dashboard/schemas.py` | +10 行 (`SemanticSearchRequest`) |
+| 修正 | `src/context_store/orchestrator.py` | +3 行 (`retrieval_pipeline` の property 公開) |
 | 修正 | `pyproject.toml` | +10 行 (extras + ruff 設定) |
 | 新規 | `tests/unit/test_mcp_gateway_cli.py` | ~200 行 |
 | 新規 | `tests/unit/test_mcp_gateway_composite.py` | ~250 行 |
 | 新規 | `tests/unit/test_mcp_gateway_llm_evaluator.py` | ~200 行 |
 | 新規 | `tests/unit/test_mcp_gateway_memory_client.py` | ~100 行 |
+| 新規 | `tests/unit/test_dashboard_semantic_search.py` | ~80 行 (DashboardService 拡張のユニット) |
 | 新規 | `tests/integration/test_evaluator_cli_subprocess.py` | ~150 行 |
-| 新規 | `scripts/check_evaluator.sh` | ~50 行 |
-| 修正 | `README.md` | +30 行 (Universal Evaluator セクション + hook 設定例) |
+| 新規 | `scripts/check_evaluator.sh` | ~60 行 |
+| 修正 | `.devcontainer/setup.sh` | +1 行 (`export DEVCONTAINER=1` を `~/.bashrc` に追記) |
+| 修正 | `README.md` | +50 行 (Universal Evaluator セクション + hook 設定例 + 高リスクツール運用ノート + 本番推奨環境変数) |
 
-**既存ファイルへの破壊変更なし**。既存 `policy/engine.py` / `policy/models.py` / `policy/loader.py` は不変。
+**既存ファイルへの破壊変更なし**。既存 `policy/engine.py` / `policy/models.py` / `policy/loader.py` は不変。`DashboardService.__init__` の新規引数 `retrieval_pipeline` はデフォルト `None` のため、既存呼び出し箇所も互換維持。
 
 ## 8. 次ステップ
 
@@ -784,4 +935,9 @@ extend-select = ["T20"]
 2. レビュー後、writing-plans スキルで実装計画 (タスク分解) を作成
 3. 実装計画に基づき TDD で実装
 4. Devcontainer 内で `scripts/check_evaluator.sh` を実行し全テスト通過を確認
-5. PR 作成 (README 更新含む)
+5. **README に以下の運用ノートを追加**:
+   - 本番環境の必須/推奨環境変数 (§5.3 表参照、特に `CHRONOS_EVALUATOR_FALLBACK=ask` の強い推奨)
+   - 高リスクツール群 (§5.4 表参照) に対する hook 構成例 (除外 or 前段マスキング)
+   - devcontainer CLI 利用時の `export DEVCONTAINER=1` 手順 (§6.4 参照)
+   - 起動ログ (`evaluator config: llm=... memory=... fallback=...`) の読み方
+6. PR 作成 (README 更新含む)

@@ -247,6 +247,8 @@ def main() -> None:
 
 **責務**: Tier 1 (deterministic) と Tier 2 (LLM) を直列に実行し、最終 Decision を返す。
 
+> **実装注記**: 以下の `ToolCallInput` / `Decision` は本 spec ではインライン定義として示すが、実装計画では循環 import 回避のため `src/mcp_gateway/policy/models_evaluator.py` に集約する。同モジュールにマスキングユーティリティ (`_summarize_tool_input`, `_redact_tool_input_for_llm`) も含む。
+
 ```python
 @dataclass(frozen=True, slots=True)
 class ToolCallInput:
@@ -385,7 +387,9 @@ class LlmEvaluator:
 
 ### 4.5 `src/mcp_gateway/policy/memory_client.py` (新規)
 
-**責務**: chronos-dashboard の `POST /memories/semantic-search` (新規追加) を叩いて Top-K の関連記憶を取得。
+**責務**: chronos-dashboard の `POST /api/memories/semantic-search` (新規追加) を叩いて Top-K の関連記憶を取得。
+
+> **実装注記**: 以下の `MemoryItem` は本 spec ではインライン定義として示すが、実装計画では `src/mcp_gateway/policy/models_evaluator.py` に集約する (§4.3 注記参照)。
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -466,20 +470,41 @@ class DashboardService:
 
 #### 4.6.2 `src/context_store/dashboard/api_server.py` (修正)
 
-`Orchestrator` から取り出した `retrieval_pipeline` を `DashboardService` に渡す:
+dashboard は現状 `Orchestrator` を起動しない (`app.state.service` は `storage` / `graph` のみで構築されている read-only エントリ) ため、本設計では **`RetrievalPipeline` を dashboard 内で単独に組み立てて** `DashboardService` に注入する。`Orchestrator` への新規依存は導入しない。
 
 ```python
 # 既存
 app.state.service = DashboardService(storage=storage, graph=graph)
-# ↓ 修正
+# ↓ 修正 (lifespan 内)
+retrieval_pipeline = None
+try:
+    from context_store.retrieval.pipeline import RetrievalPipeline
+
+    retrieval_pipeline = await RetrievalPipeline.create_for_dashboard(
+        storage=storage,
+        graph=graph,
+        settings=settings,
+    )
+except Exception as exc:  # noqa: BLE001
+    logger.warning(
+        "RetrievalPipeline could not be initialized for dashboard "
+        "(semantic-search endpoint will return 503): %s",
+        exc,
+    )
+
 app.state.service = DashboardService(
     storage=storage,
     graph=graph,
-    retrieval_pipeline=orchestrator._retrieval_pipeline,  # 既存の orchestrator から取得
+    retrieval_pipeline=retrieval_pipeline,
 )
 ```
 
-注: `Orchestrator` 側で `retrieval_pipeline` を public property として公開するか、コンストラクタ受け渡しに変更するかは実装フェーズで判断。最小変更案としては `Orchestrator` に `@property retrieval_pipeline` を追加。
+**実装の前提**:
+
+- `src/context_store/retrieval/pipeline.py` に **共通ビルダー `RetrievalPipeline.create_from_parts()` (または `create()`) を実装** し、`Orchestrator` (`orchestrator.py`) の組み立てロジックをここに集約・リファクタリングする。
+- ダッシュボード用の `RetrievalPipeline.create_for_dashboard()` は、この共通ビルダーを呼び出す薄いラッパーとして実装する。これにより、将来的なコンポーネント構成変更時の同期漏れを物理的に防止する。
+- 初期化に失敗した場合は `retrieval_pipeline=None` のまま service を構築し、後続の `POST /api/memories/semantic-search` は HTTP 503 を返す (§4.6.3 の `RuntimeError → 503` 経路)。dashboard 自体の起動は阻害しない。
+- 当初案として検討された「`Orchestrator` に `retrieval_pipeline` を public property として公開し、dashboard から再利用する」アプローチは、**dashboard が現状 `Orchestrator` を import していないため new dependency を生む** こと、および `Orchestrator` 起動が ingestion / lifecycle まで巻き込み dashboard 単独起動を重くすることを理由に採用しない。本設計では `Orchestrator` 側コードは一切変更しない。
 
 #### 4.6.3 `src/context_store/dashboard/routes/memories.py` (修正・追加エンドポイント)
 
@@ -586,13 +611,15 @@ def _configure_stderr_logging(level: str = "WARNING") -> None:
 | `CHRONOS_EVALUATOR_THINKING_BUDGET` | `1024` | (デフォルト可) | adaptive thinking のトークン上限 |
 | `CHRONOS_DASHBOARD_URL` | (未設定) | **設定必須** | 未設定なら memory 取得をスキップ |
 | `CHRONOS_DASHBOARD_API_KEY` | (未設定) | **設定必須** (--auth 時) | dashboard 認証ヘッダ |
+| `CHRONOS_DASHBOARD_TIMEOUT_SECONDS` | `3.0` | (デフォルト可) | dashboard HTTP (semantic-search) 呼び出しタイムアウト |
+| `CHRONOS_DASHBOARD_TOP_K` | `5` | (デフォルト可) | semantic-search で取得する記憶の件数 |
 | `CHRONOS_EVALUATOR_FALLBACK` | `allow` | **`ask` を強く推奨** | LLM 未構成時の挙動。`ask` にすると黙って無効化されるリスクを排除 |
 | `CHRONOS_EVALUATOR_POLICY_PATH` | (必須) | **設定必須** | intents.yaml のパス |
 | `CHRONOS_EVALUATOR_DEFAULT_INTENT` | `default` | (環境次第) | input.context.intent 未指定時の既定 |
 | `CHRONOS_EVALUATOR_DEFAULT_AGENT_ID` | `claude-code` | (環境次第) | input.context.agent_id 未指定時の既定 |
 | `CHRONOS_EVALUATOR_LOG_LEVEL` | `WARNING` | (デフォルト可) | stderr ログレベル |
 
-**設計判断**: `--policy-path` 等の argparse オプションも提供するが、env を優先することで hook 設定がコマンドラインを汚さずに済む (settings.json の保守性 ↑)。
+**設計判断**: `--policy-path` 等の argparse オプションも提供する。環境変数はデフォルト値として使用し、CLI 引数が明示指定された場合は CLI が優先される (argparse 標準動作)。PreToolUse Hook の `settings.json` にコマンドラインを固定記述する運用では、env は fallback として機能する。
 
 ### 5.4 機微情報マスキング (memory 検索 + LLM プロンプト送信)
 
@@ -898,14 +925,15 @@ extend-select = ["T20"]
 - `tests/unit/test_param_constraint.py` (既存): 変更なし
 - 新規モジュールは既存 import パスに影響しない (composite/llm/memory は新規ファイル)
 
-### 6.7 CI 統合 (将来課題)
+### 6.7 CI 統合
 
-現状 `.github/workflows` は本リポジトリに無いため (bitbucket-pipelines.yml 不在も確認済み)、本デザインでは CI 統合は scope 外。手動 Devcontainer 実行スクリプトのみ提供し、将来 CI 化時は `scripts/check_evaluator.sh` を bitbucket-pipelines.yml から呼ぶ前提とする。
+実装計画 Phase 0 で `.github/workflows/ci.yml` を新設し、`master` へのプッシュ/PR で `ubuntu-slim` ランナー上の自動テスト (ruff / mypy / pytest) を実行する。加えて `.devcontainer/setup.sh` に `export DEVCONTAINER=1` を追記し、Phase 6 の `scripts/check_evaluator.sh` が Devcontainer を検知できるようにする。
 
 ## 7. 変更ファイル一覧
 
 | 種別 | パス | 規模 |
 |------|------|------|
+| 新規 | `src/mcp_gateway/policy/models_evaluator.py` | ~90 行 (`ToolCallInput`, `Decision`, `MemoryItem`, マスキングユーティリティ集約) |
 | 新規 | `src/mcp_gateway/cli.py` | ~150 行 |
 | 修正 | `src/mcp_gateway/__main__.py` | +5 / -0 行 |
 | 新規 | `src/mcp_gateway/policy/composite.py` | ~200 行 |
@@ -913,9 +941,9 @@ extend-select = ["T20"]
 | 新規 | `src/mcp_gateway/policy/memory_client.py` | ~100 行 |
 | 修正 | `src/context_store/dashboard/routes/memories.py` | +35 行 (新規 endpoint) |
 | 修正 | `src/context_store/dashboard/services.py` | +20 行 (`semantic_search()` メソッド + コンストラクタ拡張) |
-| 修正 | `src/context_store/dashboard/api_server.py` | +5 行 (`retrieval_pipeline` 注入) |
+| 修正 | `src/context_store/dashboard/api_server.py` | +25 行 (lifespan で `RetrievalPipeline.create_for_dashboard` を呼び `DashboardService` に注入) |
 | 修正 | `src/context_store/dashboard/schemas.py` | +10 行 (`SemanticSearchRequest`) |
-| 修正 | `src/context_store/orchestrator.py` | +3 行 (`retrieval_pipeline` の property 公開) |
+| 修正 | `src/context_store/retrieval/pipeline.py` | +30 行 (`create_for_dashboard` ファクトリ追加) |
 | 修正 | `pyproject.toml` | +10 行 (extras + ruff 設定) |
 | 新規 | `tests/unit/test_mcp_gateway_cli.py` | ~200 行 |
 | 新規 | `tests/unit/test_mcp_gateway_composite.py` | ~250 行 |
@@ -924,7 +952,8 @@ extend-select = ["T20"]
 | 新規 | `tests/unit/test_dashboard_semantic_search.py` | ~80 行 (DashboardService 拡張のユニット) |
 | 新規 | `tests/integration/test_evaluator_cli_subprocess.py` | ~150 行 |
 | 新規 | `scripts/check_evaluator.sh` | ~60 行 |
-| 修正 | `.devcontainer/setup.sh` | +1 行 (`export DEVCONTAINER=1` を `~/.bashrc` に追記) |
+| 新規 | `.github/workflows/ci.yml` | ~40 行 (master トリガー + ubuntu-slim + ruff/mypy/pytest) |
+| 修正 | `.devcontainer/setup.sh` | +5 行 (`export DEVCONTAINER=1` を `~/.bashrc` に idempotent 追記) |
 | 修正 | `README.md` | +50 行 (Universal Evaluator セクション + hook 設定例 + 高リスクツール運用ノート + 本番推奨環境変数) |
 
 **既存ファイルへの破壊変更なし**。既存 `policy/engine.py` / `policy/models.py` / `policy/loader.py` は不変。`DashboardService.__init__` の新規引数 `retrieval_pipeline` はデフォルト `None` のため、既存呼び出し箇所も互換維持。

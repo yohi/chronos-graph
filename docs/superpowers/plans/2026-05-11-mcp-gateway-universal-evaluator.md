@@ -46,11 +46,11 @@
 | 1 | `src/mcp_gateway/policy/models_evaluator.py` | 新規 | `ToolCallInput`, `Decision`, `MemoryItem`, masking ユーティリティ |
 | 1 | `tests/unit/test_mcp_gateway_evaluator_models.py` | 新規 | models / マスキング 単体テスト |
 | 1 | `pyproject.toml` | 修正 | `[project.optional-dependencies].evaluator` 追加・ruff `T20` グローバル有効化 |
-| 2 | `src/context_store/orchestrator.py` | 修正 | `retrieval_pipeline` を public property として公開 |
+| 2 | `src/context_store/retrieval/pipeline.py` | 修正 | `RetrievalPipeline.create_for_dashboard()` ファクトリ追加 (dashboard 用最小組み立て) |
 | 2 | `src/context_store/dashboard/services.py` | 修正 | `DashboardService.__init__` に `retrieval_pipeline` 引数追加・`semantic_search()` メソッド追加 |
 | 2 | `src/context_store/dashboard/schemas.py` | 修正 | `SemanticSearchRequest` 追加 |
 | 2 | `src/context_store/dashboard/routes/memories.py` | 修正 | `POST /semantic-search` ルート追加 |
-| 2 | `src/context_store/dashboard/api_server.py` | 修正 | `DashboardService` 構築時に `retrieval_pipeline` を注入 |
+| 2 | `src/context_store/dashboard/api_server.py` | 修正 | lifespan で `RetrievalPipeline.create_for_dashboard()` を呼び `DashboardService` に注入 |
 | 2 | `tests/unit/test_dashboard_semantic_search.py` | 新規 | service / route 単体テスト |
 | 3 | `src/mcp_gateway/policy/memory_client.py` | 新規 | `MemoryClient` (dashboard 経由でセマンティック検索) |
 | 3 | `src/mcp_gateway/policy/llm_evaluator.py` | 新規 | `_parse_decision` / `LlmEvaluator.judge` / `from_env` |
@@ -734,16 +734,21 @@ gh pr create --draft \
 
 **Phase Base ブランチ:** `feature/phase2_dashboard_semantic_search__base` (master から派生)
 
-**目的:** `RetrievalPipeline` を dashboard 経由で公開する `POST /api/memories/semantic-search` を追加。`DashboardService.__init__` を破壊変更せず (`retrieval_pipeline` をデフォルト `None`) 互換性維持。
+**目的:** `RetrievalPipeline` を dashboard 経由で公開する `POST /api/memories/semantic-search` を追加。`DashboardService.__init__` を破壊変更せず (`retrieval_pipeline` をデフォルト `None`) 互換性維持。dashboard は `Orchestrator` を起動しないため、**`RetrievalPipeline` は dashboard 側で単独に組み立てる** 方針 (設計書 §4.6.2 改訂版)。
 
-### Task 2-1: Orchestrator に retrieval_pipeline プロパティを公開
+> **方針変更メモ (2026-05-11):** 当初構想していた「`Orchestrator` に `retrieval_pipeline` を public property として公開し dashboard から再利用する」案 (旧 Task 2-1) は、dashboard が現状 `Orchestrator` を import しておらず new dependency を生むこと、および ingestion / lifecycle まで巻き込み dashboard 単独起動を重くすることを理由に **採用しない**。代わりに `RetrievalPipeline.create_for_dashboard()` ファクトリを新規追加し、dashboard の lifespan で直接組み立てる。これに伴い旧 Task 2-1 は削除し、Phase 2 は Task 2-1 (新: pipeline factory) → Task 2-2 → Task 2-3 の 3 タスク構成とする。
 
-**派生元:** `feature/phase2_dashboard_semantic_search__base` (独立タスク)
+### Task 2-1: RetrievalPipeline.create_for_dashboard ファクトリ追加
 
-**ブランチ:** `feature/phase2-task1_orchestrator_property`
+**派生元:** `feature/phase2_dashboard_semantic_search__base` (独立タスク・他 Task 2-x のコードに依存しない)
+
+**ブランチ:** `feature/phase2-task1_pipeline_factory`
 
 **Files:**
-- Modify: `src/context_store/orchestrator.py`
+- Modify: `src/context_store/retrieval/pipeline.py`
+- Test: `tests/unit/test_retrieval_pipeline_factory.py` (新規)
+
+**目的:** `Orchestrator` を起動せずに dashboard 単独で `RetrievalPipeline` を組み立てる経路を確立する。`orchestrator.py:490-620` 周辺の retrieval セクション (query_analyzer / vector_search / keyword_search / graph_traversal / result_fusion / post_processor) を dashboard 用に切り出した classmethod を追加する。
 
 - [ ] **Step 1: ブランチ作成**
 
@@ -751,84 +756,119 @@ gh pr create --draft \
 git fetch origin master
 git checkout -b feature/phase2_dashboard_semantic_search__base origin/master
 git push -u origin feature/phase2_dashboard_semantic_search__base
-git checkout -b feature/phase2-task1_orchestrator_property
+git checkout -b feature/phase2-task1_pipeline_factory
 ```
 
 - [ ] **Step 2: 失敗するテストを書く**
 
-`tests/unit/test_orchestrator_retrieval_property.py` を新規作成:
+`tests/unit/test_retrieval_pipeline_factory.py` を新規作成:
 
 ```python
-"""Ensure Orchestrator.retrieval_pipeline exposes the underlying pipeline."""
+"""Ensure RetrievalPipeline.create_for_dashboard wires the minimal stack."""
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
-from context_store.orchestrator import Orchestrator
+import pytest
+
+from context_store.retrieval.pipeline import RetrievalPipeline
 
 
-def test_retrieval_pipeline_property_returns_injected_pipeline() -> None:
-    pipeline = MagicMock(name="RetrievalPipeline")
-    # Construct Orchestrator with only the retrieval_pipeline patched in;
-    # other deps are not exercised by this test.
-    orch = Orchestrator.__new__(Orchestrator)
-    orch._retrieval_pipeline = pipeline  # type: ignore[attr-defined]
-
-    assert orch.retrieval_pipeline is pipeline
+@pytest.mark.asyncio
+async def test_create_for_dashboard_returns_pipeline_with_search() -> None:
+    storage = MagicMock(name="StorageAdapter")
+    graph = MagicMock(name="GraphAdapter")
+    # settings はテスト用に最小値だけ持つ MagicMock。実装側で参照する属性は
+    # graph_max_logical_depth / graph_fanout_limit / graph_max_physical_hops のみ。
+    settings = MagicMock(
+        graph_max_logical_depth=2,
+        graph_fanout_limit=10,
+        graph_max_physical_hops=4,
+    )
+    pipeline = await RetrievalPipeline.create_for_dashboard(
+        storage=storage, graph=graph, settings=settings
+    )
+    assert isinstance(pipeline, RetrievalPipeline)
+    # search() を呼べる shape を持つこと (実 I/O は別テストで検証)
+    assert hasattr(pipeline, "search")
 ```
 
 - [ ] **Step 3: テストが失敗することを確認**
 
-Run (Devcontainer 内):
-
 ```bash
-uv run pytest tests/unit/test_orchestrator_retrieval_property.py -v
+uv run pytest tests/unit/test_retrieval_pipeline_factory.py -v
 ```
 
-Expected: `AttributeError: 'Orchestrator' object has no attribute 'retrieval_pipeline'` で FAIL
+Expected: `AttributeError: type object 'RetrievalPipeline' has no attribute 'create_for_dashboard'` で FAIL
 
-- [ ] **Step 4: Orchestrator に property を追加**
+- [ ] **Step 4: `create_for_dashboard` classmethod を追加**
 
-`src/context_store/orchestrator.py` の `Orchestrator` クラス内、`__init__` 直後に挿入:
+`src/context_store/retrieval/pipeline.py` の `RetrievalPipeline` クラス内に classmethod を追加。中身は `orchestrator.py:490-620` の retrieval セクションを dashboard 用に最小化したもの (embedding provider が必要な場合は `create_embedding_provider(settings)` で生成する)。
 
 ```python
-    @property
-    def retrieval_pipeline(self) -> "RetrievalPipeline":
-        """Public accessor for the retrieval pipeline.
+    @classmethod
+    async def create_for_dashboard(
+        cls,
+        *,
+        storage: "StorageAdapter",
+        graph: "GraphAdapter | None",
+        settings: "Settings",
+    ) -> "RetrievalPipeline":
+        """Build a RetrievalPipeline for the read-only dashboard.
 
-        Exposed for the dashboard semantic-search endpoint (design §4.6).
+        This avoids spinning up the full Orchestrator (which would pull in
+        ingestion / lifecycle / batch processing) for dashboard-only callers.
         """
-        return self._retrieval_pipeline
+        from context_store.embedding import create_embedding_provider
+        from context_store.retrieval.graph_traversal import GraphTraversal
+        from context_store.retrieval.keyword_search import KeywordSearch
+        from context_store.retrieval.post_processor import PostProcessor
+        from context_store.retrieval.query_analyzer import QueryAnalyzer
+        from context_store.retrieval.result_fusion import ResultFusion
+        from context_store.retrieval.vector_search import VectorSearch
+
+        embedding_provider = create_embedding_provider(settings)
+        return cls(
+            query_analyzer=QueryAnalyzer(),
+            vector_search=VectorSearch(
+                embedding_provider=embedding_provider,
+                storage_adapter=storage,
+            ),
+            keyword_search=KeywordSearch(storage_adapter=storage),
+            graph_traversal=GraphTraversal(
+                graph_adapter=graph,
+                default_depth=settings.graph_max_logical_depth,
+                fanout_limit=settings.graph_fanout_limit,
+                max_physical_hops=settings.graph_max_physical_hops,
+            ),
+            result_fusion=ResultFusion(),
+            post_processor=PostProcessor(storage_adapter=storage),
+            storage_adapter=storage,
+        )
 ```
 
 - [ ] **Step 5: テスト通過確認**
 
-Run:
-
 ```bash
-uv run pytest tests/unit/test_orchestrator_retrieval_property.py -v
+uv run pytest tests/unit/test_retrieval_pipeline_factory.py -v
 ```
 
 Expected: PASS
 
 - [ ] **Step 6: 既存テストへの回帰確認**
 
-Run:
-
 ```bash
-uv run pytest tests/unit -k "orchestrator or retrieval" -v
+uv run pytest tests/unit -k "retrieval or pipeline" -v
 ```
 
-Expected: 既存テストが全て PASS
+Expected: 既存テストが全て PASS (新規 classmethod 追加のみで既存挙動に変更なし)
 
 - [ ] **Step 7: ruff / mypy**
 
-Run:
-
 ```bash
-uv run ruff check src/context_store/orchestrator.py tests/unit/test_orchestrator_retrieval_property.py
-uv run mypy src/context_store/orchestrator.py
+uv run ruff check src/context_store/retrieval/pipeline.py tests/unit/test_retrieval_pipeline_factory.py
+uv run mypy src/context_store/retrieval/pipeline.py
 ```
 
 Expected: exit 0
@@ -836,9 +876,9 @@ Expected: exit 0
 - [ ] **Step 8: コミット**
 
 ```bash
-git add src/context_store/orchestrator.py tests/unit/test_orchestrator_retrieval_property.py
-git commit -m "feat(orchestrator): expose retrieval_pipeline as public property"
-git push -u origin feature/phase2-task1_orchestrator_property
+git add src/context_store/retrieval/pipeline.py tests/unit/test_retrieval_pipeline_factory.py
+git commit -m "feat(retrieval): add RetrievalPipeline.create_for_dashboard factory"
+git push -u origin feature/phase2-task1_pipeline_factory
 ```
 
 - [ ] **Step 9: Phase Base 向け Draft PR**
@@ -846,9 +886,9 @@ git push -u origin feature/phase2-task1_orchestrator_property
 ```bash
 gh pr create --draft \
   --base feature/phase2_dashboard_semantic_search__base \
-  --head feature/phase2-task1_orchestrator_property \
-  --title "feat(orchestrator): retrieval_pipeline を public property 化" \
-  --body "Dashboard セマンティック検索エンドポイントから RetrievalPipeline にアクセス可能にする (設計書 §4.6.2)。"
+  --head feature/phase2-task1_pipeline_factory \
+  --title "feat(retrieval): RetrievalPipeline.create_for_dashboard ファクトリ追加" \
+  --body "dashboard が Orchestrator を起動せずに RetrievalPipeline を構築できる経路を追加 (設計書 §4.6.2 改訂版)。"
 ```
 
 ### Task 2-2: DashboardService.semantic_search() + SemanticSearchRequest schema
@@ -1058,7 +1098,7 @@ gh pr create --draft \
 
 ### Task 2-3: /memories/semantic-search ルート + api_server で retrieval_pipeline 注入
 
-**派生元:** `feature/phase2-task2_dashboard_service` (依存タスク・Task 2-2 の `DashboardService.semantic_search` と Task 2-1 の `Orchestrator.retrieval_pipeline` を物理的に必要とする)
+**派生元:** `feature/phase2-task2_dashboard_service` (依存タスク・Task 2-2 の `DashboardService.semantic_search` と Task 2-1 の `RetrievalPipeline.create_for_dashboard` を物理的に必要とする)
 
 **ブランチ:** `feature/phase2-task3_memories_route`
 
@@ -1179,7 +1219,7 @@ async def semantic_search_memories(
     ]
 ```
 
-- [ ] **Step 5: api_server.py の lifespan で Orchestrator から retrieval_pipeline を注入**
+- [ ] **Step 5: api_server.py の lifespan で RetrievalPipeline.create_for_dashboard を呼び出し注入**
 
 `src/context_store/dashboard/api_server.py:50` 周辺の `app.state.service = DashboardService(storage=storage, graph=graph)` を以下に置き換え:
 
@@ -1209,7 +1249,7 @@ async def semantic_search_memories(
         )
 ```
 
-> **NOTE:** `RetrievalPipeline.create_for_dashboard` は既存にない場合は Task 2-3 内でファクトリメソッドを追加するか、`Orchestrator` を経由して `retrieval_pipeline` を再利用する形に簡略化する。実装者は `src/context_store/retrieval/pipeline.py` を確認し、最も少ない変更で read-only 用 RetrievalPipeline を構築できる経路を選択する。注入が困難な場合は `retrieval_pipeline=None` 固定で進めて Phase 2 のスコープを狭め、Phase 3 完了後に follow-up で対応する判断も可。
+> **NOTE:** `RetrievalPipeline.create_for_dashboard` は Task 2-1 で追加したメソッドを利用する。初期化に失敗した場合は `retrieval_pipeline=None` で dashboard を起動し、エンドポイントから 503 を返すようにする。
 
 - [ ] **Step 6: テスト通過確認**
 
@@ -1265,7 +1305,7 @@ gh pr create --draft \
 - [ ] **Step 1: Task PR を順序通りに Phase Base へマージ**
 
 ```bash
-gh pr merge --squash feature/phase2-task1_orchestrator_property
+gh pr merge --squash feature/phase2-task1_pipeline_factory
 gh pr merge --squash feature/phase2-task2_dashboard_service
 gh pr merge --squash feature/phase2-task3_memories_route
 ```
@@ -1281,7 +1321,7 @@ gh pr create --draft \
   --head feature/phase2_dashboard_semantic_search__base \
   --title "Phase 2: Dashboard セマンティック検索 API" \
   --body "## Summary
-- Orchestrator.retrieval_pipeline を public property 化
+- RetrievalPipeline.create_for_dashboard() ファクトリ追加
 - DashboardService.semantic_search() + SemanticSearchRequest schema
 - POST /api/memories/semantic-search エンドポイント"
 ```
@@ -2003,8 +2043,12 @@ class LlmEvaluator:
     def _get_client(self) -> Any:
         if self._client is None:
             import anthropic
+            import httpx
 
-            self._client = anthropic.Anthropic(api_key=self._api_key, timeout=self._timeout_seconds)
+            self._client = anthropic.Anthropic(
+                api_key=self._api_key,
+                timeout=httpx.Timeout(self._timeout_seconds, connect=2.0),
+            )
         return self._client
 
     async def judge(
@@ -3619,7 +3663,7 @@ gh pr create --draft \
 
 - "TBD" / "TODO" / "implement later" / "適切に" / "Similar to" の使用なし
 - 全 Task に完全な code block と exact command を記載
-- ※ Task 2-3 Step 5 の `RetrievalPipeline.create_for_dashboard` は既存コードに無い前提のため "NOTE" として注意書きを残し、実装者の判断を許容している。これは設計書 §4.6.2 が "実装フェーズで判断" と明記している箇所であり、計画の placeholder ではない。
+- ※ Task 2-3 Step 5 の `RetrievalPipeline.create_for_dashboard` は Task 2-1 で実装済み前提である。
 
 ### 3. Type consistency
 

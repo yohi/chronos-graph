@@ -768,7 +768,7 @@ git checkout -b feature/phase2-task1_pipeline_factory
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -786,9 +786,12 @@ async def test_create_for_dashboard_returns_pipeline_with_search() -> None:
         graph_fanout_limit=10,
         graph_max_physical_hops=4,
     )
-    pipeline = await RetrievalPipeline.create_for_dashboard(
-        storage=storage, graph=graph, settings=settings
-    )
+    # create_embedding_provider は settings の属性を詳細に参照するためモック化する
+    with patch("context_store.embedding.create_embedding_provider") as mock_create:
+        mock_create.return_value = MagicMock()
+        pipeline = await RetrievalPipeline.create_for_dashboard(
+            storage=storage, graph=graph, settings=settings
+        )
     assert isinstance(pipeline, RetrievalPipeline)
     # search() を呼べる shape を持つこと (実 I/O は別テストで検証)
     assert hasattr(pipeline, "search")
@@ -836,6 +839,7 @@ Expected: `AttributeError: type object 'RetrievalPipeline' has no attribute 'cre
                 storage_adapter=storage,
             ),
             keyword_search=KeywordSearch(storage_adapter=storage),
+            # graph=None の場合、GraphTraversal は内部でガードされ空の結果を返す
             graph_traversal=GraphTraversal(
                 graph_adapter=graph,
                 default_depth=settings.graph_max_logical_depth,

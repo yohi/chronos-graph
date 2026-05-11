@@ -746,6 +746,7 @@ gh pr create --draft \
 
 **Files:**
 - Modify: `src/context_store/retrieval/pipeline.py`
+- Modify: `src/context_store/orchestrator.py`
 - Test: `tests/unit/test_retrieval_pipeline_factory.py` (新規)
 
 **目的:** `Orchestrator` を起動せずに dashboard 単独で `RetrievalPipeline` を組み立てる経路を確立する。`orchestrator.py:490-620` 周辺の retrieval セクション (query_analyzer / vector_search / keyword_search / graph_traversal / result_fusion / post_processor) を dashboard 用に切り出した classmethod を追加する。
@@ -882,7 +883,7 @@ Expected: PASS
 - [ ] **Step 6: 既存テストへの回帰確認**
 
 ```bash
-uv run pytest tests/unit -k "retrieval or pipeline" -v
+uv run pytest tests/unit/test_orchestrator.py tests/unit -k "retrieval or pipeline" -v
 ```
 
 Expected: 既存テストが全て PASS (新規 classmethod 追加のみで既存挙動に変更なし)
@@ -890,8 +891,8 @@ Expected: 既存テストが全て PASS (新規 classmethod 追加のみで既�
 - [ ] **Step 7: ruff / mypy**
 
 ```bash
-uv run ruff check src/context_store/retrieval/pipeline.py tests/unit/test_retrieval_pipeline_factory.py
-uv run mypy src/context_store/retrieval/pipeline.py
+uv run ruff check src/context_store/retrieval/pipeline.py src/context_store/orchestrator.py tests/unit/test_retrieval_pipeline_factory.py
+uv run mypy src/context_store/retrieval/pipeline.py src/context_store/orchestrator.py
 ```
 
 Expected: exit 0
@@ -899,8 +900,8 @@ Expected: exit 0
 - [ ] **Step 8: コミット**
 
 ```bash
-git add src/context_store/retrieval/pipeline.py tests/unit/test_retrieval_pipeline_factory.py
-git commit -m "feat(retrieval): add RetrievalPipeline.create_for_dashboard factory"
+git add src/context_store/retrieval/pipeline.py src/context_store/orchestrator.py tests/unit/test_retrieval_pipeline_factory.py
+git commit -m "feat(retrieval): add RetrievalPipeline.create_for_dashboard factory and refactor orchestrator"
 git push -u origin feature/phase2-task1_pipeline_factory
 ```
 

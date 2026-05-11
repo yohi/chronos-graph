@@ -42,6 +42,10 @@ embedding-openai = [
 embedding-litellm = [
     "litellm>=1.0.0",
 ]
+evaluator = [
+    "anthropic>=0.40.0",
+    "httpx>=0.27.0",
+]
 dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=0.23.0",
@@ -51,8 +55,7 @@ dev = [
     "mypy>=1.10.0",
 ]
 all = [
-    "context-store-mcp[storage-postgres,embedding-local,embedding-openai,embedding-litellm,dev]",
-]
+    "context-store-mcp[storage-postgres,embedding-local,embedding-openai,embedding-litellm,dashboard,evaluator,dev]",]
 
 [project.scripts]
 context-store = "context_store.__main__:main"
@@ -69,12 +72,17 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "S", "B"]
-
+# T20 (flake8-print) をグローバルに有効化: cli/composite/llm/memory モジュールでの
+# print() を ruff レベルで禁止し、stdout の純度を強制する。
+extend-select = ["T20"]
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = [
     "S101", # assert detected
     "S105", # Possible hardcoded password
     "S106", # Possible hardcoded password
+]
+"scripts/*.py" = [
+    "T201", # print() is acceptable in utility scripts
 ]
 
 [tool.mypy]

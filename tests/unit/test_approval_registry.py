@@ -169,6 +169,7 @@ class TestResolve:
         )
         d = await reg.wait_for_decision(aid, timeout=0.1)
         assert d.status is DecisionStatus.REJECTED
+        assert d.reason is not None
         assert len(d.reason) == 256
         assert "\x00" not in d.reason
         assert d.reason == "X" * 256

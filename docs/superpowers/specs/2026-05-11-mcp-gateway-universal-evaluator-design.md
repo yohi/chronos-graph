@@ -48,7 +48,7 @@ ChronosGraph MCP Gateway に、AIエージェント（Claude Code / Gemini CLI �
 │   1. configure_logging(stream=sys.stderr)  ← stdout純度確保  │
 │   2. parse stdin JSON  → ToolCallInput                       │
 │   3. await composite.evaluate(input) → Decision              │
-│   4. json.dump(Decision, sys.stdout); print("")               │
+│   4. json.dump(Decision, sys.stdout); sys.stdout.write("\n")  │
 │   5. sys.exit(0)   ← 評価成功時。例外時のみ exit(2)            │
 └──────────────────┬───────────────────────────────────────────┘
                    ▼
@@ -85,7 +85,7 @@ ChronosGraph MCP Gateway に、AIエージェント（Claude Code / Gemini CLI �
 
 1. `logging.basicConfig(stream=sys.stderr, level=...)` をプロセス起動直後に実行
 2. Anthropic SDK の `httpx` ロガーも明示的に stderr へ再構成
-3. 例外時は `traceback.print_exc(file=sys.stderr)` → `print(json.dumps({"decision":"ask","ask_message":"System evaluation failed."}))` → `sys.exit(2)` のフォーマットで「stdout に必ず JSON」を担保
+3. 例外時は `traceback.print_exc(file=sys.stderr)` → `json.dump({"decision":"ask","ask_message":"System evaluation failed."}, sys.stdout); sys.stdout.write("\n")` → `sys.exit(2)` のフォーマットで「stdout に必ず JSON」を担保 (※ `print()` は ruff の T201 により全モジュールで禁止)
 
 ## 3. LLM 評価プロンプト設計
 
@@ -135,7 +135,7 @@ Any other output will be treated as a parse failure and downgraded to "ask".
 ```xml
 <tool_intent>
   <tool_name>{tool_name}</tool_name>
-  <tool_input>{json.dumps(tool_input, ensure_ascii=False)}</tool_input>
+  <tool_input>{json.dumps(_redact_tool_input_for_llm(tool_input), ensure_ascii=False)}</tool_input>
   <cwd>{context.cwd or "unknown"}</cwd>
   <agent_id>{context.agent_id or "unknown"}</agent_id>
 </tool_intent>
@@ -161,7 +161,9 @@ Decide now. Output JSON only.
 response = client.messages.create(
     model="claude-haiku-4-5-20251001",   # Hook はミリ秒〜秒オーダー要求 → Haiku 既定
                                           # 環境変数 CHRONOS_EVALUATOR_MODEL で上書き可
-    max_tokens=512,
+    # Anthropic Extended Thinking の制約: max_tokens は thinking.budget_tokens より
+    # 厳密に大きい必要がある。max_tokens = budget_tokens(1024) + 可視出力JSON(<512)
+    max_tokens=1536,
     system=[{
         "type": "text",
         "text": SYSTEM_PROMPT,
@@ -215,7 +217,7 @@ def _emit_fallback_ask(message: str, stream: IO[str]) -> None: ...
 3. stdin 全読取 → JSON parse → `ToolCallInput` (pydantic)
 4. parse 失敗 → fallback ask、`exit(2)`
 5. `asyncio.run(composite.evaluate(input))` → `Decision`
-6. `_write_decision()` → stdout に JSON + 改行
+6. `_write_decision()` → `json.dump(decision.to_dict(), sys.stdout); sys.stdout.write("\n")` (※ `print()` は使わない / ruff T201 で禁止)
 7. `exit(0)`
 8. try/except でこの全体を包み、未捕捉例外時は `_emit_fallback_ask()` + `exit(2)`
 
@@ -441,7 +443,7 @@ def _configure_stderr_logging(level: str = "WARNING") -> None:
 
 **追加防御策**:
 
-1. **`print()` 禁止規約**: cli/composite/llm/memory モジュールでは `print` を使わず、ruff の `flake8-print` (`T201`) を per-file で有効化 (pyproject.toml 修正)
+1. **`print()` 禁止規約**: cli/composite/llm/memory **すべてのモジュールで `print` を禁止**。ruff の `flake8-print` (`T201`) を **グローバル有効化** (`extend-select = ["T20"]`) し、`per-file-ignores` で T201 を無効化するエントリーは追加しない。stdout への出力は `json.dump(obj, sys.stdout)` + `sys.stdout.write("\n")` で行う。stderr への出力は logger 経由
 2. **stdout flush 直前検証**: テストでは `capsys.readouterr().out` がちょうど1行の JSON であることをアサート
 3. **Anthropic SDK の thinking 出力**: `thinking` ブロックは `response.content[0]` ではなく別チャネル → text の `json.loads` だけ走らせれば自然と分離される。明示的に `[block for block in response.content if block.type == "text"]` でフィルタする
 
@@ -485,29 +487,71 @@ def _configure_stderr_logging(level: str = "WARNING") -> None:
 
 **設計判断**: `--policy-path` 等の argparse オプションも提供するが、env を優先することで hook 設定がコマンドラインを汚さずに済む (settings.json の保守性 ↑)。
 
-### 5.4 機微情報マスキング (LLM プロンプト送信前)
+### 5.4 機微情報マスキング (memory 検索 + LLM プロンプト送信)
+
+**マスキングは2箇所で必須**:
+
+1. **memory_client へのクエリ構築時** (composite.py): `_summarize_tool_input()` — 文字列化版
+2. **LLM プロンプト構築時** (llm_evaluator.py): `_redact_tool_input_for_llm()` — JSON 構造保持版
+
+LLM はネスト構造を保ったまま渡された方が解釈精度が高いため、用途別に2関数を提供する。共通の `SENSITIVE_KEY_PATTERN` を再利用する。
 
 ```python
 SENSITIVE_KEY_PATTERN = re.compile(
-    r"(password|passwd|secret|token|api[_-]?key|authorization|bearer)",
+    r"(password|passwd|secret|token|api[_-]?key|authorization|bearer|credential)",
     re.IGNORECASE,
 )
 MAX_VALUE_LENGTH = 200
+REDACTED_MARKER = "<REDACTED>"
 
+def _is_sensitive_key(key: str) -> bool:
+    return bool(SENSITIVE_KEY_PATTERN.search(key))
+
+
+def _truncate(value: str) -> str:
+    if len(value) > MAX_VALUE_LENGTH:
+        return value[:MAX_VALUE_LENGTH] + "...[truncated]"
+    return value
+
+
+# (A) memory 検索クエリ用 (文字列出力)
 def _summarize_tool_input(d: dict[str, Any]) -> str:
     parts = []
     for k, v in d.items():
-        if SENSITIVE_KEY_PATTERN.search(k):
-            parts.append(f"{k}=<REDACTED>")
+        if _is_sensitive_key(k):
+            parts.append(f"{k}={REDACTED_MARKER}")
             continue
-        val_str = str(v)
-        if len(val_str) > MAX_VALUE_LENGTH:
-            val_str = val_str[:MAX_VALUE_LENGTH] + "...[truncated]"
-        parts.append(f"{k}={val_str}")
+        parts.append(f"{k}={_truncate(str(v))}")
     return " ".join(parts)
+
+
+# (B) LLM プロンプト用 (JSON 構造を保ったままキーレベルでマスク・再帰)
+def _redact_tool_input_for_llm(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        return {
+            k: (REDACTED_MARKER if _is_sensitive_key(k) else _redact_tool_input_for_llm(v))
+            for k, v in obj.items()
+        }
+    if isinstance(obj, list):
+        return [_redact_tool_input_for_llm(v) for v in obj]
+    if isinstance(obj, str):
+        return _truncate(obj)
+    return obj
 ```
 
-**注意**: 機微パターンを完全には捕捉できないため、運用上は「機微情報を扱うツールは hook の対象から除外するか、別 hook で前段マスキングする」ことを推奨。
+**設計上の不変条件**:
+
+- LLM プロンプトに埋め込む `<tool_input>` は **必ず `_redact_tool_input_for_llm()` を経由**する (§3.2 のテンプレート参照)
+- メモリ検索クエリに埋め込む文字列も **必ず `_summarize_tool_input()` を経由**する (§4.5 参照)
+- ユニットテストで `password` / `api_key` などのキーが含まれる入力に対し、生成プロンプト/クエリ両方に `<REDACTED>` が含まれることを assert する
+
+**限界の明記**:
+
+- キー名ベースのマスキングのため、`tool_input["command"] = "export AWS_SECRET=xxx"` のように **値の内部に秘密が埋め込まれているケースは検出不可**
+- 完全な秘匿性が必要なツール (例: `bash`) は、運用レベルで以下のいずれかを推奨:
+  - hook の対象から除外 (matcher で除外)
+  - 別 hook で前段マスキング (シェルコマンドの AST 解析等) を行い、本 evaluator にはサニタイズ済みデータを渡す
+- 設計書 §4.5 の `memory_client` クエリ構築コメントもこの規約に合わせて更新
 
 ### 5.5 LLM 応答パースの厳格化
 
@@ -690,15 +734,16 @@ evaluator = [
     "httpx>=0.27.0",      # memory_client 用 (既に dependencies に存在)
 ]
 
-[tool.ruff.lint.per-file-ignores]
-# print を禁止して stdout 純度を ruff レベルで強制
-"src/mcp_gateway/cli.py" = ["T201"]
-"src/mcp_gateway/policy/composite.py" = ["T201"]
-"src/mcp_gateway/policy/llm_evaluator.py" = ["T201"]
-"src/mcp_gateway/policy/memory_client.py" = ["T201"]
-
 [tool.ruff.lint]
-extend-select = ["T20"]  # flake8-print を追加
+# T20 (flake8-print) をグローバルに有効化。stdout 純度を ruff レベルで強制する。
+# cli/composite/llm/memory のいずれのファイルでも T201 を無効化するエントリーは
+# 追加しない。stdout 出力は print() ではなく json.dump(obj, sys.stdout) +
+# sys.stdout.write("\n") で行う。stderr 出力は logger 経由。
+extend-select = ["T20"]
+
+# 注意: [tool.ruff.lint.per-file-ignores] に "T201" を追加してはならない。
+# Issue 1 (per-file-ignores 反転バグ) の再発防止のため、cli.py を含む
+# evaluator 系モジュールはすべて T201 強制対象とする。
 ```
 
 ### 6.6 既存テストへの影響

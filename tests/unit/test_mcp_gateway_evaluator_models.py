@@ -36,6 +36,10 @@ class TestDecisionToDict:
         with pytest.raises(ValueError, match="reason is required"):
             Decision(decision="deny")
 
+    def test_invalid_decision_raises(self) -> None:
+        with pytest.raises(ValueError, match="Invalid decision"):
+            Decision(decision="invalid")  # type: ignore[arg-type]
+
 
 class TestSummarizeToolInput:
     def test_redacts_sensitive_keys(self) -> None:
@@ -55,6 +59,18 @@ class TestSummarizeToolInput:
         out = _summarize_tool_input({"count": 42})
         assert out == "count=42"
 
+    def test_redacts_sensitive_keys_in_nested_input(self) -> None:
+        # Verify Issue 1: nested sensitive keys are redacted
+        out = _summarize_tool_input({"headers": {"authorization": "Bearer sk-123"}, "cmd": "ls"})
+        assert f"'authorization': '{REDACTED_MARKER}'" in out
+        assert "cmd=ls" in out
+
+    def test_redacts_new_sensitive_patterns(self) -> None:
+        # Verify Issue 3: new patterns like private_key are redacted
+        out = _summarize_tool_input({"private_key": "---BEGIN---", "cert": "trust-me"})
+        assert f"private_key={REDACTED_MARKER}" in out
+        assert f"cert={REDACTED_MARKER}" in out
+
 
 class TestRedactToolInputForLLM:
     def test_preserves_nested_structure(self) -> None:
@@ -70,17 +86,24 @@ class TestRedactToolInputForLLM:
         assert _redact_tool_input_for_llm(None) is None
         assert _redact_tool_input_for_llm(True) is True
 
-    def test_truncates_long_string(self) -> None:
+    def test_no_truncation_for_llm(self) -> None:
+        # Verify Issue 4: strings are NOT truncated for LLM input
         long = "x" * (MAX_VALUE_LENGTH + 10)
         out = _redact_tool_input_for_llm({"v": long})
-        assert isinstance(out["v"], str)
-        assert "...[truncated]" in out["v"]
+        assert out["v"] == long
+        assert "...[truncated]" not in out["v"]
 
 
 class TestToolCallInput:
     def test_default_context_empty(self) -> None:
         i = ToolCallInput(tool_name="bash", tool_input={"command": "ls"})
         assert i.context == {}
+
+    def test_not_hashable(self) -> None:
+        # Verify Issue 2: ToolCallInput is not hashable because it contains dicts
+        i = ToolCallInput(tool_name="bash", tool_input={"command": "ls"})
+        with pytest.raises(TypeError, match="unhashable type"):
+            hash(i)
 
 
 class TestMemoryItem:

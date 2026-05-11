@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 SENSITIVE_KEY_PATTERN = re.compile(
-    r"(password|passwd|secret|token|api[_-]?key|authorization|bearer|credential)",
+    r"(password|passwd|secret|token|api[_-]?key|authorization|bearer|credential|private[_-]?key|passphrase|private|cert|ssh)",
     re.IGNORECASE,
 )
 MAX_VALUE_LENGTH = 200
@@ -40,7 +40,9 @@ def _summarize_tool_input(d: dict[str, Any]) -> str:
         if _is_sensitive_key(k):
             parts.append(f"{k}={REDACTED_MARKER}")
             continue
-        parts.append(f"{k}={_truncate(str(v))}")
+        # Recursively redact sensitive keys in nested structures before stringifying
+        sanitized_v = _redact_tool_input_for_llm(v)
+        parts.append(f"{k}={_truncate(str(sanitized_v))}")
     return " ".join(parts)
 
 
@@ -53,8 +55,7 @@ def _redact_tool_input_for_llm(obj: Any) -> Any:
         }
     if isinstance(obj, list):
         return [_redact_tool_input_for_llm(v) for v in obj]
-    if isinstance(obj, str):
-        return _truncate(obj)
+    # Do not truncate strings here to preserve context for the LLM
     return obj
 
 
@@ -63,6 +64,9 @@ class ToolCallInput:
     tool_name: str
     tool_input: dict[str, Any]
     context: dict[str, Any] = field(default_factory=dict)
+
+    # Contains dict fields, so not hashable
+    __hash__ = None  # type: ignore[assignment]
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +83,8 @@ class Decision:
     ask_message: str | None = None
 
     def __post_init__(self) -> None:
+        if self.decision not in ("allow", "deny", "ask"):
+            raise ValueError(f"Invalid decision: {self.decision}. Must be 'allow', 'deny', or 'ask'.")
         if self.decision == "deny" and not (self.reason and self.reason.strip()):
             raise ValueError("reason is required and must be non-empty for decision=deny")
         if self.decision == "ask" and not (self.ask_message and self.ask_message.strip()):

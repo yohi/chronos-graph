@@ -111,12 +111,56 @@ PostgreSQL へアクセスする経路を提供する。
    Prisma Client Python では `list` をそのまま渡せる。
    型キャスト `::uuid[]` は明示する。
 5. **pgvector**: 文字列 `"[0.1,0.2]"` を渡して `$N::vector` でキャスト。
-6. **Accelerate の制約**:
-   - クエリ結果サイズ上限 5 MB。
-   - クエリタイムアウト 10s。
-   - `get_memories_batch` で大量取得時は 500 件単位で分割する。
+6. **Accelerate の制約**: クエリ結果サイズ上限 5 MB、クエリタイムアウト 10s。
+   これらへのフェールセーフは 4.3 にて定義する。
 
-### 4.3 SQL 再利用ルール
+### 4.3 Accelerate 制約に対するフェールセーフ仕様
+
+運用時の事後対応ではなく、設計段階で以下のフェールセーフを組み込む。
+すべて `PrismaStorageAdapter` の内部で完結し、上位 (Orchestrator 等)
+から見たインターフェースは `PostgresStorageAdapter` と等価に保つ。
+
+#### (a) `top_k` ハードリミット
+
+- 定数 `PRISMA_MAX_TOP_K = 200` を `prisma.py` 内に定義する。
+  - 根拠: 1 件あたり embedding 768 次元 × 8 byte ≒ 6 KB に、
+    本文・メタデータを加味して安全側に 1 件 ≒ 20 KB と見積もる。
+    200 件 × 20 KB ≒ 4 MB であり、5 MB 上限に対して 20% の安全マージンを残す。
+- `vector_search(embedding, top_k, ...)` および
+  `keyword_search(query, top_k, ...)` の冒頭で `top_k` をクランプする:
+  - `top_k <= 0` → `StorageError("top_k must be >= 1", code="INVALID_PARAMETER")` を送出。
+  - `top_k > PRISMA_MAX_TOP_K` → `PRISMA_MAX_TOP_K` にクランプし、
+    `logger.warning` で「クランプした旨 / 元の値 / 適用値」を出力する。
+    サイレント切り捨てではなく必ずログに記録する。
+
+#### (b) `get_memories_batch` のチャンク分割
+
+- 定数 `PRISMA_BATCH_FETCH_CHUNK_SIZE = 500` を定義する。
+  - 根拠: 1 件 ≒ 20 KB × 500 件 ≒ 10 MB は上限超過するため、本来は
+    250 件相当が安全。ただし `get_memories_batch` はメタデータ・embedding
+    の重み付け次第で 1 件 ≒ 5–10 KB に収まる想定 (典型) のため
+    500 件を選択し、(c) のタイムアウトフォールバックで取りこぼしを救う。
+- `len(memory_ids) > PRISMA_BATCH_FETCH_CHUNK_SIZE` の場合は
+  500 件単位で `query_raw` を分割実行し、結果をマージして
+  入力順を維持して返す。
+
+#### (c) タイムアウト時のフォールバック
+
+`prisma.errors.PrismaError` の `code in {"P2024", "P2028"}` (接続/トランザクション
+タイムアウト) または HTTP 408/504 相当を補足したとき、以下を実行する。
+
+| 発生箇所 | フォールバック |
+|---|---|
+| `vector_search` / `keyword_search` | `top_k` を半分 (整数除算、最低 1) に縮小して **1 回だけ** リトライ。それでも失敗時は `StorageError(code="STORAGE_TIMEOUT", recoverable=True)` を送出。 |
+| `get_memories_batch` (チャンク内) | 該当チャンクのみチャンクサイズを半分に分割して **1 回だけ** リトライ。それでも失敗時は `StorageError(code="STORAGE_TIMEOUT", recoverable=True)` を送出。 |
+| `list_by_filter` / `count_by_filter` | リトライしない。`StorageError(code="STORAGE_TIMEOUT", recoverable=True)` を即座に送出する (これらは `limit` を呼出側が指定するため、内部で勝手に縮小しない)。 |
+| `save_memory` / `update_memory` / `delete_memory` / `increment_memory_access_count` | リトライしない (idempotency を保証できないため)。`StorageError(code="STORAGE_TIMEOUT", recoverable=True)` を送出。 |
+
+`recoverable=True` を上位 retry 層 (`tenacity`) が認識して全体リトライを
+行うことを許容する。アダプター内の自動リトライは上記の **1 回のみ** に
+限定し、二重リトライによる増幅を防ぐ。
+
+### 4.4 SQL 再利用ルール
 
 YAGNI の観点で、本設計の段階では SQL 文を `PrismaStorageAdapter` 内に
 直接書き写す。`PostgresStorageAdapter` との重複削減のための SQL 共有
@@ -128,11 +172,14 @@ YAGNI の観点で、本設計の段階では SQL 文を `PrismaStorageAdapter` 
 |---|---|---|
 | `prisma.errors.UniqueViolationError` | `DUPLICATE_CONTENT` | False |
 | `prisma.errors.RawQueryError` (構文/型エラー等) | `STORAGE_ERROR` | False |
-| `prisma.errors.PrismaError` (接続/タイムアウト) | `STORAGE_ERROR` | True |
-| HTTP 4xx/5xx (Accelerate 由来) | `STORAGE_ERROR` | True |
+| `prisma.errors.PrismaError` (接続/タイムアウト, P2024/P2028) | `STORAGE_TIMEOUT` | True |
+| `prisma.errors.PrismaError` (その他接続障害) | `STORAGE_ERROR` | True |
+| HTTP 408 / 504 (Accelerate タイムアウト) | `STORAGE_TIMEOUT` | True |
+| HTTP 4xx/5xx (上記以外, Accelerate 由来) | `STORAGE_ERROR` | True |
 
-接続障害 (Fortinet 切断, Accelerate サービス障害) は `recoverable=True`
-でマークし、上位の retry 層 (`tenacity`) で再試行可能とする。
+`STORAGE_TIMEOUT` に分類される例外は 4.3 (c) のフォールバック処理を
+経た上で送出される。`recoverable=True` を上位 retry 層 (`tenacity`) が
+認識して全体リトライを行うことを許容する。
 
 ## 6. `schema.prisma` の表現
 
@@ -219,11 +266,82 @@ mypy src/context_store/storage/prisma.py
 
 ## 8. テスト戦略
 
+### 8.1 テスト層
+
 | 層 | 対象 | 手段 |
 |---|---|---|
 | Unit | 型変換ヘルパ (`_embedding_to_pg`, `_parse_embedding`, `_record_to_memory`) | 純粋関数として直接テスト |
 | Mock 統合 | `PrismaStorageAdapter` の各メソッド | `prisma.Prisma` を `AsyncMock` で差し替え、`query_raw` / `execute_raw` が期待 SQL/params で呼ばれることを検証 |
 | Live (opt-in) | 実 Accelerate エンドポイント | `PRISMA_DATABASE_URL` が `prisma://` で始まる場合のみ実行 (`pytest.mark.live_prisma`、デフォルトスキップ) |
+
+### 8.2 Accelerate 制約に関するエッジケーステスト (必須)
+
+4.3 で定義したフェールセーフを検証するための具体的なテストケース。
+すべて Mock 統合層 (8.1) に追加し、`AsyncMock` で `query_raw` の挙動を
+制御する。
+
+#### (a) `top_k` ハードリミット
+
+| ケース | 入力 | モック挙動 | 期待される出力/動作 |
+|---|---|---|---|
+| 通常範囲 | `top_k=10` | `query_raw` は 10 件返却 | クランプなし。`top_k=10` が SQL の `LIMIT $N` パラメータに渡される。`logger.warning` は呼ばれない。 |
+| 上限ちょうど | `top_k=200` | `query_raw` は 200 件返却 | クランプなし。`top_k=200` が渡される。 |
+| 上限超過 | `top_k=500` | `query_raw` は 200 件返却 | `top_k=200` にクランプされ、SQL パラメータも 200。`logger.warning` が "clamped 500 -> 200" 相当のメッセージで 1 回呼ばれる。 |
+| 不正値 | `top_k=0` | (呼ばれない) | `StorageError(code="INVALID_PARAMETER")` が送出される。`query_raw` は呼ばれない。 |
+| 不正値 | `top_k=-1` | (呼ばれない) | 同上。 |
+
+#### (b) `get_memories_batch` のチャンク分割境界
+
+| ケース | 入力 (件数) | 期待される `query_raw` 呼び出し回数 / 各回の `len(ids)` |
+|---|---|---|
+| 単一チャンク内 | 499 | 1 回 / `[499]` |
+| チャンクサイズちょうど | 500 | 1 回 / `[500]` |
+| 1 件超過 | 501 | 2 回 / `[500, 1]` |
+| 2 チャンク未満 | 999 | 2 回 / `[500, 499]` |
+| 2 チャンク満杯 | 1000 | 2 回 / `[500, 500]` |
+| 3 チャンク開始 | 1001 | 3 回 / `[500, 500, 1]` |
+
+加えて以下を検証する:
+- 各チャンクの結果をマージした際、戻り値の順序が **入力 `memory_ids`
+  の順序と完全に一致**すること (既存 `PostgresStorageAdapter`
+  の挙動と互換)。
+- 重複 ID が含まれる場合、`PostgresStorageAdapter` と同じ挙動
+  (重複行は 1 回のみ返す) を再現すること。
+- 不正な UUID 文字列は呼び出し前にスキップされ、`query_raw` の
+  パラメータには含まれないこと。
+
+#### (c) タイムアウト時のフォールバック
+
+`prisma.errors.PrismaError` (code=`"P2024"`) を `AsyncMock.side_effect`
+で発生させる。
+
+| 対象メソッド | 初回呼び出し | フォールバック呼び出し | 期待される結果 |
+|---|---|---|---|
+| `vector_search(top_k=100)` | timeout を送出 | `top_k=50` で正常 (10 件返却) | 10 件の `ScoredMemory` が返る。`query_raw` は 2 回呼ばれ、2 回目のパラメータは `top_k=50`。 |
+| `vector_search(top_k=100)` | timeout を送出 | `top_k=50` でも timeout | `StorageError(code="STORAGE_TIMEOUT", recoverable=True)` が送出される。`query_raw` は 2 回呼ばれる。 |
+| `vector_search(top_k=1)` | timeout を送出 | `top_k=1` (= max(1, 1//2)) でも timeout | `StorageError(code="STORAGE_TIMEOUT")` が送出される。3 回目のリトライは行われない。 |
+| `keyword_search(top_k=100)` | timeout を送出 | `top_k=50` で正常 | (上記 `vector_search` と同様) |
+| `get_memories_batch(ids=600件)` | チャンク 1 (500 件) で timeout | 500 件を 250 件 × 2 に分割し正常完了。チャンク 2 (100 件) は通常実行 | 600 件 (※実存分) が返る。`query_raw` 呼び出しは 4 回 (500 失敗 → 250 成功 → 250 成功 → 100 成功)。 |
+| `get_memories_batch(ids=600件)` | チャンク 1 で timeout | 250 件分割でも timeout | `StorageError(code="STORAGE_TIMEOUT")` が送出される。 |
+| `list_by_filter(filters)` | timeout を送出 | (リトライしない) | `StorageError(code="STORAGE_TIMEOUT", recoverable=True)` が即座に送出。`query_raw` は 1 回のみ呼ばれる。 |
+| `save_memory(memory)` | timeout を送出 | (リトライしない) | `StorageError(code="STORAGE_TIMEOUT", recoverable=True)` が即座に送出。`query_first_raw` は 1 回のみ呼ばれる。 |
+
+#### (d) 5MB 上限到達のシミュレーション
+
+Accelerate からの 5MB 超過レスポンスは Prisma Client から
+`prisma.errors.PrismaError` (実装によって code 異なる) として届く。
+本テストでは以下を検証する。
+
+| ケース | モック挙動 | 期待される結果 |
+|---|---|---|
+| `vector_search` が 5MB 超過エラー | `PrismaError(code="P2034" or similar)` を送出 | `top_k` を半分にしてリトライ。タイムアウトと同等の経路をたどる。 |
+| `get_memories_batch` (500 件チャンク) が 5MB 超過 | 同上 | チャンクを 250 件に分割してリトライ。 |
+
+これらのケースは (c) のタイムアウトフォールバックパスを共用するため、
+コードパスの統合 (タイムアウトと結果サイズ超過の両方を `STORAGE_TIMEOUT`
+あるいは別コード `STORAGE_PAYLOAD_TOO_LARGE` で扱うか) は実装段階で
+決定するが、**テスト上は同じ縮小リトライ挙動を期待する**ことだけを
+本仕様で要件化する。
 
 ## 9. 設定 (`Settings`) 拡張仕様
 
@@ -293,8 +411,12 @@ if settings.storage_backend == "prisma":
   カラム + `query_raw` の組合せが将来のメジャーアップデートで
   挙動変更となる可能性がある。CI で extras 込みのスモークテストを
   Devcontainer 内で実行することで早期検知を行う。
-- Accelerate のクエリタイムアウト 10s は `vector_search` の `top_k`
-  が大きい場合や HNSW インデックス未構築時に超過する可能性がある。
-  運用時に observe して、必要なら `top_k` 上限または事前 RPC 化を検討。
+- Accelerate のクエリタイムアウト 10s および結果サイズ 5MB 上限への
+  対応は、運用時の事後対応ではなく 4.3 のフェールセーフ仕様として
+  設計に組み込み済み (`top_k` ハードリミット / チャンク分割 /
+  縮小リトライ)。HNSW インデックスが未構築のまま大規模データに
+  到達した場合は本フェールセーフでも救えないため、初期化時に
+  インデックス存在をチェックする責務は SQL マイグレーション側に
+  委ねる (既存 `0001_initial.sql` で HNSW を作成済み)。
 - 組織のコンプライアンス承認は前提条件 (`docs/future/2026-05-11-...`
   に記載)。本仕様は技術設計のみを対象とする。

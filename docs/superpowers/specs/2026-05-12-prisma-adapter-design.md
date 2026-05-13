@@ -259,8 +259,23 @@ model memories {
 
 ### 7.2 `.devcontainer/setup.sh` への追加 (差分)
 
+既存 master の `setup.sh` は `uv sync --frozen --all-extras` で全 extras を
+ロックファイル厳格モードで解決済み。Prisma 対応に伴い必要なのは以下 2 点の
+**追加** のみで、依存解決行そのものは変更しない。
+
+1. (前段) Node.js 20 の GPG 検証付きインストール — `prisma generate` のため。
+2. (後段) `prisma generate --schema=./prisma/schema.prisma` — Prisma Client
+   Python の生成。
+
+`storage-prisma` extras は `pyproject.toml` (§3.2 / 計画 Task 1.2) に
+追加されているため、`uv sync --frozen --all-extras` によって他 extras と
+同様に**自動解決される**。setup.sh 側に `storage-prisma` を明示列挙する
+必要はない。
+
+差分例:
+
 ```bash
-# Node.js (Prisma CLI 用) - GPG 署名検証を含むセキュアなインストール
+# Node.js (Prisma CLI 用) - GPG 署名検証を含むセキュアなインストール (新規追加)
 if ! command -v node >/dev/null 2>&1; then
   NODE_MAJOR=20
   sudo apt-get update && sudo apt-get install -y ca-certificates curl gnupg
@@ -272,19 +287,35 @@ if ! command -v node >/dev/null 2>&1; then
   sudo apt-get update && sudo apt-get install -y nodejs
 fi
 
-# Prisma extras を含めて Python 依存をインストール
-uv pip install -e ".[dev,storage-postgres,storage-prisma]"
+# (既存) ロックファイル厳格モードで全 extras を解決 ─ storage-prisma も自動解決される
+uv sync --frozen --all-extras
 
-# Prisma Client Python の生成 (schema.prisma → ./prisma/ パッケージ生成)
-prisma generate --schema=./prisma/schema.prisma
+# Prisma Client Python の生成 (新規追加。schema.prisma → ./prisma/ パッケージ生成)
+if [ -f ./prisma/schema.prisma ]; then
+  uv run prisma generate --schema=./prisma/schema.prisma
+fi
 ```
 
 ### 7.3 `.devcontainer/devcontainer.json` の `Install Dependencies` タスク
 
-`pip install -e ".[dev,storage-postgres]"` を
-`pip install -e ".[dev,storage-postgres,storage-prisma]"` に変更し、
-`prisma generate --schema=./prisma/schema.prisma` を後段に追加した
-新規タスク `Prisma Generate` を加える。
+既存タスクのコマンド `pip install -e ".[dev,storage-postgres]"` は
+bare `pip` を呼び出すため uv 管理仮想環境の外にインストールされ、
+`uv.lock` との整合が崩れる。本仕様の導入と併せて
+`uv sync --all-extras --dev` に置換する (CI workflow と同一手順)。
+`storage-prisma` を含む全 extras および dev グループが自動的に解決され、
+**タスク定義側に extras 名を列挙する必要はない** (`storage-prisma` を新規
+追加するたびにタスクを書き換える必要がなくなる)。
+
+加えて、`prisma generate --schema=./prisma/schema.prisma` を実行する新規
+タスク `Prisma Generate` を追加する。schema.prisma を変更した際に手動
+再生成するため、`Install Dependencies` に `dependsOn` させる必要はない
+(再生成のオン要求であって毎回 sync 直後に走らせる必要はない)。
+
+`setup.sh` (postCreateCommand) と `Install Dependencies` タスクで `--frozen`
+の有無が異なる点に留意: setup.sh はビルド時再現性のため `--frozen`、
+ユーザー起動の `Install Dependencies` タスクは開発中の依存追加を許容する
+ため `--dev` を使い `--frozen` は付けない。これは既存 master の運用設計を
+踏襲したもので、本仕様で新規に決めた差分ではない。
 
 ### 7.4 開発者向け実行コマンド (Devcontainer 内)
 
@@ -473,3 +504,11 @@ if settings.storage_backend == "prisma":
   委ねる (既存 `0001_initial.sql` で HNSW を作成済み)。
 - 組織のコンプライアンス承認は前提条件 (`docs/future/2026-05-11-...`
   に記載)。本仕様は技術設計のみを対象とする。
+- `keyword_search` の LIKE パターン (`f"%{query}%"`) は `%` および `_` を
+  エスケープしないため、これらの記号を含むクエリは検索意図と異なる結果
+  (例: `"100%"` が「100 を含む任意文字列」にマッチ) を返す。これは既存
+  `PostgresStorageAdapter` (`postgres.py:322`) と同一挙動であり、本仕様で
+  意図的に同等性を維持する (§3.1)。両アダプター共通の修正は §4.4 で示す
+  SQL 共有モジュール抽出と併せ、別タスクで対応する。SQL レベルでは
+  `query.replace('%', r'\%').replace('_', r'\_')` + `ESCAPE '\\'` 句、
+  または `plainto_tsquery` / `websearch_to_tsquery` への移行が候補。

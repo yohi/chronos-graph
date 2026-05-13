@@ -238,10 +238,7 @@
   "remoteUser": "vscode",
   "containerEnv": {
     "PYTHONUNBUFFERED": "1",
-    "PYTHONDONTWRITEBYTECODE": "1"
-  }
-}
-EBYTECODE": "1",
+    "PYTHONDONTWRITEBYTECODE": "1",
     "UV_HTTP_TIMEOUT": "1800"
   }
 }

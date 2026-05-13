@@ -24,7 +24,7 @@
 | `src/context_store/storage/prisma.py` | 新規 | `PrismaStorageAdapter` 本体 + `_PrismaMigrationRunner` (private) + 定数 `PRISMA_MAX_TOP_K=200` / `PRISMA_BATCH_FETCH_CHUNK_SIZE=250` / `PRISMA_TIMEOUT_CODES` / `PRISMA_PAYLOAD_TOO_LARGE_CODES`。 |
 | `src/context_store/storage/factory.py` | 編集 | `storage_backend == "prisma"` の分岐を追加。`read_only=True` で `NotImplementedError`、`graph_enabled=True` で `ValueError`。 |
 | `.devcontainer/setup.sh` | 編集 | Node.js 20 を GPG 検証付きでインストール後、`prisma generate` を実行。 |
-| `.devcontainer/devcontainer.json` | 編集 | `Install Dependencies` タスクに `storage-prisma` extras を追加。`Prisma Generate` タスクを新設。 |
+| `.devcontainer/devcontainer.json` | 編集 | `Install Dependencies` タスクを bare `pip` から `uv sync --all-extras --dev` に置換。`Prisma Generate` タスクを新設。 |
 | `.github/workflows/ci.yml` | 編集 | Node.js セットアップステップ + `prisma generate` ステップを追加。 |
 | `tests/unit/storage/test_prisma_adapter.py` | 新規 | `AsyncMock` ベースの単体テスト。`top_k` クランプ、チャンク分割境界、タイムアウトフォールバック、`P6004`/`P6009` シミュレーションを網羅。 |
 
@@ -520,11 +520,17 @@ echo "  prisma generate --schema=./prisma/schema.prisma"
 
 - [ ] **Step 3: `.devcontainer/devcontainer.json` の `Install Dependencies` タスクの command を更新**
 
+既存 `pip install -e ".[dev,storage-postgres]"` は bare `pip` 呼び出しで
+uv 管理 venv の外にインストールされる恐れがあるため、setup.sh / CI と同一の
+`uv sync --all-extras --dev` に置換する。これにより `pyproject.toml` の
+`storage-prisma` extras が自動的に取り込まれ、タスク定義側に extras 名を
+列挙する必要がなくなる (設計書 §7.3)。
+
 ```jsonc
 {
   "label": "Install Dependencies",
   "type": "shell",
-  "command": "pip install -e \".[dev,storage-postgres,storage-prisma]\"",
+  "command": "uv sync --all-extras --dev",
   ...
 }
 ```
@@ -588,7 +594,7 @@ gh pr create \
   --body "$(cat <<'EOF'
 ## Summary
 - `.devcontainer/setup.sh` に GPG 検証付き Node.js 20 インストールと `prisma generate` を追加
-- `.devcontainer/devcontainer.json` の `Install Dependencies` タスクに `storage-prisma` extras を追加
+- `.devcontainer/devcontainer.json` の `Install Dependencies` タスクを bare `pip install -e` から `uv sync --all-extras --dev` に置換 (uv 管理 venv との整合性確保)
 - `Prisma Generate` タスクを新設
 
 ## Test plan

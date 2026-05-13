@@ -281,10 +281,15 @@ prisma generate --schema=./prisma/schema.prisma
 
 ### 7.3 `.devcontainer/devcontainer.json` の `Install Dependencies` タスク
 
-`pip install -e ".[dev,storage-postgres]"` を
-`pip install -e ".[dev,storage-postgres,storage-prisma]"` に変更し、
-`prisma generate --schema=./prisma/schema.prisma` を後段に追加した
-新規タスク `Prisma Generate` を加える。
+既存タスクのコマンド `pip install -e ".[dev,storage-postgres]"` は
+bare `pip` を呼び出すため uv 管理仮想環境の外にインストールされ、
+`uv.lock` との整合が崩れる。本仕様の導入と併せて
+`uv sync --all-extras --dev` に置換する (setup.sh / CI と同一手順)。
+これにより `storage-prisma` を含む全 extras が自動的に解決され、
+タスク定義に extras 名を列挙する必要がなくなる。
+
+`prisma generate --schema=./prisma/schema.prisma` を実行する新規タスク
+`Prisma Generate` を加える。
 
 ### 7.4 開発者向け実行コマンド (Devcontainer 内)
 

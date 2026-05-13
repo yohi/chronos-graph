@@ -4,9 +4,14 @@ set -e
 cd /workspaces/chronos-graph
 
 echo "Installing dependencies..."
-uv sync --frozen --all-extras
+# Only install base dependencies and dev group to keep startup fast.
+# Heavy extras like 'embedding-local' (PyTorch/NVIDIA) can be installed manually if needed.
+uv sync --frozen
 
 echo "Devcontainer setup complete!"
+echo ""
+echo "Note: Heavy dependencies (PyTorch/NVIDIA) are NOT installed by default."
+echo "To use local embeddings, run: uv sync --extra embedding-local"
 echo ""
 echo "Available tasks (Ctrl+Shift+P → Tasks: Run Task):"
 echo "  - Run Tests"

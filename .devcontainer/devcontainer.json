@@ -8,7 +8,9 @@
     }
   },
   "features": {
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "moby": false
+    }
   },
   "forwardPorts": [
     5433,
@@ -73,7 +75,7 @@
           {
             "label": "Install Dependencies",
             "type": "shell",
-            "command": "pip install -e \".[dev,storage-postgres]\"",
+            "command": "uv sync --all-extras",
             "problemMatcher": [],
             "presentation": {
               "clear": true,
@@ -237,5 +239,9 @@
   "containerEnv": {
     "PYTHONUNBUFFERED": "1",
     "PYTHONDONTWRITEBYTECODE": "1"
+  }
+}
+EBYTECODE": "1",
+    "UV_HTTP_TIMEOUT": "1800"
   }
 }

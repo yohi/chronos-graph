@@ -2695,6 +2695,10 @@ EOF
 - `StorageError.code` 値は設計書 §5 と一致 (`DUPLICATE_CONTENT`, `STORAGE_TIMEOUT`, `STORAGE_PAYLOAD_TOO_LARGE`, `STORAGE_ERROR`, `INVALID_PARAMETER`) ✅
 - `PrismaStorageAdapter` のメソッドシグネチャは `PostgresStorageAdapter` と同一 (StorageAdapter プロトコル準拠) ✅
 
+### 既知の挙動 (本計画では意図的に未修正)
+
+- **`keyword_search` の LIKE エスケープ未対応**: Task 2.5 で実装する `keyword_search` は `like_query = f"%{query}%"` の形で `%` / `_` をエスケープしない。これは既存 `PostgresStorageAdapter` (`postgres.py:322`) と同一挙動であり、設計書 §3.1 (PostgresStorageAdapter の SQL 再利用) および §13 (リスクと未解決事項) に明記済み。両アダプター共通の修正は設計書 §4.4 で示す SQL 共有モジュール抽出と併せた別タスクで対応する。本計画では片側だけの修正によるバックエンド切替時の挙動差異を避けるため、現挙動を維持する。
+
 ---
 
 ## Execution Handoff

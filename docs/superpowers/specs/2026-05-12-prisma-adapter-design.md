@@ -473,3 +473,11 @@ if settings.storage_backend == "prisma":
   委ねる (既存 `0001_initial.sql` で HNSW を作成済み)。
 - 組織のコンプライアンス承認は前提条件 (`docs/future/2026-05-11-...`
   に記載)。本仕様は技術設計のみを対象とする。
+- `keyword_search` の LIKE パターン (`f"%{query}%"`) は `%` および `_` を
+  エスケープしないため、これらの記号を含むクエリは検索意図と異なる結果
+  (例: `"100%"` が「100 を含む任意文字列」にマッチ) を返す。これは既存
+  `PostgresStorageAdapter` (`postgres.py:322`) と同一挙動であり、本仕様で
+  意図的に同等性を維持する (§3.1)。両アダプター共通の修正は §4.4 で示す
+  SQL 共有モジュール抽出と併せ、別タスクで対応する。SQL レベルでは
+  `query.replace('%', r'\%').replace('_', r'\_')` + `ESCAPE '\\'` 句、
+  または `plainto_tsquery` / `websearch_to_tsquery` への移行が候補。

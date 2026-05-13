@@ -621,7 +621,7 @@ git checkout -b feature/phase1-task5_ci_prisma
 
 ```yaml
       - name: Setup Node.js (for Prisma CLI)
-        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        uses: actions/setup-node@<COMMIT_SHA_TO_BE_LOOKED_UP> # vX.Y.Z (実装時に最新 v4 安定版を確認)
         with:
           node-version: '20'
 
@@ -629,7 +629,35 @@ git checkout -b feature/phase1-task5_ci_prisma
         run: uv run prisma generate --schema=./prisma/schema.prisma
 ```
 
-> **Note:** `actions/setup-node` の pin (commit SHA) は最新の v4 安定版を確認のうえ使用すること (上記は 2026-05-12 時点の v4.1.0 SHA 例)。確認手順: `gh api repos/actions/setup-node/git/ref/tags/v4.1.0`。
+> **⚠ 重要 — SHA pin の検証手順 (実装時に必ず実施すること):**
+>
+> 上記の `<COMMIT_SHA_TO_BE_LOOKED_UP>` を**そのままコピー** / **過去のドキュメント例をコピー**してはならない。実装時点で最新の `actions/setup-node` v4 安定版を以下の手順で照会し、返ってきた SHA と対応タグを `# vX.Y.Z` コメントとともに pin する。
+>
+> ```bash
+> # 1. 最新の v4 系タグ一覧を取得 (リリース日と関連付け)
+> gh api repos/actions/setup-node/releases --jq \
+>   '.[] | select(.tag_name | startswith("v4.")) | {tag: .tag_name, published: .published_at}' \
+>   | head -20
+>
+> # 2. 採用するタグ (例: v4.X.Y) を決めたら、そのタグが指す commit SHA を取得
+> TAG="v4.X.Y"  # 実際に採用するタグに置換
+> gh api repos/actions/setup-node/git/ref/tags/${TAG} --jq '.object.sha'
+>
+> # 3. 取得した SHA が tag オブジェクトの場合は dereference して commit SHA を取得
+> SHA_FROM_TAG=$(gh api repos/actions/setup-node/git/ref/tags/${TAG} --jq '.object.sha')
+> OBJECT_TYPE=$(gh api repos/actions/setup-node/git/ref/tags/${TAG} --jq '.object.type')
+> if [ "$OBJECT_TYPE" = "tag" ]; then
+>   gh api repos/actions/setup-node/git/tags/${SHA_FROM_TAG} --jq '.object.sha'
+> else
+>   echo "$SHA_FROM_TAG"
+> fi
+> ```
+>
+> 検証チェック:
+> - 取得した commit SHA が 40 文字の hex であること
+> - タグの `published_at` が `actions/setup-node` の Releases ページ ([https://github.com/actions/setup-node/releases](https://github.com/actions/setup-node/releases)) と一致すること
+> - 該当 commit のセキュリティアドバイザリ ([https://github.com/actions/setup-node/security/advisories](https://github.com/actions/setup-node/security/advisories)) に有効な脆弱性報告がないこと
+> - YAML 内のコメント `# vX.Y.Z` がタグ名と一致すること
 
 - [ ] **Step 3: ワークフローの YAML 構文を検証 (Devcontainer 内)**
 
@@ -793,6 +821,175 @@ async def test_dispose_disconnects_client(mock_prisma):
     adapter = PrismaStorageAdapter(client=mock_prisma)
     await adapter.dispose()
     mock_prisma.disconnect.assert_awaited_once()
+
+
+# -----------------------------------------------------------------------------
+# _PrismaMigrationRunner unit tests (graph 非対応、baseline 検出、適用ロジック)
+# -----------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_tx_context(mock_prisma) -> MagicMock:
+    """Wire mock_prisma.tx() to behave as an async context manager."""
+    tx = MagicMock()
+    tx.execute_raw = AsyncMock()
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=tx)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    mock_prisma.tx = MagicMock(return_value=cm)
+    return tx
+
+
+@pytest.mark.asyncio
+async def test_migration_runner_filters_out_graph_migrations(mock_prisma, mock_tx_context, tmp_path, monkeypatch):
+    """0002_graph.sql 等の graph 関連マイグレーションは Prisma 対象外として除外される。"""
+    from context_store.storage.prisma import _PrismaMigrationRunner
+
+    # ダミーの migrations ディレクトリを構築
+    migrations_dir = tmp_path / "migrations" / "postgres"
+    migrations_dir.mkdir(parents=True)
+    (migrations_dir / "0000_system.sql").write_text("CREATE TABLE schema_migrations(version TEXT);")
+    (migrations_dir / "0001_initial.sql").write_text("CREATE TABLE memories(id UUID);")
+    (migrations_dir / "0002_graph.sql").write_text("CREATE TABLE memory_nodes(id UUID);")
+
+    # _PrismaMigrationRunner が参照する base ディレクトリを差し替え
+    monkeypatch.setattr(
+        "context_store.storage.prisma.__file__",
+        str(tmp_path / "prisma.py"),
+    )
+
+    # 1) schema_migrations 不在 → ensure_system_migration が走る
+    # 2) _get_applied_migrations は空集合
+    # 3) baseline 検出のため pg_tables を問い合わせる ("memories" のみ要求)
+    mock_prisma.query_raw = AsyncMock(side_effect=[
+        Exception("relation \"schema_migrations\" does not exist"),  # ensure_system_migration の存在確認
+        [],  # _get_applied_migrations: 空
+        [],  # _tables_exist for 0001 (memories): なし
+    ])
+    mock_prisma.execute_raw = AsyncMock(return_value=1)
+
+    runner = _PrismaMigrationRunner(mock_prisma)
+    await runner.run()
+
+    # 0002_graph.sql は適用試行されない (tx.execute_raw に SQL 内容として渡されない)
+    sqls_applied = [call.args[0] for call in mock_tx_context.execute_raw.await_args_list]
+    assert not any("memory_nodes" in sql for sql in sqls_applied)
+    # 0000_system.sql と 0001_initial.sql は適用される
+    assert any("schema_migrations" in sql for sql in sqls_applied)
+    assert any("memories" in sql for sql in sqls_applied)
+
+
+@pytest.mark.asyncio
+async def test_migration_runner_baselines_existing_memories_table(mock_prisma, mock_tx_context, tmp_path, monkeypatch):
+    """memories テーブルが既存の場合、0001 を applied として記録 (再実行しない)。"""
+    from context_store.storage.prisma import _PrismaMigrationRunner
+
+    migrations_dir = tmp_path / "migrations" / "postgres"
+    migrations_dir.mkdir(parents=True)
+    (migrations_dir / "0000_system.sql").write_text("CREATE TABLE schema_migrations(version TEXT);")
+    (migrations_dir / "0001_initial.sql").write_text("CREATE TABLE memories(id UUID);")
+
+    monkeypatch.setattr(
+        "context_store.storage.prisma.__file__",
+        str(tmp_path / "prisma.py"),
+    )
+
+    mock_prisma.query_raw = AsyncMock(side_effect=[
+        [{"1": 1}],  # ensure_system_migration: schema_migrations 存在
+        [],          # _get_applied_migrations: 空
+        [{"tablename": "memories"}],  # _tables_exist for 0001: 既存
+        [{"version": "0001_initial.sql"}],  # baseline 後の _get_applied_migrations
+    ])
+    mock_prisma.execute_raw = AsyncMock(return_value=1)
+
+    runner = _PrismaMigrationRunner(mock_prisma)
+    await runner.run()
+
+    # baseline INSERT が 0001_initial.sql で呼ばれる
+    insert_calls = [
+        call for call in mock_prisma.execute_raw.await_args_list
+        if "INSERT INTO schema_migrations" in call.args[0]
+    ]
+    versions_inserted = {call.args[1] for call in insert_calls}
+    assert "0001_initial.sql" in versions_inserted
+    # 0001_initial.sql の SQL 本文は tx 経由では実行されない (baseline 済みのため)
+    sqls_in_tx = [call.args[0] for call in mock_tx_context.execute_raw.await_args_list]
+    assert not any("CREATE TABLE memories" in sql for sql in sqls_in_tx)
+
+
+@pytest.mark.asyncio
+async def test_migration_runner_applies_sequential_files(mock_prisma, mock_tx_context, tmp_path, monkeypatch):
+    """複数の未適用ファイルを定義順に sequential に execute_raw する。"""
+    from context_store.storage.prisma import _PrismaMigrationRunner
+
+    migrations_dir = tmp_path / "migrations" / "postgres"
+    migrations_dir.mkdir(parents=True)
+    (migrations_dir / "0000_system.sql").write_text("-- system")
+    (migrations_dir / "0001_initial.sql").write_text("-- initial")
+
+    monkeypatch.setattr(
+        "context_store.storage.prisma.__file__",
+        str(tmp_path / "prisma.py"),
+    )
+
+    mock_prisma.query_raw = AsyncMock(side_effect=[
+        [{"1": 1}],  # ensure_system_migration: 存在
+        [],          # _get_applied_migrations: 空
+        [],          # _tables_exist for 0001: 不在 → baseline 対象なし
+        [],          # baseline 後の _get_applied_migrations
+    ])
+    mock_prisma.execute_raw = AsyncMock(return_value=1)
+
+    runner = _PrismaMigrationRunner(mock_prisma)
+    await runner.run()
+
+    # tx 内で実行された SQL の順序を検証 (0000 → 0001)
+    sql_sequence = [call.args[0] for call in mock_tx_context.execute_raw.await_args_list]
+    # 各マイグレーションは「本体 SQL → INSERT INTO schema_migrations」の 2 ステップ
+    assert sql_sequence[0] == "-- system"
+    assert "INSERT INTO schema_migrations" in sql_sequence[1]
+    assert sql_sequence[2] == "-- initial"
+    assert "INSERT INTO schema_migrations" in sql_sequence[3]
+
+
+@pytest.mark.asyncio
+async def test_migration_runner_transaction_failure_propagates(mock_prisma, tmp_path, monkeypatch):
+    """tx 内の execute_raw が失敗した場合、例外が伝播し INSERT は実行されない。"""
+    from context_store.storage.prisma import _PrismaMigrationRunner
+
+    migrations_dir = tmp_path / "migrations" / "postgres"
+    migrations_dir.mkdir(parents=True)
+    (migrations_dir / "0001_initial.sql").write_text("-- broken")
+
+    monkeypatch.setattr(
+        "context_store.storage.prisma.__file__",
+        str(tmp_path / "prisma.py"),
+    )
+
+    # tx() がコンテキストマネージャを返し、execute_raw で例外を送出
+    tx = MagicMock()
+    tx.execute_raw = AsyncMock(side_effect=RuntimeError("syntax error"))
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=tx)
+    cm.__aexit__ = AsyncMock(return_value=False)  # 例外を抑制しない
+    mock_prisma.tx = MagicMock(return_value=cm)
+
+    mock_prisma.query_raw = AsyncMock(side_effect=[
+        [],  # _get_applied_migrations: 空
+        [],  # _tables_exist for 0001: 不在
+        [],  # baseline 後の _get_applied_migrations
+    ])
+    mock_prisma.execute_raw = AsyncMock(return_value=0)
+
+    runner = _PrismaMigrationRunner(mock_prisma)
+    with pytest.raises(RuntimeError, match="syntax error"):
+        await runner.run()
+
+    # INSERT INTO schema_migrations は呼ばれていない (tx 内で失敗、外側の
+    # execute_raw は baseline 用途のみで未呼び出し)
+    assert tx.execute_raw.await_count >= 1
+    # baseline は requirements に該当しないため execute_raw は呼ばれない
+    assert mock_prisma.execute_raw.await_count == 0
 ```
 
 - [ ] **Step 3: テストを実行して失敗確認 (Devcontainer 内)**
@@ -847,11 +1044,10 @@ __all__ = [
     "PRISMA_PAYLOAD_TOO_LARGE_CODES",
     "PRISMA_TIMEOUT_CODES",
     "PrismaStorageAdapter",
-    "_content_hash",
-    "_embedding_to_pg",
-    "_parse_embedding",
-    "_record_to_memory",
 ]
+# 注: _content_hash / _embedding_to_pg / _parse_embedding / _record_to_memory は
+# プライベートヘルパーであり再エクスポート対象としない (`from prisma import *` に
+# 含めない)。本ファイル内部でのみ参照する。
 
 
 class PrismaStorageAdapter:
@@ -892,11 +1088,18 @@ class _PrismaMigrationRunner:
     def __init__(self, client: Prisma) -> None:
         self._client = client
 
+    # Prisma バックエンドが処理対象とするマイグレーションのみを許可するファイル名 prefix。
+    # 設計書 §2 で graph 機能は Prisma の対象外とされているため、0002_graph.sql 以降の
+    # graph 関連マイグレーションは Prisma 経由では適用しない。
+    _PRISMA_ALLOWED_MIGRATION_PREFIXES: frozenset[str] = frozenset({"0000", "0001"})
+
     async def run(self) -> None:
         """Apply pending migrations in order.
 
         実装方針:
         - postgres/ ディレクトリの SQL ファイルを `pathlib.Path` で列挙
+        - `_PRISMA_ALLOWED_MIGRATION_PREFIXES` に含まれる prefix のもののみを対象とする
+          (graph 関連の 0002* 等は Prisma バックエンドの対象外、設計書 §2)
         - `schema_migrations` テーブル存在チェックは `query_raw`
         - 適用済みバージョン取得は `query_raw`
         - 未適用ファイルを sequential に `execute_raw` で適用
@@ -907,7 +1110,11 @@ class _PrismaMigrationRunner:
         migrations_dir = (
             Path(__file__).parent / "migrations" / "postgres"
         )
-        files = sorted(migrations_dir.glob("*.sql"))
+        all_files = sorted(migrations_dir.glob("*.sql"))
+        files = [
+            f for f in all_files
+            if f.name.split("_")[0] in self._PRISMA_ALLOWED_MIGRATION_PREFIXES
+        ]
 
         # 0000_system.sql を必ず最初に確保
         system_file = migrations_dir / "0000_system.sql"
@@ -945,7 +1152,9 @@ class _PrismaMigrationRunner:
     async def _handle_baseline(
         self, files: list["Path"], applied: set[str]  # type: ignore[name-defined]
     ) -> None:
-        requirements = {"0001": ["memories"], "0002": ["memory_nodes", "memory_edges"]}
+        # graph (memory_nodes / memory_edges) は Prisma バックエンド対象外のため
+        # baseline 検出対象に含めない (設計書 §2)。
+        requirements = {"0001": ["memories"]}
         to_baseline: list[str] = []
         for file_path in files:
             prefix = file_path.name.split("_")[0]
@@ -981,7 +1190,7 @@ class _PrismaMigrationRunner:
 ```bash
 uv run pytest tests/unit/storage/test_prisma_adapter.py -v
 ```
-Expected: 3 件すべて PASS。
+Expected: 6 件すべて PASS (`test_constants_have_expected_values`, `test_dispose_disconnects_client`, および `_PrismaMigrationRunner` の 4 件 = graph 除外 / baseline / sequential / トランザクション失敗)。
 
 - [ ] **Step 6: 静的解析を Devcontainer 内で実行**
 
@@ -1010,11 +1219,13 @@ gh pr create \
   --body "$(cat <<'EOF'
 ## Summary
 - `PrismaStorageAdapter` の最小スケルトン (`create`, `dispose`, `initialize`)
-- `_PrismaMigrationRunner` (private) で既存 postgres/*.sql を `execute_raw` で順次適用
+- `_PrismaMigrationRunner` (private) で `postgres/*.sql` のうち prefix が 0000/0001 のみを順次適用 (graph: 0002* は Prisma 対象外として除外、設計書 §2)
 - Accelerate 制約用定数 (`PRISMA_MAX_TOP_K=200`, `PRISMA_BATCH_FETCH_CHUNK_SIZE=250`, タイムアウト/payload too large コード)
+- `__all__` は公開 API (アダプター + 定数) のみ。プライベートヘルパーは内部参照のみ
+- `_PrismaMigrationRunner` の単体テスト 4 件 (graph 除外 / baseline / sequential / トランザクション失敗) を含む
 
 ## Test plan
-- [ ] `pytest tests/unit/storage/test_prisma_adapter.py -v` が全 PASS
+- [ ] `pytest tests/unit/storage/test_prisma_adapter.py -v` が全 PASS (6 件)
 - [ ] `ruff check` / `mypy` がエラーなし
 EOF
 )"
@@ -1177,7 +1388,7 @@ Expected: FAIL (`AttributeError: 'PrismaStorageAdapter' object has no attribute 
 ```bash
 uv run pytest tests/unit/storage/test_prisma_adapter.py -v
 ```
-Expected: 5 件 (累積) すべて PASS。
+Expected: 8 件 (累積) すべて PASS (Task 2.1 の 6 件 + 本タスクの 2 件)。
 
 - [ ] **Step 6: 静的解析 (Devcontainer 内)**
 

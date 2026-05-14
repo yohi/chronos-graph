@@ -182,7 +182,7 @@ class _PrismaMigrationRunner:
     async def _get_applied_migrations(self) -> set[str]:
         try:
             rows = await self._client.query_raw("SELECT version FROM schema_migrations")
-        except Exception:
+        except PrismaError:
             return set()
         return {row["version"] for row in rows}
 

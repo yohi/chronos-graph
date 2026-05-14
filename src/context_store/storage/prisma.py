@@ -8,11 +8,18 @@ Prisma Accelerate を介して PostgreSQL にアクセスする実装。
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from context_store.config import Settings
+from context_store.storage.postgres import _content_hash, _embedding_to_pg
+from context_store.storage.protocols import StorageError
 from prisma import Prisma  # type: ignore[import-not-found]
+
+if TYPE_CHECKING:
+    from context_store.models.memory import Memory
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +75,67 @@ class PrismaStorageAdapter:
     async def dispose(self) -> None:
         """Disconnect the Prisma client."""
         await self._client.disconnect()
+
+    async def save_memory(self, memory: "Memory") -> str:  # type: ignore[name-defined]
+        """Persist a memory and return its string ID."""
+        embedding_str = _embedding_to_pg(memory.embedding)
+        content_hash = _content_hash(memory.content)
+
+        sql = """
+            INSERT INTO memories (
+                id, content, memory_type, source_type, source_metadata,
+                embedding, semantic_relevance, importance_score, access_count,
+                last_accessed_at, created_at, updated_at, archived_at,
+                tags, project, content_hash
+            ) VALUES (
+                $1, $2, $3, $4, $5::jsonb,
+                $6::vector, $7, $8, $9,
+                $10, $11, $12, $13,
+                $14, $15, $16
+            )
+            RETURNING id
+        """
+
+        try:
+            row = await self._client.query_first_raw(  # type: ignore[attr-defined]
+                sql,
+                memory.id,
+                memory.content,
+                memory.memory_type.value,
+                memory.source_type.value,
+                json.dumps(memory.source_metadata),
+                embedding_str,
+                memory.semantic_relevance,
+                memory.importance_score,
+                memory.access_count,
+                memory.last_accessed_at,
+                memory.created_at,
+                memory.updated_at,
+                memory.archived_at,
+                memory.tags,
+                memory.project,
+                content_hash,
+            )
+        except Exception as e:
+            if e.__class__.__name__ == "UniqueViolationError":
+                raise StorageError(
+                    message=str(e),
+                    code="DUPLICATE_CONTENT",
+                    recoverable=False,
+                ) from e
+            raise StorageError(
+                message=str(e),
+                code="STORAGE_ERROR",
+                recoverable=False,
+            ) from e
+
+        if row is None:
+            raise StorageError(
+                message="INSERT RETURNING returned no row",
+                code="STORAGE_ERROR",
+                recoverable=False,
+            )
+        return str(row["id"])
 
 
 class _PrismaMigrationRunner:

@@ -49,7 +49,7 @@ evaluator = [
     "anthropic>=0.40.0",
 ]
 all = [
-    "context-store-mcp[storage-postgres,embedding-local,embedding-openai,embedding-litellm,dashboard,evaluator]",
+    "context-store-mcp[storage-postgres,storage-prisma,embedding-local,embedding-openai,embedding-litellm,dashboard,evaluator]",
 ]
 
 [project.scripts]

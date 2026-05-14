@@ -10,9 +10,14 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from context_store.config import Settings
 from prisma import Prisma  # type: ignore[attr-defined, import-not-found]
+
+if TYPE_CHECKING:
+    from context_store.models.memory import Memory, ScoredMemory
+    from context_store.storage.protocols import MemoryFilters
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +73,46 @@ class PrismaStorageAdapter:
     async def dispose(self) -> None:
         """Disconnect the Prisma client."""
         await self._client.disconnect()
+
+    async def save_memory(self, memory: "Memory") -> str:
+        raise NotImplementedError("Not supported by Prisma stub")
+
+    async def get_memory(self, memory_id: str) -> "Memory | None":
+        raise NotImplementedError("Not supported by Prisma stub")
+
+    async def get_memories_batch(self, memory_ids: list[str]) -> list["Memory"]:
+        raise NotImplementedError("Not supported by Prisma stub")
+
+    async def delete_memory(self, memory_id: str) -> bool:
+        raise NotImplementedError("Not supported by Prisma stub")
+
+    async def update_memory(self, memory_id: str, updates: dict[str, Any]) -> bool:
+        raise NotImplementedError("Not supported by Prisma stub")
+
+    async def vector_search(
+        self, embedding: list[float], top_k: int, project: str | None = None
+    ) -> list["ScoredMemory"]:
+        raise NotImplementedError("Not supported by Prisma stub")
+
+    async def keyword_search(
+        self, query: str, top_k: int, project: str | None = None
+    ) -> list["ScoredMemory"]:
+        raise NotImplementedError("Not supported by Prisma stub")
+
+    async def list_by_filter(self, filters: "MemoryFilters") -> list["Memory"]:
+        raise NotImplementedError("Not supported by Prisma stub")
+
+    async def count_by_filter(self, filters: "MemoryFilters") -> int:
+        raise NotImplementedError("Not supported by Prisma stub")
+
+    async def list_projects(self) -> list[str]:
+        raise NotImplementedError("Not supported by Prisma stub")
+
+    async def increment_memory_access_count(self, memory_id: str) -> bool:
+        raise NotImplementedError("Not supported by Prisma stub")
+
+    async def get_vector_dimension(self) -> int | None:
+        raise NotImplementedError("Not supported by Prisma stub")
 
 
 class _PrismaMigrationRunner:
@@ -158,6 +203,8 @@ class _PrismaMigrationRunner:
     async def _apply_migration(self, file_path: Path) -> None:
         sql = file_path.read_text()
         version = file_path.name
-        async with self._client.tx() as tx:
-            await tx.execute_raw(sql)
-            await tx.execute_raw("INSERT INTO schema_migrations (version) VALUES ($1)", version)
+        # CREATE INDEX CONCURRENTLY はトランザクション内で実行できないため、直接実行する
+        await self._client.execute_raw(sql)
+        await self._client.execute_raw(
+            "INSERT INTO schema_migrations (version) VALUES ($1)", version
+        )

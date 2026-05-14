@@ -17,7 +17,7 @@ model memories {
   memory_type        String                       @db.VarChar(20)
   source_type        String                       @db.VarChar(20)
   source_metadata    Json                         @default("{}")
-  embedding          Unsupported("vector(768)")?
+  embedding          Unsupported("vector(1024)")?
   semantic_relevance Float                        @default(0.5)
   importance_score   Float                        @default(0.5)
   access_count       Int                          @default(0)

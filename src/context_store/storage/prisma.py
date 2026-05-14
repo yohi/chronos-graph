@@ -191,10 +191,14 @@ class _PrismaMigrationRunner:
         try:
             await self._client.query_raw("SELECT 1 FROM schema_migrations LIMIT 1")
             return
-        except BaseException as e:
-            # We use BaseException and message check to ensure all possible "table not found"
-            # errors (including PrismaError and its subclasses) are caught correctly
-            # even in mock-heavy test environments or different client versions.
+        except (
+            PrismaClientKnownRequestError,
+            PrismaClientUnknownRequestError,
+            PrismaError,
+        ) as e:
+            # We catch specific Prisma errors and check the message to ensure
+            # "table not found" errors are handled correctly even in
+            # mock-heavy test environments or different client versions.
             msg = str(e).lower()
             if "relation" in msg and "does not exist" in msg:
                 logger.info("schema_migrations table not found, applying system migration")
@@ -205,7 +209,11 @@ class _PrismaMigrationRunner:
     async def _get_applied_migrations(self) -> set[str]:
         try:
             rows = await self._client.query_raw("SELECT version FROM schema_migrations")
-        except BaseException as e:
+        except (
+            PrismaClientKnownRequestError,
+            PrismaClientUnknownRequestError,
+            PrismaError,
+        ) as e:
             msg = str(e).lower()
             if "relation" in msg and "does not exist" in msg:
                 logger.info("schema_migrations table not found, returning empty applied set")

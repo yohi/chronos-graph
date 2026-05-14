@@ -9,11 +9,9 @@ generator client {
 }
 
 model Context {
-  id        String   @id
+  id        String   @id @default(cuid())
   key       String   @unique
   value     Json
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  @@index([key])
 }

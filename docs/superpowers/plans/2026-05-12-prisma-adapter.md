@@ -177,7 +177,7 @@ git checkout feature/phase1_prisma_foundation__base
 git checkout -b feature/phase1-task2_pyproject_extras
 ```
 
-- [ ] **Step 2: `pyproject.toml` の `[project.optional-dependencies]` に `storage-prisma` を追加**
+- [x] **Step 2: `pyproject.toml` の `[project.optional-dependencies]` に `storage-prisma` を追加**
 
 `pyproject.toml` の `storage-postgres` の直後に以下を追加する:
 
@@ -187,7 +187,7 @@ storage-prisma = [
 ]
 ```
 
-- [ ] **Step 3: `pyproject.toml` の `[tool.mypy.overrides]` セクションに `prisma.*` 用 override を追加**
+- [x] **Step 3: `pyproject.toml` の `[tool.mypy.overrides]` セクションに `prisma.*` 用 override を追加**
 
 `asyncpg.*` の override の直後に追加する:
 
@@ -197,11 +197,11 @@ module = "prisma.*"
 ignore_missing_imports = true
 ```
 
-- [ ] **Step 4: メタ extras (例: `context-store-mcp[...]`) に `storage-prisma` を追記しない**
+- [x] **Step 4: メタ extras (例: `context-store-mcp[...]`) に `storage-prisma` を追記しない**
 
 `storage-prisma` は opt-in。既存利用者への影響を避けるため、メタ extras には含めない。
 
-- [ ] **Step 5: ロックファイル更新を Devcontainer 内で実行**
+- [x] **Step 5: ロックファイル更新を Devcontainer 内で実行**
 
 ```bash
 # Devcontainer 内
@@ -209,7 +209,7 @@ uv lock
 ```
 Expected: `uv.lock` が更新され、`prisma==0.15.x` が追加される。
 
-- [ ] **Step 6: Devcontainer 内で extras 解決を確認**
+- [x] **Step 6: Devcontainer 内で extras 解決を確認**
 
 ```bash
 uv sync --all-extras
@@ -217,7 +217,7 @@ uv run python -c "import prisma; print(prisma.__version__)"
 ```
 Expected: バージョン (例: `0.15.0`) が出力される。
 
-- [ ] **Step 7: 静的解析を Devcontainer 内で実行**
+- [x] **Step 7: 静的解析を Devcontainer 内で実行**
 
 ```bash
 uv run ruff check src/ tests/
@@ -555,14 +555,14 @@ uv 管理 venv の外にインストールされる恐れがあるため、setup
 },
 ```
 
-- [ ] **Step 5: setup.sh の構文を Devcontainer 内で検証**
+- [x] **Step 5: setup.sh の構文を Devcontainer 内で検証**
 
 ```bash
 bash -n .devcontainer/setup.sh
 ```
 Expected: 構文エラーなし。
 
-- [ ] **Step 6: devcontainer.json の JSON 構文を検証**
+- [x] **Step 6: devcontainer.json の JSON 構文を検証**
 
 ```bash
 uv run python -c "import json; json.load(open('.devcontainer/devcontainer.json'))"

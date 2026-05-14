@@ -364,7 +364,10 @@ def test_settings_strips_prisma_database_url(monkeypatch):
         prisma_database_url=SecretStr("  prisma://accelerate.prisma-data.net/?api_key=test-key  "),
         graph_enabled=False,
     )
-    assert settings.prisma_database_url.get_secret_value() == "prisma://accelerate.prisma-data.net/?api_key=test-key"
+    assert (
+        settings.prisma_database_url.get_secret_value()
+        == "prisma://accelerate.prisma-data.net/?api_key=test-key"
+    )
 
 
 def test_settings_dashboard_allowed_hosts_from_env(monkeypatch, default_settings):

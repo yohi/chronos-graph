@@ -381,3 +381,41 @@ async def test_get_memories_batch_skips_invalid_uuid(mock_prisma):
 
     passed_ids = mock_prisma.query_raw.await_args.args[1]
     assert passed_ids == [valid]
+
+
+@pytest.mark.asyncio
+async def test_delete_memory_returns_true_when_deleted(mock_prisma):
+    mock_prisma.execute_raw = AsyncMock(return_value=1)
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    assert await adapter.delete_memory("some-id") is True
+
+
+@pytest.mark.asyncio
+async def test_delete_memory_returns_false_when_not_found(mock_prisma):
+    mock_prisma.execute_raw = AsyncMock(return_value=0)
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    assert await adapter.delete_memory("missing-id") is False
+
+
+@pytest.mark.asyncio
+async def test_update_memory_returns_false_for_empty_updates(mock_prisma):
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    assert await adapter.update_memory("id", {}) is False
+    mock_prisma.execute_raw.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_memory_updates_content_with_hash(mock_prisma):
+    mock_prisma.execute_raw = AsyncMock(return_value=1)
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    result = await adapter.update_memory("id-1", {"content": "new content"})
+    assert result is True
+    sql = mock_prisma.execute_raw.await_args.args[0]
+    assert "content_hash" in sql
+
+
+@pytest.mark.asyncio
+async def test_increment_memory_access_count_returns_true(mock_prisma):
+    mock_prisma.execute_raw = AsyncMock(return_value=1)
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    assert await adapter.increment_memory_access_count("id-1") is True

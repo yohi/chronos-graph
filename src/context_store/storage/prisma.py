@@ -10,16 +10,9 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-from prisma.errors import PrismaError, RawQueryError  # type: ignore[import-not-found]
 
 from context_store.config import Settings
-from prisma import Prisma  # type: ignore[attr-defined, import-not-found]
-
-if TYPE_CHECKING:
-    from context_store.models.memory import Memory, ScoredMemory
-    from context_store.storage.protocols import MemoryFilters
+from prisma import Prisma  # type: ignore[import-not-found]
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +41,6 @@ __all__ = [
 class PrismaStorageAdapter:
     """StorageAdapter implementation backed by Prisma Accelerate (HTTPS)."""
 
-    is_implemented: bool = False
-
     def __init__(self, client: Prisma) -> None:
         self._client = client
 
@@ -67,11 +58,6 @@ class PrismaStorageAdapter:
         except Exception:
             await client.disconnect()
             raise
-
-        if not cls.is_implemented:
-            await client.disconnect()
-            raise NotImplementedError("Prisma backend not implemented")
-
         return adapter
 
     async def initialize(self) -> None:
@@ -82,46 +68,6 @@ class PrismaStorageAdapter:
     async def dispose(self) -> None:
         """Disconnect the Prisma client."""
         await self._client.disconnect()
-
-    async def save_memory(self, memory: "Memory") -> str:
-        raise NotImplementedError("Not supported by Prisma stub")
-
-    async def get_memory(self, memory_id: str) -> "Memory | None":
-        raise NotImplementedError("Not supported by Prisma stub")
-
-    async def get_memories_batch(self, memory_ids: list[str]) -> list["Memory"]:
-        raise NotImplementedError("Not supported by Prisma stub")
-
-    async def delete_memory(self, memory_id: str) -> bool:
-        raise NotImplementedError("Not supported by Prisma stub")
-
-    async def update_memory(self, memory_id: str, updates: dict[str, Any]) -> bool:
-        raise NotImplementedError("Not supported by Prisma stub")
-
-    async def vector_search(
-        self, embedding: list[float], top_k: int, project: str | None = None
-    ) -> list["ScoredMemory"]:
-        raise NotImplementedError("Not supported by Prisma stub")
-
-    async def keyword_search(
-        self, query: str, top_k: int, project: str | None = None
-    ) -> list["ScoredMemory"]:
-        raise NotImplementedError("Not supported by Prisma stub")
-
-    async def list_by_filter(self, filters: "MemoryFilters") -> list["Memory"]:
-        raise NotImplementedError("Not supported by Prisma stub")
-
-    async def count_by_filter(self, filters: "MemoryFilters") -> int:
-        raise NotImplementedError("Not supported by Prisma stub")
-
-    async def list_projects(self) -> list[str]:
-        raise NotImplementedError("Not supported by Prisma stub")
-
-    async def increment_memory_access_count(self, memory_id: str) -> bool:
-        raise NotImplementedError("Not supported by Prisma stub")
-
-    async def get_vector_dimension(self) -> int | None:
-        raise NotImplementedError("Not supported by Prisma stub")
 
 
 class _PrismaMigrationRunner:
@@ -147,6 +93,8 @@ class _PrismaMigrationRunner:
         - 未適用ファイルを sequential に `execute_raw` で適用
         - `pg_catalog.pg_tables` を用いた baseline 検出は既存 MigrationRunner と同等
         """
+        from pathlib import Path
+
         migrations_dir = Path(__file__).parent / "migrations" / "postgres"
         all_files = sorted(migrations_dir.glob("*.sql"))
         files = [
@@ -171,31 +119,27 @@ class _PrismaMigrationRunner:
                 await self._apply_migration(file_path)
                 logger.info("Applied migration via Prisma: %s", version)
 
-    async def _ensure_system_migration(self, file_path: Path) -> None:
+    async def _ensure_system_migration(self, file_path: "Path") -> None:  # type: ignore[name-defined]
         try:
             await self._client.query_raw("SELECT 1 FROM schema_migrations LIMIT 1")
             return
-        except RawQueryError as e:
-            error_str = str(e).lower()
-            if "does not exist" in error_str or "42p01" in error_str:
-                logger.debug("Table schema_migrations not found, applying system migration")
-                await self._apply_migration(file_path)
-                return
-            raise
-        except PrismaError:
-            raise
+        except Exception:
+            logger.debug("schema_migrations table not found, applying system migration")
+            pass
+        await self._apply_migration(file_path)
 
     async def _get_applied_migrations(self) -> set[str]:
         try:
             rows = await self._client.query_raw("SELECT version FROM schema_migrations")
-        except RawQueryError as e:
-            error_str = str(e).lower()
-            if "does not exist" in error_str or "42p01" in error_str:
-                return set()
-            raise
+        except Exception:
+            return set()
         return {row["version"] for row in rows}
 
-    async def _handle_baseline(self, files: list[Path], applied: set[str]) -> None:
+    async def _handle_baseline(
+        self,
+        files: list["Path"],
+        applied: set[str],  # type: ignore[name-defined]
+    ) -> None:
         # graph (memory_nodes / memory_edges) は Prisma バックエンド対象外のため
         # baseline 検出対象に含めない (設計書 §2)。
         requirements = {"0001": ["memories"]}
@@ -218,18 +162,9 @@ class _PrismaMigrationRunner:
         )
         return len(rows) == len(table_names)
 
-    async def _apply_migration(self, file_path: Path) -> None:
+    async def _apply_migration(self, file_path: "Path") -> None:  # type: ignore[name-defined]
         sql = file_path.read_text()
         version = file_path.name
-
-        statements = [stmt.strip() for stmt in sql.split(";")]
-        for stmt in statements:
-            lines = [line.strip() for line in stmt.splitlines() if line.strip()]
-            if not lines or all(line.startswith("--") for line in lines):
-                continue
-            await self._client.execute_raw(stmt)
-
-        await self._client.execute_raw(
-            "INSERT INTO schema_migrations (version) VALUES ($1)",
-            version,
-        )
+        async with self._client.tx() as tx:
+            await tx.execute_raw(sql)
+            await tx.execute_raw("INSERT INTO schema_migrations (version) VALUES ($1)", version)

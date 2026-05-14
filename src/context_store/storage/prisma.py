@@ -175,9 +175,15 @@ class _PrismaMigrationRunner:
         try:
             await self._client.query_raw("SELECT 1 FROM schema_migrations LIMIT 1")
             return
+        except RawQueryError as e:
+            error_str = str(e).lower()
+            if "does not exist" in error_str or "42p01" in error_str:
+                logger.debug("Table schema_migrations not found, applying system migration")
+                await self._apply_migration(file_path)
+                return
+            raise
         except PrismaError:
-            logger.debug("Table schema_migrations not found, applying system migration")
-        await self._apply_migration(file_path)
+            raise
 
     async def _get_applied_migrations(self) -> set[str]:
         try:
@@ -215,8 +221,15 @@ class _PrismaMigrationRunner:
     async def _apply_migration(self, file_path: Path) -> None:
         sql = file_path.read_text()
         version = file_path.name
-        # CREATE INDEX CONCURRENTLY はトランザクション内で実行できないため、直接実行する
-        # 実行と記録の間にプロセスがクラッシュするのを防ぐため一つのステートメントとする
-        # 外部入力ではないためSQLインジェクション対象外
-        combined_sql = f"{sql}\nINSERT INTO schema_migrations (version) VALUES ('{version}');"  # nosec
-        await self._client.execute_raw(combined_sql)
+
+        statements = [stmt.strip() for stmt in sql.split(";")]
+        for stmt in statements:
+            lines = [line.strip() for line in stmt.splitlines() if line.strip()]
+            if not lines or all(line.startswith("--") for line in lines):
+                continue
+            await self._client.execute_raw(stmt)
+
+        await self._client.execute_raw(
+            "INSERT INTO schema_migrations (version) VALUES ($1)",
+            version,
+        )

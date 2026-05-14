@@ -310,10 +310,8 @@ async def _create_storage_adapter(
         from context_store.storage.prisma import PrismaStorageAdapter
 
         if read_only:
-            raise NotImplementedError(
-                "read_only mode for prisma backend is not yet supported"
-            )
-        return await PrismaStorageAdapter.create(settings)
+            raise NotImplementedError("read_only mode for prisma backend is not yet supported")
+        return await PrismaStorageAdapter.create(settings)  # type: ignore[return-value]
 
     raise ValueError(f"Unsupported storage_backend: {settings.storage_backend!r}")
 

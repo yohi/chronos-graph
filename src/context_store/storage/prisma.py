@@ -9,12 +9,10 @@ Prisma Accelerate を介して PostgreSQL にアクセスする実装。
 from __future__ import annotations
 
 import logging
-from typing import Any
-
-from prisma import Prisma  # type: ignore[import-not-found]
+from pathlib import Path
 
 from context_store.config import Settings
-from context_store.storage.protocols import StorageError
+from prisma import Prisma  # type: ignore[attr-defined, import-not-found]
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +25,6 @@ PRISMA_PAYLOAD_TOO_LARGE_CODES: frozenset[str] = frozenset({"P6009"})
 
 # ヘルパー関数は既存 PostgresStorageAdapter のものを物理的に再利用する。
 # DRY の観点から本ファイルで再定義するのではなく、postgres.py から import する。
-from context_store.storage.postgres import (  # noqa: E402
-    _content_hash,
-    _embedding_to_pg,
-    _parse_embedding,
-    _record_to_memory,
-)
 
 __all__ = [
     "PRISMA_BATCH_FETCH_CHUNK_SIZE",
@@ -101,15 +93,10 @@ class _PrismaMigrationRunner:
         - 未適用ファイルを sequential に `execute_raw` で適用
         - `pg_catalog.pg_tables` を用いた baseline 検出は既存 MigrationRunner と同等
         """
-        from pathlib import Path
-
-        migrations_dir = (
-            Path(__file__).parent / "migrations" / "postgres"
-        )
+        migrations_dir = Path(__file__).parent / "migrations" / "postgres"
         all_files = sorted(migrations_dir.glob("*.sql"))
         files = [
-            f for f in all_files
-            if f.name.split("_")[0] in self._PRISMA_ALLOWED_MIGRATION_PREFIXES
+            f for f in all_files if f.name.split("_")[0] in self._PRISMA_ALLOWED_MIGRATION_PREFIXES
         ]
 
         # 0000_system.sql を必ず最初に確保
@@ -130,12 +117,12 @@ class _PrismaMigrationRunner:
                 await self._apply_migration(file_path)
                 logger.info("Applied migration via Prisma: %s", version)
 
-    async def _ensure_system_migration(self, file_path: "Path") -> None:  # type: ignore[name-defined]
+    async def _ensure_system_migration(self, file_path: Path) -> None:
         try:
             await self._client.query_raw("SELECT 1 FROM schema_migrations LIMIT 1")
             return
         except Exception:
-            pass
+            logger.debug("Table schema_migrations not found, applying system migration")
         await self._apply_migration(file_path)
 
     async def _get_applied_migrations(self) -> set[str]:
@@ -145,9 +132,7 @@ class _PrismaMigrationRunner:
             return set()
         return {row["version"] for row in rows}
 
-    async def _handle_baseline(
-        self, files: list["Path"], applied: set[str]  # type: ignore[name-defined]
-    ) -> None:
+    async def _handle_baseline(self, files: list[Path], applied: set[str]) -> None:
         # graph (memory_nodes / memory_edges) は Prisma バックエンド対象外のため
         # baseline 検出対象に含めない (設計書 §2)。
         requirements = {"0001": ["memories"]}
@@ -159,8 +144,7 @@ class _PrismaMigrationRunner:
                 to_baseline.append(file_path.name)
         for version in to_baseline:
             await self._client.execute_raw(
-                "INSERT INTO schema_migrations (version) VALUES ($1) "
-                "ON CONFLICT DO NOTHING",
+                "INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING",
                 version,
             )
 
@@ -171,11 +155,9 @@ class _PrismaMigrationRunner:
         )
         return len(rows) == len(table_names)
 
-    async def _apply_migration(self, file_path: "Path") -> None:  # type: ignore[name-defined]
+    async def _apply_migration(self, file_path: Path) -> None:
         sql = file_path.read_text()
         version = file_path.name
         async with self._client.tx() as tx:
             await tx.execute_raw(sql)
-            await tx.execute_raw(
-                "INSERT INTO schema_migrations (version) VALUES ($1)", version
-            )
+            await tx.execute_raw("INSERT INTO schema_migrations (version) VALUES ($1)", version)

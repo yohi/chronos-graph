@@ -7,6 +7,21 @@ from pathlib import Path
 from context_store.config import Settings
 from prisma import Prisma  # type: ignore[import-not-found]
 
+try:
+    from prisma.errors import PrismaError
+except ImportError:
+    PrismaError = Exception  # type: ignore
+
+try:
+    from prisma.errors import PrismaClientKnownRequestError  # type: ignore[attr-defined]
+except ImportError:
+    PrismaClientKnownRequestError = PrismaError  # type: ignore
+
+try:
+    from prisma.errors import PrismaClientUnknownRequestError  # type: ignore[attr-defined]
+except ImportError:
+    PrismaClientUnknownRequestError = PrismaError  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 # --- Accelerate 制約に対する定数 (設計書 4.3) ---
@@ -75,25 +90,8 @@ class _PrismaMigrationRunner:
         self._client = client
 
     async def run(self) -> None:
-        """マイグレーションを実行する。"""
-        # src/context_store/storage/prisma.py の位置から migrations ディレクトリを特定
-        # 構造: src/context_store/storage/prisma.py
-        #       prisma/migrations/postgres/
-        # パス: Path(__file__).parent.parent.parent.parent / "prisma" / "migrations" / "postgres"
-        # 修正: Path(__file__).parent.parent.parent / "prisma" / "migrations" / "postgres"
-        # 実際の位置:
-        # /home/y_ohi/program/chronos-graph/src/context_store/storage/prisma.py
-        # /home/y_ohi/program/chronos-graph/prisma/migrations/postgres/
-        # .parent (storage) / .parent (context_store) / .parent (src) / .parent (root)
-        # つまり .parent.parent.parent.parent は正しいはずなのだが...
-        # あ、tests で monkeypatch しているから、monkeypatch の位置に依存する。
-        # test_prisma_adapter.py: monkeypatch.setattr(..., str(tmp_path / "prisma.py"))
-        # tmp_path / "prisma.py" の .parent.parent.parent.parent は / ではなく
-        # 存在しないディレクトリになる可能性がある。
-        # 元のコードを確認する。
-        migrations_dir = (
-            Path(__file__).parent.parent.parent.parent / "prisma" / "migrations" / "postgres"
-        )
+        """Apply pending migrations in order."""
+        migrations_dir = Path(__file__).parent / "migrations" / "postgres"
         if not migrations_dir.exists():
             logger.warning("Migrations directory not found: %s", migrations_dir)
             return

@@ -177,27 +177,26 @@ class _PrismaMigrationRunner:
         version = file_path.name
 
         # Prisma Accelerate does not support multiple statements in a single execute_raw call.
-        # Simple splitting by semicolon is risky for PostgreSQL (e.g. $$ block).
-        # We use a basic regex-based approach to split by semicolon NOT within dollar quotes.
+        # We split the SQL into individual statements.
+        try:
+            import sqlparse
 
-        # Find all dollar-quoted blocks or semicolons
-        # Pattern: (\$\$.*?\$\$) | (;)
-        # We use DOTALL to match across lines in dollar quotes.
-        pattern = re.compile(r"(\$\$.*?\$\$)|(;)", re.DOTALL)
-
-        statements = []
-        last_pos = 0
-        for match in pattern.finditer(sql):
-            if match.group(2):  # It's a semicolon
-                stmt = sql[last_pos : match.start()].strip()
-                if stmt:
-                    statements.append(stmt)
-                last_pos = match.end()
-
-        # Add remaining part if any
-        remaining = sql[last_pos:].strip()
-        if remaining:
-            statements.append(remaining)
+            statements = [s.strip() for s in sqlparse.split(sql) if s.strip()]
+        except ImportError:
+            # Fallback to a basic regex-based approach if sqlparse is not available.
+            # This handles standard $$ dollar quotes but not named ones like $tag$.
+            pattern = re.compile(r"(\$\$.*?\$\$)|(;)", re.DOTALL)
+            statements = []
+            last_pos = 0
+            for match in pattern.finditer(sql):
+                if match.group(2):  # It's a semicolon
+                    stmt = sql[last_pos : match.start()].strip()
+                    if stmt:
+                        statements.append(stmt)
+                    last_pos = match.end()
+            remaining = sql[last_pos:].strip()
+            if remaining:
+                statements.append(remaining)
 
         async with self._client.tx() as tx:
             for stmt in statements:

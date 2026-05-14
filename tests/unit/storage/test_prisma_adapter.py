@@ -87,13 +87,17 @@ async def test_migration_runner_filters_out_graph_migrations(
     # 1) schema_migrations 不在 → ensure_system_migration が走る
     # 2) _get_applied_migrations は空集合
     # 3) baseline 検出のため pg_tables を問い合わせる ("memories" のみ要求)
+    # 4) baseline 後の _get_applied_migrations (空)
+    from prisma.errors import PrismaError
+
     mock_prisma.query_raw = AsyncMock(
         side_effect=[
-            Exception(
+            PrismaError(
                 'relation "schema_migrations" does not exist'
             ),  # ensure_system_migration の存在確認
             [],  # _get_applied_migrations: 空
             [],  # _tables_exist for 0001 (memories): なし
+            [],  # baseline 後の _get_applied_migrations
         ]
     )
     mock_prisma.execute_raw = AsyncMock(return_value=1)
@@ -161,8 +165,8 @@ async def test_migration_runner_applies_sequential_files(
 
     migrations_dir = tmp_path / "migrations" / "postgres"
     migrations_dir.mkdir(parents=True)
-    (migrations_dir / "0000_system.sql").write_text("-- system")
-    (migrations_dir / "0001_initial.sql").write_text("-- initial")
+    (migrations_dir / "0000_system.sql").write_text("CREATE TABLE system_info(id INT);")
+    (migrations_dir / "0001_initial.sql").write_text("CREATE TABLE memories(id UUID);")
 
     monkeypatch.setattr(
         "context_store.storage.prisma.__file__",
@@ -185,9 +189,9 @@ async def test_migration_runner_applies_sequential_files(
     # tx 内で実行された SQL の順序を検証 (0000 → 0001)
     sql_sequence = [call.args[0] for call in mock_tx_context.execute_raw.await_args_list]
     # 各マイグレーションは「本体 SQL → INSERT INTO schema_migrations」の 2 ステップ
-    assert sql_sequence[0] == "-- system"
+    assert sql_sequence[0] == "CREATE TABLE system_info(id INT)"
     assert "INSERT INTO schema_migrations" in sql_sequence[1]
-    assert sql_sequence[2] == "-- initial"
+    assert sql_sequence[2] == "CREATE TABLE memories(id UUID)"
     assert "INSERT INTO schema_migrations" in sql_sequence[3]
 
 
@@ -261,7 +265,7 @@ async def test_save_memory_inserts_and_returns_id(mock_prisma):
     adapter = PrismaStorageAdapter(client=mock_prisma)
     result_id = await adapter.save_memory(memory)
 
-    assert result_id == memory.id
+    assert result_id == str(memory.id)
     mock_prisma.query_first_raw.assert_awaited_once()
     sql_arg = mock_prisma.query_first_raw.await_args.args[0]
     assert "INSERT INTO memories" in sql_arg

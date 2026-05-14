@@ -21,6 +21,21 @@ from prisma import Prisma  # type: ignore[import-not-found]
 if TYPE_CHECKING:
     from context_store.models.memory import Memory
 
+try:
+    from prisma.errors import PrismaError
+except ImportError:
+    PrismaError = Exception  # type: ignore
+
+try:
+    from prisma.errors import PrismaClientKnownRequestError  # type: ignore[attr-defined]
+except ImportError:
+    PrismaClientKnownRequestError = PrismaError  # type: ignore
+
+try:
+    from prisma.errors import PrismaClientUnknownRequestError  # type: ignore[attr-defined]
+except ImportError:
+    PrismaClientUnknownRequestError = PrismaError  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 # --- Accelerate 制約に対する定数 (設計書 4.3) ---
@@ -40,9 +55,6 @@ __all__ = [
     "PRISMA_TIMEOUT_CODES",
     "PrismaStorageAdapter",
 ]
-# 注: _content_hash / _embedding_to_pg / _parse_embedding / _record_to_memory は
-# プライベートヘルパーであり再エクスポート対象としない (`from prisma import *` に
-# 含めない)。本ファイル内部でのみ参照する。
 
 
 class PrismaStorageAdapter:
@@ -150,19 +162,7 @@ class _PrismaMigrationRunner:
     _PRISMA_ALLOWED_MIGRATION_PREFIXES: frozenset[str] = frozenset({"0000", "0001"})
 
     async def run(self) -> None:
-        """Apply pending migrations in order.
-
-        実装方針:
-        - postgres/ ディレクトリの SQL ファイルを `pathlib.Path` で列挙
-        - `_PRISMA_ALLOWED_MIGRATION_PREFIXES` に含まれる prefix のもののみを対象とする
-          (graph 関連の 0002* 等は Prisma バックエンドの対象外、設計書 §2)
-        - `schema_migrations` テーブル存在チェックは `query_raw`
-        - 適用済みバージョン取得は `query_raw`
-        - 未適用ファイルを sequential に `execute_raw` で適用
-        - `pg_catalog.pg_tables` を用いた baseline 検出は既存 MigrationRunner と同等
-        """
-        from pathlib import Path
-
+        """Apply pending migrations in order."""
         migrations_dir = Path(__file__).parent / "migrations" / "postgres"
         all_files = sorted(migrations_dir.glob("*.sql"))
         files = [
@@ -187,26 +187,36 @@ class _PrismaMigrationRunner:
                 await self._apply_migration(file_path)
                 logger.info("Applied migration via Prisma: %s", version)
 
-    async def _ensure_system_migration(self, file_path: "Path") -> None:  # type: ignore[name-defined]
+    async def _ensure_system_migration(self, file_path: Path) -> None:
         try:
             await self._client.query_raw("SELECT 1 FROM schema_migrations LIMIT 1")
             return
-        except Exception:
-            logger.debug("schema_migrations table not found, applying system migration")
-            pass
-        await self._apply_migration(file_path)
+        except BaseException as e:
+            # We use BaseException and message check to ensure all possible "table not found"
+            # errors (including PrismaError and its subclasses) are caught correctly
+            # even in mock-heavy test environments or different client versions.
+            msg = str(e).lower()
+            if "relation" in msg and "does not exist" in msg:
+                logger.info("schema_migrations table not found, applying system migration")
+                await self._apply_migration(file_path)
+                return
+            raise
 
     async def _get_applied_migrations(self) -> set[str]:
         try:
             rows = await self._client.query_raw("SELECT version FROM schema_migrations")
-        except Exception:
-            return set()
+        except BaseException as e:
+            msg = str(e).lower()
+            if "relation" in msg and "does not exist" in msg:
+                logger.info("schema_migrations table not found, returning empty applied set")
+                return set()
+            raise
         return {row["version"] for row in rows}
 
     async def _handle_baseline(
         self,
-        files: list["Path"],
-        applied: set[str],  # type: ignore[name-defined]
+        files: list[Path],
+        applied: set[str],
     ) -> None:
         # graph (memory_nodes / memory_edges) は Prisma バックエンド対象外のため
         # baseline 検出対象に含めない (設計書 §2)。
@@ -230,9 +240,20 @@ class _PrismaMigrationRunner:
         )
         return len(rows) == len(table_names)
 
-    async def _apply_migration(self, file_path: "Path") -> None:  # type: ignore[name-defined]
+    async def _apply_migration(self, file_path: Path) -> None:
         sql = file_path.read_text()
         version = file_path.name
+
+        # Prisma Accelerate does not support multiple statements in a single execute_raw call.
+        # Split by semicolon and filter out empty or comment-only statements.
+        statements = [s.strip() for s in sql.split(";") if s.strip()]
+
         async with self._client.tx() as tx:
-            await tx.execute_raw(sql)
+            for stmt in statements:
+                # Skip if the statement consists only of comments and whitespace
+                if all(
+                    line.strip().startswith("--") or not line.strip() for line in stmt.splitlines()
+                ):
+                    continue
+                await tx.execute_raw(stmt)
             await tx.execute_raw("INSERT INTO schema_migrations (version) VALUES ($1)", version)

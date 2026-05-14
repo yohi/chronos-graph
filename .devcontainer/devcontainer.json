@@ -73,12 +73,25 @@
           {
             "label": "Install Dependencies",
             "type": "shell",
-            "command": "pip install -e \".[dev,storage-postgres]\"",
+            "command": "uv sync --frozen --all-extras",
             "problemMatcher": [],
             "presentation": {
               "clear": true,
               "panel": "shared"
             }
+          },
+          {
+            "label": "Prisma Generate",
+            "type": "shell",
+            "command": "uv run prisma generate --schema=./prisma/schema.prisma",
+            "problemMatcher": [],
+            "presentation": {
+              "reveal": "always",
+              "panel": "shared"
+            },
+            "dependsOn": [
+              "Install Dependencies"
+            ]
           },
           {
             "label": "Run Tests",

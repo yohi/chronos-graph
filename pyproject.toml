@@ -27,6 +27,9 @@ storage-postgres = [
     "neo4j>=5.0.0",
     "redis>=5.0.0",
 ]
+storage-prisma = [
+    "prisma>=0.15.0",
+]
 embedding-local = [
     "sentence-transformers>=3.0.0",
     "numpy>=1.26.0",
@@ -123,6 +126,10 @@ disable_error_code = ["no-any-return", "no-untyped-def"]
 
 [[tool.mypy.overrides]]
 module = "asyncpg.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "prisma.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

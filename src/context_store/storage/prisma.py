@@ -53,6 +53,27 @@ __all__ = [
 class PrismaStorageAdapter:
     """StorageAdapter implementation backed by Prisma Accelerate (HTTPS)."""
 
+    def _classify_prisma_error(self, exc: Exception) -> tuple[str, bool] | None:
+        """Classify Prisma-specific error codes for Accelerate fallbacks."""
+        code = getattr(exc, "code", None)
+        if code in PRISMA_TIMEOUT_CODES:
+            return ("STORAGE_TIMEOUT", True)
+        if code in PRISMA_PAYLOAD_TOO_LARGE_CODES:
+            return ("STORAGE_PAYLOAD_TOO_LARGE", True)
+        return None
+
+    def _map_to_storage_error(self, exc: Exception) -> StorageError:
+        """Map Prisma/Accelerate exceptions to canonical StorageError."""
+        if exc.__class__.__name__ == "UniqueViolationError":
+            return StorageError(message=str(exc), code="DUPLICATE_CONTENT", recoverable=False)
+
+        classified = self._classify_prisma_error(exc)
+        if classified is not None:
+            code, recoverable = classified
+            return StorageError(message=str(exc), code=code, recoverable=recoverable)
+
+        return StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False)
+
     def __init__(self, client: Prisma) -> None:
         self._client = client
 
@@ -102,7 +123,7 @@ class PrismaStorageAdapter:
         """
 
         try:
-            row = await self._client.query_first_raw(  # type: ignore[attr-defined]
+            row = await self._client.query_first_raw(
                 sql,
                 memory.id,
                 memory.content,
@@ -122,17 +143,7 @@ class PrismaStorageAdapter:
                 content_hash,
             )
         except Exception as e:
-            if e.__class__.__name__ == "UniqueViolationError":
-                raise StorageError(
-                    message=str(e),
-                    code="DUPLICATE_CONTENT",
-                    recoverable=False,
-                ) from e
-            raise StorageError(
-                message=str(e),
-                code="STORAGE_ERROR",
-                recoverable=False,
-            ) from e
+            raise self._map_to_storage_error(e) from e
 
         if row is None:
             raise StorageError(
@@ -142,24 +153,24 @@ class PrismaStorageAdapter:
             )
         return str(row["id"])
 
-    async def get_memory(self, memory_id: str) -> "Memory | None":  # type: ignore[name-defined]
+    async def get_memory(self, memory_id: str) -> Memory | None:
         """Retrieve a memory by ID."""
         sql = "SELECT * FROM memories WHERE id = $1"
         try:
-            row = await self._client.query_first_raw(sql, memory_id)  # type: ignore[attr-defined]
+            row = await self._client.query_first_raw(sql, memory_id)
         except Exception as exc:
-            raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
+            raise self._map_to_storage_error(exc) from exc
         if row is None:
             return None
         return _record_to_memory(row)
 
-    async def get_memories_batch(self, memory_ids: list[str]) -> "list[Memory]":  # type: ignore[name-defined]
+    async def get_memories_batch(self, memory_ids: list[str]) -> list[Memory]:
         """Retrieve multiple memories by ID, preserving input order.
 
         Accelerate の 5MB 応答上限への対策として、チャンクサイズ
-        ``PRISMA_BATCH_FETCH_CHUNK_SIZE`` で分割実行する。
+        ``PRISMA_BATCH_FETCH_CHUNK_SIZE`` で分割実行し、
+        エラー時はさらに半分に分割してリトライする。
         """
-
         if not memory_ids:
             return []
 
@@ -179,9 +190,23 @@ class PrismaStorageAdapter:
             try:
                 rows = await self._client.query_raw(sql, chunk)
             except Exception as exc:
-                raise StorageError(
-                    message=str(exc), code="STORAGE_ERROR", recoverable=False
-                ) from exc
+                # タイムアウトまたはサイズ上限エラーの場合、チャンクを半分にしてリトライ
+                classified = self._classify_prisma_error(exc)
+                if classified is None:
+                    raise self._map_to_storage_error(exc) from exc
+
+                logger.warning("Accelerate chunk error (%s); retrying with smaller chunks", exc)
+                mid = max(1, len(chunk) // 2)
+                rows = []
+                for sub_chunk in [chunk[:mid], chunk[mid:]]:
+                    if not sub_chunk:
+                        continue
+                    try:
+                        sub_rows = await self._client.query_raw(sql, sub_chunk)
+                        rows.extend(sub_rows)
+                    except Exception as retry_exc:
+                        raise self._map_to_storage_error(retry_exc) from retry_exc
+
             for row in rows:
                 memory_map[str(row["id"])] = _record_to_memory(row)
 
@@ -201,7 +226,7 @@ class PrismaStorageAdapter:
         try:
             affected = await self._client.execute_raw(sql, memory_id)
         except Exception as exc:
-            raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
+            raise self._map_to_storage_error(exc) from exc
         return int(affected) >= 1
 
     async def update_memory(self, memory_id: str, updates: dict[str, Any]) -> bool:
@@ -261,7 +286,7 @@ class PrismaStorageAdapter:
         try:
             affected = await self._client.execute_raw(sql, *params)
         except Exception as exc:
-            raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
+            raise self._map_to_storage_error(exc) from exc
         return int(affected) >= 1
 
     async def increment_memory_access_count(self, memory_id: str) -> bool:
@@ -275,7 +300,7 @@ class PrismaStorageAdapter:
         try:
             affected = await self._client.execute_raw(sql, memory_id)
         except Exception as exc:
-            raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
+            raise self._map_to_storage_error(exc) from exc
         return int(affected) >= 1
 
     def _clamp_top_k(self, top_k: int, method_name: str) -> int:
@@ -300,7 +325,7 @@ class PrismaStorageAdapter:
         embedding: list[float],
         top_k: int,
         project: str | None = None,
-    ) -> list["ScoredMemory"]:  # type: ignore[name-defined]
+    ) -> list[ScoredMemory]:
         from context_store.models.memory import MemorySource, ScoredMemory
 
         embedding_str = _embedding_to_pg(embedding)
@@ -319,9 +344,14 @@ class PrismaStorageAdapter:
             try:
                 rows = await self._client.query_raw(sql, embedding_str, effective_top_k, project)
             except Exception as exc:
-                raise StorageError(
-                    message=str(exc), code="STORAGE_ERROR", recoverable=False
-                ) from exc
+                classified = self._classify_prisma_error(exc)
+                if classified is None:
+                    raise self._map_to_storage_error(exc) from exc
+                retry_top_k = max(1, effective_top_k // 2)
+                try:
+                    rows = await self._client.query_raw(sql, embedding_str, retry_top_k, project)
+                except Exception as retry_exc:
+                    raise self._map_to_storage_error(retry_exc) from retry_exc
         else:
             sql = (
                 "SELECT *, 1 - (embedding <=> $1::vector) AS score "
@@ -333,9 +363,14 @@ class PrismaStorageAdapter:
             try:
                 rows = await self._client.query_raw(sql, embedding_str, effective_top_k)
             except Exception as exc:
-                raise StorageError(
-                    message=str(exc), code="STORAGE_ERROR", recoverable=False
-                ) from exc
+                classified = self._classify_prisma_error(exc)
+                if classified is None:
+                    raise self._map_to_storage_error(exc) from exc
+                retry_top_k = max(1, effective_top_k // 2)
+                try:
+                    rows = await self._client.query_raw(sql, embedding_str, retry_top_k)
+                except Exception as retry_exc:
+                    raise self._map_to_storage_error(retry_exc) from retry_exc
 
         return [
             ScoredMemory(
@@ -351,7 +386,7 @@ class PrismaStorageAdapter:
         query: str,
         top_k: int,
         project: str | None = None,
-    ) -> list["ScoredMemory"]:  # type: ignore[name-defined]
+    ) -> list[ScoredMemory]:
         from context_store.models.memory import MemorySource, ScoredMemory
 
         effective_top_k = self._clamp_top_k(top_k, "keyword_search")
@@ -366,9 +401,14 @@ class PrismaStorageAdapter:
             try:
                 rows = await self._client.query_raw(sql, like_query, effective_top_k, project)
             except Exception as exc:
-                raise StorageError(
-                    message=str(exc), code="STORAGE_ERROR", recoverable=False
-                ) from exc
+                classified = self._classify_prisma_error(exc)
+                if classified is None:
+                    raise self._map_to_storage_error(exc) from exc
+                retry_top_k = max(1, effective_top_k // 2)
+                try:
+                    rows = await self._client.query_raw(sql, like_query, retry_top_k, project)
+                except Exception as retry_exc:
+                    raise self._map_to_storage_error(retry_exc) from retry_exc
         else:
             sql = (
                 "SELECT *, 1.0 AS score FROM memories "
@@ -378,9 +418,14 @@ class PrismaStorageAdapter:
             try:
                 rows = await self._client.query_raw(sql, like_query, effective_top_k)
             except Exception as exc:
-                raise StorageError(
-                    message=str(exc), code="STORAGE_ERROR", recoverable=False
-                ) from exc
+                classified = self._classify_prisma_error(exc)
+                if classified is None:
+                    raise self._map_to_storage_error(exc) from exc
+                retry_top_k = max(1, effective_top_k // 2)
+                try:
+                    rows = await self._client.query_raw(sql, like_query, retry_top_k)
+                except Exception as retry_exc:
+                    raise self._map_to_storage_error(retry_exc) from retry_exc
 
         return [
             ScoredMemory(
@@ -518,7 +563,7 @@ class PrismaStorageAdapter:
         try:
             rows = await self._client.query_raw(sql, *params)
         except Exception as exc:
-            raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
+            raise self._map_to_storage_error(exc) from exc
         return [_record_to_memory(row) for row in rows]
 
     async def count_by_filter(self, filters: MemoryFilters) -> int:
@@ -527,9 +572,9 @@ class PrismaStorageAdapter:
             part for part in ["SELECT COUNT(*) AS count", "FROM memories", where_clause] if part
         ).strip()
         try:
-            row = await self._client.query_first_raw(sql, *params)  # type: ignore[attr-defined]
+            row = await self._client.query_first_raw(sql, *params)
         except Exception as exc:
-            raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
+            raise self._map_to_storage_error(exc) from exc
         if row is None:
             return 0
         return int(row.get("count", 0) or 0)
@@ -539,7 +584,7 @@ class PrismaStorageAdapter:
         try:
             rows = await self._client.query_raw(sql)
         except Exception as exc:
-            raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
+            raise self._map_to_storage_error(exc) from exc
         return [str(row["project"]) for row in rows]
 
     async def get_vector_dimension(self) -> int | None:
@@ -548,9 +593,9 @@ class PrismaStorageAdapter:
             "FROM memories WHERE embedding IS NOT NULL LIMIT 1"
         )
         try:
-            row = await self._client.query_first_raw(sql)  # type: ignore[attr-defined]
+            row = await self._client.query_first_raw(sql)
         except Exception as exc:
-            raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
+            raise self._map_to_storage_error(exc) from exc
         if row is None or row.get("vector_dims") is None:
             return None
         return int(row["vector_dims"])
@@ -579,8 +624,6 @@ class _PrismaMigrationRunner:
         - 未適用ファイルを sequential に `execute_raw` で適用
         - `pg_catalog.pg_tables` を用いた baseline 検出は既存 MigrationRunner と同等
         """
-        from pathlib import Path
-
         migrations_dir = Path(__file__).parent / "migrations" / "postgres"
         all_files = sorted(migrations_dir.glob("*.sql"))
         files = [
@@ -605,13 +648,12 @@ class _PrismaMigrationRunner:
                 await self._apply_migration(file_path)
                 logger.info("Applied migration via Prisma: %s", version)
 
-    async def _ensure_system_migration(self, file_path: "Path") -> None:  # type: ignore[name-defined]
+    async def _ensure_system_migration(self, file_path: Path) -> None:
         try:
             await self._client.query_raw("SELECT 1 FROM schema_migrations LIMIT 1")
             return
-        except Exception:
-            logger.debug("schema_migrations table not found, applying system migration")
-            pass
+        except Exception as e:
+            logger.debug("schema_migrations table not found, applying system migration: %s", e)
         await self._apply_migration(file_path)
 
     async def _get_applied_migrations(self) -> set[str]:
@@ -621,11 +663,7 @@ class _PrismaMigrationRunner:
             return set()
         return {row["version"] for row in rows}
 
-    async def _handle_baseline(
-        self,
-        files: list["Path"],
-        applied: set[str],  # type: ignore[name-defined]
-    ) -> None:
+    async def _handle_baseline(self, files: list[Path], applied: set[str]) -> None:
         # graph (memory_nodes / memory_edges) は Prisma バックエンド対象外のため
         # baseline 検出対象に含めない (設計書 §2)。
         requirements = {"0001": ["memories"]}
@@ -648,7 +686,7 @@ class _PrismaMigrationRunner:
         )
         return len(rows) == len(table_names)
 
-    async def _apply_migration(self, file_path: "Path") -> None:  # type: ignore[name-defined]
+    async def _apply_migration(self, file_path: Path) -> None:
         sql = file_path.read_text()
         version = file_path.name
         async with self._client.tx() as tx:

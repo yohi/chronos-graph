@@ -356,6 +356,17 @@ def test_graph_backend_is_disabled_for_prisma(monkeypatch):
     assert settings.graph_backend == "disabled"
 
 
+def test_settings_strips_prisma_database_url(monkeypatch):
+    """PRISMA_DATABASE_URL の前後の空白が削除される。"""
+    settings = Settings(
+        _env_file=None,
+        storage_backend="prisma",
+        prisma_database_url=SecretStr("  prisma://accelerate.prisma-data.net/?api_key=test-key  "),
+        graph_enabled=False,
+    )
+    assert settings.prisma_database_url.get_secret_value() == "prisma://accelerate.prisma-data.net/?api_key=test-key"
+
+
 def test_settings_dashboard_allowed_hosts_from_env(monkeypatch, default_settings):
     """DASHBOARD_ALLOWED_HOSTS はカンマ区切りで解釈される。"""
     # 1. シンプルなケース

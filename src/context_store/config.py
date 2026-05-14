@@ -239,6 +239,7 @@ class Settings(BaseSettings):
             url = self.prisma_database_url.get_secret_value().strip()
             if not url:
                 raise ValueError("PRISMA_DATABASE_URL は storage_backend=prisma の場合に必須です。")
+            self.prisma_database_url = SecretStr(url)
             if not (url.startswith("prisma://") or url.startswith("prismas://")):
                 raise ValueError(
                     "PRISMA_DATABASE_URL は prisma:// または prismas:// で始まる "

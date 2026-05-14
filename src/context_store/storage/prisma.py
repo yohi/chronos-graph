@@ -48,6 +48,8 @@ __all__ = [
 class PrismaStorageAdapter:
     """StorageAdapter implementation backed by Prisma Accelerate (HTTPS)."""
 
+    is_implemented: bool = False
+
     def __init__(self, client: Prisma) -> None:
         self._client = client
 
@@ -65,6 +67,11 @@ class PrismaStorageAdapter:
         except Exception:
             await client.disconnect()
             raise
+
+        if not cls.is_implemented:
+            await client.disconnect()
+            raise NotImplementedError("Prisma backend not implemented")
+
         return adapter
 
     async def initialize(self) -> None:

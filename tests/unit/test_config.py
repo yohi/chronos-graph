@@ -308,6 +308,50 @@ def test_settings_embedding_model_derivation(monkeypatch, default_settings):
     assert s.embedding_model == "openai/text-embedding-3-large"
 
 
+def test_settings_accepts_prisma_backend(monkeypatch):
+    settings = Settings(
+        storage_backend="prisma",
+        prisma_database_url=SecretStr("prisma://accelerate.prisma-data.net/?api_key=test-key"),
+        graph_enabled=False,
+    )
+    assert settings.storage_backend == "prisma"
+    assert settings.prisma_database_url.get_secret_value().startswith("prisma://")
+
+
+def test_settings_rejects_empty_prisma_url_when_backend_is_prisma(monkeypatch):
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(storage_backend="prisma", prisma_database_url=SecretStr(""))
+    assert "PRISMA_DATABASE_URL" in str(exc_info.value)
+
+
+def test_settings_rejects_non_prisma_scheme_url(monkeypatch):
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(
+            storage_backend="prisma",
+            prisma_database_url=SecretStr("postgresql://user:pass@host:5432/db"),
+        )
+    assert "prisma://" in str(exc_info.value) or "prismas://" in str(exc_info.value)
+
+
+def test_settings_rejects_prisma_with_graph_enabled(monkeypatch):
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(
+            storage_backend="prisma",
+            prisma_database_url=SecretStr("prisma://accelerate.prisma-data.net/?api_key=test-key"),
+            graph_enabled=True,
+        )
+    assert "graph" in str(exc_info.value).lower()
+
+
+def test_graph_backend_is_disabled_for_prisma(monkeypatch):
+    settings = Settings(
+        storage_backend="prisma",
+        prisma_database_url=SecretStr("prisma://accelerate.prisma-data.net/?api_key=test-key"),
+        graph_enabled=False,
+    )
+    assert settings.graph_backend == "disabled"
+
+
 def test_settings_dashboard_allowed_hosts_from_env(monkeypatch, default_settings):
     """DASHBOARD_ALLOWED_HOSTS はカンマ区切りで解釈される。"""
     # 1. シンプルなケース

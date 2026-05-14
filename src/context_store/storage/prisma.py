@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from prisma.errors import PrismaError  # type: ignore[import-not-found]
+from prisma.errors import PrismaError, RawQueryError  # type: ignore[import-not-found]
 
 from context_store.config import Settings
 from prisma import Prisma  # type: ignore[attr-defined, import-not-found]
@@ -182,8 +182,11 @@ class _PrismaMigrationRunner:
     async def _get_applied_migrations(self) -> set[str]:
         try:
             rows = await self._client.query_raw("SELECT version FROM schema_migrations")
-        except PrismaError:
-            return set()
+        except RawQueryError as e:
+            error_str = str(e).lower()
+            if "does not exist" in error_str or "42p01" in error_str:
+                return set()
+            raise
         return {row["version"] for row in rows}
 
     async def _handle_baseline(self, files: list[Path], applied: set[str]) -> None:
@@ -213,7 +216,6 @@ class _PrismaMigrationRunner:
         sql = file_path.read_text()
         version = file_path.name
         # CREATE INDEX CONCURRENTLY はトランザクション内で実行できないため、直接実行する
-        await self._client.execute_raw(sql)
-        await self._client.execute_raw(
-            "INSERT INTO schema_migrations (version) VALUES ($1)", version
-        )
+        # 実行と記録の間にプロセスがクラッシュするのを防ぐため、一つのステートメントとして送信する
+        combined_sql = f"{sql}\nINSERT INTO schema_migrations (version) VALUES ('{version}');"
+        await self._client.execute_raw(combined_sql)

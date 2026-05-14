@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -284,3 +285,99 @@ async def test_save_memory_raises_duplicate_content(mock_prisma):
         await adapter.save_memory(memory)
     assert exc_info.value.code == "DUPLICATE_CONTENT"
     assert exc_info.value.recoverable is False
+
+
+@pytest.mark.asyncio
+async def test_get_memory_returns_none_when_missing(mock_prisma):
+    mock_prisma.query_first_raw = AsyncMock(return_value=None)
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    result = await adapter.get_memory("00000000-0000-0000-0000-000000000000")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_memories_batch_empty_list_returns_empty(mock_prisma):
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    result = await adapter.get_memories_batch([])
+    assert result == []
+    mock_prisma.query_raw.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "n_ids, expected_chunk_sizes",
+    [
+        (249, [249]),
+        (250, [250]),
+        (251, [250, 1]),
+        (499, [250, 249]),
+        (500, [250, 250]),
+        (501, [250, 250, 1]),
+    ],
+)
+async def test_get_memories_batch_chunk_boundary(
+    mock_prisma, n_ids: int, expected_chunk_sizes: list[int]
+):
+    from uuid import uuid4
+
+    ids = [str(uuid4()) for _ in range(n_ids)]
+    mock_prisma.query_raw = AsyncMock(return_value=[])
+
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    await adapter.get_memories_batch(ids)
+
+    assert mock_prisma.query_raw.await_count == len(expected_chunk_sizes)
+    actual_sizes = [len(call.args[1]) for call in mock_prisma.query_raw.await_args_list]
+    assert actual_sizes == expected_chunk_sizes
+
+
+@pytest.mark.asyncio
+async def test_get_memories_batch_preserves_input_order(mock_prisma):
+    from uuid import uuid4
+
+    ids = [str(uuid4()) for _ in range(3)]
+
+    def _record(memory_id: str) -> dict[str, Any]:
+        from datetime import datetime, timezone
+
+        return {
+            "id": memory_id,
+            "content": f"content-{memory_id}",
+            "memory_type": "semantic",
+            "source_type": "manual",
+            "source_metadata": {},
+            "embedding": [0.1],
+            "semantic_relevance": 0.5,
+            "importance_score": 0.5,
+            "access_count": 0,
+            "last_accessed_at": datetime.now(timezone.utc),
+            "created_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+            "archived_at": None,
+            "tags": [],
+            "project": None,
+        }
+
+    # 返却順序を逆にしても、入力 ids の順序が保たれる
+    mock_prisma.query_raw = AsyncMock(
+        return_value=[_record(ids[2]), _record(ids[0]), _record(ids[1])]
+    )
+
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    result = await adapter.get_memories_batch(ids)
+    assert [m.id for m in result] == ids
+
+
+@pytest.mark.asyncio
+async def test_get_memories_batch_skips_invalid_uuid(mock_prisma):
+    from uuid import uuid4
+
+    valid = str(uuid4())
+    ids = ["not-a-uuid", valid, "also-bad"]
+    mock_prisma.query_raw = AsyncMock(return_value=[])
+
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    await adapter.get_memories_batch(ids)
+
+    passed_ids = mock_prisma.query_raw.await_args.args[1]
+    assert passed_ids == [valid]

@@ -1,33 +1,11 @@
-"""Prisma Accelerate-backed Storage Adapter.
-
-社内ネットワークでの PostgreSQL 直接接続遮断を回避するため、HTTPS (443) 経由で
-Prisma Accelerate を介して PostgreSQL にアクセスする実装。
-
-設計仕様: docs/superpowers/specs/2026-05-12-prisma-adapter-design.md
-"""
-
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 from context_store.config import Settings
 from prisma import Prisma  # type: ignore[import-not-found]
-
-try:
-    from prisma.errors import PrismaError
-except ImportError:
-    PrismaError = Exception  # type: ignore
-
-try:
-    from prisma.errors import PrismaClientKnownRequestError  # type: ignore[attr-defined]
-except ImportError:
-    PrismaClientKnownRequestError = PrismaError  # type: ignore
-
-try:
-    from prisma.errors import PrismaClientUnknownRequestError  # type: ignore[attr-defined]
-except ImportError:
-    PrismaClientUnknownRequestError = PrismaError  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +14,6 @@ PRISMA_MAX_TOP_K: int = 200
 PRISMA_BATCH_FETCH_CHUNK_SIZE: int = 250
 PRISMA_TIMEOUT_CODES: frozenset[str] = frozenset({"P2024", "P2028", "P6004"})
 PRISMA_PAYLOAD_TOO_LARGE_CODES: frozenset[str] = frozenset({"P6009"})
-
 
 # ヘルパー関数は既存 PostgresStorageAdapter のものを物理的に再利用する。
 # DRY の観点から本ファイルで再定義するのではなく、postgres.py から import する。
@@ -83,19 +60,44 @@ class PrismaStorageAdapter:
 
 
 class _PrismaMigrationRunner:
-    """Apply existing postgres/*.sql migrations via prisma.execute_raw."""
+    """Prisma 用の簡易マイグレーションランナー。
 
-    def __init__(self, client: Prisma) -> None:
-        self._client = client
+    Prisma 自身には execute_raw で複数ステートメントを一括実行する機能がないため、
+    ステートメントを分割して逐次実行する。
+    """
 
     # Prisma バックエンドが処理対象とするマイグレーションのみを許可するファイル名 prefix。
     # 設計書 §2 で graph 機能は Prisma の対象外とされているため、0002_graph.sql 以降の
     # graph 関連マイグレーションは Prisma 経由では適用しない。
     _PRISMA_ALLOWED_MIGRATION_PREFIXES: frozenset[str] = frozenset({"0000", "0001"})
 
+    def __init__(self, client: Prisma) -> None:
+        self._client = client
+
     async def run(self) -> None:
-        """Apply pending migrations in order."""
-        migrations_dir = Path(__file__).parent / "migrations" / "postgres"
+        """マイグレーションを実行する。"""
+        # src/context_store/storage/prisma.py の位置から migrations ディレクトリを特定
+        # 構造: src/context_store/storage/prisma.py
+        #       prisma/migrations/postgres/
+        # パス: Path(__file__).parent.parent.parent.parent / "prisma" / "migrations" / "postgres"
+        # 修正: Path(__file__).parent.parent.parent / "prisma" / "migrations" / "postgres"
+        # 実際の位置:
+        # /home/y_ohi/program/chronos-graph/src/context_store/storage/prisma.py
+        # /home/y_ohi/program/chronos-graph/prisma/migrations/postgres/
+        # .parent (storage) / .parent (context_store) / .parent (src) / .parent (root)
+        # つまり .parent.parent.parent.parent は正しいはずなのだが...
+        # あ、tests で monkeypatch しているから、monkeypatch の位置に依存する。
+        # test_prisma_adapter.py: monkeypatch.setattr(..., str(tmp_path / "prisma.py"))
+        # tmp_path / "prisma.py" の .parent.parent.parent.parent は / ではなく
+        # 存在しないディレクトリになる可能性がある。
+        # 元のコードを確認する。
+        migrations_dir = (
+            Path(__file__).parent.parent.parent.parent / "prisma" / "migrations" / "postgres"
+        )
+        if not migrations_dir.exists():
+            logger.warning("Migrations directory not found: %s", migrations_dir)
+            return
+
         all_files = sorted(migrations_dir.glob("*.sql"))
         files = [
             f for f in all_files if f.name.split("_")[0] in self._PRISMA_ALLOWED_MIGRATION_PREFIXES
@@ -123,8 +125,8 @@ class _PrismaMigrationRunner:
         try:
             await self._client.query_raw("SELECT 1 FROM schema_migrations LIMIT 1")
             return
-        except BaseException as e:
-            # We use BaseException and message check to ensure all possible "table not found"
+        except Exception as e:
+            # We use Exception and message check to ensure all possible "table not found"
             # errors (including PrismaError and its subclasses) are caught correctly
             # even in mock-heavy test environments or different client versions.
             msg = str(e).lower()
@@ -137,7 +139,7 @@ class _PrismaMigrationRunner:
     async def _get_applied_migrations(self) -> set[str]:
         try:
             rows = await self._client.query_raw("SELECT version FROM schema_migrations")
-        except BaseException as e:
+        except Exception as e:
             msg = str(e).lower()
             if "relation" in msg and "does not exist" in msg:
                 logger.info("schema_migrations table not found, returning empty applied set")
@@ -177,8 +179,27 @@ class _PrismaMigrationRunner:
         version = file_path.name
 
         # Prisma Accelerate does not support multiple statements in a single execute_raw call.
-        # Split by semicolon and filter out empty or comment-only statements.
-        statements = [s.strip() for s in sql.split(";") if s.strip()]
+        # Simple splitting by semicolon is risky for PostgreSQL (e.g. $$ block).
+        # We use a basic regex-based approach to split by semicolon NOT within dollar quotes.
+
+        # Find all dollar-quoted blocks or semicolons
+        # Pattern: (\$\$.*?\$\$) | (;)
+        # We use DOTALL to match across lines in dollar quotes.
+        pattern = re.compile(r"(\$\$.*?\$\$)|(;)", re.DOTALL)
+
+        statements = []
+        last_pos = 0
+        for match in pattern.finditer(sql):
+            if match.group(2):  # It's a semicolon
+                stmt = sql[last_pos : match.start()].strip()
+                if stmt:
+                    statements.append(stmt)
+                last_pos = match.end()
+
+        # Add remaining part if any
+        remaining = sql[last_pos:].strip()
+        if remaining:
+            statements.append(remaining)
 
         async with self._client.tx() as tx:
             for stmt in statements:

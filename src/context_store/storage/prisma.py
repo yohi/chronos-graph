@@ -11,10 +11,15 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from context_store.config import Settings
-from context_store.storage.postgres import _content_hash, _embedding_to_pg
+from context_store.storage.postgres import (
+    _content_hash,
+    _embedding_to_pg,
+    _record_to_memory,
+)
 from context_store.storage.protocols import StorageError
 from prisma import Prisma  # type: ignore[import-not-found]
 
@@ -136,6 +141,60 @@ class PrismaStorageAdapter:
                 recoverable=False,
             )
         return str(row["id"])
+
+    async def get_memory(self, memory_id: str) -> "Memory | None":  # type: ignore[name-defined]
+        """Retrieve a memory by ID."""
+        sql = "SELECT * FROM memories WHERE id = $1"
+        try:
+            row = await self._client.query_first_raw(sql, memory_id)  # type: ignore[attr-defined]
+        except Exception as exc:
+            raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
+        if row is None:
+            return None
+        return _record_to_memory(row)
+
+    async def get_memories_batch(self, memory_ids: list[str]) -> "list[Memory]":  # type: ignore[name-defined]
+        """Retrieve multiple memories by ID, preserving input order.
+
+        Accelerate の 5MB 応答上限への対策として、チャンクサイズ
+        ``PRISMA_BATCH_FETCH_CHUNK_SIZE`` で分割実行する。
+        """
+
+        if not memory_ids:
+            return []
+
+        cleaned: list[str] = []
+        for memory_id in memory_ids:
+            try:
+                cleaned.append(str(UUID(str(memory_id))))
+            except (TypeError, ValueError, AttributeError):
+                continue
+        if not cleaned:
+            return []
+
+        sql = "SELECT * FROM memories WHERE id = ANY($1::uuid[])"
+        memory_map: dict[str, Any] = {}
+        for offset in range(0, len(cleaned), PRISMA_BATCH_FETCH_CHUNK_SIZE):
+            chunk = cleaned[offset : offset + PRISMA_BATCH_FETCH_CHUNK_SIZE]
+            try:
+                rows = await self._client.query_raw(sql, chunk)
+            except Exception as exc:
+                raise StorageError(
+                    message=str(exc), code="STORAGE_ERROR", recoverable=False
+                ) from exc
+            for row in rows:
+                memory_map[str(row["id"])] = _record_to_memory(row)
+
+        results = []
+        for memory_id in memory_ids:
+            try:
+                norm_id = str(UUID(str(memory_id)))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            memory = memory_map.get(norm_id)
+            if memory is not None:
+                results.append(memory)
+        return results
 
 
 class _PrismaMigrationRunner:

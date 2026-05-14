@@ -93,8 +93,9 @@ class _PrismaMigrationRunner:
         """Apply pending migrations in order."""
         migrations_dir = Path(__file__).parent / "migrations" / "postgres"
         if not migrations_dir.exists():
-            logger.warning("Migrations directory not found: %s", migrations_dir)
-            return
+            msg = f"Migrations directory not found: {migrations_dir}"
+            logger.error(msg)
+            raise RuntimeError(msg)
 
         all_files = sorted(migrations_dir.glob("*.sql"))
         files = [
@@ -183,17 +184,62 @@ class _PrismaMigrationRunner:
 
             statements = [s.strip() for s in sqlparse.split(sql) if s.strip()]
         except ImportError:
-            # Fallback to a basic regex-based approach if sqlparse is not available.
-            # This handles standard $$ dollar quotes but not named ones like $tag$.
-            pattern = re.compile(r"(\$\$.*?\$\$)|(;)", re.DOTALL)
+            # Fallback to a scanner-based approach if sqlparse is not available.
+            # This handles both standard $$ and tagged $tag$ dollar quotes,
+            # as well as basic single/double quote regions.
             statements = []
             last_pos = 0
-            for match in pattern.finditer(sql):
-                if match.group(2):  # It's a semicolon
-                    stmt = sql[last_pos : match.start()].strip()
+            pos = 0
+            n = len(sql)
+            tag_re = re.compile(r"\$([A-Za-z0-9_]*)\$")
+
+            while pos < n:
+                char = sql[pos]
+
+                # Handle single quotes
+                if char == "'":
+                    pos += 1
+                    while pos < n:
+                        if sql[pos] == "'":
+                            if pos + 1 < n and sql[pos + 1] == "'":  # Escaped quote ''
+                                pos += 2
+                                continue
+                            pos += 1
+                            break
+                        pos += 1
+                    continue
+
+                # Handle double quotes (for identifiers)
+                if char == '"':
+                    pos += 1
+                    while pos < n:
+                        if sql[pos] == '"':
+                            if pos + 1 < n and sql[pos + 1] == '"':  # Escaped quote ""
+                                pos += 2
+                                continue
+                            pos += 1
+                            break
+                        pos += 1
+                    continue
+
+                # Check for dollar quote start
+                match = tag_re.match(sql, pos)
+                if match:
+                    tag = match.group(0)
+                    tag_end_pos = sql.find(tag, pos + len(tag))
+                    if tag_end_pos != -1:
+                        pos = tag_end_pos + len(tag)
+                        continue
+
+                # Check for semicolon
+                if char == ";":
+                    stmt = sql[last_pos:pos].strip()
                     if stmt:
                         statements.append(stmt)
-                    last_pos = match.end()
+                    last_pos = pos + 1
+
+                pos += 1
+
             remaining = sql[last_pos:].strip()
             if remaining:
                 statements.append(remaining)

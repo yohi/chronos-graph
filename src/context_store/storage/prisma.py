@@ -196,6 +196,88 @@ class PrismaStorageAdapter:
                 results.append(memory)
         return results
 
+    async def delete_memory(self, memory_id: str) -> bool:
+        sql = "DELETE FROM memories WHERE id = $1"
+        try:
+            affected = await self._client.execute_raw(sql, memory_id)
+        except Exception as exc:
+            raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
+        return int(affected) >= 1
+
+    async def update_memory(self, memory_id: str, updates: dict[str, Any]) -> bool:
+        if not updates:
+            return False
+
+        allowed_columns = {
+            "content",
+            "memory_type",
+            "source_type",
+            "source_metadata",
+            "embedding",
+            "semantic_relevance",
+            "importance_score",
+            "access_count",
+            "last_accessed_at",
+            "updated_at",
+            "archived_at",
+            "tags",
+            "project",
+        }
+        set_parts: list[str] = []
+        params: list[Any] = []
+        for col, val in updates.items():
+            if col not in allowed_columns:
+                continue
+            if col == "content":
+                params.append(val)
+                set_parts.append(f"{col} = ${len(params)}")
+                params.append(_content_hash(str(val)))
+                set_parts.append(f"content_hash = ${len(params)}")
+                continue
+            if col == "embedding":
+                val = _embedding_to_pg(val) if isinstance(val, list) else val
+                params.append(val)
+                set_parts.append(f"{col} = ${len(params)}::vector")
+                continue
+            if col == "source_metadata" and isinstance(val, dict):
+                val = json.dumps(val)
+                params.append(val)
+                set_parts.append(f"{col} = ${len(params)}::jsonb")
+                continue
+            params.append(val)
+            set_parts.append(f"{col} = ${len(params)}")
+
+        if not set_parts:
+            return False
+
+        params.append(memory_id)
+        sql = " ".join(
+            [
+                "UPDATE memories",
+                f"SET {', '.join(set_parts)}",
+                f"WHERE id = ${len(params)}",
+            ]
+        )
+        try:
+            affected = await self._client.execute_raw(sql, *params)
+        except Exception as exc:
+            raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
+        return int(affected) >= 1
+
+    async def increment_memory_access_count(self, memory_id: str) -> bool:
+        sql = (
+            "UPDATE memories "
+            "SET access_count = access_count + 1, "
+            "    last_accessed_at = NOW(), "
+            "    updated_at = NOW() "
+            "WHERE id = $1"
+        )
+        try:
+            affected = await self._client.execute_raw(sql, memory_id)
+        except Exception as exc:
+            raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
+        return int(affected) >= 1
+
 
 class _PrismaMigrationRunner:
     """Apply existing postgres/*.sql migrations via prisma.execute_raw."""

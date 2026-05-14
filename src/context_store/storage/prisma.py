@@ -123,7 +123,7 @@ class PrismaStorageAdapter:
         """
 
         try:
-            row = await self._client.query_first_raw(
+            row = await self._client.query_first_raw(  # type: ignore[attr-defined]
                 sql,
                 memory.id,
                 memory.content,
@@ -157,7 +157,7 @@ class PrismaStorageAdapter:
         """Retrieve a memory by ID."""
         sql = "SELECT * FROM memories WHERE id = $1"
         try:
-            row = await self._client.query_first_raw(sql, memory_id)
+            row = await self._client.query_first_raw(sql, memory_id)  # type: ignore[attr-defined]
         except Exception as exc:
             raise self._map_to_storage_error(exc) from exc
         if row is None:
@@ -572,7 +572,7 @@ class PrismaStorageAdapter:
             part for part in ["SELECT COUNT(*) AS count", "FROM memories", where_clause] if part
         ).strip()
         try:
-            row = await self._client.query_first_raw(sql, *params)
+            row = await self._client.query_first_raw(sql, *params)  # type: ignore[attr-defined]
         except Exception as exc:
             raise self._map_to_storage_error(exc) from exc
         if row is None:
@@ -593,7 +593,7 @@ class PrismaStorageAdapter:
             "FROM memories WHERE embedding IS NOT NULL LIMIT 1"
         )
         try:
-            row = await self._client.query_first_raw(sql)
+            row = await self._client.query_first_raw(sql)  # type: ignore[attr-defined]
         except Exception as exc:
             raise self._map_to_storage_error(exc) from exc
         if row is None or row.get("vector_dims") is None:

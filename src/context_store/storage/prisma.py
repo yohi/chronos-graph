@@ -24,7 +24,7 @@ from context_store.storage.protocols import StorageError
 from prisma import Prisma  # type: ignore[import-not-found]
 
 if TYPE_CHECKING:
-    from context_store.models.memory import Memory
+    from context_store.models.memory import Memory, ScoredMemory
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +277,119 @@ class PrismaStorageAdapter:
         except Exception as exc:
             raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
         return int(affected) >= 1
+
+    def _clamp_top_k(self, top_k: int, method_name: str) -> int:
+        if top_k <= 0:
+            raise StorageError(
+                message=f"top_k must be >= 1 (got {top_k})",
+                code="INVALID_PARAMETER",
+                recoverable=False,
+            )
+        if top_k > PRISMA_MAX_TOP_K:
+            logger.warning(
+                "%s: top_k clamped %d -> %d (PRISMA_MAX_TOP_K)",
+                method_name,
+                top_k,
+                PRISMA_MAX_TOP_K,
+            )
+            return PRISMA_MAX_TOP_K
+        return top_k
+
+    async def vector_search(
+        self,
+        embedding: list[float],
+        top_k: int,
+        project: str | None = None,
+    ) -> list["ScoredMemory"]:  # type: ignore[name-defined]
+        from context_store.models.memory import MemorySource, ScoredMemory
+
+        embedding_str = _embedding_to_pg(embedding)
+        if embedding_str is None:
+            return []
+
+        effective_top_k = self._clamp_top_k(top_k, "vector_search")
+        if project is not None:
+            sql = (
+                "SELECT *, 1 - (embedding <=> $1::vector) AS score "
+                "FROM memories "
+                "WHERE archived_at IS NULL AND embedding IS NOT NULL AND project = $3 "
+                "ORDER BY embedding <=> $1::vector "
+                "LIMIT $2"
+            )
+            try:
+                rows = await self._client.query_raw(sql, embedding_str, effective_top_k, project)
+            except Exception as exc:
+                raise StorageError(
+                    message=str(exc), code="STORAGE_ERROR", recoverable=False
+                ) from exc
+        else:
+            sql = (
+                "SELECT *, 1 - (embedding <=> $1::vector) AS score "
+                "FROM memories "
+                "WHERE archived_at IS NULL AND embedding IS NOT NULL "
+                "ORDER BY embedding <=> $1::vector "
+                "LIMIT $2"
+            )
+            try:
+                rows = await self._client.query_raw(sql, embedding_str, effective_top_k)
+            except Exception as exc:
+                raise StorageError(
+                    message=str(exc), code="STORAGE_ERROR", recoverable=False
+                ) from exc
+
+        return [
+            ScoredMemory(
+                memory=_record_to_memory(row),
+                score=float(row["score"]),
+                source=MemorySource.VECTOR,
+            )
+            for row in rows
+        ]
+
+    async def keyword_search(
+        self,
+        query: str,
+        top_k: int,
+        project: str | None = None,
+    ) -> list["ScoredMemory"]:  # type: ignore[name-defined]
+        from context_store.models.memory import MemorySource, ScoredMemory
+
+        effective_top_k = self._clamp_top_k(top_k, "keyword_search")
+        like_query = f"%{query}%"
+
+        if project is not None:
+            sql = (
+                "SELECT *, 1.0 AS score FROM memories "
+                "WHERE archived_at IS NULL AND content LIKE $1 AND project = $3 "
+                "LIMIT $2"
+            )
+            try:
+                rows = await self._client.query_raw(sql, like_query, effective_top_k, project)
+            except Exception as exc:
+                raise StorageError(
+                    message=str(exc), code="STORAGE_ERROR", recoverable=False
+                ) from exc
+        else:
+            sql = (
+                "SELECT *, 1.0 AS score FROM memories "
+                "WHERE archived_at IS NULL AND content LIKE $1 "
+                "LIMIT $2"
+            )
+            try:
+                rows = await self._client.query_raw(sql, like_query, effective_top_k)
+            except Exception as exc:
+                raise StorageError(
+                    message=str(exc), code="STORAGE_ERROR", recoverable=False
+                ) from exc
+
+        return [
+            ScoredMemory(
+                memory=_record_to_memory(row),
+                score=float(row["score"]),
+                source=MemorySource.KEYWORD,
+            )
+            for row in rows
+        ]
 
 
 class _PrismaMigrationRunner:

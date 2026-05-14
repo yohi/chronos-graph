@@ -216,6 +216,7 @@ class _PrismaMigrationRunner:
         sql = file_path.read_text()
         version = file_path.name
         # CREATE INDEX CONCURRENTLY はトランザクション内で実行できないため、直接実行する
-        # 実行と記録の間にプロセスがクラッシュするのを防ぐため、一つのステートメントとして送信する
-        combined_sql = f"{sql}\nINSERT INTO schema_migrations (version) VALUES ('{version}');"
+        # 実行と記録の間にプロセスがクラッシュするのを防ぐため一つのステートメントとする
+        # 外部入力ではないためSQLインジェクション対象外
+        combined_sql = f"{sql}\nINSERT INTO schema_migrations (version) VALUES ('{version}');"  # nosec
         await self._client.execute_raw(combined_sql)

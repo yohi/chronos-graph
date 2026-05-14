@@ -310,6 +310,7 @@ def test_settings_embedding_model_derivation(monkeypatch, default_settings):
 
 def test_settings_accepts_prisma_backend(monkeypatch):
     settings = Settings(
+        _env_file=None,
         storage_backend="prisma",
         prisma_database_url=SecretStr("prisma://accelerate.prisma-data.net/?api_key=test-key"),
         graph_enabled=False,
@@ -320,13 +321,14 @@ def test_settings_accepts_prisma_backend(monkeypatch):
 
 def test_settings_rejects_empty_prisma_url_when_backend_is_prisma(monkeypatch):
     with pytest.raises(ValidationError) as exc_info:
-        Settings(storage_backend="prisma", prisma_database_url=SecretStr(""))
+        Settings(_env_file=None, storage_backend="prisma", prisma_database_url=SecretStr(""))
     assert "PRISMA_DATABASE_URL" in str(exc_info.value)
 
 
 def test_settings_rejects_non_prisma_scheme_url(monkeypatch):
     with pytest.raises(ValidationError) as exc_info:
         Settings(
+            _env_file=None,
             storage_backend="prisma",
             prisma_database_url=SecretStr("postgresql://user:pass@host:5432/db"),
         )
@@ -336,6 +338,7 @@ def test_settings_rejects_non_prisma_scheme_url(monkeypatch):
 def test_settings_rejects_prisma_with_graph_enabled(monkeypatch):
     with pytest.raises(ValidationError) as exc_info:
         Settings(
+            _env_file=None,
             storage_backend="prisma",
             prisma_database_url=SecretStr("prisma://accelerate.prisma-data.net/?api_key=test-key"),
             graph_enabled=True,
@@ -345,6 +348,7 @@ def test_settings_rejects_prisma_with_graph_enabled(monkeypatch):
 
 def test_graph_backend_is_disabled_for_prisma(monkeypatch):
     settings = Settings(
+        _env_file=None,
         storage_backend="prisma",
         prisma_database_url=SecretStr("prisma://accelerate.prisma-data.net/?api_key=test-key"),
         graph_enabled=False,

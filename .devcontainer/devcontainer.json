@@ -73,7 +73,7 @@
           {
             "label": "Install Dependencies",
             "type": "shell",
-            "command": "uv sync --all-extras --dev",
+            "command": "uv sync --frozen --all-extras",
             "problemMatcher": [],
             "presentation": {
               "clear": true,
@@ -83,7 +83,7 @@
           {
             "label": "Prisma Generate",
             "type": "shell",
-            "command": "prisma generate --schema=./prisma/schema.prisma",
+            "command": "uv run prisma generate --schema=./prisma/schema.prisma",
             "problemMatcher": [],
             "presentation": {
               "reveal": "always",

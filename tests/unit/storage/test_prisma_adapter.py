@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -318,8 +319,6 @@ async def test_get_memories_batch_empty_list_returns_empty(mock_prisma):
 async def test_get_memories_batch_chunk_boundary(
     mock_prisma, n_ids: int, expected_chunk_sizes: list[int]
 ):
-    from uuid import uuid4
-
     ids = [str(uuid4()) for _ in range(n_ids)]
     mock_prisma.query_raw = AsyncMock(return_value=[])
 
@@ -333,13 +332,9 @@ async def test_get_memories_batch_chunk_boundary(
 
 @pytest.mark.asyncio
 async def test_get_memories_batch_preserves_input_order(mock_prisma):
-    from uuid import uuid4
-
     ids = [str(uuid4()) for _ in range(3)]
 
     def _record(memory_id: str) -> dict[str, Any]:
-        from datetime import datetime, timezone
-
         return {
             "id": memory_id,
             "content": f"content-{memory_id}",
@@ -370,8 +365,6 @@ async def test_get_memories_batch_preserves_input_order(mock_prisma):
 
 @pytest.mark.asyncio
 async def test_get_memories_batch_skips_invalid_uuid(mock_prisma):
-    from uuid import uuid4
-
     valid = str(uuid4())
     ids = ["not-a-uuid", valid, "also-bad"]
     mock_prisma.query_raw = AsyncMock(return_value=[])
@@ -433,8 +426,6 @@ async def test_increment_memory_access_count_returns_true(mock_prisma):
 async def test_vector_search_top_k_clamp(
     mock_prisma, caplog, input_top_k, expected_effective_top_k, expects_warning
 ):
-    import logging
-
     mock_prisma.query_raw = AsyncMock(return_value=[])
     adapter = PrismaStorageAdapter(client=mock_prisma)
     with caplog.at_level(logging.WARNING, logger="context_store.storage.prisma"):
@@ -468,8 +459,6 @@ async def test_vector_search_empty_embedding_returns_empty(mock_prisma):
 
 @pytest.mark.asyncio
 async def test_keyword_search_top_k_clamp(mock_prisma, caplog):
-    import logging
-
     mock_prisma.query_raw = AsyncMock(return_value=[])
     adapter = PrismaStorageAdapter(client=mock_prisma)
     with caplog.at_level(logging.WARNING, logger="context_store.storage.prisma"):
@@ -527,3 +516,27 @@ async def test_get_vector_dimension_returns_none_when_no_data(mock_prisma):
     adapter = PrismaStorageAdapter(client=mock_prisma)
     result = await adapter.get_vector_dimension()
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_memories_batch_retry_on_accelerate_error(mock_prisma, caplog):
+    """P6004 等のエラー時にチャンクを分割してリトライする。"""
+    from prisma.errors import PrismaClientKnownRequestError  # type: ignore[import-not-found]
+
+    ids = ["id-1", "id-2"]
+
+    # 1回目: 失敗 (P6004), 2回目&3回目: 成功
+    mock_prisma.query_raw = AsyncMock(
+        side_effect=[
+            PrismaClientKnownRequestError("timeout", code="P6004", meta={}),
+            [{"id": "id-1"}],
+            [{"id": "id-2"}],
+        ]
+    )
+
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    with caplog.at_level(logging.WARNING, logger="context_store.storage.prisma"):
+        await adapter.get_memories_batch(ids)
+
+    assert mock_prisma.query_raw.await_count == 3
+    assert any("retrying with smaller chunks" in r.message for r in caplog.records)

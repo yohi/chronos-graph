@@ -419,3 +419,61 @@ async def test_increment_memory_access_count_returns_true(mock_prisma):
     mock_prisma.execute_raw = AsyncMock(return_value=1)
     adapter = PrismaStorageAdapter(client=mock_prisma)
     assert await adapter.increment_memory_access_count("id-1") is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "input_top_k, expected_effective_top_k, expects_warning",
+    [
+        (10, 10, False),
+        (200, 200, False),
+        (500, 200, True),  # クランプ
+    ],
+)
+async def test_vector_search_top_k_clamp(
+    mock_prisma, caplog, input_top_k, expected_effective_top_k, expects_warning
+):
+    import logging
+
+    mock_prisma.query_raw = AsyncMock(return_value=[])
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    with caplog.at_level(logging.WARNING, logger="context_store.storage.prisma"):
+        await adapter.vector_search(embedding=[0.1] * 768, top_k=input_top_k)
+
+    params = mock_prisma.query_raw.await_args.args
+    assert expected_effective_top_k in params
+    if expects_warning:
+        assert any("clamped" in r.message.lower() for r in caplog.records)
+    else:
+        assert not any("clamped" in r.message.lower() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_top_k", [0, -1])
+async def test_vector_search_rejects_non_positive_top_k(mock_prisma, invalid_top_k):
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    with pytest.raises(StorageError) as exc_info:
+        await adapter.vector_search(embedding=[0.1] * 768, top_k=invalid_top_k)
+    assert exc_info.value.code == "INVALID_PARAMETER"
+    mock_prisma.query_raw.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_vector_search_empty_embedding_returns_empty(mock_prisma):
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    result = await adapter.vector_search(embedding=[], top_k=10)
+    assert result == []
+    mock_prisma.query_raw.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_keyword_search_top_k_clamp(mock_prisma, caplog):
+    import logging
+
+    mock_prisma.query_raw = AsyncMock(return_value=[])
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    with caplog.at_level(logging.WARNING, logger="context_store.storage.prisma"):
+        await adapter.keyword_search(query="test", top_k=300)
+    params = mock_prisma.query_raw.await_args.args
+    assert 200 in params
+    assert any("clamped" in r.message.lower() for r in caplog.records)

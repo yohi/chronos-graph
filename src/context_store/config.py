@@ -238,9 +238,7 @@ class Settings(BaseSettings):
         if self.storage_backend == "prisma":
             url = self.prisma_database_url.get_secret_value().strip()
             if not url:
-                raise ValueError(
-                    "PRISMA_DATABASE_URL は storage_backend=prisma の場合に必須です。"
-                )
+                raise ValueError("PRISMA_DATABASE_URL は storage_backend=prisma の場合に必須です。")
             if not (url.startswith("prisma://") or url.startswith("prismas://")):
                 raise ValueError(
                     "PRISMA_DATABASE_URL は prisma:// または prismas:// で始まる "

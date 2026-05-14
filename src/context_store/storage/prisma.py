@@ -12,6 +12,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from prisma.errors import PrismaError  # type: ignore[import-not-found]
+
 from context_store.config import Settings
 from prisma import Prisma  # type: ignore[attr-defined, import-not-found]
 
@@ -166,7 +168,7 @@ class _PrismaMigrationRunner:
         try:
             await self._client.query_raw("SELECT 1 FROM schema_migrations LIMIT 1")
             return
-        except Exception:
+        except PrismaError:
             logger.debug("Table schema_migrations not found, applying system migration")
         await self._apply_migration(file_path)
 

@@ -20,12 +20,12 @@ except ImportError:
     PrismaError = Exception  # type: ignore
 
 try:
-    from prisma.errors import PrismaClientKnownRequestError
+    from prisma.errors import PrismaClientKnownRequestError  # type: ignore[attr-defined]
 except ImportError:
     PrismaClientKnownRequestError = PrismaError  # type: ignore
 
 try:
-    from prisma.errors import PrismaClientUnknownRequestError
+    from prisma.errors import PrismaClientUnknownRequestError  # type: ignore[attr-defined]
 except ImportError:
     PrismaClientUnknownRequestError = PrismaError  # type: ignore
 

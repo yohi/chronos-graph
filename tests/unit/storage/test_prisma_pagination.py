@@ -90,11 +90,8 @@ async def test_ensure_system_migration_ignores_non_missing_table_errors(mock_pri
     # Missing table error (Postgres 42P01) should trigger migration
     mock_prisma.query_raw.side_effect = Exception('relation "schema_migrations" does not exist')
     mock_prisma.execute_raw = AsyncMock(return_value=1)
-    # Mocking _apply_migration indirectly by checking execute_raw calls
-    # Actually runner._apply_migration reads the file, so we need a real-ish Path
-    # But for this unit test, let's just check if it proceeds to the next step
-    # or fails. Since we can't easily mock the file read here without more setup,
-    # let's just verify it doesn't re-raise immediately.
+    await runner._ensure_system_migration(MagicMock())
+    mock_prisma.execute_raw.assert_awaited()
 
 
 @pytest.mark.asyncio

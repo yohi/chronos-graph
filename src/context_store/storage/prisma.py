@@ -105,6 +105,11 @@ class PrismaStorageAdapter:
             return ("STORAGE_TIMEOUT", True)
         if code in PRISMA_PAYLOAD_TOO_LARGE_CODES:
             return ("STORAGE_PAYLOAD_TOO_LARGE", True)
+
+        exc_str = str(exc).lower()
+        if "408" in exc_str or "504" in exc_str or "timeout" in exc_str:
+            return ("STORAGE_TIMEOUT", True)
+
         return None
 
     def _map_to_storage_error(self, exc: Exception) -> StorageError:
@@ -122,12 +127,17 @@ class PrismaStorageAdapter:
         if code == "P2002":
             return StorageError(message=exc_str, code="DUPLICATE_CONTENT", recoverable=False)
 
+        # P2010 is Prisma's RawQueryError (syntax error, table not found, etc)
+        if code == "P2010" or exc.__class__.__name__ == "RawQueryError":
+            return StorageError(message=exc_str, code="STORAGE_ERROR", recoverable=False)
+
         classified = self._classify_prisma_error(exc)
         if classified is not None:
             err_code, recoverable = classified
             return StorageError(message=exc_str, code=err_code, recoverable=recoverable)
 
-        return StorageError(message=exc_str, code="STORAGE_ERROR", recoverable=False)
+        # Unclassified network/HTTP errors default to recoverable=True
+        return StorageError(message=exc_str, code="STORAGE_ERROR", recoverable=True)
 
     @classmethod
     async def create(cls, settings: Settings) -> "PrismaStorageAdapter":

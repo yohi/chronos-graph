@@ -425,9 +425,9 @@ class PrismaStorageAdapter:
     ) -> list[ScoredMemory]:
         from context_store.models.memory import MemorySource, ScoredMemory
 
-        embedding_str = _embedding_to_pg(embedding)
-        if embedding_str is None:
+        if not embedding:
             return []
+        embedding_str = _embedding_to_pg(embedding)
 
         effective_top_k = self._clamp_top_k(top_k, "vector_search")
         if project is not None:
@@ -477,12 +477,14 @@ class PrismaStorageAdapter:
         from context_store.models.memory import MemorySource, ScoredMemory
 
         effective_top_k = self._clamp_top_k(top_k, "keyword_search")
-        like_query = f"%{query}%"
+        # SQL LIKE wildcards: escape backslashes first, then % and _
+        escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like_query = f"%{escaped_query}%"
 
         if project is not None:
             sql = (
                 "SELECT *, 1.0 AS score FROM memories "
-                "WHERE archived_at IS NULL AND content LIKE $1 AND project = $3 "
+                "WHERE archived_at IS NULL AND content LIKE $1 ESCAPE '\\\\' AND project = $3 "
                 "LIMIT $2"
             )
             try:
@@ -494,7 +496,7 @@ class PrismaStorageAdapter:
         else:
             sql = (
                 "SELECT *, 1.0 AS score FROM memories "
-                "WHERE archived_at IS NULL AND content LIKE $1 "
+                "WHERE archived_at IS NULL AND content LIKE $1 ESCAPE '\\\\' "
                 "LIMIT $2"
             )
             try:
@@ -597,7 +599,9 @@ class _PrismaMigrationRunner:
                 return set()
             if "p2010" in exc_str:
                 return set()
-            return set()
+
+            logger.exception("Failed to fetch applied migrations from schema_migrations table")
+            raise
 
     async def _tables_exist(self, tables: list[str]) -> bool:
         """Check if specified tables exist in the database."""

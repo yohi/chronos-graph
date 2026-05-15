@@ -529,5 +529,35 @@ async def test_keyword_search_executes_correct_sql(mock_prisma):
 
     mock_prisma.query_raw.assert_awaited_once()
     sql = mock_prisma.query_raw.await_args.args[0]
-    assert "content LIKE $1" in sql
+    params = mock_prisma.query_raw.await_args.args[1:]
+    assert "content LIKE $1 ESCAPE '\\\\'" in sql
     assert "LIMIT $2" in sql
+    # params: (like_query, effective_top_k)
+    assert params == ("%hello%", 5)
+
+
+@pytest.mark.asyncio
+async def test_get_applied_migrations_raises_unknown_exception(mock_prisma):
+    """未知の例外が発生した場合、_get_applied_migrations がそれを再スローすることを確認。"""
+    from context_store.storage.prisma import _PrismaMigrationRunner
+
+    # 1. _ensure_system_migration の table check (query_raw) -> 成功 (テーブルあり)
+    # 2. _get_applied_migrations の version fetch (query_raw) -> 失敗 (未知の例外)
+    mock_prisma.query_raw = AsyncMock(
+        side_effect=[
+            [{"1": 1}],  # table exists
+            RuntimeError("Connection lost"),  # version fetch fails
+        ]
+    )
+    runner = _PrismaMigrationRunner(mock_prisma)
+    with pytest.raises(RuntimeError, match="Connection lost"):
+        await runner.run()
+
+
+@pytest.mark.asyncio
+async def test_vector_search_returns_empty_on_empty_embedding(mock_prisma):
+    """空の embedding リストが渡された場合、即座に空リストを返すことを確認。"""
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    result = await adapter.vector_search([], top_k=5)
+    assert result == []
+    mock_prisma.query_raw.assert_not_called()

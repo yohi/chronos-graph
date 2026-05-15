@@ -440,8 +440,9 @@ class PrismaStorageAdapter:
 
         if project is not None:
             sql = (
-                "SELECT *, 1.0 AS score FROM memories "
+                "SELECT *, bigm_similarity(content, $1) AS score FROM memories "
                 "WHERE archived_at IS NULL AND content LIKE $1 ESCAPE '\\' AND project = $3 "
+                "ORDER BY score DESC "
                 "LIMIT $2"
             )
             try:
@@ -452,8 +453,9 @@ class PrismaStorageAdapter:
                 ) from exc
         else:
             sql = (
-                "SELECT *, 1.0 AS score FROM memories "
+                "SELECT *, bigm_similarity(content, $1) AS score FROM memories "
                 "WHERE archived_at IS NULL AND content LIKE $1 ESCAPE '\\' "
+                "ORDER BY score DESC "
                 "LIMIT $2"
             )
             try:

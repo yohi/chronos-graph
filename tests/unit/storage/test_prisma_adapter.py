@@ -153,6 +153,9 @@ async def test_migration_runner_applies_new_migrations_by_default(
     (migrations_dir / "0001_initial.sql").write_text("CREATE TABLE memories(id UUID);")
     (migrations_dir / "0002_graph.sql").write_text("CREATE TABLE nodes(id UUID);")
     (migrations_dir / "0003_future.sql").write_text("CREATE TABLE future_table(id UUID);")
+    (migrations_dir / "0004_fix_graph_issue.sql").write_text(
+        "ALTER TABLE memories ADD COLUMN graph_ref TEXT;"
+    )
 
     mock_prisma.query_raw = AsyncMock(side_effect=[[], [], []])
 
@@ -163,7 +166,10 @@ async def test_migration_runner_applies_new_migrations_by_default(
     assert any("CREATE TABLE schema_migrations" in sql for sql in sqls_applied)
     assert any("CREATE TABLE memories" in sql for sql in sqls_applied)
     assert any("future_table" in sql for sql in sqls_applied)  # 新しいファイルは適用される
-    assert not any("nodes" in sql for sql in sqls_applied)  # graph は除外される
+    assert any(
+        "graph_ref" in sql for sql in sqls_applied
+    )  # 名前に graph を含むが先頭でないので適用される
+    assert not any("nodes" in sql for sql in sqls_applied)  # graph で始まるので除外される
 
 
 @pytest.mark.asyncio

@@ -765,8 +765,13 @@ class _PrismaMigrationRunner:
         all_files = sorted(migrations_path.glob("*.sql"))
         target_files = []
         for f in all_files:
-            if any(kw in f.name.lower() for kw in self._PRISMA_EXCLUDED_KEYWORDS):
-                logger.info("Skipping migration file '%s' (excluded by keyword)", f.name)
+            # Check if description (after numeric prefix) starts with an excluded keyword.
+            # This prevents accidental exclusion of files containing keywords elsewhere.
+            name_parts = f.name.lower().split("_", 1)
+            desc = name_parts[1] if len(name_parts) > 1 else name_parts[0]
+
+            if any(desc.startswith(kw) for kw in self._PRISMA_EXCLUDED_KEYWORDS):
+                logger.info("Skipping migration file '%s' (excluded by keyword prefix)", f.name)
                 continue
             target_files.append(f)
 

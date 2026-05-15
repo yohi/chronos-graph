@@ -1,15 +1,8 @@
-"""Prisma Accelerate-backed Storage Adapter.
-
-社内ネットワークでの PostgreSQL 直接接続遮断を回避するため、HTTPS (443) 経由で
-Prisma Accelerate を介して PostgreSQL にアクセスする実装。
-
-設計仕様: docs/superpowers/specs/2026-05-12-prisma-adapter-design.md
-"""
-
 from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -21,10 +14,41 @@ from context_store.storage.postgres import (
     _record_to_memory,
 )
 from context_store.storage.protocols import StorageError
-from prisma import Prisma  # type: ignore[import-not-found]
+
+try:
+    from prisma import Prisma  # type: ignore[import-not-found, attr-defined]
+except ImportError:
+    Prisma = Any  # type: ignore
 
 if TYPE_CHECKING:
     from context_store.models.memory import Memory
+
+try:
+    from prisma.errors import PrismaError
+except ImportError:
+
+    class PrismaError(Exception):  # type: ignore[no-redef]
+        pass
+
+
+try:
+    from prisma.errors import DataError, UniqueViolationError  # type: ignore
+except ImportError:
+
+    class DataError(PrismaError):  # type: ignore[no-redef]
+        pass
+
+    class UniqueViolationError(DataError):  # type: ignore[no-redef]
+        pass
+
+
+try:
+    from prisma.errors import PrismaClientKnownRequestError  # type: ignore
+except ImportError:
+
+    class PrismaClientKnownRequestError(PrismaError):  # type: ignore[no-redef]
+        pass
+
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +57,6 @@ PRISMA_MAX_TOP_K: int = 200
 PRISMA_BATCH_FETCH_CHUNK_SIZE: int = 250
 PRISMA_TIMEOUT_CODES: frozenset[str] = frozenset({"P2024", "P2028", "P6004"})
 PRISMA_PAYLOAD_TOO_LARGE_CODES: frozenset[str] = frozenset({"P6009"})
-
 
 # ヘルパー関数は既存 PostgresStorageAdapter のものを物理的に再利用する。
 # DRY の観点から本ファイルで再定義するのではなく、postgres.py から import する。
@@ -45,9 +68,6 @@ __all__ = [
     "PRISMA_TIMEOUT_CODES",
     "PrismaStorageAdapter",
 ]
-# 注: _content_hash / _embedding_to_pg / _parse_embedding / _record_to_memory は
-# プライベートヘルパーであり再エクスポート対象としない (`from prisma import *` に
-# 含めない)。本ファイル内部でのみ参照する。
 
 
 class PrismaStorageAdapter:
@@ -83,25 +103,25 @@ class PrismaStorageAdapter:
 
     async def save_memory(self, memory: "Memory") -> str:  # type: ignore[name-defined]
         """Persist a memory and return its string ID."""
-        embedding_str = _embedding_to_pg(memory.embedding)
-        content_hash = _content_hash(memory.content)
-
-        sql = """
-            INSERT INTO memories (
-                id, content, memory_type, source_type, source_metadata,
-                embedding, semantic_relevance, importance_score, access_count,
-                last_accessed_at, created_at, updated_at, archived_at,
-                tags, project, content_hash
-            ) VALUES (
-                $1, $2, $3, $4, $5::jsonb,
-                $6::vector, $7, $8, $9,
-                $10, $11, $12, $13,
-                $14, $15, $16
-            )
-            RETURNING id
-        """
-
         try:
+            embedding_str = _embedding_to_pg(memory.embedding)
+            content_hash = _content_hash(memory.content)
+
+            sql = """
+                INSERT INTO memories (
+                    id, content, memory_type, source_type, source_metadata,
+                    embedding, semantic_relevance, importance_score, access_count,
+                    last_accessed_at, created_at, updated_at, archived_at,
+                    tags, project, content_hash
+                ) VALUES (
+                    $1, $2, $3, $4, $5::jsonb,
+                    $6::vector, $7, $8, $9,
+                    $10, $11, $12, $13,
+                    $14, $15, $16
+                )
+                RETURNING id
+            """
+
             row = await self._client.query_first_raw(  # type: ignore[attr-defined]
                 sql,
                 memory.id,
@@ -121,13 +141,28 @@ class PrismaStorageAdapter:
                 memory.project,
                 content_hash,
             )
-        except Exception as e:
-            if e.__class__.__name__ == "UniqueViolationError":
+        except PrismaError as e:
+            # P2002: Unique constraint failed.
+            # We check both the specific UniqueViolationError and the error code "P2002"
+            # (common in PrismaClientKnownRequestError) for robust mapping.
+            is_unique_violation = getattr(e, "code", None) == "P2002" or isinstance(
+                e, (UniqueViolationError, PrismaClientKnownRequestError)
+            )
+            if is_unique_violation:
                 raise StorageError(
                     message=str(e),
                     code="DUPLICATE_CONTENT",
                     recoverable=False,
                 ) from e
+            # Other Prisma related errors
+            raise StorageError(
+                message=str(e),
+                code="STORAGE_ERROR",
+                recoverable=False,
+            ) from e
+        except Exception as e:
+            if isinstance(e, StorageError):
+                raise
             raise StorageError(
                 message=str(e),
                 code="STORAGE_ERROR",
@@ -198,31 +233,28 @@ class PrismaStorageAdapter:
 
 
 class _PrismaMigrationRunner:
-    """Apply existing postgres/*.sql migrations via prisma.execute_raw."""
+    """Prisma 用の簡易マイグレーションランナー。
 
-    def __init__(self, client: Prisma) -> None:
-        self._client = client
+    Prisma 自身には execute_raw で複数ステートメントを一括実行する機能がないため、
+    ステートメントを分割して逐次実行する。
+    """
 
     # Prisma バックエンドが処理対象とするマイグレーションのみを許可するファイル名 prefix。
     # 設計書 §2 で graph 機能は Prisma の対象外とされているため、0002_graph.sql 以降の
     # graph 関連マイグレーションは Prisma 経由では適用しない。
     _PRISMA_ALLOWED_MIGRATION_PREFIXES: frozenset[str] = frozenset({"0000", "0001"})
 
+    def __init__(self, client: Prisma) -> None:
+        self._client = client
+
     async def run(self) -> None:
-        """Apply pending migrations in order.
-
-        実装方針:
-        - postgres/ ディレクトリの SQL ファイルを `pathlib.Path` で列挙
-        - `_PRISMA_ALLOWED_MIGRATION_PREFIXES` に含まれる prefix のもののみを対象とする
-          (graph 関連の 0002* 等は Prisma バックエンドの対象外、設計書 §2)
-        - `schema_migrations` テーブル存在チェックは `query_raw`
-        - 適用済みバージョン取得は `query_raw`
-        - 未適用ファイルを sequential に `execute_raw` で適用
-        - `pg_catalog.pg_tables` を用いた baseline 検出は既存 MigrationRunner と同等
-        """
-        from pathlib import Path
-
+        """Apply pending migrations in order."""
         migrations_dir = Path(__file__).parent / "migrations" / "postgres"
+        if not migrations_dir.exists():
+            msg = f"Migrations directory not found: {migrations_dir}"
+            logger.error(msg)
+            raise RuntimeError(msg)
+
         all_files = sorted(migrations_dir.glob("*.sql"))
         files = [
             f for f in all_files if f.name.split("_")[0] in self._PRISMA_ALLOWED_MIGRATION_PREFIXES
@@ -246,26 +278,42 @@ class _PrismaMigrationRunner:
                 await self._apply_migration(file_path)
                 logger.info("Applied migration via Prisma: %s", version)
 
-    async def _ensure_system_migration(self, file_path: "Path") -> None:  # type: ignore[name-defined]
+    async def _ensure_system_migration(self, file_path: Path) -> None:
         try:
             await self._client.query_raw("SELECT 1 FROM schema_migrations LIMIT 1")
             return
-        except Exception:
-            logger.debug("schema_migrations table not found, applying system migration")
-            pass
-        await self._apply_migration(file_path)
+        except (
+            DataError,
+            PrismaError,
+        ) as e:
+            # We catch specific Prisma errors and check the message to ensure
+            # "table not found" errors are handled correctly even in
+            # mock-heavy test environments or different client versions.
+            msg = str(e).lower()
+            if "relation" in msg and "does not exist" in msg:
+                logger.info("schema_migrations table not found, applying system migration")
+                await self._apply_migration(file_path)
+                return
+            raise
 
     async def _get_applied_migrations(self) -> set[str]:
         try:
             rows = await self._client.query_raw("SELECT version FROM schema_migrations")
-        except Exception:
-            return set()
+        except (
+            DataError,
+            PrismaError,
+        ) as e:
+            msg = str(e).lower()
+            if "relation" in msg and "does not exist" in msg:
+                logger.info("schema_migrations table not found, returning empty applied set")
+                return set()
+            raise
         return {row["version"] for row in rows}
 
     async def _handle_baseline(
         self,
-        files: list["Path"],
-        applied: set[str],  # type: ignore[name-defined]
+        files: list[Path],
+        applied: set[str],
     ) -> None:
         # graph (memory_nodes / memory_edges) は Prisma バックエンド対象外のため
         # baseline 検出対象に含めない (設計書 §2)。
@@ -289,9 +337,83 @@ class _PrismaMigrationRunner:
         )
         return len(rows) == len(table_names)
 
-    async def _apply_migration(self, file_path: "Path") -> None:  # type: ignore[name-defined]
+    async def _apply_migration(self, file_path: Path) -> None:
         sql = file_path.read_text()
         version = file_path.name
+
+        # Prisma Accelerate does not support multiple statements in a single execute_raw call.
+        # We split the SQL into individual statements.
+        try:
+            import sqlparse  # type: ignore[import-not-found]
+
+            statements = [s.strip().rstrip(";") for s in sqlparse.split(sql) if s.strip()]
+        except ImportError:
+            # Fallback to a scanner-based approach if sqlparse is not available.
+            # This handles both standard $$ and tagged $tag$ dollar quotes,
+            # as well as basic single/double quote regions.
+            statements = []
+            last_pos = 0
+            pos = 0
+            n = len(sql)
+            tag_re = re.compile(r"\$([A-Za-z0-9_]*)\$")
+
+            while pos < n:
+                char = sql[pos]
+
+                # Handle single quotes
+                if char == "'":
+                    pos += 1
+                    while pos < n:
+                        if sql[pos] == "'":
+                            if pos + 1 < n and sql[pos + 1] == "'":  # Escaped quote ''
+                                pos += 2
+                                continue
+                            pos += 1
+                            break
+                        pos += 1
+                    continue
+
+                # Handle double quotes (for identifiers)
+                if char == '"':
+                    pos += 1
+                    while pos < n:
+                        if sql[pos] == '"':
+                            if pos + 1 < n and sql[pos + 1] == '"':  # Escaped quote ""
+                                pos += 2
+                                continue
+                            pos += 1
+                            break
+                        pos += 1
+                    continue
+
+                # Check for dollar quote start
+                match = tag_re.match(sql, pos)
+                if match:
+                    tag = match.group(0)
+                    tag_end_pos = sql.find(tag, pos + len(tag))
+                    if tag_end_pos != -1:
+                        pos = tag_end_pos + len(tag)
+                        continue
+
+                # Check for semicolon
+                if char == ";":
+                    stmt = sql[last_pos:pos].strip().rstrip(";")
+                    if stmt:
+                        statements.append(stmt)
+                    last_pos = pos + 1
+
+                pos += 1
+
+            remaining = sql[last_pos:].strip().rstrip(";")
+            if remaining:
+                statements.append(remaining)
+
         async with self._client.tx() as tx:
-            await tx.execute_raw(sql)
+            for stmt in statements:
+                # Skip if the statement consists only of comments and whitespace
+                if all(
+                    line.strip().startswith("--") or not line.strip() for line in stmt.splitlines()
+                ):
+                    continue
+                await tx.execute_raw(stmt)
             await tx.execute_raw("INSERT INTO schema_migrations (version) VALUES ($1)", version)

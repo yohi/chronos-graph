@@ -28,6 +28,8 @@ from context_store.config import Settings
 from context_store.storage.protocols import ALLOWED_SORT_COLUMNS, MemoryFilters, StorageError
 
 if TYPE_CHECKING:
+    from prisma.types import DatasourceOverride
+
     from context_store.models.memory import Memory, ScoredMemory
 
 logger = logging.getLogger(__name__)
@@ -132,7 +134,12 @@ class PrismaStorageAdapter:
         """Create and connect the Prisma client."""
         if not prisma_available:
             raise ImportError("Prisma is not installed. Run 'prisma generate' to setup.")
-        client = Prisma()
+
+        # Settings から接続文字列を取得して Prisma クライアントに渡す
+        db_url = settings.prisma_database_url.get_secret_value()
+        datasource: DatasourceOverride | None = {"url": db_url} if db_url else None
+        client = Prisma(datasource=datasource)
+
         await client.connect()
         success = False
         try:
@@ -398,6 +405,35 @@ class PrismaStorageAdapter:
             return PRISMA_MAX_TOP_K
         return top_k
 
+    async def _query_raw_with_retry(
+        self,
+        sql: str,
+        *params: Any,
+        top_k_index: int = 1,
+    ) -> list[Any]:
+        """Execute query_raw with a single retry using halved top_k on classified errors."""
+        try:
+            return await self._client.query_raw(sql, *params)
+        except Exception as exc:
+            classified = self._classify_prisma_error(exc)
+            if classified is None:
+                # 分類不能なエラーはそのまま StorageError に変換して投げる
+                raise self._map_to_storage_error(exc) from exc
+
+            # Accelerate 特有のエラー（タイムアウトやペイロード過大）の場合、
+            # top_k を半分にして再試行
+            top_k = params[top_k_index]
+            retry_top_k = max(1, top_k // 2)
+            logger.warning("Accelerate error (%s); retrying with top_k=%d", exc, retry_top_k)
+
+            retry_params = list(params)
+            retry_params[top_k_index] = retry_top_k
+
+            try:
+                return await self._client.query_raw(sql, *retry_params)
+            except Exception as retry_exc:
+                raise self._map_to_storage_error(retry_exc) from retry_exc
+
     async def vector_search(
         self,
         embedding: list[float],
@@ -419,18 +455,7 @@ class PrismaStorageAdapter:
                 "ORDER BY embedding <=> $1::vector "
                 "LIMIT $2"
             )
-            try:
-                rows = await self._client.query_raw(sql, embedding_str, effective_top_k, project)
-            except Exception as exc:
-                classified = self._classify_prisma_error(exc)
-                if classified is None:
-                    raise self._map_to_storage_error(exc) from exc
-                retry_top_k = max(1, effective_top_k // 2)
-                logger.warning("Accelerate error (%s); retrying with top_k=%d", exc, retry_top_k)
-                try:
-                    rows = await self._client.query_raw(sql, embedding_str, retry_top_k, project)
-                except Exception as retry_exc:
-                    raise self._map_to_storage_error(retry_exc) from retry_exc
+            rows = await self._query_raw_with_retry(sql, embedding_str, effective_top_k, project)
         else:
             sql = (
                 "SELECT *, 1 - (embedding <=> $1::vector) AS score "
@@ -439,18 +464,7 @@ class PrismaStorageAdapter:
                 "ORDER BY embedding <=> $1::vector "
                 "LIMIT $2"
             )
-            try:
-                rows = await self._client.query_raw(sql, embedding_str, effective_top_k)
-            except Exception as exc:
-                classified = self._classify_prisma_error(exc)
-                if classified is None:
-                    raise self._map_to_storage_error(exc) from exc
-                retry_top_k = max(1, effective_top_k // 2)
-                logger.warning("Accelerate error (%s); retrying with top_k=%d", exc, retry_top_k)
-                try:
-                    rows = await self._client.query_raw(sql, embedding_str, retry_top_k)
-                except Exception as retry_exc:
-                    raise self._map_to_storage_error(retry_exc) from retry_exc
+            rows = await self._query_raw_with_retry(sql, embedding_str, effective_top_k)
 
         return [
             ScoredMemory(
@@ -484,22 +498,9 @@ class PrismaStorageAdapter:
                 "ORDER BY score DESC "
                 "LIMIT $2"
             )
-            try:
-                rows = await self._client.query_raw(
-                    sql, like_query, effective_top_k, project, query
-                )
-            except Exception as exc:
-                classified = self._classify_prisma_error(exc)
-                if classified is None:
-                    raise self._map_to_storage_error(exc) from exc
-                retry_top_k = max(1, effective_top_k // 2)
-                logger.warning("Accelerate error (%s); retrying with top_k=%d", exc, retry_top_k)
-                try:
-                    rows = await self._client.query_raw(
-                        sql, like_query, retry_top_k, project, query
-                    )
-                except Exception as retry_exc:
-                    raise self._map_to_storage_error(retry_exc) from retry_exc
+            rows = await self._query_raw_with_retry(
+                sql, like_query, effective_top_k, project, query
+            )
         else:
             sql = (
                 "SELECT *, bigm_similarity(content, $3) AS score FROM memories "
@@ -507,18 +508,7 @@ class PrismaStorageAdapter:
                 "ORDER BY score DESC "
                 "LIMIT $2"
             )
-            try:
-                rows = await self._client.query_raw(sql, like_query, effective_top_k, query)
-            except Exception as exc:
-                classified = self._classify_prisma_error(exc)
-                if classified is None:
-                    raise self._map_to_storage_error(exc) from exc
-                retry_top_k = max(1, effective_top_k // 2)
-                logger.warning("Accelerate error (%s); retrying with top_k=%d", exc, retry_top_k)
-                try:
-                    rows = await self._client.query_raw(sql, like_query, retry_top_k, query)
-                except Exception as retry_exc:
-                    raise self._map_to_storage_error(retry_exc) from retry_exc
+            rows = await self._query_raw_with_retry(sql, like_query, effective_top_k, query)
 
         return [
             ScoredMemory(

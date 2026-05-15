@@ -420,7 +420,7 @@ class PrismaStorageAdapter:
                 # 分類不能なエラーはそのまま StorageError に変換して投げる
                 raise self._map_to_storage_error(exc) from exc
 
-            # Accelerate 特有のエラー（タイムアウトやペイロード過大）の場合、
+            # Accelerate 特有のエラー (タイムアウトやペイロード過大) の場合、
             # top_k を半分にして再試行
             top_k = params[top_k_index]
             retry_top_k = max(1, top_k // 2)

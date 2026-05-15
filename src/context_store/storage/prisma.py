@@ -17,13 +17,29 @@ if TYPE_CHECKING:
 try:
     from prisma.errors import PrismaError
 except ImportError:
-    PrismaError = Exception  # type: ignore
+
+    class PrismaError(Exception):  # type: ignore[no-redef]
+        pass
+
 
 try:
     from prisma.errors import DataError, UniqueViolationError  # type: ignore
 except ImportError:
-    DataError = PrismaError  # type: ignore
-    UniqueViolationError = PrismaError  # type: ignore
+
+    class DataError(PrismaError):  # type: ignore[no-redef]
+        pass
+
+    class UniqueViolationError(DataError):  # type: ignore[no-redef]
+        pass
+
+
+try:
+    from prisma.errors import PrismaClientKnownRequestError  # type: ignore
+except ImportError:
+
+    class PrismaClientKnownRequestError(PrismaError):  # type: ignore[no-redef]
+        pass
+
 
 logger = logging.getLogger(__name__)
 
@@ -116,15 +132,20 @@ class PrismaStorageAdapter:
                 memory.project,
                 content_hash,
             )
-        except UniqueViolationError as e:
-            # P2002: Unique constraint failed
-            raise StorageError(
-                message=str(e),
-                code="DUPLICATE_CONTENT",
-                recoverable=False,
-            ) from e
-        except DataError as e:
-            # Other Prisma data-related errors (Accelerate/Prisma Engine)
+        except PrismaError as e:
+            # P2002: Unique constraint failed.
+            # We check both the specific UniqueViolationError and the error code "P2002"
+            # (common in PrismaClientKnownRequestError) for robust mapping.
+            is_unique_violation = getattr(e, "code", None) == "P2002" or isinstance(
+                e, (UniqueViolationError, PrismaClientKnownRequestError)
+            )
+            if is_unique_violation:
+                raise StorageError(
+                    message=str(e),
+                    code="DUPLICATE_CONTENT",
+                    recoverable=False,
+                ) from e
+            # Other Prisma related errors
             raise StorageError(
                 message=str(e),
                 code="STORAGE_ERROR",

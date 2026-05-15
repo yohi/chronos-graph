@@ -293,6 +293,28 @@ async def test_save_memory_raises_duplicate_content(mock_prisma):
 
 
 @pytest.mark.asyncio
+async def test_save_memory_raises_duplicate_content_from_known_request_error(mock_prisma):
+    # Simulate PrismaClientKnownRequestError with code P2002
+    from prisma.errors import PrismaError
+
+    # We use a mock that has the 'code' attribute, simulating PrismaClientKnownRequestError
+    class MockKnownRequestError(PrismaError):
+        def __init__(self, message: str, code: str):
+            super().__init__(message)
+            self.code = code
+
+    error = MockKnownRequestError("unique constraint failed", code="P2002")
+
+    memory = _build_memory("known_error")
+    mock_prisma.query_first_raw = AsyncMock(side_effect=error)
+
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    with pytest.raises(StorageError) as exc_info:
+        await adapter.save_memory(memory)
+    assert exc_info.value.code == "DUPLICATE_CONTENT"
+
+
+@pytest.mark.asyncio
 async def test_save_memory_raises_storage_error_on_none_row(mock_prisma):
     """row is None ケースのテスト。"""
     memory = _build_memory("no row")

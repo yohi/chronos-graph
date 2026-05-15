@@ -24,7 +24,11 @@ except ImportError:
     Prisma = Any  # type: ignore
     prisma_available = False
 
-from context_store.storage.protocols import StorageError
+from context_store.storage.protocols import (
+    ALLOWED_SORT_COLUMNS,
+    MemoryFilters,
+    StorageError,
+)
 
 if TYPE_CHECKING:
     from context_store.models.memory import Memory, ScoredMemory
@@ -90,7 +94,7 @@ def _embedding_to_pg(embedding: list[float]) -> str:
 
 
 class PrismaStorageAdapter:
-    """Prisma Client を直接使用した PostgreSQL ストレージ実装 (HTTPS)。"""
+    """StorageAdapter implementation backed by Prisma Accelerate (HTTPS)."""
 
     def __init__(self, client: Prisma) -> None:
         self._client = client
@@ -109,7 +113,6 @@ class PrismaStorageAdapter:
             success = True
             return adapter
         except Exception:
-            await client.disconnect()
             raise
         finally:
             if not success and client.is_connected():
@@ -351,55 +354,6 @@ class PrismaStorageAdapter:
             raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
         return int(affected) >= 1
 
-    async def list_memories(
-        self,
-        filter_dict: dict[str, Any] | None = None,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> list[Memory]:
-        """List memories with basic filtering and pagination."""
-        params: list[Any] = []
-        where_clauses: list[str] = []
-
-        allowed_columns = {
-            "memory_type",
-            "source_type",
-            "project",
-            "archived_at",
-            "importance_score",
-        }
-
-        if filter_dict:
-            for col, val in filter_dict.items():
-                if col not in allowed_columns:
-                    raise StorageError(
-                        message=f"Invalid filter column: {col}",
-                        code="INVALID_INPUT",
-                        recoverable=False,
-                    )
-                if val is None:
-                    where_clauses.append(f'"{col}" IS NULL')
-                else:
-                    params.append(val)
-                    where_clauses.append(f'"{col}" = ${len(params)}')
-
-        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
-
-        params.append(limit)
-        limit_idx = len(params)
-        params.append(offset)
-        offset_idx = len(params)
-
-        # noqa: S608 (where_clauses use whitelisted keys)
-        sql = f"SELECT * FROM memories {where_sql} LIMIT ${limit_idx} OFFSET ${offset_idx}"  # noqa: S608
-
-        try:
-            rows = await self._client.query_raw(sql, *params)
-        except Exception as exc:
-            raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
-
-        return [_record_to_memory(row) for row in rows]
-
     def _clamp_top_k(self, top_k: int, method_name: str) -> int:
         if top_k <= 0:
             raise StorageError(
@@ -486,24 +440,28 @@ class PrismaStorageAdapter:
 
         if project is not None:
             sql = (
-                "SELECT *, 1.0 AS score FROM memories "
+                "SELECT *, bigm_similarity(content, $4) AS score FROM memories "
                 "WHERE archived_at IS NULL AND content LIKE $1 ESCAPE '\\' AND project = $3 "
+                "ORDER BY score DESC "
                 "LIMIT $2"
             )
             try:
-                rows = await self._client.query_raw(sql, like_query, effective_top_k, project)
+                rows = await self._client.query_raw(
+                    sql, like_query, effective_top_k, project, query
+                )
             except Exception as exc:
                 raise StorageError(
                     message=str(exc), code="STORAGE_ERROR", recoverable=False
                 ) from exc
         else:
             sql = (
-                "SELECT *, 1.0 AS score FROM memories "
+                "SELECT *, bigm_similarity(content, $3) AS score FROM memories "
                 "WHERE archived_at IS NULL AND content LIKE $1 ESCAPE '\\' "
+                "ORDER BY score DESC "
                 "LIMIT $2"
             )
             try:
-                rows = await self._client.query_raw(sql, like_query, effective_top_k)
+                rows = await self._client.query_raw(sql, like_query, effective_top_k, query)
             except Exception as exc:
                 raise StorageError(
                     message=str(exc), code="STORAGE_ERROR", recoverable=False
@@ -517,6 +475,185 @@ class PrismaStorageAdapter:
             )
             for row in rows
         ]
+
+    def _build_where_clause(self, filters: MemoryFilters) -> tuple[str, list[Any]]:
+        conditions: list[str] = []
+        params: list[Any] = []
+
+        if filters.archived is False:
+            conditions.append("archived_at IS NULL")
+        elif filters.archived is True:
+            conditions.append("archived_at IS NOT NULL")
+        # filters.archived is None means no filter on archived status
+
+        if filters.project is not None:
+            params.append(filters.project)
+            conditions.append(f"project = ${len(params)}")
+
+        if filters.memory_type is not None:
+            params.append(filters.memory_type)
+            conditions.append(f"memory_type = ${len(params)}")
+
+        if filters.tags:
+            params.append(filters.tags)
+            conditions.append(f"tags && ${len(params)}")
+
+        if getattr(filters, "session_id", None) is not None:
+            params.append(filters.session_id)
+            conditions.append(f"source_metadata->>'session_id' = ${len(params)}")
+
+        if filters.min_importance is not None:
+            params.append(filters.min_importance)
+            conditions.append(f"importance_score >= ${len(params)}")
+
+        if filters.id_after is not None:
+            # Shared id_after parameter for cursor-based pagination
+            params.append(filters.id_after)
+            id_after_idx = len(params)
+
+            if filters.created_after is not None:
+                params.append(filters.created_after)
+                conditions.append(f"(created_at, id) > (${len(params)}, ${id_after_idx})")
+            elif filters.archived_after is not None:
+                params.append(filters.archived_after)
+                conditions.append(f"(archived_at, id) > (${len(params)}, ${id_after_idx})")
+        else:
+            if filters.created_after is not None:
+                params.append(filters.created_after)
+                conditions.append(f"created_at >= ${len(params)}")
+
+            if filters.archived_after is not None:
+                params.append(filters.archived_after)
+                conditions.append(f"archived_at >= ${len(params)}")
+
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        return where_clause, params
+
+    async def list_by_filter(self, filters: MemoryFilters) -> list[Memory]:
+        """List memories matching the given filters."""
+        where_clause, params = self._build_where_clause(filters)
+
+        order_clause = "ORDER BY created_at DESC"
+        if filters.order_by:
+            order_parts: list[str] = []
+            for part in str(filters.order_by).split(","):
+                tokens = part.strip().split()
+                if not tokens:
+                    continue
+                col = tokens[0].lower()
+                if col not in ALLOWED_SORT_COLUMNS:
+                    raise StorageError(
+                        message=f"Invalid sort column: {col}",
+                        code="INVALID_PARAMETER",
+                    )
+                direction = "DESC"
+                if len(tokens) > 1:
+                    dir_token = tokens[1].upper()
+                    if dir_token not in ("ASC", "DESC"):
+                        raise StorageError(
+                            message=f"Invalid sort direction: {dir_token}",
+                            code="INVALID_PARAMETER",
+                        )
+                    direction = dir_token
+                order_parts.append(f"{col} {direction}")
+            if order_parts:
+                order_clause = f"ORDER BY {', '.join(order_parts)}"
+
+        limit_clause = ""
+        if filters.limit is not None:
+            try:
+                limit_int = int(filters.limit)
+                if limit_int < 0:
+                    raise StorageError(
+                        message=f"Invalid limit value: {limit_int}",
+                        code="INVALID_PARAMETER",
+                    )
+                params.append(limit_int)
+                limit_clause = f"LIMIT ${len(params)}"
+            except (ValueError, TypeError) as e:
+                raise StorageError(
+                    message=f"Invalid limit type: {type(filters.limit)}",
+                    code="INVALID_PARAMETER",
+                ) from e
+
+        offset_clause = ""
+        if filters.offset is not None:
+            try:
+                offset_int = int(filters.offset)
+                if offset_int < 0:
+                    raise StorageError(
+                        message=f"Invalid offset value: {offset_int}",
+                        code="INVALID_PARAMETER",
+                    )
+                params.append(offset_int)
+                offset_clause = f"OFFSET ${len(params)}"
+            except (ValueError, TypeError) as e:
+                raise StorageError(
+                    message=f"Invalid offset type: {type(filters.offset)}",
+                    code="INVALID_PARAMETER",
+                ) from e
+
+        sql = " ".join(
+            part
+            for part in [
+                "SELECT * FROM memories",
+                where_clause,
+                order_clause,
+                limit_clause,
+                offset_clause,
+            ]
+            if part
+        ).strip()
+        try:
+            rows = await self._client.query_raw(sql, *params)
+        except Exception as exc:
+            raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
+        return [_record_to_memory(row) for row in rows]
+
+    async def count_by_filter(self, filters: MemoryFilters) -> int:
+        """Count memories matching the given filters."""
+        where_clause, params = self._build_where_clause(filters)
+        sql = " ".join(
+            part for part in ["SELECT COUNT(*) AS count", "FROM memories", where_clause] if part
+        ).strip()
+        try:
+            if hasattr(self._client, "query_first_raw"):
+                row = await self._client.query_first_raw(sql, *params)
+            else:
+                rows = await self._client.query_raw(sql, *params)
+                row = rows[0] if rows else None
+        except Exception as exc:
+            raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
+        if row is None:
+            return 0
+        return int(row.get("count", 0) or 0)
+
+    async def list_projects(self) -> list[str]:
+        """List all unique project names present in the storage."""
+        sql = "SELECT DISTINCT project FROM memories WHERE project IS NOT NULL AND project != ''"
+        try:
+            rows = await self._client.query_raw(sql)
+        except Exception as exc:
+            raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
+        return [str(row["project"]) for row in rows]
+
+    async def get_vector_dimension(self) -> int | None:
+        """Return the dimension of stored vectors."""
+        sql = (
+            "SELECT vector_dims(embedding) AS vector_dims "
+            "FROM memories WHERE embedding IS NOT NULL LIMIT 1"
+        )
+        try:
+            if hasattr(self._client, "query_first_raw"):
+                row = await self._client.query_first_raw(sql)
+            else:
+                rows = await self._client.query_raw(sql)
+                row = rows[0] if rows else None
+        except Exception as exc:
+            raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
+        if row is None or row.get("vector_dims") is None:
+            return None
+        return int(row["vector_dims"])
 
 
 class _PrismaMigrationRunner:

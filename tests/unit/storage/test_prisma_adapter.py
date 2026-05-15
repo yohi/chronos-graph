@@ -17,7 +17,7 @@ from context_store.storage.prisma import (
     PRISMA_TIMEOUT_CODES,
     PrismaStorageAdapter,
 )
-from context_store.storage.protocols import StorageError
+from context_store.storage.protocols import MemoryFilters, StorageError
 
 
 @pytest.fixture
@@ -93,7 +93,6 @@ async def test_migration_runner_filters_out_graph_migrations(
     # 1) schema_migrations 不在 → ensure_system_migration が走る
     # 2) _get_applied_migrations は空集合
     # 3) baseline 検出のため pg_tables を問い合わせる ("memories" のみ要求)
-    # 4) baseline 後の _get_applied_migrations (空)
 
     mock_prisma.query_raw = AsyncMock(
         side_effect=[
@@ -542,9 +541,8 @@ async def test_keyword_search_executes_correct_sql(mock_prisma):
     sql = mock_prisma.query_raw.await_args.args[0]
     params = mock_prisma.query_raw.await_args.args[1:]
     assert "content LIKE $1 ESCAPE '\\'" in sql
-    assert params == ("%hello%", 5)
-    # params: (like_query, effective_top_k)
-    assert params == ("%hello%", 5)
+    assert "bigm_similarity(content, $3)" in sql
+    assert params == ("%hello%", 5, "hello")
 
 
 @pytest.mark.asyncio
@@ -572,3 +570,53 @@ async def test_vector_search_returns_empty_on_empty_embedding(mock_prisma):
     result = await adapter.vector_search([], top_k=5)
     assert result == []
     mock_prisma.query_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_list_by_filter_invokes_query_raw(mock_prisma):
+    mock_prisma.query_raw = AsyncMock(return_value=[])
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    await adapter.list_by_filter(MemoryFilters(project="proj-a"))
+    sql = mock_prisma.query_raw.await_args.args[0]
+    assert "SELECT * FROM memories" in sql
+    assert "project = $1" in sql
+
+
+@pytest.mark.asyncio
+async def test_list_by_filter_invalid_sort_column_raises(mock_prisma):
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    with pytest.raises(StorageError) as exc_info:
+        await adapter.list_by_filter(MemoryFilters(order_by="malicious_col"))
+    assert exc_info.value.code == "INVALID_PARAMETER"
+
+
+@pytest.mark.asyncio
+async def test_count_by_filter_returns_int(mock_prisma):
+    mock_prisma.query_first_raw = AsyncMock(return_value={"count": 42})
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    result = await adapter.count_by_filter(MemoryFilters())
+    assert result == 42
+
+
+@pytest.mark.asyncio
+async def test_list_projects_returns_distinct_projects(mock_prisma):
+    mock_prisma.query_raw = AsyncMock(return_value=[{"project": "a"}, {"project": "b"}])
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    result = await adapter.list_projects()
+    assert result == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_get_vector_dimension_returns_int(mock_prisma):
+    mock_prisma.query_first_raw = AsyncMock(return_value={"vector_dims": 768})
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    result = await adapter.get_vector_dimension()
+    assert result == 768
+
+
+@pytest.mark.asyncio
+async def test_get_vector_dimension_returns_none_when_no_data(mock_prisma):
+    mock_prisma.query_first_raw = AsyncMock(return_value=None)
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    result = await adapter.get_vector_dimension()
+    assert result is None

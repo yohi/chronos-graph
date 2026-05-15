@@ -137,6 +137,34 @@ async def test_migration_runner_filters_out_graph_migrations(
 
 
 @pytest.mark.asyncio
+async def test_migration_runner_allows_only_prisma_prefixes(
+    mock_prisma, mock_tx_context, tmp_path, monkeypatch
+):
+    """0000/0001 以外の将来マイグレーションは名前に関係なく Prisma 対象外にする。"""
+    from context_store.storage.prisma import _PrismaMigrationRunner
+
+    prisma_file = tmp_path / "src" / "context_store" / "storage" / "prisma.py"
+    prisma_file.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("context_store.storage.prisma.__file__", str(prisma_file))
+
+    migrations_dir = tmp_path / "src" / "context_store" / "storage" / "migrations" / "postgres"
+    migrations_dir.mkdir(parents=True)
+    (migrations_dir / "0000_system.sql").write_text("CREATE TABLE schema_migrations(version TEXT);")
+    (migrations_dir / "0001_initial.sql").write_text("CREATE TABLE memories(id UUID);")
+    (migrations_dir / "0003_future.sql").write_text("CREATE TABLE future_table(id UUID);")
+
+    mock_prisma.query_raw = AsyncMock(side_effect=[[], [], []])
+
+    runner = _PrismaMigrationRunner(mock_prisma)
+    await runner.run()
+
+    sqls_applied = [call.args[0] for call in mock_tx_context.execute_raw.await_args_list]
+    assert any("CREATE TABLE schema_migrations" in sql for sql in sqls_applied)
+    assert any("CREATE TABLE memories" in sql for sql in sqls_applied)
+    assert not any("future_table" in sql for sql in sqls_applied)
+
+
+@pytest.mark.asyncio
 async def test_migration_runner_baselines_existing_memories_table(
     mock_prisma, mock_tx_context, tmp_path, monkeypatch
 ):
@@ -242,7 +270,6 @@ async def test_migration_runner_filters_empty_statements(
 
     mock_prisma.query_raw = AsyncMock(
         side_effect=[
-            [{"1": 1}],  # _ensure_system_migration: 存在
             [],  # _get_applied_migrations: 空
             [],  # _tables_exist: 不在
         ]
@@ -288,7 +315,6 @@ async def test_migration_runner_transaction_failure_propagates(mock_prisma, tmp_
 
     mock_prisma.query_raw = AsyncMock(
         side_effect=[
-            [{"1": 1}],  # _ensure_system_migration: 存在
             [],  # _get_applied_migrations: 空
             [],  # _tables_exist for 0001: 不在
         ]
@@ -338,6 +364,19 @@ async def test_save_memory_inserts_and_returns_id(mock_prisma):
     sql_arg = mock_prisma.query_first_raw.await_args.args[0]
     assert "INSERT INTO memories" in sql_arg
     assert "RETURNING id" in sql_arg
+
+
+@pytest.mark.asyncio
+async def test_save_memory_binds_none_for_empty_embedding(mock_prisma):
+    memory = _build_memory("empty embedding")
+    memory.embedding = []
+    mock_prisma.query_first_raw = AsyncMock(return_value={"id": str(memory.id)})
+
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    await adapter.save_memory(memory)
+
+    params = mock_prisma.query_first_raw.await_args.args[1:]
+    assert params[5] is None
 
 
 @pytest.mark.asyncio
@@ -625,14 +664,15 @@ async def test_keyword_search_top_k_clamp(mock_prisma, caplog):
 
 
 @pytest.mark.asyncio
-async def test_keyword_search_returns_empty_on_empty_query(mock_prisma):
+async def test_keyword_search_keeps_postgres_empty_query_behavior(mock_prisma):
+    mock_prisma.query_raw = AsyncMock(return_value=[])
     adapter = PrismaStorageAdapter(client=mock_prisma)
-    # empty string
+
     assert await adapter.keyword_search("", top_k=5) == []
-    # whitespace
     assert await adapter.keyword_search("   ", top_k=5) == []
-    # No query_raw call should happen
-    mock_prisma.query_raw.assert_not_called()
+
+    params = [call.args[1:] for call in mock_prisma.query_raw.await_args_list]
+    assert params == [("%%", 5), ("%   %", 5)]
 
 
 @pytest.mark.asyncio
@@ -644,10 +684,22 @@ async def test_keyword_search_executes_correct_sql(mock_prisma):
     mock_prisma.query_raw.assert_awaited_once()
     sql = mock_prisma.query_raw.await_args.args[0]
     params = mock_prisma.query_raw.await_args.args[1:]
-    assert "content LIKE $1 ESCAPE '\\'" in sql
-    assert "bigm_similarity(content, $3)" in sql
-    assert "ORDER BY score DESC" in sql
-    assert params == ("%hello%", 5, "hello")
+    assert "SELECT *, 1.0 AS score" in sql
+    assert "content LIKE $1" in sql
+    assert "ESCAPE" not in sql
+    assert "bigm_similarity" not in sql
+    assert "ORDER BY score" not in sql
+    assert params == ("%hello%", 5)
+
+
+@pytest.mark.asyncio
+async def test_keyword_search_does_not_escape_like_wildcards(mock_prisma):
+    mock_prisma.query_raw = AsyncMock(return_value=[])
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    await adapter.keyword_search("100_%", top_k=5)
+
+    params = mock_prisma.query_raw.await_args.args[1:]
+    assert params == ("%100_%%", 5)
 
 
 @pytest.mark.asyncio

@@ -25,6 +25,11 @@ except ImportError:
     prisma_available = False
 
 from context_store.config import Settings
+from context_store.storage.postgres_helpers import (
+    _content_hash,
+    _embedding_to_pg,
+    _record_to_memory,
+)
 from context_store.storage.protocols import ALLOWED_SORT_COLUMNS, MemoryFilters, StorageError
 
 if TYPE_CHECKING:
@@ -53,43 +58,6 @@ class UniqueViolationError(PrismaError):
     """Raised when a unique constraint is violated."""
 
     pass
-
-
-def _record_to_memory(row: dict[str, Any]) -> Memory:
-    """Prisma の dict 形式のレコードを Memory モデルに変換する。"""
-    from context_store.models.memory import Memory
-
-    # content_hash は内部用なので除外。embedding は保持し、必要ならパースする。
-    data = {k: v for k, v in row.items() if k != "content_hash"}
-
-    # embedding の変換 (str "[0.1, 0.2]" -> list[float])
-    emb = data.get("embedding")
-    if isinstance(emb, str):
-        try:
-            data["embedding"] = [float(x) for x in emb.strip("[]").split(",") if x.strip()]
-        except (ValueError, TypeError):
-            data["embedding"] = []
-    elif emb is None:
-        data["embedding"] = []
-
-    if isinstance(data.get("source_metadata"), str):
-        try:
-            data["source_metadata"] = json.loads(data["source_metadata"])
-        except json.JSONDecodeError:
-            pass
-    return Memory(**data)
-
-
-def _content_hash(content: str) -> str:
-    """content のハッシュ値を生成する"""
-    import hashlib
-
-    return hashlib.sha256(content.encode()).hexdigest()
-
-
-def _embedding_to_pg(embedding: list[float]) -> str:
-    """list[float] を PostgreSQL の vector 形式文字列 '[1,2,3]' に変換する。"""
-    return "[" + ",".join(map(str, embedding)) + "]"
 
 
 class PrismaStorageAdapter:
@@ -498,32 +466,23 @@ class PrismaStorageAdapter:
     ) -> list[ScoredMemory]:
         from context_store.models.memory import MemorySource, ScoredMemory
 
-        if not query or not query.strip():
-            return []
-
         effective_top_k = self._clamp_top_k(top_k, "keyword_search")
-        # SQL LIKE wildcards: escape backslashes first, then % and _
-        escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        like_query = f"%{escaped_query}%"
+        like_query = f"%{query}%"
 
         if project is not None:
             sql = (
-                "SELECT *, bigm_similarity(content, $4) AS score FROM memories "
-                "WHERE archived_at IS NULL AND content LIKE $1 ESCAPE '\\' AND project = $3 "
-                "ORDER BY score DESC "
+                "SELECT *, 1.0 AS score FROM memories "
+                "WHERE archived_at IS NULL AND content LIKE $1 AND project = $3 "
                 "LIMIT $2"
             )
-            rows = await self._query_raw_with_retry(
-                sql, like_query, effective_top_k, project, query
-            )
+            rows = await self._query_raw_with_retry(sql, like_query, effective_top_k, project)
         else:
             sql = (
-                "SELECT *, bigm_similarity(content, $3) AS score FROM memories "
-                "WHERE archived_at IS NULL AND content LIKE $1 ESCAPE '\\' "
-                "ORDER BY score DESC "
+                "SELECT *, 1.0 AS score FROM memories "
+                "WHERE archived_at IS NULL AND content LIKE $1 "
                 "LIMIT $2"
             )
-            rows = await self._query_raw_with_retry(sql, like_query, effective_top_k, query)
+            rows = await self._query_raw_with_retry(sql, like_query, effective_top_k)
 
         return [
             ScoredMemory(
@@ -740,8 +699,7 @@ class PrismaStorageAdapter:
 class _PrismaMigrationRunner:
     """Prisma 用の簡易マイグレーションランナー。"""
 
-    # グラフ系マイグレーション (0002_graph.sql 等) を除外するためのパターン。
-    _PRISMA_EXCLUDED_MIGRATION_PATTERNS: frozenset[str] = frozenset({"graph"})
+    _PRISMA_ALLOWED_MIGRATION_PREFIXES: frozenset[str] = frozenset({"0000", "0001"})
 
     def __init__(self, client: Prisma) -> None:
         self._client = client
@@ -755,15 +713,14 @@ class _PrismaMigrationRunner:
             logger.warning("Migrations directory '%s' not found.", migrations_path)
             return
 
-        sql_files = sorted(migrations_path.glob("*.sql"))
+        all_files = sorted(migrations_path.glob("*.sql"))
         target_files = [
-            f
-            for f in sql_files
-            if not any(p in f.name.lower() for p in self._PRISMA_EXCLUDED_MIGRATION_PATTERNS)
+            f for f in all_files if f.name.split("_")[0] in self._PRISMA_ALLOWED_MIGRATION_PREFIXES
         ]
 
-        await self._ensure_system_migration()
-        await self._mark_as_applied("0000_system.sql")
+        system_file = migrations_path / "0000_system.sql"
+        if system_file.exists():
+            await self._ensure_system_migration(system_file)
         applied = await self._get_applied_migrations()
 
         if "0001_initial.sql" not in applied:
@@ -777,34 +734,18 @@ class _PrismaMigrationRunner:
                 continue
 
             logger.info(f"Applying migration: {sql_file.name}")
-            content = sql_file.read_text()
-            # Use sqlparse for SQL-aware splitting to avoid breaking on semicolons in strings.
-            statements = [s.strip().rstrip(";") for s in sqlparse.split(content) if s.strip()]
+            await self._apply_migration(sql_file)
 
-            async with self._client.tx() as tx:
-                for stmt in statements:
-                    if stmt:
-                        await tx.execute_raw(stmt)
-                await tx.execute_raw(
-                    "INSERT INTO schema_migrations (version) VALUES ($1)", sql_file.name
-                )
-
-    async def _ensure_system_migration(self) -> None:
+    async def _ensure_system_migration(self, sql_file: Path) -> None:
         """Ensure the schema_migrations table exists."""
-        sql = "SELECT 1 FROM pg_catalog.pg_tables WHERE tablename = 'schema_migrations'"
         try:
-            res = await self._client.query_raw(sql)
-            if res:
-                return
+            await self._client.query_raw("SELECT 1 FROM schema_migrations LIMIT 1")
+            return
         except Exception:
-            logger.debug("schema_migrations table check failed, will attempt to create it.")
+            logger.debug("schema_migrations table check failed, will apply system migration.")
 
-        logger.info("Creating schema_migrations table")
-        create_sql = (
-            "CREATE TABLE IF NOT EXISTS schema_migrations "
-            "(version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT NOW())"
-        )
-        await self._client.execute_raw(create_sql)
+        logger.info("Applying system migration: %s", sql_file.name)
+        await self._apply_migration(sql_file)
 
     async def _get_applied_migrations(self) -> set[str]:
         """Get the set of applied migration versions."""
@@ -843,3 +784,16 @@ class _PrismaMigrationRunner:
         await self._client.execute_raw(
             "INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING", version
         )
+
+    async def _apply_migration(self, sql_file: Path) -> None:
+        """Apply one SQL migration file and record its version."""
+        content = sql_file.read_text()
+        statements = [s.strip().rstrip(";") for s in sqlparse.split(content) if s.strip()]
+
+        async with self._client.tx() as tx:
+            for stmt in statements:
+                if stmt:
+                    await tx.execute_raw(stmt)
+            await tx.execute_raw(
+                "INSERT INTO schema_migrations (version) VALUES ($1)", sql_file.name
+            )

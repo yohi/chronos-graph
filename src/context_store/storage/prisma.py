@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -350,7 +349,7 @@ class PrismaStorageAdapter:
         params.append(offset)
         offset_idx = len(params)
 
-        sql = f"SELECT * FROM memories {where_sql} LIMIT ${limit_idx} OFFSET ${offset_idx}"
+        sql = f"SELECT * FROM memories {where_sql} LIMIT ${limit_idx} OFFSET ${offset_idx}"  # noqa: S608
 
         try:
             rows = await self._client.query_raw(sql, *params)
@@ -403,9 +402,7 @@ class _PrismaMigrationRunner:
 
         sql_files = sorted(migrations_path.glob("*.sql"))
         target_files = [
-            f
-            for f in sql_files
-            if f.name[:4] in self._PRISMA_ALLOWED_MIGRATION_PREFIXES
+            f for f in sql_files if f.name[:4] in self._PRISMA_ALLOWED_MIGRATION_PREFIXES
         ]
 
         await self._ensure_system_migration()
@@ -439,21 +436,20 @@ class _PrismaMigrationRunner:
 
     async def _ensure_system_migration(self) -> None:
         """schema_migrations テーブルの存在を保証する。"""
-        sql = (
-            "SELECT 1 FROM pg_catalog.pg_tables "
-            "WHERE tablename = 'schema_migrations'"
-        )
+        sql = "SELECT 1 FROM pg_catalog.pg_tables WHERE tablename = 'schema_migrations'"
         try:
             res = await self._client.query_raw(sql)
             if res:
                 return
-        except Exception:
+        except Exception:  # noqa: S110
             pass
 
         logger.info("Creating schema_migrations table")
-        await self._client.execute_raw(
-            "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT NOW())"
+        create_sql = (
+            "CREATE TABLE IF NOT EXISTS schema_migrations "
+            "(version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT NOW())"
         )
+        await self._client.execute_raw(create_sql)
 
     async def _get_applied_migrations(self) -> set[str]:
         sql = "SELECT version FROM schema_migrations"

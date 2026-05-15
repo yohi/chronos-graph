@@ -249,7 +249,8 @@ async def test_migration_runner_transaction_failure_propagates(mock_prisma, tmp_
     assert tx.execute_raw.await_count >= 1
     # ensure_system_migration による CREATE TABLE が 1 回呼ばれる
     assert mock_prisma.execute_raw.await_count == 1
-    assert "CREATE TABLE IF NOT EXISTS schema_migrations" in mock_prisma.execute_raw.await_args.args[0]
+    call_args = mock_prisma.execute_raw.await_args.args[0]
+    assert "CREATE TABLE IF NOT EXISTS schema_migrations" in call_args
 
 
 def _build_memory(content: str = "hello") -> Memory:

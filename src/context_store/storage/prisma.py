@@ -17,8 +17,11 @@ from context_store.storage.protocols import StorageError
 
 try:
     from prisma import Prisma  # type: ignore[import-not-found, attr-defined]
+
+    prisma_available = True
 except ImportError:
     Prisma = Any  # type: ignore
+    prisma_available = False
 
 if TYPE_CHECKING:
     from context_store.models.memory import Memory
@@ -79,6 +82,11 @@ class PrismaStorageAdapter:
     @classmethod
     async def create(cls, settings: Settings) -> "PrismaStorageAdapter":
         """Connect to Prisma Accelerate and apply migrations."""
+        if not prisma_available:
+            raise ImportError(
+                "Prisma is not installed. Please install 'prisma' package "
+                "to use PrismaStorageAdapter."
+            )
         url = settings.prisma_database_url.get_secret_value().strip()
         client = Prisma(
             datasource={"url": url},
@@ -179,6 +187,11 @@ class PrismaStorageAdapter:
 
     async def get_memory(self, memory_id: str) -> "Memory | None":  # type: ignore[name-defined]
         """Retrieve a memory by ID."""
+        try:
+            UUID(str(memory_id))
+        except (TypeError, ValueError, AttributeError):
+            return None
+
         sql = "SELECT * FROM memories WHERE id = $1"
         try:
             row = await self._client.query_first_raw(sql, memory_id)  # type: ignore[attr-defined]
@@ -198,15 +211,19 @@ class PrismaStorageAdapter:
         if not memory_ids:
             return []
 
-        cleaned: list[str] = []
+        # 重複を除去しつつ、有効な UUID のみを抽出
+        unique_cleaned: dict[str, None] = {}
         for memory_id in memory_ids:
             try:
-                cleaned.append(str(UUID(str(memory_id))))
+                norm_id = str(UUID(str(memory_id)))
+                unique_cleaned[norm_id] = None
             except (TypeError, ValueError, AttributeError):
                 continue
-        if not cleaned:
+
+        if not unique_cleaned:
             return []
 
+        cleaned = list(unique_cleaned.keys())
         sql = "SELECT * FROM memories WHERE id = ANY($1::uuid[])"
         memory_map: dict[str, Any] = {}
         for offset in range(0, len(cleaned), PRISMA_BATCH_FETCH_CHUNK_SIZE):

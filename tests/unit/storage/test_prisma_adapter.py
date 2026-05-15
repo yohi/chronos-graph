@@ -414,3 +414,56 @@ async def test_get_memories_batch_skips_invalid_uuid(mock_prisma):
 
     passed_ids = mock_prisma.query_raw.await_args.args[1]
     assert passed_ids == [valid]
+
+
+@pytest.mark.asyncio
+async def test_get_memory_raises_storage_error_on_exception(mock_prisma):
+    mock_prisma.query_first_raw = AsyncMock(side_effect=Exception("DB Error"))
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    with pytest.raises(StorageError) as excinfo:
+        await adapter.get_memory(str(uuid4()))
+    assert excinfo.value.code == "STORAGE_ERROR"
+    assert "DB Error" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_get_memory_returns_none_for_invalid_uuid(mock_prisma):
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    result = await adapter.get_memory("not-a-uuid")
+    assert result is None
+    mock_prisma.query_first_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_memories_batch_deduplicates_ids(mock_prisma):
+    uid = str(uuid4())
+    ids = [uid, uid, uid]
+    mock_prisma.query_raw = AsyncMock(return_value=[])
+
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    await adapter.get_memories_batch(ids)
+
+    # 渡された chunk は 1 つの ID だけであるべき
+    assert mock_prisma.query_raw.await_count == 1
+    passed_ids = mock_prisma.query_raw.await_args.args[1]
+    assert passed_ids == [uid]
+
+
+@pytest.mark.asyncio
+async def test_create_raises_import_error_when_prisma_not_available(monkeypatch):
+    """Test that PrismaStorageAdapter.create raises ImportError when Prisma is not installed."""
+    from pydantic import SecretStr
+
+    import context_store.storage.prisma
+    from context_store.config import Settings
+
+    monkeypatch.setattr(context_store.storage.prisma, "prisma_available", False)
+    settings = Settings(
+        storage_backend="prisma",
+        graph_enabled=False,
+        prisma_database_url=SecretStr("prisma://accelerate.prisma-data.net/?api_key=test"),
+    )
+
+    with pytest.raises(ImportError) as excinfo:
+        await context_store.storage.prisma.PrismaStorageAdapter.create(settings)
+    assert "Prisma is not installed" in str(excinfo.value)

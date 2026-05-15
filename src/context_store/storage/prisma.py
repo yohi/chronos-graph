@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+import sqlparse
+
 try:
     from prisma import Prisma
 
@@ -40,7 +42,19 @@ class UniqueViolationError(PrismaError):
 
 def _record_to_memory(row: dict[str, Any]) -> Memory:
     """Prisma の dict 形式のレコードを Memory モデルに変換する。"""
-    data = {k: v for k, v in row.items() if k not in ("content_hash", "embedding")}
+    # content_hash は内部用なので除外。embedding は保持し、必要ならパースする。
+    data = {k: v for k, v in row.items() if k != "content_hash"}
+
+    # embedding の変換 (str "[0.1, 0.2]" -> list[float])
+    emb = data.get("embedding")
+    if isinstance(emb, str):
+        try:
+            data["embedding"] = [float(x) for x in emb.strip("[]").split(",") if x.strip()]
+        except (ValueError, TypeError):
+            data["embedding"] = []
+    elif emb is None:
+        data["embedding"] = []
+
     if isinstance(data.get("source_metadata"), str):
         try:
             data["source_metadata"] = json.loads(data["source_metadata"])
@@ -74,13 +88,15 @@ class PrismaStorageAdapter:
             raise ImportError("Prisma is not installed. Run 'prisma generate' to setup.")
         client = Prisma()
         await client.connect()
+        success = False
         try:
             adapter = cls(client)
             await adapter.initialize()
+            success = True
             return adapter
-        except Exception:
-            await client.disconnect()
-            raise
+        finally:
+            if not success:
+                await client.disconnect()
 
     async def dispose(self) -> None:
         """Disconnect the Prisma client."""
@@ -310,10 +326,16 @@ class PrismaStorageAdapter:
         if filter_dict:
             for col, val in filter_dict.items():
                 if col not in allowed_columns:
-                    continue
-                # col is whitelisted
-                params.append(val)
-                where_clauses.append(f'"{col}" = ${len(params)}')
+                    raise StorageError(
+                        message=f"Invalid filter column: {col}",
+                        code="INVALID_INPUT",
+                        recoverable=False,
+                    )
+                if val is None:
+                    where_clauses.append(f'"{col}" IS NULL')
+                else:
+                    params.append(val)
+                    where_clauses.append(f'"{col}" = ${len(params)}')
 
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
@@ -375,7 +397,10 @@ class _PrismaMigrationRunner:
 
             logger.info(f"Applying migration: {sql_file.name}")
             content = sql_file.read_text()
-            statements = [s.strip() for s in content.split(";") if s.strip()]
+            # Naive split(";") will break if semicolons are inside strings or functions.
+            # Use sqlparse.split for SQL-aware splitting.
+            # We rstrip(";") to match previous behavior where split(";") removed it.
+            statements = [s.strip().rstrip(";") for s in sqlparse.split(content) if s.strip()]
 
             async with self._client.tx() as tx:
                 for stmt in statements:

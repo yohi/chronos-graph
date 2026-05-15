@@ -233,14 +233,14 @@ class _PrismaMigrationRunner:
 
                 # Check for semicolon
                 if char == ";":
-                    stmt = sql[last_pos:pos].strip()
+                    stmt = sql[last_pos:pos].strip().rstrip(";")
                     if stmt:
                         statements.append(stmt)
                     last_pos = pos + 1
 
                 pos += 1
 
-            remaining = sql[last_pos:].strip()
+            remaining = sql[last_pos:].strip().rstrip(";")
             if remaining:
                 statements.append(remaining)
 

@@ -72,33 +72,35 @@ async def test_migration_runner_filters_out_graph_migrations(
     """0002_graph.sql 等の graph 関連マイグレーションは Prisma 対象外として除外される。"""
     from context_store.storage.prisma import _PrismaMigrationRunner
 
+    # _PrismaMigrationRunner が参照する base ディレクトリを差し替え
+    # run() は __file__ から遡って docker/postgres を探すため、
+    # tmp_path/src/context_store/storage/prisma.py という構造にする
+    prisma_file = tmp_path / "src" / "context_store" / "storage" / "prisma.py"
+    prisma_file.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        "context_store.storage.prisma.__file__",
+        str(prisma_file),
+    )
+
     # ダミーの migrations ディレクトリを構築
-    migrations_dir = tmp_path / "migrations" / "postgres"
+    # prisma.py が src/context_store/storage/ にある場合、
+    # 2つ上の parent (src/) の隣に docker/ があると想定される (通常はプロジェクトルート)
+    migrations_dir = tmp_path / "docker" / "postgres"
     migrations_dir.mkdir(parents=True)
     (migrations_dir / "0000_system.sql").write_text("CREATE TABLE schema_migrations(version TEXT);")
     (migrations_dir / "0001_initial.sql").write_text("CREATE TABLE memories(id UUID);")
     (migrations_dir / "0002_graph.sql").write_text("CREATE TABLE memory_nodes(id UUID);")
 
-    # _PrismaMigrationRunner が参照する base ディレクトリを差し替え
-    monkeypatch.setattr(
-        "context_store.storage.prisma.__file__",
-        str(tmp_path / "prisma.py"),
-    )
-
     # 1) schema_migrations 不在 → ensure_system_migration が走る
     # 2) _get_applied_migrations は空集合
     # 3) baseline 検出のため pg_tables を問い合わせる ("memories" のみ要求)
     # 4) baseline 後の _get_applied_migrations (空)
-    from context_store.storage.prisma import PrismaError
 
     mock_prisma.query_raw = AsyncMock(
         side_effect=[
-            PrismaError(
-                'relation "schema_migrations" does not exist'
-            ),  # ensure_system_migration の存在確認
+            [],  # _ensure_system_migration: schema_migrations 不在
             [],  # _get_applied_migrations: 空
             [],  # _tables_exist for 0001 (memories): なし
-            [],  # baseline 後の _get_applied_migrations
         ]
     )
     mock_prisma.execute_raw = AsyncMock(return_value=1)
@@ -121,22 +123,22 @@ async def test_migration_runner_baselines_existing_memories_table(
     """memories テーブルが既存の場合、0001 を applied として記録 (再実行しない)。"""
     from context_store.storage.prisma import _PrismaMigrationRunner
 
-    migrations_dir = tmp_path / "migrations" / "postgres"
-    migrations_dir.mkdir(parents=True)
-    (migrations_dir / "0000_system.sql").write_text("CREATE TABLE schema_migrations(version TEXT);")
-    (migrations_dir / "0001_initial.sql").write_text("CREATE TABLE memories(id UUID);")
-
+    # _PrismaMigrationRunner が参照する base ディレクトリを差し替え
+    prisma_file = tmp_path / "src" / "context_store" / "storage" / "prisma.py"
+    prisma_file.parent.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(
         "context_store.storage.prisma.__file__",
-        str(tmp_path / "prisma.py"),
+        str(prisma_file),
     )
+
+    migrations_dir = tmp_path / "docker" / "postgres"
+    migrations_dir.mkdir(parents=True)
 
     mock_prisma.query_raw = AsyncMock(
         side_effect=[
-            [{"1": 1}],  # ensure_system_migration: schema_migrations 存在
+            [{"1": 1}],  # _ensure_system_migration: schema_migrations 存在
             [],  # _get_applied_migrations: 空
             [{"tablename": "memories"}],  # _tables_exist for 0001: 既存
-            [{"version": "0001_initial.sql"}],  # baseline 後の _get_applied_migrations
         ]
     )
     mock_prisma.execute_raw = AsyncMock(return_value=1)
@@ -164,22 +166,24 @@ async def test_migration_runner_applies_sequential_files(
     """複数の未適用ファイルを定義順に sequential に execute_raw する。"""
     from context_store.storage.prisma import _PrismaMigrationRunner
 
-    migrations_dir = tmp_path / "migrations" / "postgres"
+    # _PrismaMigrationRunner が参照する base ディレクトリを差し替え
+    prisma_file = tmp_path / "src" / "context_store" / "storage" / "prisma.py"
+    prisma_file.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        "context_store.storage.prisma.__file__",
+        str(prisma_file),
+    )
+
+    migrations_dir = tmp_path / "docker" / "postgres"
     migrations_dir.mkdir(parents=True)
     (migrations_dir / "0000_system.sql").write_text("CREATE TABLE system_info(id INT);")
     (migrations_dir / "0001_initial.sql").write_text("CREATE TABLE memories(id UUID);")
 
-    monkeypatch.setattr(
-        "context_store.storage.prisma.__file__",
-        str(tmp_path / "prisma.py"),
-    )
-
     mock_prisma.query_raw = AsyncMock(
         side_effect=[
-            [{"1": 1}],  # ensure_system_migration: 存在
+            [{"1": 1}],  # _ensure_system_migration: 存在
             [],  # _get_applied_migrations: 空
             [],  # _tables_exist for 0001: 不在 → baseline 対象なし
-            [],  # baseline 後の _get_applied_migrations
         ]
     )
     mock_prisma.execute_raw = AsyncMock(return_value=1)
@@ -201,14 +205,17 @@ async def test_migration_runner_transaction_failure_propagates(mock_prisma, tmp_
     """tx 内の execute_raw が失敗した場合、例外が伝播し INSERT は実行されない。"""
     from context_store.storage.prisma import _PrismaMigrationRunner
 
-    migrations_dir = tmp_path / "migrations" / "postgres"
-    migrations_dir.mkdir(parents=True)
-    (migrations_dir / "0001_initial.sql").write_text("INVALID SQL")
-
+    # _PrismaMigrationRunner が参照する base ディレクトリを差し替え
+    prisma_file = tmp_path / "src" / "context_store" / "storage" / "prisma.py"
+    prisma_file.parent.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(
         "context_store.storage.prisma.__file__",
-        str(tmp_path / "prisma.py"),
+        str(prisma_file),
     )
+
+    migrations_dir = tmp_path / "docker" / "postgres"
+    migrations_dir.mkdir(parents=True)
+    (migrations_dir / "0001_initial.sql").write_text("INVALID SQL")
 
     # tx() がコンテキストマネージャを返し、execute_raw で例外を送出
     tx = MagicMock()
@@ -220,9 +227,9 @@ async def test_migration_runner_transaction_failure_propagates(mock_prisma, tmp_
 
     mock_prisma.query_raw = AsyncMock(
         side_effect=[
+            [],  # _ensure_system_migration: schema_migrations 不在
             [],  # _get_applied_migrations: 空
             [],  # _tables_exist for 0001: 不在
-            [],  # baseline 後の _get_applied_migrations
         ]
     )
     mock_prisma.execute_raw = AsyncMock(return_value=0)
@@ -234,8 +241,10 @@ async def test_migration_runner_transaction_failure_propagates(mock_prisma, tmp_
     # INSERT INTO schema_migrations は呼ばれていない (tx 内で失敗、外側の
     # execute_raw は baseline 用途のみで未呼び出し)
     assert tx.execute_raw.await_count >= 1
-    # baseline は requirements に該当しないため execute_raw は呼ばれない
-    assert mock_prisma.execute_raw.await_count == 0
+    # ensure_system_migration による CREATE TABLE が 1 回呼ばれる
+    assert mock_prisma.execute_raw.await_count == 1
+    call_args = mock_prisma.execute_raw.await_args.args[0]
+    assert "CREATE TABLE IF NOT EXISTS schema_migrations" in call_args
 
 
 def _build_memory(content: str = "hello") -> Memory:

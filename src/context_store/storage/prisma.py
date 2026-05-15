@@ -747,7 +747,8 @@ class _PrismaMigrationRunner:
     """Prisma 用の簡易マイグレーションランナー。"""
 
     # Prisma backend manages only the storage schema required by the memories table.
-    _PRISMA_ALLOWED_MIGRATION_PREFIXES: frozenset[str] = frozenset({"0000", "0001"})
+    # Graph-related tables (memory_nodes/edges) are excluded from Prisma management.
+    _PRISMA_EXCLUDED_KEYWORDS: frozenset[str] = frozenset({"graph"})
 
     def __init__(self, client: Prisma) -> None:
         self._client = client
@@ -762,9 +763,12 @@ class _PrismaMigrationRunner:
             return
 
         all_files = sorted(migrations_path.glob("*.sql"))
-        target_files = [
-            f for f in all_files if f.name.split("_")[0] in self._PRISMA_ALLOWED_MIGRATION_PREFIXES
-        ]
+        target_files = []
+        for f in all_files:
+            if any(kw in f.name.lower() for kw in self._PRISMA_EXCLUDED_KEYWORDS):
+                logger.info("Skipping migration file '%s' (excluded by keyword)", f.name)
+                continue
+            target_files.append(f)
 
         system_file = migrations_path / "0000_system.sql"
         if system_file.exists():

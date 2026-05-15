@@ -94,7 +94,7 @@ def mock_tx_context(mock_prisma) -> MagicMock:
 async def test_migration_runner_filters_out_graph_migrations(
     mock_prisma, mock_tx_context, tmp_path, monkeypatch
 ):
-    """0002_graph.sql 等の graph 関連マイグレーションは Prisma 対象外として除外される。"""
+    """'graph' キーワードを含むマイグレーションは Prisma 対象外として除外される。"""
     from context_store.storage.prisma import _PrismaMigrationRunner
 
     # _PrismaMigrationRunner が参照する base ディレクトリを差し替え
@@ -137,10 +137,10 @@ async def test_migration_runner_filters_out_graph_migrations(
 
 
 @pytest.mark.asyncio
-async def test_migration_runner_allows_only_prisma_supported_prefixes(
+async def test_migration_runner_applies_new_migrations_by_default(
     mock_prisma, mock_tx_context, tmp_path, monkeypatch
 ):
-    """Prisma 対象の 0000/0001 prefix のマイグレーションだけを適用する。"""
+    """'graph' キーワードを含まない新しいマイグレーションはデフォルトで適用される。"""
     from context_store.storage.prisma import _PrismaMigrationRunner
 
     prisma_file = tmp_path / "src" / "context_store" / "storage" / "prisma.py"
@@ -162,7 +162,7 @@ async def test_migration_runner_allows_only_prisma_supported_prefixes(
     sqls_applied = [call.args[0] for call in mock_tx_context.execute_raw.await_args_list]
     assert any("CREATE TABLE schema_migrations" in sql for sql in sqls_applied)
     assert any("CREATE TABLE memories" in sql for sql in sqls_applied)
-    assert not any("future_table" in sql for sql in sqls_applied)
+    assert any("future_table" in sql for sql in sqls_applied)  # 新しいファイルは適用される
     assert not any("nodes" in sql for sql in sqls_applied)  # graph は除外される
 
 

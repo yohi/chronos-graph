@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 from context_store.config import Settings
-from prisma import Prisma  # type: ignore[import-not-found]
+from prisma import Prisma  # type: ignore[import-not-found, attr-defined]
 
 try:
     from prisma.errors import PrismaError
@@ -13,12 +13,16 @@ except ImportError:
     PrismaError = Exception  # type: ignore
 
 try:
-    from prisma.errors import PrismaClientKnownRequestError  # type: ignore[attr-defined]
+    from prisma.errors import (
+        PrismaClientKnownRequestError,  # type: ignore[attr-defined, import-not-found]
+    )
 except ImportError:
     PrismaClientKnownRequestError = PrismaError  # type: ignore
 
 try:
-    from prisma.errors import PrismaClientUnknownRequestError  # type: ignore[attr-defined]
+    from prisma.errors import (
+        PrismaClientUnknownRequestError,  # type: ignore[attr-defined, import-not-found]
+    )
 except ImportError:
     PrismaClientUnknownRequestError = PrismaError  # type: ignore
 
@@ -180,7 +184,7 @@ class _PrismaMigrationRunner:
         # Prisma Accelerate does not support multiple statements in a single execute_raw call.
         # We split the SQL into individual statements.
         try:
-            import sqlparse
+            import sqlparse  # type: ignore[import-not-found]
 
             statements = [s.strip().rstrip(";") for s in sqlparse.split(sql) if s.strip()]
         except ImportError:

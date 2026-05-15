@@ -28,7 +28,7 @@ async def test_orchestrator_initialization_with_prisma(monkeypatch):
 
     with patch(
         "context_store.storage.prisma.PrismaStorageAdapter.create",
-        return_value=mock_storage,
+        new=AsyncMock(return_value=mock_storage),
     ) as mock_create:
         orchestrator = await create_orchestrator(settings)
         try:

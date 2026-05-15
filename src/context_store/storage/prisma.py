@@ -746,8 +746,9 @@ class PrismaStorageAdapter:
 class _PrismaMigrationRunner:
     """Prisma 用の簡易マイグレーションランナー。"""
 
-    # Prisma 以外（グラフDB等）で管理されるマイグレーションを除外するためのキーワード。
-    _EXCLUDED_MIGRATION_KEYWORDS: frozenset[str] = frozenset({"graph"})
+    # Prisma backend manages only the storage schema required by the memories table.
+    # Graph-related tables (memory_nodes/edges) are excluded from Prisma management.
+    _PRISMA_EXCLUDED_KEYWORDS: frozenset[str] = frozenset({"graph"})
 
     def __init__(self, client: Prisma) -> None:
         self._client = client
@@ -762,11 +763,17 @@ class _PrismaMigrationRunner:
             return
 
         all_files = sorted(migrations_path.glob("*.sql"))
-        target_files = [
-            f
-            for f in all_files
-            if not any(kw in f.name.lower() for kw in self._EXCLUDED_MIGRATION_KEYWORDS)
-        ]
+        target_files = []
+        for f in all_files:
+            # Check if description (after numeric prefix) starts with an excluded keyword.
+            # This prevents accidental exclusion of files containing keywords elsewhere.
+            name_parts = f.name.lower().split("_", 1)
+            desc = name_parts[1] if len(name_parts) > 1 else name_parts[0]
+
+            if any(desc.startswith(kw) for kw in self._PRISMA_EXCLUDED_KEYWORDS):
+                logger.info("Skipping migration file '%s' (excluded by keyword prefix)", f.name)
+                continue
+            target_files.append(f)
 
         system_file = migrations_path / "0000_system.sql"
         if system_file.exists():

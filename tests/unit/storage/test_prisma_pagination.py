@@ -1,6 +1,7 @@
 """Unit tests for Prisma pagination and migration logic improvements."""
 
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -81,16 +82,22 @@ async def test_list_by_filter_validates_cursor_consistency(mock_prisma):
 @pytest.mark.asyncio
 async def test_ensure_system_migration_ignores_non_missing_table_errors(mock_prisma):
     runner = _PrismaMigrationRunner(mock_prisma)
+    mock_file = MagicMock(spec=Path)
+    mock_file.name = "0000_system.sql"
+    mock_file.read_text.return_value = "CREATE TABLE schema_migrations (version TEXT PRIMARY KEY);"
 
     # Connection error should be re-raised, not trigger migration
     mock_prisma.query_raw.side_effect = RuntimeError("Connection lost")
     with pytest.raises(RuntimeError, match="Connection lost"):
-        await runner._ensure_system_migration(MagicMock())
+        await runner._ensure_system_migration(mock_file)
 
     # Missing table error (Postgres 42P01) should trigger migration
     mock_prisma.query_raw.side_effect = Exception('relation "schema_migrations" does not exist')
     mock_prisma.execute_raw = AsyncMock(return_value=1)
-    await runner._ensure_system_migration(MagicMock())
+    # mock_prisma.tx() is used in _apply_migration
+    mock_prisma.tx.return_value.__aenter__.return_value = mock_prisma
+
+    await runner._ensure_system_migration(mock_file)
     mock_prisma.execute_raw.assert_awaited()
 
 

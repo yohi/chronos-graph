@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -88,7 +89,7 @@ async def test_migration_runner_filters_out_graph_migrations(
     # 2) _get_applied_migrations は空集合
     # 3) baseline 検出のため pg_tables を問い合わせる ("memories" のみ要求)
     # 4) baseline 後の _get_applied_migrations (空)
-    from prisma.errors import PrismaError
+    from context_store.storage.prisma import PrismaError
 
     mock_prisma.query_raw = AsyncMock(
         side_effect=[
@@ -275,7 +276,7 @@ async def test_save_memory_inserts_and_returns_id(mock_prisma):
 @pytest.mark.asyncio
 async def test_save_memory_raises_duplicate_content(mock_prisma):
     # Simulate UniqueViolationError (actual Prisma unique violation)
-    from prisma.errors import UniqueViolationError
+    from context_store.storage.prisma import UniqueViolationError
 
     # UniqueViolationError typically takes the raw data dict
     error = UniqueViolationError(
@@ -295,7 +296,7 @@ async def test_save_memory_raises_duplicate_content(mock_prisma):
 @pytest.mark.asyncio
 async def test_save_memory_raises_duplicate_content_from_known_request_error(mock_prisma):
     # Simulate PrismaClientKnownRequestError with code P2002
-    from prisma.errors import PrismaError
+    from context_store.storage.prisma import PrismaError
 
     # We use a mock that has the 'code' attribute, simulating PrismaClientKnownRequestError
     class MockKnownRequestError(PrismaError):
@@ -326,3 +327,143 @@ async def test_save_memory_raises_storage_error_on_none_row(mock_prisma):
     assert exc_info.value.code == "STORAGE_ERROR"
     assert "INSERT RETURNING returned no row" in str(exc_info.value)
     assert exc_info.value.recoverable is False
+
+
+@pytest.mark.asyncio
+async def test_get_memory_returns_none_when_missing(mock_prisma):
+    mock_prisma.query_first_raw = AsyncMock(return_value=None)
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    result = await adapter.get_memory("00000000-0000-0000-0000-000000000000")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_memories_batch_empty_list_returns_empty(mock_prisma):
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    result = await adapter.get_memories_batch([])
+    assert result == []
+    mock_prisma.query_raw.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "n_ids, expected_chunk_sizes",
+    [
+        (249, [249]),
+        (250, [250]),
+        (251, [250, 1]),
+        (499, [250, 249]),
+        (500, [250, 250]),
+        (501, [250, 250, 1]),
+    ],
+)
+async def test_get_memories_batch_chunk_boundary(
+    mock_prisma, n_ids: int, expected_chunk_sizes: list[int]
+):
+    ids = [str(uuid4()) for _ in range(n_ids)]
+    mock_prisma.query_raw = AsyncMock(return_value=[])
+
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    await adapter.get_memories_batch(ids)
+
+    assert mock_prisma.query_raw.await_count == len(expected_chunk_sizes)
+    actual_sizes = [len(call.args[1]) for call in mock_prisma.query_raw.await_args_list]
+    assert actual_sizes == expected_chunk_sizes
+
+
+@pytest.mark.asyncio
+async def test_get_memories_batch_preserves_input_order(mock_prisma):
+    ids = [str(uuid4()) for _ in range(3)]
+
+    def _record(memory_id: str) -> dict[str, Any]:
+        return {
+            "id": memory_id,
+            "content": f"content-{memory_id}",
+            "memory_type": "semantic",
+            "source_type": "manual",
+            "source_metadata": {},
+            "embedding": [0.1],
+            "semantic_relevance": 0.5,
+            "importance_score": 0.5,
+            "access_count": 0,
+            "last_accessed_at": datetime.now(timezone.utc),
+            "created_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+            "archived_at": None,
+            "tags": [],
+            "project": None,
+        }
+
+    mock_prisma.query_raw = AsyncMock(
+        return_value=[_record(ids[2]), _record(ids[0]), _record(ids[1])]
+    )
+
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    result = await adapter.get_memories_batch(ids)
+    assert [str(m.id) for m in result] == ids
+
+
+@pytest.mark.asyncio
+async def test_get_memories_batch_skips_invalid_uuid(mock_prisma):
+    valid = str(uuid4())
+    ids = ["not-a-uuid", valid, "also-bad"]
+    mock_prisma.query_raw = AsyncMock(return_value=[])
+
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    await adapter.get_memories_batch(ids)
+
+    passed_ids = mock_prisma.query_raw.await_args.args[1]
+    assert passed_ids == [valid]
+
+
+@pytest.mark.asyncio
+async def test_get_memory_raises_storage_error_on_exception(mock_prisma):
+    mock_prisma.query_first_raw = AsyncMock(side_effect=Exception("DB Error"))
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    with pytest.raises(StorageError) as excinfo:
+        await adapter.get_memory(str(uuid4()))
+    assert excinfo.value.code == "STORAGE_ERROR"
+    assert "DB Error" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_get_memory_returns_none_for_invalid_uuid(mock_prisma):
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    result = await adapter.get_memory("not-a-uuid")
+    assert result is None
+    mock_prisma.query_first_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_memories_batch_deduplicates_ids(mock_prisma):
+    uid = str(uuid4())
+    ids = [uid, uid, uid]
+    mock_prisma.query_raw = AsyncMock(return_value=[])
+
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    await adapter.get_memories_batch(ids)
+
+    # 渡された chunk は 1 つの ID だけであるべき
+    assert mock_prisma.query_raw.await_count == 1
+    passed_ids = mock_prisma.query_raw.await_args.args[1]
+    assert passed_ids == [uid]
+
+
+@pytest.mark.asyncio
+async def test_create_raises_import_error_when_prisma_not_available(monkeypatch):
+    """Test that PrismaStorageAdapter.create raises ImportError when Prisma is not installed."""
+    from pydantic import SecretStr
+
+    import context_store.storage.prisma
+    from context_store.config import Settings
+
+    monkeypatch.setattr(context_store.storage.prisma, "prisma_available", False)
+    settings = Settings(
+        storage_backend="prisma",
+        graph_enabled=False,
+        prisma_database_url=SecretStr("prisma://accelerate.prisma-data.net/?api_key=test"),
+    )
+
+    with pytest.raises(ImportError) as excinfo:
+        await context_store.storage.prisma.PrismaStorageAdapter.create(settings)
+    assert "Prisma is not installed" in str(excinfo.value)

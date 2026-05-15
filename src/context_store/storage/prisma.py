@@ -202,16 +202,16 @@ class PrismaStorageAdapter:
     async def get_memory(self, memory_id: str) -> Memory | None:
         """Retrieve a memory by ID."""
         try:
-            str(UUID(str(memory_id)))
+            norm_id = str(UUID(str(memory_id)))
         except (TypeError, ValueError, AttributeError):
             return None
 
         sql = "SELECT * FROM memories WHERE id = $1"
         try:
             if hasattr(self._client, "query_first_raw"):
-                row = await self._client.query_first_raw(sql, memory_id)
+                row = await self._client.query_first_raw(sql, norm_id)
             else:
-                rows = await self._client.query_raw(sql, memory_id)
+                rows = await self._client.query_raw(sql, norm_id)
                 row = rows[0] if rows else None
 
             if row is None:

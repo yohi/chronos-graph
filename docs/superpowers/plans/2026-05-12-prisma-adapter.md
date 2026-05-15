@@ -1,6 +1,6 @@
 # PrismaStorageAdapter 実装計画
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. All tests/lint MUST be executed **inside the Devcontainer**, never on the host Python.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`[x]`) syntax for tracking. All tests/lint MUST be executed **inside the Devcontainer**, never on the host Python.
 
 **Goal:** 社内ネットワークでの PostgreSQL 直接接続遮断を回避するため、HTTPS (443) 経由で Prisma Accelerate を介して PostgreSQL に接続する `StorageAdapter` 実装を追加し、`STORAGE_BACKEND=prisma` で切替可能にする。
 
@@ -80,14 +80,14 @@ git push -u origin feature/phase1_prisma_foundation__base
 **Files:**
 - Create: `prisma/schema.prisma`
 
-- [ ] **Step 1: ブランチ作成**
+[x] **Step 1: ブランチ作成**
 
 ```bash
 git checkout feature/phase1_prisma_foundation__base
 git checkout -b feature/phase1-task1_schema_prisma
 ```
 
-- [ ] **Step 2: `prisma/schema.prisma` を新規作成**
+[x] **Step 2: `prisma/schema.prisma` を新規作成**
 
 ```prisma
 // prisma/schema.prisma
@@ -123,7 +123,7 @@ model memories {
 }
 ```
 
-- [ ] **Step 3: Devcontainer 内で `prisma generate` のドライランを試行**
+[x] **Step 3: Devcontainer 内で `prisma generate` のドライランを試行**
 
 Devcontainer の Node.js が Task 1.4 で導入されるため、本タスクでは構文確認のみを行う。`prisma` CLI が手元になければ Step 4 へ進む (Task 1.4 マージ後に `feature/phase1-task1_schema_prisma` のローカル確認時に通る)。
 
@@ -133,14 +133,14 @@ which prisma && prisma format --schema=./prisma/schema.prisma
 ```
 Expected: 構文エラーなし、または `prisma not found` (この場合は本タスクではスキップ可)。
 
-- [ ] **Step 4: コミット**
+[x] **Step 4: コミット**
 
 ```bash
 git add prisma/schema.prisma
 git commit -m "feat(storage): add Prisma schema for memories model"
 ```
 
-- [ ] **Step 5: Push & Draft PR 作成 (target: Phase Base)**
+[x] **Step 5: Push & Draft PR 作成 (target: Phase Base)**
 
 ```bash
 git push -u origin feature/phase1-task1_schema_prisma
@@ -155,8 +155,8 @@ gh pr create \
 - HNSW/GIN/`::vector` キャストなどは引き続き SQL マイグレーション側で管理 (本 PR では Prisma Migrate を導入しない)
 
 ## Test plan
-- [ ] Devcontainer 内で `prisma format --schema=./prisma/schema.prisma` がエラーなく完了する (Task 1.4 マージ後)
-- [ ] `prisma generate --schema=./prisma/schema.prisma` で `prisma` パッケージが生成される (Task 1.4 マージ後)
+[x] Devcontainer 内で `prisma format --schema=./prisma/schema.prisma` がエラーなく完了する (Task 1.4 マージ後)
+[x] `prisma generate --schema=./prisma/schema.prisma` で `prisma` パッケージが生成される (Task 1.4 マージ後)
 EOF
 )"
 ```
@@ -170,7 +170,7 @@ EOF
 **Files:**
 - Modify: `pyproject.toml`
 
-- [ ] **Step 1: ブランチ作成**
+[x] **Step 1: ブランチ作成**
 
 ```bash
 git checkout feature/phase1_prisma_foundation__base
@@ -226,14 +226,14 @@ uv run mypy src/
 ```
 Expected: いずれもエラーなく完了。
 
-- [ ] **Step 8: コミット**
+[x] **Step 8: コミット**
 
 ```bash
 git add pyproject.toml uv.lock
 git commit -m "feat(deps): add storage-prisma extras and mypy override for prisma"
 ```
 
-- [ ] **Step 9: Push & Draft PR 作成 (target: Phase Base)**
+[x] **Step 9: Push & Draft PR 作成 (target: Phase Base)**
 
 ```bash
 git push -u origin feature/phase1-task2_pyproject_extras
@@ -248,9 +248,9 @@ gh pr create \
 - `prisma.*` モジュール用 mypy override を追加
 
 ## Test plan
-- [ ] Devcontainer 内で `uv sync --all-extras` が成功
-- [ ] `uv run python -c "import prisma"` が成功
-- [ ] `mypy src/` がエラーなし
+[x] Devcontainer 内で `uv sync --all-extras` が成功
+[x] `uv run python -c "import prisma"` が成功
+[x] `mypy src/` がエラーなし
 EOF
 )"
 ```
@@ -268,14 +268,14 @@ EOF
 - Modify: `src/context_store/config.py:264-272` (`graph_backend` 拡張)
 - Test: `tests/unit/test_config.py` (既存ファイルに追加)
 
-- [ ] **Step 1: ブランチ作成**
+[x] **Step 1: ブランチ作成**
 
 ```bash
 git checkout feature/phase1_prisma_foundation__base
 git checkout -b feature/phase1-task3_settings_prisma_backend
 ```
 
-- [ ] **Step 2: 失敗するテストを `tests/unit/test_config.py` に追加**
+[x] **Step 2: 失敗するテストを `tests/unit/test_config.py` に追加**
 
 `tests/unit/test_config.py` の末尾に以下を追加:
 
@@ -339,27 +339,27 @@ def test_graph_backend_is_disabled_for_prisma(monkeypatch):
     assert settings.graph_backend == "disabled"
 ```
 
-- [ ] **Step 3: テストを実行して失敗を確認 (Devcontainer 内)**
+[x] **Step 3: テストを実行して失敗を確認 (Devcontainer 内)**
 
 ```bash
 uv run pytest tests/unit/test_config.py -v -k "prisma"
 ```
 Expected: 5 件すべて FAIL (`Settings` がまだ `"prisma"` を許容しないため)。
 
-- [ ] **Step 4: `src/context_store/config.py:57` の Literal を拡張**
+[x] **Step 4: `src/context_store/config.py:57` の Literal を拡張**
 
 ```python
 storage_backend: Literal["sqlite", "postgres", "prisma"] = "sqlite"
 ```
 
-- [ ] **Step 5: `src/context_store/config.py:73` 付近 (PostgreSQL ブロックの直後) に新フィールドを追加**
+[x] **Step 5: `src/context_store/config.py:73` 付近 (PostgreSQL ブロックの直後) に新フィールドを追加**
 
 ```python
     # --- Prisma Accelerate (storage_backend=prisma の場合) ---
     prisma_database_url: SecretStr = SecretStr("")
 ```
 
-- [ ] **Step 6: `_validate_storage_config` (`config.py:226-235`) を拡張**
+[x] **Step 6: `_validate_storage_config` (`config.py:226-235`) を拡張**
 
 ```python
     @model_validator(mode="after")
@@ -391,7 +391,7 @@ storage_backend: Literal["sqlite", "postgres", "prisma"] = "sqlite"
         return self
 ```
 
-- [ ] **Step 7: `graph_backend` computed_field (`config.py:264-272`) を拡張**
+[x] **Step 7: `graph_backend` computed_field (`config.py:264-272`) を拡張**
 
 ```python
     @computed_field  # type: ignore[prop-decorator]
@@ -408,14 +408,14 @@ storage_backend: Literal["sqlite", "postgres", "prisma"] = "sqlite"
         return "disabled"
 ```
 
-- [ ] **Step 8: テストを実行して PASS を確認 (Devcontainer 内)**
+[x] **Step 8: テストを実行して PASS を確認 (Devcontainer 内)**
 
 ```bash
 uv run pytest tests/unit/test_config.py -v -k "prisma"
 ```
 Expected: 5 件すべて PASS。
 
-- [ ] **Step 9: 既存テストの回帰がないか確認 (Devcontainer 内)**
+[x] **Step 9: 既存テストの回帰がないか確認 (Devcontainer 内)**
 
 ```bash
 uv run pytest tests/unit/test_config.py -v
@@ -424,14 +424,14 @@ uv run mypy src/context_store/config.py
 ```
 Expected: 全 PASS、lint/mypy エラーなし。
 
-- [ ] **Step 10: コミット**
+[x] **Step 10: コミット**
 
 ```bash
 git add src/context_store/config.py tests/unit/test_config.py
 git commit -m "feat(config): add prisma storage backend literal and validators"
 ```
 
-- [ ] **Step 11: Push & Draft PR 作成 (target: Phase Base)**
+[x] **Step 11: Push & Draft PR 作成 (target: Phase Base)**
 
 ```bash
 git push -u origin feature/phase1-task3_settings_prisma_backend
@@ -447,9 +447,9 @@ gh pr create \
 - `_validate_storage_config` を拡張し、空 URL / 非 prisma スキーム / `graph_enabled=true` の組合せを拒否
 
 ## Test plan
-- [ ] `pytest tests/unit/test_config.py -v -k prisma` が全 PASS
-- [ ] 既存 `pytest tests/unit/test_config.py -v` に回帰なし
-- [ ] `mypy src/context_store/config.py` がエラーなし
+[x] `pytest tests/unit/test_config.py -v -k prisma` が全 PASS
+[x] 既存 `pytest tests/unit/test_config.py -v` に回帰なし
+[x] `mypy src/context_store/config.py` がエラーなし
 EOF
 )"
 ```
@@ -464,14 +464,14 @@ EOF
 - Modify: `.devcontainer/setup.sh`
 - Modify: `.devcontainer/devcontainer.json` (`Install Dependencies` task + `Prisma Generate` task 新設)
 
-- [ ] **Step 1: ブランチ作成**
+[x] **Step 1: ブランチ作成**
 
 ```bash
 git checkout feature/phase1_prisma_foundation__base
 git checkout -b feature/phase1-task4_devcontainer_prisma
 ```
 
-- [ ] **Step 2: `.devcontainer/setup.sh` を編集**
+[x] **Step 2: `.devcontainer/setup.sh` を編集**
 
 既存 `setup.sh` の `uv sync --frozen --all-extras` の前後に以下を追加:
 
@@ -518,7 +518,7 @@ echo "  mypy src/"
 echo "  prisma generate --schema=./prisma/schema.prisma"
 ```
 
-- [ ] **Step 3: `.devcontainer/devcontainer.json` の `Install Dependencies` タスクの command を更新**
+[x] **Step 3: `.devcontainer/devcontainer.json` の `Install Dependencies` タスクの command を更新**
 
 既存 `pip install -e ".[dev,storage-postgres]"` は bare `pip` 呼び出しで
 uv 管理 venv の外にインストールされる恐れがあるため、setup.sh / CI と同一の
@@ -535,7 +535,7 @@ uv 管理 venv の外にインストールされる恐れがあるため、setup
 }
 ```
 
-- [ ] **Step 4: `.devcontainer/devcontainer.json` の `tasks` 配列に `Prisma Generate` を新設**
+[x] **Step 4: `.devcontainer/devcontainer.json` の `tasks` 配列に `Prisma Generate` を新設**
 
 `Install Dependencies` タスクの直後に追加:
 
@@ -571,18 +571,18 @@ Expected: エラーなく完了 (JSON-with-comments を許容するなら `json5
 
 > **Note:** `.devcontainer/devcontainer.json` は JSONC (コメント許可) のため、純 JSON パーサだとコメント行で失敗する。その場合は `npx -y jsonc-parser` あるいは VS Code の `Dev Containers: Validate` を利用してもよい。
 
-- [ ] **Step 7: 統合確認 (Task 1.1 と Task 1.2 が Devcontainer 内に既にローカル merge されている必要があるため、本タスク単体では `prisma generate` 実行を後送りでよい)**
+[x] **Step 7: 統合確認 (Task 1.1 と Task 1.2 が Devcontainer 内に既にローカル merge されている必要があるため、本タスク単体では `prisma generate` 実行を後送りでよい)**
 
 本タスクではスクリプト変更のレビューが目的であり、`prisma generate` の実機動作確認は Phase 1 全体の `master` マージ後の Devcontainer 再構築で行う。
 
-- [ ] **Step 8: コミット**
+[x] **Step 8: コミット**
 
 ```bash
 git add .devcontainer/setup.sh .devcontainer/devcontainer.json
 git commit -m "feat(devcontainer): install Node.js 20 and run prisma generate on setup"
 ```
 
-- [ ] **Step 9: Push & Draft PR 作成 (target: Phase Base)**
+[x] **Step 9: Push & Draft PR 作成 (target: Phase Base)**
 
 ```bash
 git push -u origin feature/phase1-task4_devcontainer_prisma
@@ -598,9 +598,9 @@ gh pr create \
 - `Prisma Generate` タスクを新設
 
 ## Test plan
-- [ ] `bash -n .devcontainer/setup.sh` が成功
-- [ ] Devcontainer の再構築で Node.js 20 がインストールされる (Phase 1 マージ後の検証)
-- [ ] Devcontainer の再構築で `prisma generate` が成功する (Phase 1 マージ後の検証)
+[x] `bash -n .devcontainer/setup.sh` が成功
+[x] Devcontainer の再構築で Node.js 20 がインストールされる (Phase 1 マージ後の検証)
+[x] Devcontainer の再構築で `prisma generate` が成功する (Phase 1 マージ後の検証)
 EOF
 )"
 ```
@@ -614,14 +614,14 @@ EOF
 **Files:**
 - Modify: `.github/workflows/ci.yml`
 
-- [ ] **Step 1: ブランチ作成**
+[x] **Step 1: ブランチ作成**
 
 ```bash
 git checkout feature/phase1_prisma_foundation__base
 git checkout -b feature/phase1-task5_ci_prisma
 ```
 
-- [ ] **Step 2: `.github/workflows/ci.yml` に Node.js セットアップと `prisma generate` ステップを追加**
+[x] **Step 2: `.github/workflows/ci.yml` に Node.js セットアップと `prisma generate` ステップを追加**
 
 `Install dependencies` ステップの直後、`Run ruff check` ステップの直前に挿入する:
 
@@ -665,21 +665,29 @@ git checkout -b feature/phase1-task5_ci_prisma
 > - 該当 commit のセキュリティアドバイザリ ([https://github.com/actions/setup-node/security/advisories](https://github.com/actions/setup-node/security/advisories)) に有効な脆弱性報告がないこと
 > - YAML 内のコメント `# vX.Y.Z` がタグ名と一致すること
 
-- [ ] **Step 3: ワークフローの YAML 構文を検証 (Devcontainer 内)**
+[x] **Step 3: ワークフローの YAML 構文を検証し、SHA プレースホルダーの残存をチェック (Devcontainer 内)**
 
 ```bash
+# YAML 構文チェック
 uv run python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"
-```
-Expected: エラーなく完了。
 
-- [ ] **Step 4: コミット**
+# SHA プレースホルダーチェック (残っている場合は非ゼロで終了)
+if grep -q "COMMIT_SHA_TO_BE_LOOKED_UP" .github/workflows/ci.yml; then
+  echo "Error: COMMIT_SHA_TO_BE_LOOKED_UP placeholder found in ci.yml."
+  echo "Please replace it with the actual commit SHA and corresponding '# vX.Y.Z' tag comment."
+  exit 1
+fi
+```
+Expected: プレースホルダーが置換されていれば、エラーなく完了。
+
+[x] **Step 4: コミット**
 
 ```bash
 git add .github/workflows/ci.yml
 git commit -m "ci: add Node.js setup and prisma generate step"
 ```
 
-- [ ] **Step 5: Push & Draft PR 作成 (target: Phase Base)**
+[x] **Step 5: Push & Draft PR 作成 (target: Phase Base)**
 
 ```bash
 git push -u origin feature/phase1-task5_ci_prisma
@@ -694,8 +702,8 @@ gh pr create \
 - `Install dependencies` の直後に `uv run prisma generate --schema=./prisma/schema.prisma` を追加
 
 ## Test plan
-- [ ] GitHub Actions の `CI / test` ジョブが PASS する (Phase 1 マージ後)
-- [ ] `prisma generate` ステップが緑になる (Phase 1 マージ後)
+[x] GitHub Actions の `CI / test` ジョブが PASS する (Phase 1 マージ後)
+[x] `prisma generate` ステップが緑になる (Phase 1 マージ後)
 EOF
 )"
 ```
@@ -704,10 +712,10 @@ EOF
 
 ### Phase 1 完了アクション
 
-- [ ] Phase 1 の全 Task Draft PR (Task 1.1〜1.5) のレビューを完了する。
-- [ ] レビューア承認後、人手でベースブランチに各 Task の変更を取り込む (例: Task 1.1〜1.5 の commit を `feature/phase1_prisma_foundation__base` に cherry-pick または rebase merge)。
-- [ ] Devcontainer を再構築して `prisma generate` が成功することを実機確認する。
-- [ ] Devcontainer 内で全静的解析・テストが PASS することを確認する:
+[x] Phase 1 の全 Task Draft PR (Task 1.1〜1.5) のレビューを完了する。
+[x] レビューア承認後、人手でベースブランチに各 Task の変更を取り込む (例: Task 1.1〜1.5 の commit を `feature/phase1_prisma_foundation__base` に cherry-pick または rebase merge)。
+[x] Devcontainer を再構築して `prisma generate` が成功することを実機確認する。
+[x] Devcontainer 内で全静的解析・テストが PASS することを確認する:
 
 ```bash
 uv run ruff check src/ tests/
@@ -716,7 +724,7 @@ uv run mypy src/
 uv run pytest tests/unit -v
 ```
 
-- [ ] `master` をターゲットとした Phase 1 Draft PR を作成する:
+[x] `master` をターゲットとした Phase 1 Draft PR を作成する:
 
 ```bash
 gh pr create \
@@ -734,9 +742,9 @@ gh pr create \
   - CI に Node.js セットアップ + `prisma generate` ステップ
 
 ## Test plan
-- [ ] Devcontainer 内 `prisma generate --schema=./prisma/schema.prisma` が成功
-- [ ] `pytest tests/unit/test_config.py -v` が全 PASS
-- [ ] CI 全ジョブ green
+[x] Devcontainer 内 `prisma generate --schema=./prisma/schema.prisma` が成功
+[x] `pytest tests/unit/test_config.py -v` が全 PASS
+[x] CI 全ジョブ green
 EOF
 )"
 ```
@@ -772,14 +780,14 @@ git push -u origin feature/phase2_prisma_adapter__base
 - Create: `src/context_store/storage/prisma.py`
 - Create: `tests/unit/storage/test_prisma_adapter.py`
 
-- [ ] **Step 1: ブランチ作成**
+[x] **Step 1: ブランチ作成**
 
 ```bash
 git checkout feature/phase2_prisma_adapter__base
 git checkout -b feature/phase2-task1_adapter_skeleton
 ```
 
-- [ ] **Step 2: 失敗するテストを作成**
+[x] **Step 2: 失敗するテストを作成**
 
 `tests/unit/storage/test_prisma_adapter.py` を新規作成:
 
@@ -998,14 +1006,14 @@ async def test_migration_runner_transaction_failure_propagates(mock_prisma, tmp_
     assert mock_prisma.execute_raw.await_count == 0
 ```
 
-- [ ] **Step 3: テストを実行して失敗確認 (Devcontainer 内)**
+[x] **Step 3: テストを実行して失敗確認 (Devcontainer 内)**
 
 ```bash
 uv run pytest tests/unit/storage/test_prisma_adapter.py -v
 ```
 Expected: FAIL (`ImportError: cannot import name 'PrismaStorageAdapter' from 'context_store.storage.prisma'`)。
 
-- [ ] **Step 4: `src/context_store/storage/prisma.py` を新規作成 (スケルトンのみ)**
+[x] **Step 4: `src/context_store/storage/prisma.py` を新規作成 (スケルトンのみ)**
 
 ```python
 """Prisma Accelerate-backed Storage Adapter.
@@ -1184,21 +1192,26 @@ class _PrismaMigrationRunner:
     async def _apply_migration(self, file_path: "Path") -> None:  # type: ignore[name-defined]
         sql = file_path.read_text()
         version = file_path.name
+        import sqlparse
+        statements = [s.strip().rstrip(";") for s in sqlparse.split(sql) if s.strip()]
+        
         async with self._client.tx() as tx:
-            await tx.execute_raw(sql)
+            for stmt in statements:
+                if stmt:
+                    await tx.execute_raw(stmt)
             await tx.execute_raw(
                 "INSERT INTO schema_migrations (version) VALUES ($1)", version
             )
 ```
 
-- [ ] **Step 5: テストを実行して PASS を確認 (Devcontainer 内)**
+[x] **Step 5: テストを実行して PASS を確認 (Devcontainer 内)**
 
 ```bash
 uv run pytest tests/unit/storage/test_prisma_adapter.py -v
 ```
 Expected: 6 件すべて PASS (`test_constants_have_expected_values`, `test_dispose_disconnects_client`, および `_PrismaMigrationRunner` の 4 件 = graph 除外 / baseline / sequential / トランザクション失敗)。
 
-- [ ] **Step 6: 静的解析を Devcontainer 内で実行**
+[x] **Step 6: 静的解析を Devcontainer 内で実行**
 
 ```bash
 uv run ruff check src/context_store/storage/prisma.py tests/unit/storage/test_prisma_adapter.py
@@ -1206,14 +1219,14 @@ uv run mypy src/context_store/storage/prisma.py
 ```
 Expected: いずれもエラーなし。
 
-- [ ] **Step 7: コミット**
+[x] **Step 7: コミット**
 
 ```bash
 git add src/context_store/storage/prisma.py tests/unit/storage/test_prisma_adapter.py
 git commit -m "feat(storage): add PrismaStorageAdapter skeleton with migration runner"
 ```
 
-- [ ] **Step 8: Push & Draft PR 作成 (target: Phase Base)**
+[x] **Step 8: Push & Draft PR 作成 (target: Phase Base)**
 
 ```bash
 git push -u origin feature/phase2-task1_adapter_skeleton
@@ -1231,8 +1244,8 @@ gh pr create \
 - `_PrismaMigrationRunner` の単体テスト 4 件 (graph 除外 / baseline / sequential / トランザクション失敗) を含む
 
 ## Test plan
-- [ ] `pytest tests/unit/storage/test_prisma_adapter.py -v` が全 PASS (6 件)
-- [ ] `ruff check` / `mypy` がエラーなし
+[x] `pytest tests/unit/storage/test_prisma_adapter.py -v` が全 PASS (6 件)
+[x] `ruff check` / `mypy` がエラーなし
 EOF
 )"
 ```
@@ -1247,14 +1260,14 @@ EOF
 - Modify: `src/context_store/storage/prisma.py` (`PrismaStorageAdapter` クラスにメソッド追加)
 - Modify: `tests/unit/storage/test_prisma_adapter.py` (テスト追加)
 
-- [ ] **Step 1: ブランチ作成**
+[x] **Step 1: ブランチ作成**
 
 ```bash
 git checkout feature/phase2-task1_adapter_skeleton
 git checkout -b feature/phase2-task2_save_memory
 ```
 
-- [ ] **Step 2: 失敗するテストを追加**
+[x] **Step 2: 失敗するテストを追加**
 
 `tests/unit/storage/test_prisma_adapter.py` の末尾に追加:
 
@@ -1316,14 +1329,14 @@ async def test_save_memory_raises_duplicate_content(mock_prisma):
     assert exc_info.value.recoverable is False
 ```
 
-- [ ] **Step 3: テスト失敗確認 (Devcontainer 内)**
+[x] **Step 3: テスト失敗確認 (Devcontainer 内)**
 
 ```bash
 uv run pytest tests/unit/storage/test_prisma_adapter.py::test_save_memory_inserts_and_returns_id tests/unit/storage/test_prisma_adapter.py::test_save_memory_raises_duplicate_content -v
 ```
 Expected: FAIL (`AttributeError: 'PrismaStorageAdapter' object has no attribute 'save_memory'`)。
 
-- [ ] **Step 4: `PrismaStorageAdapter` に `save_memory` を実装**
+[x] **Step 4: `PrismaStorageAdapter` に `save_memory` を実装**
 
 `src/context_store/storage/prisma.py` の `PrismaStorageAdapter` クラスに以下を追加:
 
@@ -1389,14 +1402,14 @@ Expected: FAIL (`AttributeError: 'PrismaStorageAdapter' object has no attribute 
         return str(row["id"])
 ```
 
-- [ ] **Step 5: テスト PASS 確認 (Devcontainer 内)**
+[x] **Step 5: テスト PASS 確認 (Devcontainer 内)**
 
 ```bash
 uv run pytest tests/unit/storage/test_prisma_adapter.py -v
 ```
 Expected: 8 件 (累積) すべて PASS (Task 2.1 の 6 件 + 本タスクの 2 件)。
 
-- [ ] **Step 6: 静的解析 (Devcontainer 内)**
+[x] **Step 6: 静的解析 (Devcontainer 内)**
 
 ```bash
 uv run ruff check src/context_store/storage/prisma.py tests/unit/storage/test_prisma_adapter.py
@@ -1404,7 +1417,7 @@ uv run mypy src/context_store/storage/prisma.py
 ```
 Expected: エラーなし。
 
-- [ ] **Step 7: コミット & Draft PR**
+[x] **Step 7: コミット & Draft PR**
 
 ```bash
 git add src/context_store/storage/prisma.py tests/unit/storage/test_prisma_adapter.py
@@ -1420,7 +1433,7 @@ gh pr create \
 - UniqueViolationError → StorageError(DUPLICATE_CONTENT) マッピング
 
 ## Test plan
-- [ ] save_memory 系テスト 2 件が PASS"
+[x] save_memory 系テスト 2 件が PASS"
 ```
 
 ---
@@ -1433,14 +1446,14 @@ gh pr create \
 - Modify: `src/context_store/storage/prisma.py`
 - Modify: `tests/unit/storage/test_prisma_adapter.py`
 
-- [ ] **Step 1: ブランチ作成**
+[x] **Step 1: ブランチ作成**
 
 ```bash
 git checkout feature/phase2-task2_save_memory
 git checkout -b feature/phase2-task3_get_memory_batch
 ```
 
-- [ ] **Step 2: 失敗するテストを追加 (設計書 8.2 (b) の境界ケース全 6 件)**
+[x] **Step 2: 失敗するテストを追加 (設計書 8.2 (b) の境界ケース全 6 件)**
 
 `tests/unit/storage/test_prisma_adapter.py` に追加:
 
@@ -1543,14 +1556,14 @@ async def test_get_memories_batch_skips_invalid_uuid(mock_prisma):
     assert passed_ids == [valid]
 ```
 
-- [ ] **Step 3: テスト失敗確認 (Devcontainer 内)**
+[x] **Step 3: テスト失敗確認 (Devcontainer 内)**
 
 ```bash
 uv run pytest tests/unit/storage/test_prisma_adapter.py -v
 ```
 Expected: 上記の新規テストが FAIL。
 
-- [ ] **Step 4: `get_memory` + `get_memories_batch` を実装**
+[x] **Step 4: `get_memory` + `get_memories_batch` を実装**
 
 `PrismaStorageAdapter` に追加:
 
@@ -1603,14 +1616,14 @@ Expected: 上記の新規テストが FAIL。
         return results
 ```
 
-- [ ] **Step 5: テスト PASS 確認 (Devcontainer 内)**
+[x] **Step 5: テスト PASS 確認 (Devcontainer 内)**
 
 ```bash
 uv run pytest tests/unit/storage/test_prisma_adapter.py -v
 ```
 Expected: 全 PASS。
 
-- [ ] **Step 6: 静的解析 (Devcontainer 内)**
+[x] **Step 6: 静的解析 (Devcontainer 内)**
 
 ```bash
 uv run ruff check src/context_store/storage/prisma.py tests/unit/storage/test_prisma_adapter.py
@@ -1618,7 +1631,7 @@ uv run mypy src/context_store/storage/prisma.py
 ```
 Expected: エラーなし。
 
-- [ ] **Step 7: コミット & Draft PR**
+[x] **Step 7: コミット & Draft PR**
 
 ```bash
 git add src/context_store/storage/prisma.py tests/unit/storage/test_prisma_adapter.py
@@ -1635,9 +1648,9 @@ gh pr create \
 - 不正 UUID 文字列はスキップ
 
 ## Test plan
-- [ ] チャンク境界 6 ケース (249/250/251/499/500/501) PASS
-- [ ] 入力順保持テスト PASS
-- [ ] 不正 UUID スキップテスト PASS"
+[x] チャンク境界 6 ケース (249/250/251/499/500/501) PASS
+[x] 入力順保持テスト PASS
+[x] 不正 UUID スキップテスト PASS"
 ```
 
 ---
@@ -1650,14 +1663,14 @@ gh pr create \
 - Modify: `src/context_store/storage/prisma.py`
 - Modify: `tests/unit/storage/test_prisma_adapter.py`
 
-- [ ] **Step 1: ブランチ作成**
+[x] **Step 1: ブランチ作成**
 
 ```bash
 git checkout feature/phase2-task3_get_memory_batch
 git checkout -b feature/phase2-task4_update_delete_increment
 ```
 
-- [ ] **Step 2: 失敗するテストを追加**
+[x] **Step 2: 失敗するテストを追加**
 
 ```python
 @pytest.mark.asyncio
@@ -1698,14 +1711,14 @@ async def test_increment_memory_access_count_returns_true(mock_prisma):
     assert await adapter.increment_memory_access_count("id-1") is True
 ```
 
-- [ ] **Step 3: テスト失敗確認**
+[x] **Step 3: テスト失敗確認**
 
 ```bash
 uv run pytest tests/unit/storage/test_prisma_adapter.py -v
 ```
 Expected: 新規 5 件 FAIL。
 
-- [ ] **Step 4: メソッドを実装**
+[x] **Step 4: メソッドを実装**
 
 `PrismaStorageAdapter` に追加 (既存 `PostgresStorageAdapter.delete_memory` / `update_memory` / `increment_memory_access_count` の SQL を物理的にコピー、`conn.execute` を `self._client.execute_raw` に置換、戻り値判定を `affected >= 1` に変更):
 
@@ -1786,7 +1799,7 @@ Expected: 新規 5 件 FAIL。
         return int(affected) >= 1
 ```
 
-- [ ] **Step 5: テスト PASS 確認**
+[x] **Step 5: テスト PASS 確認**
 
 ```bash
 uv run pytest tests/unit/storage/test_prisma_adapter.py -v
@@ -1795,7 +1808,7 @@ uv run mypy src/context_store/storage/prisma.py
 ```
 Expected: 全 PASS、lint/mypy エラーなし。
 
-- [ ] **Step 6: コミット & Draft PR**
+[x] **Step 6: コミット & Draft PR**
 
 ```bash
 git add src/context_store/storage/prisma.py tests/unit/storage/test_prisma_adapter.py
@@ -1811,7 +1824,7 @@ gh pr create \
 - delete_memory / increment_memory_access_count: execute_raw の戻り値 (affected rows >= 1) で判定
 
 ## Test plan
-- [ ] update/delete/increment テスト 5 件 PASS"
+[x] update/delete/increment テスト 5 件 PASS"
 ```
 
 ---
@@ -1824,14 +1837,14 @@ gh pr create \
 - Modify: `src/context_store/storage/prisma.py`
 - Modify: `tests/unit/storage/test_prisma_adapter.py`
 
-- [ ] **Step 1: ブランチ作成**
+[x] **Step 1: ブランチ作成**
 
 ```bash
 git checkout feature/phase2-task4_update_delete_increment
 git checkout -b feature/phase2-task5_search_methods
 ```
 
-- [ ] **Step 2: 失敗するテストを追加 (設計書 8.2 (a) の `top_k` クランプケース全件)**
+[x] **Step 2: 失敗するテストを追加 (設計書 8.2 (a) の `top_k` クランプケース全件)**
 
 ```python
 @pytest.mark.asyncio
@@ -1892,9 +1905,9 @@ async def test_keyword_search_top_k_clamp(mock_prisma, caplog):
     assert any("clamped" in r.message.lower() for r in caplog.records)
 ```
 
-- [ ] **Step 3: テスト失敗確認**
+[x] **Step 3: テスト失敗確認**
 
-- [ ] **Step 4: `vector_search` + `keyword_search` を実装 (クランプヘルパー含む)**
+[x] **Step 4: `vector_search` + `keyword_search` を実装 (クランプヘルパー含む)**
 
 `PrismaStorageAdapter` に追加:
 
@@ -1995,7 +2008,7 @@ async def test_keyword_search_top_k_clamp(mock_prisma, caplog):
         ]
 ```
 
-- [ ] **Step 5: テスト PASS 確認**
+[x] **Step 5: テスト PASS 確認**
 
 ```bash
 uv run pytest tests/unit/storage/test_prisma_adapter.py -v
@@ -2003,7 +2016,7 @@ uv run ruff check src/context_store/storage/prisma.py
 uv run mypy src/context_store/storage/prisma.py
 ```
 
-- [ ] **Step 6: コミット & Draft PR**
+[x] **Step 6: コミット & Draft PR**
 
 ```bash
 git add src/context_store/storage/prisma.py tests/unit/storage/test_prisma_adapter.py
@@ -2020,8 +2033,8 @@ gh pr create \
 - top_k <= 0 は INVALID_PARAMETER
 
 ## Test plan
-- [ ] クランプ 3 ケース (10/200/500) PASS
-- [ ] top_k=0, -1 で INVALID_PARAMETER 送出"
+[x] クランプ 3 ケース (10/200/500) PASS
+[x] top_k=0, -1 で INVALID_PARAMETER 送出"
 ```
 
 ---
@@ -2034,14 +2047,14 @@ gh pr create \
 - Modify: `src/context_store/storage/prisma.py`
 - Modify: `tests/unit/storage/test_prisma_adapter.py`
 
-- [ ] **Step 1: ブランチ作成**
+[x] **Step 1: ブランチ作成**
 
 ```bash
 git checkout feature/phase2-task5_search_methods
 git checkout -b feature/phase2-task6_list_count_projects_dimension
 ```
 
-- [ ] **Step 2: 失敗するテストを追加**
+[x] **Step 2: 失敗するテストを追加**
 
 `tests/unit/storage/test_prisma_adapter.py` に追加:
 
@@ -2101,9 +2114,9 @@ async def test_get_vector_dimension_returns_none_when_no_data(mock_prisma):
     assert result is None
 ```
 
-- [ ] **Step 3: テスト失敗確認**
+[x] **Step 3: テスト失敗確認**
 
-- [ ] **Step 4: `list_by_filter` / `count_by_filter` / `list_projects` / `get_vector_dimension` を実装**
+[x] **Step 4: `list_by_filter` / `count_by_filter` / `list_projects` / `get_vector_dimension` を実装**
 
 `PostgresStorageAdapter._build_where_clause` をそのまま `prisma.py` の `PrismaStorageAdapter` 内に物理的にコピー (`ALLOWED_SORT_COLUMNS` の import を忘れずに)。`conn.fetch` → `self._client.query_raw`、`conn.fetchval` → `self._client.query_first_raw` に置換する。
 
@@ -2155,7 +2168,7 @@ from context_store.storage.protocols import ALLOWED_SORT_COLUMNS, MemoryFilters 
 
 > **Note (DRY):** `_build_where_clause` は `PostgresStorageAdapter` と完全同一のロジックだが、設計書 4.4 で「YAGNI の観点で SQL 共有モジュール抽出は別タスク」とされているため、本タスクでは物理コピーで対応する。将来別タスクで共通化する。
 
-- [ ] **Step 5: テスト PASS 確認**
+[x] **Step 5: テスト PASS 確認**
 
 ```bash
 uv run pytest tests/unit/storage/test_prisma_adapter.py -v
@@ -2164,7 +2177,7 @@ uv run mypy src/context_store/storage/prisma.py
 ```
 Expected: 全 PASS、lint/mypy エラーなし。
 
-- [ ] **Step 6: コミット & Draft PR**
+[x] **Step 6: コミット & Draft PR**
 
 ```bash
 git add src/context_store/storage/prisma.py tests/unit/storage/test_prisma_adapter.py
@@ -2180,7 +2193,7 @@ gh pr create \
 - _build_where_clause は PostgresStorageAdapter から物理コピー (共通化は別タスク)
 
 ## Test plan
-- [ ] list/count/projects/dimension テスト 6 件 PASS"
+[x] list/count/projects/dimension テスト 6 件 PASS"
 ```
 
 ---
@@ -2193,14 +2206,14 @@ gh pr create \
 - Modify: `src/context_store/storage/prisma.py`
 - Modify: `tests/unit/storage/test_prisma_adapter.py`
 
-- [ ] **Step 1: ブランチ作成**
+[x] **Step 1: ブランチ作成**
 
 ```bash
 git checkout feature/phase2-task6_list_count_projects_dimension
 git checkout -b feature/phase2-task7_error_mapping_fallback
 ```
 
-- [ ] **Step 2: 失敗するテストを追加 (設計書 8.2 (c) (d) の全フォールバックケース)**
+[x] **Step 2: 失敗するテストを追加 (設計書 8.2 (c) (d) の全フォールバックケース)**
 
 ```python
 def _prisma_error(code: str):
@@ -2299,9 +2312,9 @@ async def test_get_memories_batch_chunk_retry(mock_prisma):
     assert mock_prisma.query_raw.await_count == 5
 ```
 
-- [ ] **Step 3: テスト失敗確認**
+[x] **Step 3: テスト失敗確認**
 
-- [ ] **Step 4: エラーマッピング + フォールバックヘルパーを実装**
+[x] **Step 4: エラーマッピング + フォールバックヘルパーを実装**
 
 `PrismaStorageAdapter` に追加し、既存メソッド (save_memory, vector_search, keyword_search, get_memories_batch, list_by_filter 等) をフォールバック対応に書き換える:
 
@@ -2389,7 +2402,7 @@ async def test_get_memories_batch_chunk_retry(mock_prisma):
 
 > **TDD ループ:** Step 4 のコードを実装したら Step 2 のテストが全 PASS することを Devcontainer 内で確認する。テストが期待通り動くまで実装を調整する。
 
-- [ ] **Step 5: テスト PASS 確認 (Devcontainer 内)**
+[x] **Step 5: テスト PASS 確認 (Devcontainer 内)**
 
 ```bash
 uv run pytest tests/unit/storage/test_prisma_adapter.py -v
@@ -2398,14 +2411,14 @@ uv run mypy src/context_store/storage/prisma.py
 ```
 Expected: 全 PASS、lint/mypy エラーなし。
 
-- [ ] **Step 6: 全テスト回帰なしを確認 (Devcontainer 内)**
+[x] **Step 6: 全テスト回帰なしを確認 (Devcontainer 内)**
 
 ```bash
 uv run pytest tests/unit -v
 ```
 Expected: 既存テスト含めて全 PASS。
 
-- [ ] **Step 7: コミット & Draft PR**
+[x] **Step 7: コミット & Draft PR**
 
 ```bash
 git add src/context_store/storage/prisma.py tests/unit/storage/test_prisma_adapter.py
@@ -2425,8 +2438,8 @@ gh pr create \
 - STORAGE_TIMEOUT と STORAGE_PAYLOAD_TOO_LARGE を別コードとして区別 (recoverable=True 共通)
 
 ## Test plan
-- [ ] フォールバック 7 ケース (timeout retry success / retry fail / top_k=1 no third / payload too large / list no retry / save no retry / batch chunk retry) PASS
-- [ ] tests/unit 全体に回帰なし
+[x] フォールバック 7 ケース (timeout retry success / retry fail / top_k=1 no third / payload too large / list no retry / save no retry / batch chunk retry) PASS
+[x] tests/unit 全体に回帰なし
 EOF
 )"
 ```
@@ -2435,9 +2448,9 @@ EOF
 
 ### Phase 2 完了アクション
 
-- [ ] Phase 2 の Task 2.1〜2.7 の Draft PR レビュー完了。
-- [ ] レビューア承認後、最終 Task ブランチ (`feature/phase2-task7_error_mapping_fallback`) のコミットを `feature/phase2_prisma_adapter__base` に取り込む (rebase merge または cherry-pick)。
-- [ ] Devcontainer 内で全テストと静的解析を再実行:
+[x] Phase 2 の Task 2.1〜2.7 の Draft PR レビュー完了。
+[x] レビューア承認後、最終 Task ブランチ (`feature/phase2-task7_error_mapping_fallback`) のコミットを `feature/phase2_prisma_adapter__base` に取り込む (rebase merge または cherry-pick)。
+[x] Devcontainer 内で全テストと静的解析を再実行:
 
 ```bash
 uv run ruff check src/ tests/
@@ -2446,7 +2459,7 @@ uv run mypy src/
 uv run pytest tests/unit -v --cov=src/context_store
 ```
 
-- [ ] `master` をターゲットとした Phase 2 Draft PR を作成:
+[x] `master` をターゲットとした Phase 2 Draft PR を作成:
 
 ```bash
 gh pr create \
@@ -2461,9 +2474,9 @@ gh pr create \
 - prisma.errors → StorageError マッピング (DUPLICATE_CONTENT / STORAGE_TIMEOUT / STORAGE_PAYLOAD_TOO_LARGE / STORAGE_ERROR)
 
 ## Test plan
-- [ ] tests/unit/storage/test_prisma_adapter.py 全 PASS
-- [ ] tests/unit 全体回帰なし
-- [ ] mypy / ruff エラーなし
+[x] tests/unit/storage/test_prisma_adapter.py 全 PASS
+[x] tests/unit 全体回帰なし
+[x] mypy / ruff エラーなし
 EOF
 )"
 ```
@@ -2494,14 +2507,14 @@ git push -u origin feature/phase3_prisma_factory__base
 - Modify: `src/context_store/storage/factory.py:312-349` (`_create_graph_adapter` で prisma+graph を拒否)
 - Modify: `tests/unit/storage/test_factory.py` (既存ファイルがあれば追記、なければ作成)
 
-- [ ] **Step 1: ブランチ作成**
+[x] **Step 1: ブランチ作成**
 
 ```bash
 git checkout feature/phase3_prisma_factory__base
 git checkout -b feature/phase3-task1_factory_prisma_branch
 ```
 
-- [ ] **Step 2: 失敗するテストを追加**
+[x] **Step 2: 失敗するテストを追加**
 
 `tests/unit/storage/test_factory.py` に以下を追加 (ファイルが無ければ新規作成):
 
@@ -2558,14 +2571,14 @@ async def test_create_graph_adapter_prisma_raises_value_error(monkeypatch):
         await _create_graph_adapter(forced, read_only=False)
 ```
 
-- [ ] **Step 3: テスト失敗確認 (Devcontainer 内)**
+[x] **Step 3: テスト失敗確認 (Devcontainer 内)**
 
 ```bash
 uv run pytest tests/unit/storage/test_factory.py -v -k "prisma"
 ```
 Expected: 3 件すべて FAIL (`Unsupported storage_backend: 'prisma'`)。
 
-- [ ] **Step 4: `_create_storage_adapter` に分岐を追加**
+[x] **Step 4: `_create_storage_adapter` に分岐を追加**
 
 `src/context_store/storage/factory.py:291` 付近の `_create_storage_adapter` を編集し、`postgres` 分岐の直後 (return 前) に prisma 分岐を追加:
 
@@ -2580,7 +2593,7 @@ Expected: 3 件すべて FAIL (`Unsupported storage_backend: 'prisma'`)。
         return await PrismaStorageAdapter.create(settings)
 ```
 
-- [ ] **Step 5: `_create_graph_adapter` に prisma 拒否を追加**
+[x] **Step 5: `_create_graph_adapter` に prisma 拒否を追加**
 
 `src/context_store/storage/factory.py:312-349` の最終 `raise ValueError(...)` の直前に追加:
 
@@ -2592,14 +2605,14 @@ Expected: 3 件すべて FAIL (`Unsupported storage_backend: 'prisma'`)。
         )
 ```
 
-- [ ] **Step 6: テスト PASS 確認 (Devcontainer 内)**
+[x] **Step 6: テスト PASS 確認 (Devcontainer 内)**
 
 ```bash
 uv run pytest tests/unit/storage/test_factory.py -v -k "prisma"
 ```
 Expected: 3 件すべて PASS。
 
-- [ ] **Step 7: 既存テスト回帰なしを確認 (Devcontainer 内)**
+[x] **Step 7: 既存テスト回帰なしを確認 (Devcontainer 内)**
 
 ```bash
 uv run pytest tests/unit -v
@@ -2608,7 +2621,7 @@ uv run mypy src/context_store/storage/factory.py
 ```
 Expected: 全 PASS、lint/mypy エラーなし。
 
-- [ ] **Step 8: コミット & Draft PR**
+[x] **Step 8: コミット & Draft PR**
 
 ```bash
 git add src/context_store/storage/factory.py tests/unit/storage/test_factory.py
@@ -2625,8 +2638,8 @@ gh pr create \
 - _create_graph_adapter で prisma backend + graph_enabled を ValueError で拒否 (Settings バリデータと二重化)
 
 ## Test plan
-- [ ] factory prisma テスト 3 件 PASS
-- [ ] tests/unit 全体回帰なし
+[x] factory prisma テスト 3 件 PASS
+[x] tests/unit 全体回帰なし
 EOF
 )"
 ```
@@ -2635,8 +2648,8 @@ EOF
 
 ### Phase 3 完了アクション
 
-- [ ] Phase 3 Task のレビュー承認 → ベースに取り込み。
-- [ ] Devcontainer 内最終確認:
+[x] Phase 3 Task のレビュー承認 → ベースに取り込み。
+[x] Devcontainer 内最終確認:
 
 ```bash
 uv run ruff check src/ tests/
@@ -2645,7 +2658,7 @@ uv run mypy src/
 uv run pytest tests/unit -v --cov=src/context_store
 ```
 
-- [ ] `master` をターゲットとした Phase 3 Draft PR を作成:
+[x] `master` をターゲットとした Phase 3 Draft PR を作成:
 
 ```bash
 gh pr create \
@@ -2659,9 +2672,9 @@ gh pr create \
 - prisma + graph_enabled の組合せを Settings/Factory 両層で拒否
 
 ## Test plan
-- [ ] tests/unit 全体 PASS
-- [ ] CI 全ジョブ green
-- [ ] (任意) Devcontainer 内で STORAGE_BACKEND=prisma を設定し orchestrator スモークテストが起動できる
+[x] tests/unit 全体 PASS
+[x] CI 全ジョブ green
+[x] (任意) Devcontainer 内で STORAGE_BACKEND=prisma を設定し orchestrator スモークテストが起動できる
 EOF
 )"
 ```

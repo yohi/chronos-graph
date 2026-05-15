@@ -74,9 +74,13 @@ class PrismaStorageAdapter:
             raise ImportError("Prisma is not installed. Run 'prisma generate' to setup.")
         client = Prisma()
         await client.connect()
-        adapter = cls(client)
-        await adapter.initialize()
-        return adapter
+        try:
+            adapter = cls(client)
+            await adapter.initialize()
+            return adapter
+        except Exception:
+            await client.disconnect()
+            raise
 
     async def dispose(self) -> None:
         """Disconnect the Prisma client."""
@@ -307,8 +311,9 @@ class PrismaStorageAdapter:
             for col, val in filter_dict.items():
                 if col not in allowed_columns:
                     continue
+                # col is whitelisted
                 params.append(val)
-                where_clauses.append(f"{col} = ${len(params)}")
+                where_clauses.append(f'"{col}" = ${len(params)}')
 
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
@@ -381,12 +386,9 @@ class _PrismaMigrationRunner:
 
     async def _ensure_system_migration(self) -> None:
         sql = "SELECT 1 FROM pg_catalog.pg_tables WHERE tablename = 'schema_migrations'"
-        try:
-            res = await self._client.query_raw(sql)
-            if res:
-                return
-        except Exception:  # noqa: S110
-            pass
+        res = await self._client.query_raw(sql)
+        if res:
+            return
 
         logger.info("Creating schema_migrations table")
         create_sql = (
@@ -402,7 +404,11 @@ class _PrismaMigrationRunner:
             return {row["version"] for row in rows}
         except Exception as exc:
             exc_str = str(exc).lower()
-            if "does not exist" in exc_str or "p2010" in exc_str:
+            # P2010 is Prisma's code for "Raw query failed" which can happen if table is missing.
+            # We also check common error messages for "relation does not exist".
+            if "relation" in exc_str and "does not exist" in exc_str:
+                return set()
+            if "p2010" in exc_str:
                 return set()
             raise
 
@@ -413,5 +419,5 @@ class _PrismaMigrationRunner:
 
     async def _mark_as_applied(self, version: str) -> None:
         await self._client.execute_raw(
-            "INSERT INTO schema_migrations (version) VALUES ($1)", version
+            "INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING", version
         )

@@ -99,12 +99,9 @@ async def test_migration_runner_filters_out_graph_migrations(
 
     mock_prisma.query_raw = AsyncMock(
         side_effect=[
-            PrismaError(
-                'relation "schema_migrations" does not exist'
-            ),  # ensure_system_migration の存在確認
+            [],  # _ensure_system_migration: schema_migrations 不在
             [],  # _get_applied_migrations: 空
             [],  # _tables_exist for 0001 (memories): なし
-            [],  # baseline 後の _get_applied_migrations
         ]
     )
     mock_prisma.execute_raw = AsyncMock(return_value=1)
@@ -140,10 +137,9 @@ async def test_migration_runner_baselines_existing_memories_table(
 
     mock_prisma.query_raw = AsyncMock(
         side_effect=[
-            [{"1": 1}],  # ensure_system_migration: schema_migrations 存在
+            [{"1": 1}],  # _ensure_system_migration: schema_migrations 存在
             [],  # _get_applied_migrations: 空
             [{"tablename": "memories"}],  # _tables_exist for 0001: 既存
-            [{"version": "0001_initial.sql"}],  # baseline 後の _get_applied_migrations
         ]
     )
     mock_prisma.execute_raw = AsyncMock(return_value=1)
@@ -186,10 +182,9 @@ async def test_migration_runner_applies_sequential_files(
 
     mock_prisma.query_raw = AsyncMock(
         side_effect=[
-            [{"1": 1}],  # ensure_system_migration: 存在
+            [{"1": 1}],  # _ensure_system_migration: 存在
             [],  # _get_applied_migrations: 空
             [],  # _tables_exist for 0001: 不在 → baseline 対象なし
-            [],  # baseline 後の _get_applied_migrations
         ]
     )
     mock_prisma.execute_raw = AsyncMock(return_value=1)
@@ -235,7 +230,7 @@ async def test_migration_runner_transaction_failure_propagates(mock_prisma, tmp_
         side_effect=[
             [],  # _ensure_system_migration: schema_migrations 不在
             [],  # _get_applied_migrations: 空
-            [],  # baseline 後の _get_applied_migrations
+            [],  # _tables_exist for 0001: 不在
         ]
     )
     mock_prisma.execute_raw = AsyncMock(return_value=0)

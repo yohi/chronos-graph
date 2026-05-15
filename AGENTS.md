@@ -31,5 +31,5 @@ Do not guess implementation details. Search or read these files for domain conte
 
 ## 5. ESSENTIAL RULES
 - **Database Migrations**: NEVER hardcode DDL (`CREATE`, `ALTER`) in application code. Generate and apply `.sql` migration files under `src/context_store/storage/migrations/{backend}/`.
-- **Memory Management**: Use the `memory_save` tool autonomously for semantic/procedural insights. Prefix inputs properly (e.g., `[🧠 Semantic]`).
+- **Memory Management**: Use `memory_save` autonomously for Semantic/Procedural insights; use `session_flush` for Episodic batch saving. Prefix inputs with `[📜 Episodic]`, `[🧠 Semantic]`, or `[🕒 Procedural]`.
 - **Error Handling**: If environment setup fails, stop and ask the user; do not attempt blind autonomous fixes.

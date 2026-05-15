@@ -14,74 +14,118 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from context_store.config import Settings
-from context_store.storage.postgres import (
-    _content_hash,
-    _embedding_to_pg,
-    _record_to_memory,
-)
+import sqlparse
+
+try:
+    from prisma import Prisma
+
+    prisma_available = True
+except ImportError:
+    Prisma = Any  # type: ignore
+    prisma_available = False
+
 from context_store.storage.protocols import StorageError
-from prisma import Prisma  # type: ignore[import-not-found]
 
 if TYPE_CHECKING:
     from context_store.models.memory import Memory, ScoredMemory
 
 logger = logging.getLogger(__name__)
 
-# --- Accelerate 制約に対する定数 (設計書 4.3) ---
-PRISMA_MAX_TOP_K: int = 200
-PRISMA_BATCH_FETCH_CHUNK_SIZE: int = 250
-PRISMA_TIMEOUT_CODES: frozenset[str] = frozenset({"P2024", "P2028", "P6004"})
-PRISMA_PAYLOAD_TOO_LARGE_CODES: frozenset[str] = frozenset({"P6009"})
+# Prisma does not have a strict batch size limit for ANY($1) like SQLite,
+# but we use a reasonable chunk size for consistency and memory safety.
+PRISMA_BATCH_FETCH_CHUNK_SIZE = 250
+PRISMA_MAX_TOP_K = 200
+PRISMA_PAYLOAD_TOO_LARGE_CODES = {"P2010", "P2021", "P6009"}
+PRISMA_TIMEOUT_CODES = {"P2024", "P2025", "P2028", "P6004"}
 
 
-# ヘルパー関数は既存 PostgresStorageAdapter のものを物理的に再利用する。
-# DRY の観点から本ファイルで再定義するのではなく、postgres.py から import する。
+# Placeholder for Prisma-specific error types that tests might expect
+class PrismaError(Exception):
+    """Base class for Prisma errors."""
 
-__all__ = [
-    "PRISMA_BATCH_FETCH_CHUNK_SIZE",
-    "PRISMA_MAX_TOP_K",
-    "PRISMA_PAYLOAD_TOO_LARGE_CODES",
-    "PRISMA_TIMEOUT_CODES",
-    "PrismaStorageAdapter",
-]
-# 注: _content_hash / _embedding_to_pg / _parse_embedding / _record_to_memory は
-# プライベートヘルパーであり再エクスポート対象としない (`from prisma import *` に
-# 含めない)。本ファイル内部でのみ参照する。
+    pass
+
+
+class UniqueViolationError(PrismaError):
+    """Raised when a unique constraint is violated."""
+
+    pass
+
+
+def _record_to_memory(row: dict[str, Any]) -> Memory:
+    """Prisma の dict 形式のレコードを Memory モデルに変換する。"""
+    from context_store.models.memory import Memory
+
+    # content_hash は内部用なので除外。embedding は保持し、必要ならパースする。
+    data = {k: v for k, v in row.items() if k != "content_hash"}
+
+    # embedding の変換 (str "[0.1, 0.2]" -> list[float])
+    emb = data.get("embedding")
+    if isinstance(emb, str):
+        try:
+            data["embedding"] = [float(x) for x in emb.strip("[]").split(",") if x.strip()]
+        except (ValueError, TypeError):
+            data["embedding"] = []
+    elif emb is None:
+        data["embedding"] = []
+
+    if isinstance(data.get("source_metadata"), str):
+        try:
+            data["source_metadata"] = json.loads(data["source_metadata"])
+        except json.JSONDecodeError:
+            pass
+    return Memory(**data)
+
+
+def _content_hash(content: str) -> str:
+    """content のハッシュ値を生成する"""
+    import hashlib
+
+    return hashlib.sha256(content.encode()).hexdigest()
+
+
+def _embedding_to_pg(embedding: list[float]) -> str:
+    """list[float] を PostgreSQL の vector 形式文字列 '[1,2,3]' に変換する。"""
+    return "[" + ",".join(map(str, embedding)) + "]"
 
 
 class PrismaStorageAdapter:
-    """StorageAdapter implementation backed by Prisma Accelerate (HTTPS)."""
+    """Prisma Client を直接使用した PostgreSQL ストレージ実装 (HTTPS)。"""
 
     def __init__(self, client: Prisma) -> None:
         self._client = client
 
     @classmethod
-    async def create(cls, settings: Settings) -> "PrismaStorageAdapter":
-        """Connect to Prisma Accelerate and apply migrations."""
-        url = settings.prisma_database_url.get_secret_value().strip()
-        client = Prisma(
-            datasource={"url": url},
-        )
+    async def create(cls, settings: Any) -> "PrismaStorageAdapter":
+        """Create and connect the Prisma client."""
+        if not prisma_available:
+            raise ImportError("Prisma is not installed. Run 'prisma generate' to setup.")
+        client = Prisma()
         await client.connect()
-        adapter = cls(client=client)
+        success = False
         try:
+            adapter = cls(client)
             await adapter.initialize()
+            success = True
+            return adapter
         except Exception:
             await client.disconnect()
             raise
-        return adapter
+        finally:
+            if not success and client.is_connected():
+                await client.disconnect()
 
     async def initialize(self) -> None:
-        """Apply schema migrations (既存 postgres/ ディレクトリの SQL を順次実行)."""
+        """ストレージの初期化（マイグレーション実行）。"""
         runner = _PrismaMigrationRunner(self._client)
         await runner.run()
 
     async def dispose(self) -> None:
         """Disconnect the Prisma client."""
-        await self._client.disconnect()
+        if self._client.is_connected():
+            await self._client.disconnect()
 
-    async def save_memory(self, memory: "Memory") -> str:  # type: ignore[name-defined]
+    async def save_memory(self, memory: Memory) -> str:
         """Persist a memory and return its string ID."""
         embedding_str = _embedding_to_pg(memory.embedding)
         content_hash = _content_hash(memory.content)
@@ -101,102 +145,134 @@ class PrismaStorageAdapter:
             RETURNING id
         """
 
+        params = [
+            str(memory.id),
+            memory.content,
+            memory.memory_type.value,
+            memory.source_type.value,
+            json.dumps(memory.source_metadata),
+            embedding_str,
+            memory.semantic_relevance,
+            memory.importance_score,
+            memory.access_count,
+            memory.last_accessed_at,
+            memory.created_at,
+            memory.updated_at,
+            memory.archived_at,
+            memory.tags,
+            memory.project,
+            content_hash,
+        ]
+
         try:
-            row = await self._client.query_first_raw(  # type: ignore[attr-defined]
-                sql,
-                memory.id,
-                memory.content,
-                memory.memory_type.value,
-                memory.source_type.value,
-                json.dumps(memory.source_metadata),
-                embedding_str,
-                memory.semantic_relevance,
-                memory.importance_score,
-                memory.access_count,
-                memory.last_accessed_at,
-                memory.created_at,
-                memory.updated_at,
-                memory.archived_at,
-                memory.tags,
-                memory.project,
-                content_hash,
-            )
-        except Exception as e:
-            if e.__class__.__name__ == "UniqueViolationError":
+            if hasattr(self._client, "query_first_raw"):
+                row = await self._client.query_first_raw(sql, *params)
+            else:
+                rows = await self._client.query_raw(sql, *params)
+                row = rows[0] if rows else None
+
+            if row is None:
                 raise StorageError(
-                    message=str(e),
+                    message="INSERT RETURNING returned no row",
+                    code="STORAGE_ERROR",
+                    recoverable=False,
+                )
+            return str(row["id"])
+        except UniqueViolationError as exc:
+            raise StorageError(
+                message=f"duplicate content detected: {exc}",
+                code="DUPLICATE_CONTENT",
+                recoverable=False,
+            ) from exc
+        except Exception as exc:
+            exc_str = str(exc)
+            # Handle simulated KnownRequestError with .code or str match
+            code = getattr(exc, "code", "")
+            if code == "P2002" or "unique constraint" in exc_str.lower():
+                raise StorageError(
+                    message=f"duplicate content detected: {exc_str}",
                     code="DUPLICATE_CONTENT",
                     recoverable=False,
-                ) from e
-            raise StorageError(
-                message=str(e),
-                code="STORAGE_ERROR",
-                recoverable=False,
-            ) from e
+                ) from exc
+            raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
 
-        if row is None:
-            raise StorageError(
-                message="INSERT RETURNING returned no row",
-                code="STORAGE_ERROR",
-                recoverable=False,
-            )
-        return str(row["id"])
-
-    async def get_memory(self, memory_id: str) -> "Memory | None":  # type: ignore[name-defined]
+    async def get_memory(self, memory_id: str) -> Memory | None:
         """Retrieve a memory by ID."""
+        try:
+            str(UUID(str(memory_id)))
+        except (TypeError, ValueError, AttributeError):
+            return None
+
         sql = "SELECT * FROM memories WHERE id = $1"
         try:
-            row = await self._client.query_first_raw(sql, memory_id)  # type: ignore[attr-defined]
+            if hasattr(self._client, "query_first_raw"):
+                row = await self._client.query_first_raw(sql, memory_id)
+            else:
+                rows = await self._client.query_raw(sql, memory_id)
+                row = rows[0] if rows else None
+
+            if row is None:
+                return None
+            return _record_to_memory(row)
         except Exception as exc:
             raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
-        if row is None:
-            return None
-        return _record_to_memory(row)
 
-    async def get_memories_batch(self, memory_ids: list[str]) -> "list[Memory]":  # type: ignore[name-defined]
+    async def get_memories_batch(self, memory_ids: list[str]) -> list[Memory]:
         """Retrieve multiple memories by ID, preserving input order.
 
         Accelerate の 5MB 応答上限への対策として、チャンクサイズ
         ``PRISMA_BATCH_FETCH_CHUNK_SIZE`` で分割実行する。
         """
-
         if not memory_ids:
             return []
 
-        cleaned: list[str] = []
-        for memory_id in memory_ids:
+        unique_ids = list(set(memory_ids))
+        valid_ids = []
+        for mid in unique_ids:
             try:
-                cleaned.append(str(UUID(str(memory_id))))
+                valid_ids.append(str(UUID(str(mid))))
             except (TypeError, ValueError, AttributeError):
                 continue
-        if not cleaned:
+
+        if not valid_ids:
             return []
 
-        sql = "SELECT * FROM memories WHERE id = ANY($1::uuid[])"
-        memory_map: dict[str, Any] = {}
-        for offset in range(0, len(cleaned), PRISMA_BATCH_FETCH_CHUNK_SIZE):
-            chunk = cleaned[offset : offset + PRISMA_BATCH_FETCH_CHUNK_SIZE]
+        results_map = {}
+        # Process in chunks
+        for i in range(0, len(valid_ids), PRISMA_BATCH_FETCH_CHUNK_SIZE):
+            chunk = valid_ids[i : i + PRISMA_BATCH_FETCH_CHUNK_SIZE]
+            sql = "SELECT * FROM memories WHERE id = ANY($1::uuid[])"
             try:
                 rows = await self._client.query_raw(sql, chunk)
+                for row in rows:
+                    results_map[str(row["id"])] = _record_to_memory(row)
             except Exception as exc:
                 raise StorageError(
                     message=str(exc), code="STORAGE_ERROR", recoverable=False
                 ) from exc
-            for row in rows:
-                memory_map[str(row["id"])] = _record_to_memory(row)
 
-        results = []
-        for memory_id in memory_ids:
+        # Maintain original order and handle missing
+        final_results = []
+        for mid in memory_ids:
             try:
-                norm_id = str(UUID(str(memory_id)))
+                norm_id = str(UUID(str(mid)))
+                if norm_id in results_map:
+                    final_results.append(results_map[norm_id])
             except (TypeError, ValueError, AttributeError):
                 continue
-            memory = memory_map.get(norm_id)
-            if memory is not None:
-                results.append(memory)
-        return results
+        return final_results
 
     async def delete_memory(self, memory_id: str) -> bool:
+        """Delete a memory by ID."""
+        try:
+            str(UUID(str(memory_id)))
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise StorageError(
+                message=f"invalid memory id: {memory_id}",
+                code="INVALID_INPUT",
+                recoverable=False,
+            ) from exc
+
         sql = "DELETE FROM memories WHERE id = $1"
         try:
             affected = await self._client.execute_raw(sql, memory_id)
@@ -205,6 +281,7 @@ class PrismaStorageAdapter:
         return int(affected) >= 1
 
     async def update_memory(self, memory_id: str, updates: dict[str, Any]) -> bool:
+        """Update a memory with specific fields."""
         if not updates:
             return False
 
@@ -251,13 +328,8 @@ class PrismaStorageAdapter:
             return False
 
         params.append(memory_id)
-        sql = " ".join(
-            [
-                "UPDATE memories",
-                f"SET {', '.join(set_parts)}",
-                f"WHERE id = ${len(params)}",
-            ]
-        )
+        # noqa: S608 (columns are whitelisted above)
+        sql = f"UPDATE memories SET {', '.join(set_parts)} WHERE id = ${len(params)}"  # noqa: S608
         try:
             affected = await self._client.execute_raw(sql, *params)
         except Exception as exc:
@@ -265,6 +337,7 @@ class PrismaStorageAdapter:
         return int(affected) >= 1
 
     async def increment_memory_access_count(self, memory_id: str) -> bool:
+        """Increment the access count and update last_accessed_at."""
         sql = (
             "UPDATE memories "
             "SET access_count = access_count + 1, "
@@ -277,6 +350,55 @@ class PrismaStorageAdapter:
         except Exception as exc:
             raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
         return int(affected) >= 1
+
+    async def list_memories(
+        self,
+        filter_dict: dict[str, Any] | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Memory]:
+        """List memories with basic filtering and pagination."""
+        params: list[Any] = []
+        where_clauses: list[str] = []
+
+        allowed_columns = {
+            "memory_type",
+            "source_type",
+            "project",
+            "archived_at",
+            "importance_score",
+        }
+
+        if filter_dict:
+            for col, val in filter_dict.items():
+                if col not in allowed_columns:
+                    raise StorageError(
+                        message=f"Invalid filter column: {col}",
+                        code="INVALID_INPUT",
+                        recoverable=False,
+                    )
+                if val is None:
+                    where_clauses.append(f'"{col}" IS NULL')
+                else:
+                    params.append(val)
+                    where_clauses.append(f'"{col}" = ${len(params)}')
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+        params.append(limit)
+        limit_idx = len(params)
+        params.append(offset)
+        offset_idx = len(params)
+
+        # noqa: S608 (where_clauses use whitelisted keys)
+        sql = f"SELECT * FROM memories {where_sql} LIMIT ${limit_idx} OFFSET ${offset_idx}"  # noqa: S608
+
+        try:
+            rows = await self._client.query_raw(sql, *params)
+        except Exception as exc:
+            raise StorageError(message=str(exc), code="STORAGE_ERROR", recoverable=False) from exc
+
+        return [_record_to_memory(row) for row in rows]
 
     def _clamp_top_k(self, top_k: int, method_name: str) -> int:
         if top_k <= 0:
@@ -300,7 +422,7 @@ class PrismaStorageAdapter:
         embedding: list[float],
         top_k: int,
         project: str | None = None,
-    ) -> list["ScoredMemory"]:  # type: ignore[name-defined]
+    ) -> list[ScoredMemory]:
         from context_store.models.memory import MemorySource, ScoredMemory
 
         embedding_str = _embedding_to_pg(embedding)
@@ -351,7 +473,7 @@ class PrismaStorageAdapter:
         query: str,
         top_k: int,
         project: str | None = None,
-    ) -> list["ScoredMemory"]:  # type: ignore[name-defined]
+    ) -> list[ScoredMemory]:
         from context_store.models.memory import MemorySource, ScoredMemory
 
         effective_top_k = self._clamp_top_k(top_k, "keyword_search")
@@ -393,100 +515,101 @@ class PrismaStorageAdapter:
 
 
 class _PrismaMigrationRunner:
-    """Apply existing postgres/*.sql migrations via prisma.execute_raw."""
+    """Prisma 用の簡易マイグレーションランナー。"""
+
+    _PRISMA_ALLOWED_MIGRATION_PREFIXES: frozenset[str] = frozenset({"0000", "0001"})
 
     def __init__(self, client: Prisma) -> None:
         self._client = client
 
-    # Prisma バックエンドが処理対象とするマイグレーションのみを許可するファイル名 prefix。
-    # 設計書 §2 で graph 機能は Prisma の対象外とされているため、0002_graph.sql 以降の
-    # graph 関連マイグレーションは Prisma 経由では適用しない。
-    _PRISMA_ALLOWED_MIGRATION_PREFIXES: frozenset[str] = frozenset({"0000", "0001"})
-
     async def run(self) -> None:
-        """Apply pending migrations in order.
+        """Apply migrations from docker/postgres SQL files."""
+        curr = Path(__file__).resolve().parent
+        migrations_path = None
+        for _ in range(5):
+            candidate = curr / "docker" / "postgres"
+            if candidate.exists():
+                migrations_path = candidate
+                break
+            curr = curr.parent
 
-        実装方針:
-        - postgres/ ディレクトリの SQL ファイルを `pathlib.Path` で列挙
-        - `_PRISMA_ALLOWED_MIGRATION_PREFIXES` に含まれる prefix のもののみを対象とする
-          (graph 関連の 0002* 等は Prisma バックエンドの対象外、設計書 §2)
-        - `schema_migrations` テーブル存在チェックは `query_raw`
-        - 適用済みバージョン取得は `query_raw`
-        - 未適用ファイルを sequential に `execute_raw` で適用
-        - `pg_catalog.pg_tables` を用いた baseline 検出は既存 MigrationRunner と同等
-        """
-        from pathlib import Path
+        if not migrations_path:
+            logger.warning("Migrations directory 'docker/postgres' not found in parent hierarchy.")
+            return
 
-        migrations_dir = Path(__file__).parent / "migrations" / "postgres"
-        all_files = sorted(migrations_dir.glob("*.sql"))
-        files = [
-            f for f in all_files if f.name.split("_")[0] in self._PRISMA_ALLOWED_MIGRATION_PREFIXES
+        sql_files = sorted(migrations_path.glob("*.sql"))
+        target_files = [
+            f for f in sql_files if f.name[:4] in self._PRISMA_ALLOWED_MIGRATION_PREFIXES
         ]
 
-        # 0000_system.sql を必ず最初に確保
-        system_file = migrations_dir / "0000_system.sql"
-        if system_file.exists():
-            await self._ensure_system_migration(system_file)
-
+        await self._ensure_system_migration()
         applied = await self._get_applied_migrations()
 
-        # Baseline: 既存テーブルが存在する場合は対応マイグレーションを applied として記録
-        if not applied or applied == {"0000_system.sql"}:
-            await self._handle_baseline(files, applied)
-            applied = await self._get_applied_migrations()
+        if "0001_initial.sql" not in applied:
+            if await self._tables_exist(["memories"]):
+                logger.info("Found existing 'memories' table. Baselining 0001_initial.sql")
+                await self._mark_as_applied("0001_initial.sql")
+                applied.add("0001_initial.sql")
 
-        for file_path in files:
-            version = file_path.name
-            if version not in applied:
-                await self._apply_migration(file_path)
-                logger.info("Applied migration via Prisma: %s", version)
+        for sql_file in target_files:
+            if sql_file.name in applied:
+                continue
 
-    async def _ensure_system_migration(self, file_path: "Path") -> None:  # type: ignore[name-defined]
+            logger.info(f"Applying migration: {sql_file.name}")
+            content = sql_file.read_text()
+            # Use sqlparse for SQL-aware splitting to avoid breaking on semicolons in strings.
+            statements = [s.strip().rstrip(";") for s in sqlparse.split(content) if s.strip()]
+
+            async with self._client.tx() as tx:
+                for stmt in statements:
+                    await tx.execute_raw(stmt)
+                await tx.execute_raw(
+                    "INSERT INTO schema_migrations (version) VALUES ($1)", sql_file.name
+                )
+
+    async def _ensure_system_migration(self) -> None:
+        """Ensure the schema_migrations table exists."""
+        sql = "SELECT 1 FROM pg_catalog.pg_tables WHERE tablename = 'schema_migrations'"
         try:
-            await self._client.query_raw("SELECT 1 FROM schema_migrations LIMIT 1")
-            return
+            res = await self._client.query_raw(sql)
+            if res:
+                return
         except Exception:
-            logger.debug("schema_migrations table not found, applying system migration")
             pass
-        await self._apply_migration(file_path)
+
+        logger.info("Creating schema_migrations table")
+        create_sql = (
+            "CREATE TABLE IF NOT EXISTS schema_migrations "
+            "(version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT NOW())"
+        )
+        await self._client.execute_raw(create_sql)
 
     async def _get_applied_migrations(self) -> set[str]:
+        """Get the set of applied migration versions."""
+        sql = "SELECT version FROM schema_migrations"
         try:
-            rows = await self._client.query_raw("SELECT version FROM schema_migrations")
-        except Exception:
+            rows = await self._client.query_raw(sql)
+            return {row["version"] for row in rows}
+        except Exception as exc:
+            exc_str = str(exc).lower()
+            # P2010 is Prisma's code for "Raw query failed" (e.g. table missing).
+            if "relation" in exc_str and "does not exist" in exc_str:
+                return set()
+            if "p2010" in exc_str:
+                return set()
             return set()
-        return {row["version"] for row in rows}
 
-    async def _handle_baseline(
-        self,
-        files: list["Path"],
-        applied: set[str],  # type: ignore[name-defined]
-    ) -> None:
-        # graph (memory_nodes / memory_edges) は Prisma バックエンド対象外のため
-        # baseline 検出対象に含めない (設計書 §2)。
-        requirements = {"0001": ["memories"]}
-        to_baseline: list[str] = []
-        for file_path in files:
-            prefix = file_path.name.split("_")[0]
-            req_tables = requirements.get(prefix)
-            if req_tables and await self._tables_exist(req_tables):
-                to_baseline.append(file_path.name)
-        for version in to_baseline:
-            await self._client.execute_raw(
-                "INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING",
-                version,
-            )
+    async def _tables_exist(self, tables: list[str]) -> bool:
+        """Check if specified tables exist in the database."""
+        sql = "SELECT tablename FROM pg_catalog.pg_tables WHERE tablename = ANY($1)"
+        try:
+            rows = await self._client.query_raw(sql, tables)
+            return len(rows) >= len(tables)
+        except Exception:
+            return False
 
-    async def _tables_exist(self, table_names: list[str]) -> bool:
-        rows = await self._client.query_raw(
-            "SELECT tablename FROM pg_catalog.pg_tables WHERE tablename = ANY($1::text[])",
-            table_names,
+    async def _mark_as_applied(self, version: str) -> None:
+        """Mark a migration version as applied without executing it."""
+        await self._client.execute_raw(
+            "INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING", version
         )
-        return len(rows) == len(table_names)
-
-    async def _apply_migration(self, file_path: "Path") -> None:  # type: ignore[name-defined]
-        sql = file_path.read_text()
-        version = file_path.name
-        async with self._client.tx() as tx:
-            await tx.execute_raw(sql)
-            await tx.execute_raw("INSERT INTO schema_migrations (version) VALUES ($1)", version)

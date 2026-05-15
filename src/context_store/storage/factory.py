@@ -353,6 +353,12 @@ async def _create_graph_adapter(
             read_only=read_only,
         )
 
+    if settings.storage_backend == "prisma":
+        raise ValueError(
+            "Graph adapter is not supported for storage_backend=prisma "
+            "(Neo4j Bolt cannot be tunneled over HTTPS)"
+        )
+
     raise ValueError(f"Unsupported storage_backend for graph: {settings.storage_backend!r}")
 
 

@@ -440,26 +440,28 @@ class PrismaStorageAdapter:
 
         if project is not None:
             sql = (
-                "SELECT *, bigm_similarity(content, $1) AS score FROM memories "
+                "SELECT *, bigm_similarity(content, $4) AS score FROM memories "
                 "WHERE archived_at IS NULL AND content LIKE $1 ESCAPE '\\' AND project = $3 "
                 "ORDER BY score DESC "
                 "LIMIT $2"
             )
             try:
-                rows = await self._client.query_raw(sql, like_query, effective_top_k, project)
+                rows = await self._client.query_raw(
+                    sql, like_query, effective_top_k, project, query
+                )
             except Exception as exc:
                 raise StorageError(
                     message=str(exc), code="STORAGE_ERROR", recoverable=False
                 ) from exc
         else:
             sql = (
-                "SELECT *, bigm_similarity(content, $1) AS score FROM memories "
+                "SELECT *, bigm_similarity(content, $3) AS score FROM memories "
                 "WHERE archived_at IS NULL AND content LIKE $1 ESCAPE '\\' "
                 "ORDER BY score DESC "
                 "LIMIT $2"
             )
             try:
-                rows = await self._client.query_raw(sql, like_query, effective_top_k)
+                rows = await self._client.query_raw(sql, like_query, effective_top_k, query)
             except Exception as exc:
                 raise StorageError(
                     message=str(exc), code="STORAGE_ERROR", recoverable=False
@@ -478,10 +480,11 @@ class PrismaStorageAdapter:
         conditions: list[str] = []
         params: list[Any] = []
 
-        if filters.archived is None:
+        if filters.archived is False:
             conditions.append("archived_at IS NULL")
         elif filters.archived is True:
             conditions.append("archived_at IS NOT NULL")
+        # filters.archived is None means no filter on archived status
 
         if filters.project is not None:
             params.append(filters.project)
@@ -503,21 +506,23 @@ class PrismaStorageAdapter:
             params.append(filters.min_importance)
             conditions.append(f"importance_score >= ${len(params)}")
 
-        if filters.created_after is not None:
-            if filters.id_after is not None:
+        if filters.id_after is not None:
+            # Shared id_after parameter for cursor-based pagination
+            params.append(filters.id_after)
+            id_after_idx = len(params)
+
+            if filters.created_after is not None:
                 params.append(filters.created_after)
-                params.append(filters.id_after)
-                conditions.append(f"(created_at, id) > (${len(params) - 1}, ${len(params)})")
-            else:
+                conditions.append(f"(created_at, id) > (${len(params)}, ${id_after_idx})")
+            elif filters.archived_after is not None:
+                params.append(filters.archived_after)
+                conditions.append(f"(archived_at, id) > (${len(params)}, ${id_after_idx})")
+        else:
+            if filters.created_after is not None:
                 params.append(filters.created_after)
                 conditions.append(f"created_at >= ${len(params)}")
 
-        if filters.archived_after is not None:
-            if filters.id_after is not None:
-                params.append(filters.archived_after)
-                params.append(filters.id_after)
-                conditions.append(f"(archived_at, id) > (${len(params) - 1}, ${len(params)})")
-            else:
+            if filters.archived_after is not None:
                 params.append(filters.archived_after)
                 conditions.append(f"archived_at >= ${len(params)}")
 

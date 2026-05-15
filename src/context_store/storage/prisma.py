@@ -746,8 +746,8 @@ class PrismaStorageAdapter:
 class _PrismaMigrationRunner:
     """Prisma 用の簡易マイグレーションランナー。"""
 
-    # Prisma 以外（グラフDB等）で管理されるマイグレーションを除外するためのキーワード。
-    _EXCLUDED_MIGRATION_KEYWORDS: frozenset[str] = frozenset({"graph"})
+    # Prisma backend manages only the storage schema required by the memories table.
+    _PRISMA_ALLOWED_MIGRATION_PREFIXES: frozenset[str] = frozenset({"0000", "0001"})
 
     def __init__(self, client: Prisma) -> None:
         self._client = client
@@ -763,9 +763,7 @@ class _PrismaMigrationRunner:
 
         all_files = sorted(migrations_path.glob("*.sql"))
         target_files = [
-            f
-            for f in all_files
-            if not any(kw in f.name.lower() for kw in self._EXCLUDED_MIGRATION_KEYWORDS)
+            f for f in all_files if f.name.split("_")[0] in self._PRISMA_ALLOWED_MIGRATION_PREFIXES
         ]
 
         system_file = migrations_path / "0000_system.sql"

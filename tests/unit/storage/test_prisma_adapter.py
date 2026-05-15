@@ -137,10 +137,10 @@ async def test_migration_runner_filters_out_graph_migrations(
 
 
 @pytest.mark.asyncio
-async def test_migration_runner_excludes_graph_migrations(
+async def test_migration_runner_allows_only_prisma_supported_prefixes(
     mock_prisma, mock_tx_context, tmp_path, monkeypatch
 ):
-    """'graph' キーワードを含むマイグレーションは Prisma 対象外にする。"""
+    """Prisma 対象の 0000/0001 prefix のマイグレーションだけを適用する。"""
     from context_store.storage.prisma import _PrismaMigrationRunner
 
     prisma_file = tmp_path / "src" / "context_store" / "storage" / "prisma.py"
@@ -162,7 +162,7 @@ async def test_migration_runner_excludes_graph_migrations(
     sqls_applied = [call.args[0] for call in mock_tx_context.execute_raw.await_args_list]
     assert any("CREATE TABLE schema_migrations" in sql for sql in sqls_applied)
     assert any("CREATE TABLE memories" in sql for sql in sqls_applied)
-    assert any("future_table" in sql for sql in sqls_applied)  # 今後は許可される
+    assert not any("future_table" in sql for sql in sqls_applied)
     assert not any("nodes" in sql for sql in sqls_applied)  # graph は除外される
 
 

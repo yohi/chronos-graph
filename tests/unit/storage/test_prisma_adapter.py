@@ -213,7 +213,7 @@ async def test_migration_runner_filters_empty_statements(
 
     migrations_dir = tmp_path / "docker" / "postgres"
     migrations_dir.mkdir(parents=True)
-    # セミコロンのみの行や、空白＋セミコロンの行を含む SQL
+    # セミコロンのみの行や、空白+セミコロンの行を含む SQL
     (migrations_dir / "0001_initial.sql").write_text(
         "CREATE TABLE t1(id INT);\n  ;  \nCREATE TABLE t2(id INT);"
     )

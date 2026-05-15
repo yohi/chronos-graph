@@ -1,26 +1,45 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from context_store.config import Settings
+from context_store.storage.postgres import _content_hash, _embedding_to_pg
+from context_store.storage.protocols import StorageError
 from prisma import Prisma  # type: ignore[import-not-found, attr-defined]
+
+if TYPE_CHECKING:
+    from context_store.models.memory import Memory
 
 try:
     from prisma.errors import PrismaError
 except ImportError:
-    PrismaError = Exception  # type: ignore
+
+    class PrismaError(Exception):  # type: ignore[no-redef]
+        pass
+
+
+try:
+    from prisma.errors import DataError, UniqueViolationError  # type: ignore
+except ImportError:
+
+    class DataError(PrismaError):  # type: ignore[no-redef]
+        pass
+
+    class UniqueViolationError(DataError):  # type: ignore[no-redef]
+        pass
+
 
 try:
     from prisma.errors import PrismaClientKnownRequestError  # type: ignore
 except ImportError:
-    PrismaClientKnownRequestError = PrismaError  # type: ignore
 
-try:
-    from prisma.errors import PrismaClientUnknownRequestError  # type: ignore
-except ImportError:
-    PrismaClientUnknownRequestError = PrismaError  # type: ignore
+    class PrismaClientKnownRequestError(PrismaError):  # type: ignore[no-redef]
+        pass
+
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +92,82 @@ class PrismaStorageAdapter:
         """Disconnect the Prisma client."""
         await self._client.disconnect()
 
+    async def save_memory(self, memory: "Memory") -> str:  # type: ignore[name-defined]
+        """Persist a memory and return its string ID."""
+        try:
+            embedding_str = _embedding_to_pg(memory.embedding)
+            content_hash = _content_hash(memory.content)
+
+            sql = """
+                INSERT INTO memories (
+                    id, content, memory_type, source_type, source_metadata,
+                    embedding, semantic_relevance, importance_score, access_count,
+                    last_accessed_at, created_at, updated_at, archived_at,
+                    tags, project, content_hash
+                ) VALUES (
+                    $1, $2, $3, $4, $5::jsonb,
+                    $6::vector, $7, $8, $9,
+                    $10, $11, $12, $13,
+                    $14, $15, $16
+                )
+                RETURNING id
+            """
+
+            row = await self._client.query_first_raw(  # type: ignore[attr-defined]
+                sql,
+                memory.id,
+                memory.content,
+                memory.memory_type.value,
+                memory.source_type.value,
+                json.dumps(memory.source_metadata),
+                embedding_str,
+                memory.semantic_relevance,
+                memory.importance_score,
+                memory.access_count,
+                memory.last_accessed_at,
+                memory.created_at,
+                memory.updated_at,
+                memory.archived_at,
+                memory.tags,
+                memory.project,
+                content_hash,
+            )
+        except PrismaError as e:
+            # P2002: Unique constraint failed.
+            # We check both the specific UniqueViolationError and the error code "P2002"
+            # (common in PrismaClientKnownRequestError) for robust mapping.
+            is_unique_violation = getattr(e, "code", None) == "P2002" or isinstance(
+                e, (UniqueViolationError, PrismaClientKnownRequestError)
+            )
+            if is_unique_violation:
+                raise StorageError(
+                    message=str(e),
+                    code="DUPLICATE_CONTENT",
+                    recoverable=False,
+                ) from e
+            # Other Prisma related errors
+            raise StorageError(
+                message=str(e),
+                code="STORAGE_ERROR",
+                recoverable=False,
+            ) from e
+        except Exception as e:
+            if isinstance(e, StorageError):
+                raise
+            raise StorageError(
+                message=str(e),
+                code="STORAGE_ERROR",
+                recoverable=False,
+            ) from e
+
+        if row is None:
+            raise StorageError(
+                message="INSERT RETURNING returned no row",
+                code="STORAGE_ERROR",
+                recoverable=False,
+            )
+        return str(row["id"])
+
 
 class _PrismaMigrationRunner:
     """Prisma 用の簡易マイグレーションランナー。
@@ -124,10 +219,13 @@ class _PrismaMigrationRunner:
         try:
             await self._client.query_raw("SELECT 1 FROM schema_migrations LIMIT 1")
             return
-        except Exception as e:
-            # We use Exception and message check to ensure all possible "table not found"
-            # errors (including PrismaError and its subclasses) are caught correctly
-            # even in mock-heavy test environments or different client versions.
+        except (
+            DataError,
+            PrismaError,
+        ) as e:
+            # We catch specific Prisma errors and check the message to ensure
+            # "table not found" errors are handled correctly even in
+            # mock-heavy test environments or different client versions.
             msg = str(e).lower()
             if "relation" in msg and "does not exist" in msg:
                 logger.info("schema_migrations table not found, applying system migration")
@@ -138,7 +236,10 @@ class _PrismaMigrationRunner:
     async def _get_applied_migrations(self) -> set[str]:
         try:
             rows = await self._client.query_raw("SELECT version FROM schema_migrations")
-        except Exception as e:
+        except (
+            DataError,
+            PrismaError,
+        ) as e:
             msg = str(e).lower()
             if "relation" in msg and "does not exist" in msg:
                 logger.info("schema_migrations table not found, returning empty applied set")

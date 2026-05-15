@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
 
+from context_store.models.memory import Memory, MemoryType, SourceType
 from context_store.storage.prisma import (
     PRISMA_BATCH_FETCH_CHUNK_SIZE,
     PRISMA_MAX_TOP_K,
@@ -13,6 +16,7 @@ from context_store.storage.prisma import (
     PRISMA_TIMEOUT_CODES,
     PrismaStorageAdapter,
 )
+from context_store.storage.protocols import StorageError
 
 
 @pytest.fixture
@@ -231,3 +235,94 @@ async def test_migration_runner_transaction_failure_propagates(mock_prisma, tmp_
     assert tx.execute_raw.await_count >= 1
     # baseline は requirements に該当しないため execute_raw は呼ばれない
     assert mock_prisma.execute_raw.await_count == 0
+
+
+def _build_memory(content: str = "hello") -> Memory:
+    return Memory(
+        id=str(uuid4()),
+        content=content,
+        memory_type=MemoryType.SEMANTIC,
+        source_type=SourceType.MANUAL,
+        source_metadata={},
+        embedding=[0.1, 0.2, 0.3],
+        semantic_relevance=0.5,
+        importance_score=0.5,
+        access_count=0,
+        last_accessed_at=datetime.now(timezone.utc),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        archived_at=None,
+        tags=[],
+        project=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_save_memory_inserts_and_returns_id(mock_prisma):
+    memory = _build_memory("hello world")
+    mock_prisma.query_first_raw = AsyncMock(return_value={"id": memory.id})
+
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    result_id = await adapter.save_memory(memory)
+
+    assert result_id == str(memory.id)
+    mock_prisma.query_first_raw.assert_awaited_once()
+    sql_arg = mock_prisma.query_first_raw.await_args.args[0]
+    assert "INSERT INTO memories" in sql_arg
+    assert "RETURNING id" in sql_arg
+
+
+@pytest.mark.asyncio
+async def test_save_memory_raises_duplicate_content(mock_prisma):
+    # Simulate UniqueViolationError (actual Prisma unique violation)
+    from prisma.errors import UniqueViolationError
+
+    # UniqueViolationError typically takes the raw data dict
+    error = UniqueViolationError(
+        {"user_facing_error": {"error_code": "P2002", "message": "duplicate content_hash"}}
+    )
+
+    memory = _build_memory("dup")
+    mock_prisma.query_first_raw = AsyncMock(side_effect=error)
+
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    with pytest.raises(StorageError) as exc_info:
+        await adapter.save_memory(memory)
+    assert exc_info.value.code == "DUPLICATE_CONTENT"
+    assert exc_info.value.recoverable is False
+
+
+@pytest.mark.asyncio
+async def test_save_memory_raises_duplicate_content_from_known_request_error(mock_prisma):
+    # Simulate PrismaClientKnownRequestError with code P2002
+    from prisma.errors import PrismaError
+
+    # We use a mock that has the 'code' attribute, simulating PrismaClientKnownRequestError
+    class MockKnownRequestError(PrismaError):
+        def __init__(self, message: str, code: str):
+            super().__init__(message)
+            self.code = code
+
+    error = MockKnownRequestError("unique constraint failed", code="P2002")
+
+    memory = _build_memory("known_error")
+    mock_prisma.query_first_raw = AsyncMock(side_effect=error)
+
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    with pytest.raises(StorageError) as exc_info:
+        await adapter.save_memory(memory)
+    assert exc_info.value.code == "DUPLICATE_CONTENT"
+
+
+@pytest.mark.asyncio
+async def test_save_memory_raises_storage_error_on_none_row(mock_prisma):
+    """row is None ケースのテスト。"""
+    memory = _build_memory("no row")
+    mock_prisma.query_first_raw = AsyncMock(return_value=None)
+
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    with pytest.raises(StorageError) as exc_info:
+        await adapter.save_memory(memory)
+    assert exc_info.value.code == "STORAGE_ERROR"
+    assert "INSERT RETURNING returned no row" in str(exc_info.value)
+    assert exc_info.value.recoverable is False

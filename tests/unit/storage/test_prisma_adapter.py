@@ -95,7 +95,6 @@ async def test_migration_runner_filters_out_graph_migrations(
     # 2) _get_applied_migrations は空集合
     # 3) baseline 検出のため pg_tables を問い合わせる ("memories" のみ要求)
     # 4) baseline 後の _get_applied_migrations (空)
-    from context_store.storage.prisma import PrismaError
 
     mock_prisma.query_raw = AsyncMock(
         side_effect=[

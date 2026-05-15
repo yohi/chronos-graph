@@ -731,3 +731,37 @@ async def test_get_applied_migrations_raises_unknown_exception(mock_prisma):
     # _get_applied_migrations が RuntimeError を re-raise し、それが run に伝播する
     with pytest.raises(RuntimeError, match="Connection lost"):
         await runner.run()
+
+
+@pytest.mark.asyncio
+async def test_classify_prisma_error_http_timeout(mock_prisma):
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+
+    class MockHttpError(Exception):
+        pass
+
+    exc1 = MockHttpError("HTTP 504: Gateway Timeout")
+    classified1 = adapter._classify_prisma_error(exc1)
+    assert classified1 == ("STORAGE_TIMEOUT", True)
+
+    exc2 = MockHttpError("Accelerate error 408 Request Timeout")
+    classified2 = adapter._classify_prisma_error(exc2)
+    assert classified2 == ("STORAGE_TIMEOUT", True)
+
+    exc3 = MockHttpError("connection timeout occurred")
+    classified3 = adapter._classify_prisma_error(exc3)
+    assert classified3 == ("STORAGE_TIMEOUT", True)
+
+
+@pytest.mark.asyncio
+async def test_map_to_storage_error_default_is_recoverable(mock_prisma):
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+
+    class UnknownDBError(Exception):
+        pass
+
+    exc = UnknownDBError("some temporary network failure 502")
+    storage_err = adapter._map_to_storage_error(exc)
+
+    assert storage_err.code == "STORAGE_ERROR"
+    assert storage_err.recoverable is True

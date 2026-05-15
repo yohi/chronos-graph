@@ -368,6 +368,11 @@ class PrismaStorageAdapter:
                 params.append(val)
                 set_parts.append(f"{col} = ${len(params)}::jsonb")
                 continue
+
+            # Serialize Enums or other objects with .value
+            if hasattr(val, "value"):
+                val = val.value
+
             params.append(val)
             set_parts.append(f"{col} = ${len(params)}")
 
@@ -529,15 +534,32 @@ class PrismaStorageAdapter:
             for row in rows
         ]
 
+    def _get_effective_sort(self, filters: MemoryFilters) -> tuple[str, bool]:
+        """Determine primary sort column and direction (is_desc) for cursor pagination."""
+        # Default is created_at DESC
+        sort_col = "created_at"
+        is_desc = True
+
+        if filters.order_by:
+            # list_by_filter parses the full clause, we just need the primary one for cursor logic
+            parts = str(filters.order_by).split(",")[0].strip().split()
+            if parts:
+                col = parts[0].lower()
+                if col in ALLOWED_SORT_COLUMNS:
+                    sort_col = col
+                if len(parts) > 1 and parts[1].upper() == "ASC":
+                    is_desc = False
+        return sort_col, is_desc
+
     def _build_where_clause(self, filters: MemoryFilters) -> tuple[str, list[Any]]:
         conditions: list[str] = []
         params: list[Any] = []
 
-        if filters.archived is False:
-            conditions.append("archived_at IS NULL")
-        elif filters.archived is True:
+        if filters.archived is True:
             conditions.append("archived_at IS NOT NULL")
-        # filters.archived is None means no filter on archived status
+        elif filters.archived is None:
+            conditions.append("archived_at IS NULL")
+        # filters.archived is False means no filter (both active and archived)
 
         if filters.project is not None:
             params.append(filters.project)
@@ -559,6 +581,9 @@ class PrismaStorageAdapter:
             params.append(filters.min_importance)
             conditions.append(f"importance_score >= ${len(params)}")
 
+        sort_col, is_desc = self._get_effective_sort(filters)
+        op = "<" if is_desc else ">"
+
         if filters.id_after is not None:
             # Shared id_after parameter for cursor-based pagination
             params.append(filters.id_after)
@@ -566,10 +591,13 @@ class PrismaStorageAdapter:
 
             if filters.created_after is not None:
                 params.append(filters.created_after)
-                conditions.append(f"(created_at, id) > (${len(params)}, ${id_after_idx})")
+                conditions.append(f"(created_at, id) {op} (${len(params)}, ${id_after_idx})")
             elif filters.archived_after is not None:
                 params.append(filters.archived_after)
-                conditions.append(f"(archived_at, id) > (${len(params)}, ${id_after_idx})")
+                conditions.append(f"(archived_at, id) {op} (${len(params)}, ${id_after_idx})")
+            else:
+                # Handle id_after alone (ID-only pagination or fallback)
+                conditions.append(f"id {op} ${id_after_idx}")
         else:
             if filters.created_after is not None:
                 params.append(filters.created_after)
@@ -712,7 +740,8 @@ class PrismaStorageAdapter:
 class _PrismaMigrationRunner:
     """Prisma 用の簡易マイグレーションランナー。"""
 
-    _PRISMA_ALLOWED_MIGRATION_PREFIXES: frozenset[str] = frozenset({"0000", "0001"})
+    # グラフ系マイグレーション (0002_graph.sql 等) を除外するためのパターン。
+    _PRISMA_EXCLUDED_MIGRATION_PATTERNS: frozenset[str] = frozenset({"graph"})
 
     def __init__(self, client: Prisma) -> None:
         self._client = client
@@ -728,10 +757,13 @@ class _PrismaMigrationRunner:
 
         sql_files = sorted(migrations_path.glob("*.sql"))
         target_files = [
-            f for f in sql_files if f.name[:4] in self._PRISMA_ALLOWED_MIGRATION_PREFIXES
+            f
+            for f in sql_files
+            if not any(p in f.name.lower() for p in self._PRISMA_EXCLUDED_MIGRATION_PATTERNS)
         ]
 
         await self._ensure_system_migration()
+        await self._mark_as_applied("0000_system.sql")
         applied = await self._get_applied_migrations()
 
         if "0001_initial.sql" not in applied:

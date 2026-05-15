@@ -476,6 +476,9 @@ class PrismaStorageAdapter:
     ) -> list[ScoredMemory]:
         from context_store.models.memory import MemorySource, ScoredMemory
 
+        if not query or not query.strip():
+            return []
+
         effective_top_k = self._clamp_top_k(top_k, "keyword_search")
         # SQL LIKE wildcards: escape backslashes first, then % and _
         escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -484,7 +487,7 @@ class PrismaStorageAdapter:
         if project is not None:
             sql = (
                 "SELECT *, 1.0 AS score FROM memories "
-                "WHERE archived_at IS NULL AND content LIKE $1 ESCAPE '\\\\' AND project = $3 "
+                "WHERE archived_at IS NULL AND content LIKE $1 ESCAPE '\\' AND project = $3 "
                 "LIMIT $2"
             )
             try:
@@ -496,7 +499,7 @@ class PrismaStorageAdapter:
         else:
             sql = (
                 "SELECT *, 1.0 AS score FROM memories "
-                "WHERE archived_at IS NULL AND content LIKE $1 ESCAPE '\\\\' "
+                "WHERE archived_at IS NULL AND content LIKE $1 ESCAPE '\\' "
                 "LIMIT $2"
             )
             try:
@@ -609,8 +612,14 @@ class _PrismaMigrationRunner:
         try:
             rows = await self._client.query_raw(sql, tables)
             return len(rows) >= len(tables)
-        except Exception:
-            return False
+        except Exception as exc:
+            exc_str = str(exc).lower()
+            code = getattr(exc, "code", "")
+            # P2021: Table does not exist in current database.
+            # 42P01: undefined_table (PostgreSQL error code)
+            if code == "P2021" or "42p01" in exc_str or "relation" in exc_str:
+                return False
+            raise
 
     async def _mark_as_applied(self, version: str) -> None:
         """Mark a migration version as applied without executing it."""

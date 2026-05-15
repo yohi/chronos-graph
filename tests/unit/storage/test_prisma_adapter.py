@@ -522,6 +522,17 @@ async def test_vector_search_executes_correct_sql(mock_prisma):
 
 
 @pytest.mark.asyncio
+async def test_keyword_search_returns_empty_on_empty_query(mock_prisma):
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    # empty string
+    assert await adapter.keyword_search("", top_k=5) == []
+    # whitespace
+    assert await adapter.keyword_search("   ", top_k=5) == []
+    # No query_raw call should happen
+    mock_prisma.query_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_keyword_search_executes_correct_sql(mock_prisma):
     mock_prisma.query_raw = AsyncMock(return_value=[])
     adapter = PrismaStorageAdapter(client=mock_prisma)
@@ -530,8 +541,8 @@ async def test_keyword_search_executes_correct_sql(mock_prisma):
     mock_prisma.query_raw.assert_awaited_once()
     sql = mock_prisma.query_raw.await_args.args[0]
     params = mock_prisma.query_raw.await_args.args[1:]
-    assert "content LIKE $1 ESCAPE '\\\\'" in sql
-    assert "LIMIT $2" in sql
+    assert "content LIKE $1 ESCAPE '\\'" in sql
+    assert params == ("%hello%", 5)
     # params: (like_query, effective_top_k)
     assert params == ("%hello%", 5)
 

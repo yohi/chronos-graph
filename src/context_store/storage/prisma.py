@@ -348,7 +348,9 @@ class PrismaStorageAdapter:
             return False
 
         params.append(memory_id)
-        # noqa: S608 (columns are whitelisted above)
+        # NOTE: Dynamic SQL is used here for UPDATE fields, but it is SAFE from SQL injection
+        # because 'set_parts' only contains column names from the 'allowed_columns' whitelist.
+        # Values are passed via parameters ($1, $2, etc.).
         sql = f"UPDATE memories SET {', '.join(set_parts)} WHERE id = ${len(params)}"  # noqa: S608
         try:
             affected = await self._client.execute_raw(sql, *params)
@@ -467,6 +469,10 @@ class PrismaStorageAdapter:
         from context_store.models.memory import MemorySource, ScoredMemory
 
         effective_top_k = self._clamp_top_k(top_k, "keyword_search")
+        # NOTE: We do not escape '%' or '_' in the query intentionally.
+        # This allows users to use LIKE wildcards, but may lead to unexpected matches
+        # if the input is not sanitized by the caller.
+        # See: test_keyword_search_does_not_escape_like_wildcards
         like_query = f"%{query}%"
 
         if project is not None:
@@ -540,7 +546,7 @@ class PrismaStorageAdapter:
             params.append(filters.min_importance)
             conditions.append(f"importance_score >= ${len(params)}")
 
-        sort_col, is_desc = self._get_effective_sort(filters)
+        _sort_col, is_desc = self._get_effective_sort(filters)
         op = "<" if is_desc else ">"
 
         if filters.id_after is not None:
@@ -699,7 +705,8 @@ class PrismaStorageAdapter:
 class _PrismaMigrationRunner:
     """Prisma 用の簡易マイグレーションランナー。"""
 
-    _PRISMA_ALLOWED_MIGRATION_PREFIXES: frozenset[str] = frozenset({"0000", "0001"})
+    # Prisma 以外（グラフDB等）で管理されるマイグレーションを除外するためのキーワード。
+    _EXCLUDED_MIGRATION_KEYWORDS: frozenset[str] = frozenset({"graph"})
 
     def __init__(self, client: Prisma) -> None:
         self._client = client
@@ -715,7 +722,9 @@ class _PrismaMigrationRunner:
 
         all_files = sorted(migrations_path.glob("*.sql"))
         target_files = [
-            f for f in all_files if f.name.split("_")[0] in self._PRISMA_ALLOWED_MIGRATION_PREFIXES
+            f
+            for f in all_files
+            if not any(kw in f.name.lower() for kw in self._EXCLUDED_MIGRATION_KEYWORDS)
         ]
 
         system_file = migrations_path / "0000_system.sql"

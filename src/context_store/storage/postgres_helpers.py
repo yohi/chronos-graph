@@ -18,14 +18,18 @@ def _parse_embedding(raw: object) -> list[float]:
     """Parse a pgvector value returned by a PostgreSQL client into list[float]."""
     if raw is None:
         return []
-    if isinstance(raw, (list, tuple)):
-        return [float(v) for v in raw]
-    s = str(raw).strip()
-    if s.startswith("[") and s.endswith("]"):
-        s = s[1:-1]
-    if not s:
+    try:
+        if isinstance(raw, (list, tuple)):
+            return [float(v) for v in raw]
+        s = str(raw).strip()
+        if s.startswith("[") and s.endswith("]"):
+            s = s[1:-1]
+        if not s:
+            return []
+        return [float(v) for v in s.split(",")]
+    except (ValueError, TypeError):
+        # Log or handle malformed pgvector values gracefully
         return []
-    return [float(v) for v in s.split(",")]
 
 
 def _embedding_to_pg(embedding: list[float]) -> str | None:
@@ -39,7 +43,11 @@ def _record_to_memory(record: dict[str, Any]) -> Memory:
     """Convert a PostgreSQL record dict to a Memory model."""
     source_metadata = record.get("source_metadata") or {}
     if isinstance(source_metadata, str):
-        source_metadata = json.loads(source_metadata)
+        try:
+            source_metadata = json.loads(source_metadata)
+        except (json.JSONDecodeError, ValueError):
+            # Fallback to empty dict if JSON is malformed
+            source_metadata = {}
 
     return Memory(
         id=record["id"],

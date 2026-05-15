@@ -137,10 +137,10 @@ async def test_migration_runner_filters_out_graph_migrations(
 
 
 @pytest.mark.asyncio
-async def test_migration_runner_allows_only_prisma_prefixes(
+async def test_migration_runner_excludes_graph_migrations(
     mock_prisma, mock_tx_context, tmp_path, monkeypatch
 ):
-    """0000/0001 以外の将来マイグレーションは名前に関係なく Prisma 対象外にする。"""
+    """'graph' キーワードを含むマイグレーションは Prisma 対象外にする。"""
     from context_store.storage.prisma import _PrismaMigrationRunner
 
     prisma_file = tmp_path / "src" / "context_store" / "storage" / "prisma.py"
@@ -151,6 +151,7 @@ async def test_migration_runner_allows_only_prisma_prefixes(
     migrations_dir.mkdir(parents=True)
     (migrations_dir / "0000_system.sql").write_text("CREATE TABLE schema_migrations(version TEXT);")
     (migrations_dir / "0001_initial.sql").write_text("CREATE TABLE memories(id UUID);")
+    (migrations_dir / "0002_graph.sql").write_text("CREATE TABLE nodes(id UUID);")
     (migrations_dir / "0003_future.sql").write_text("CREATE TABLE future_table(id UUID);")
 
     mock_prisma.query_raw = AsyncMock(side_effect=[[], [], []])
@@ -161,7 +162,8 @@ async def test_migration_runner_allows_only_prisma_prefixes(
     sqls_applied = [call.args[0] for call in mock_tx_context.execute_raw.await_args_list]
     assert any("CREATE TABLE schema_migrations" in sql for sql in sqls_applied)
     assert any("CREATE TABLE memories" in sql for sql in sqls_applied)
-    assert not any("future_table" in sql for sql in sqls_applied)
+    assert any("future_table" in sql for sql in sqls_applied)  # 今後は許可される
+    assert not any("nodes" in sql for sql in sqls_applied)  # graph は除外される
 
 
 @pytest.mark.asyncio

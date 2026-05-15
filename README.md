@@ -26,7 +26,7 @@ ChronosGraph は、AIエージェント（Claude Code / Gemini CLI / Cursor 等�
 - **時間的減衰** — 指数関数的減衰スコアで古い記憶を自動アーカイブ
 - **重複排除** — Append-only 置換 + SUPERSEDES グラフエッジで変遷を追跡
 - **ライトウェイトモード** — SQLite + sqlite-vec でゼロ設定で起動
-- **スケーラブル** — PostgreSQL + Neo4j + Redis への切り替え対応
+- **スケーラブル** — PostgreSQL + Neo4j + Redis への切り替え対応、Prisma Accelerate (HTTPS) による社内 DPI 回避（※ セキュリティ・コンプライアンス上の注意点は [SPEC.md](SPEC.md) を参照）
 - **RL 拡張ポイント** — ActionLogger / RewardSignal / PolicyHook インターフェース
 - **Dashboard Web UI** — Cytoscape.js グラフ可視化・リアルタイムログストリーミング・severity フィルター（React + FastAPI）
 - **MCP Gateway** — ゼロ・スタンディング・権限 (ZSP) と意図に基づくアクセス制御 (IBAC) を提供する専用ゲートウェイを搭載
@@ -276,7 +276,8 @@ SQLite および PostgreSQL ストレージを使用している場合、テー�
 
 | 環境変数 | デフォルト | 説明 |
 |---|---|---|
-| `STORAGE_BACKEND` | `sqlite` | ストレージバックエンド (`sqlite` / `postgres`) |
+| `STORAGE_BACKEND` | `sqlite` | ストレージバックエンド (`sqlite` / `postgres` / `prisma`) |
+| `PRISMA_DATABASE_URL` | `""` | **[Prisma用]** Prisma Accelerate 接続 URL (`prisma://...`) |
 | `SQLITE_DB_PATH` | `~/.context-store/memories.db` | SQLite DB ファイルパス |
 | `EMBEDDING_PROVIDER` | `openai` | 埋め込みプロバイダー (`openai` / `local-model` / `litellm` / `custom-api`) |
 | `OPENAI_API_KEY` | `` | OpenAI API キー |

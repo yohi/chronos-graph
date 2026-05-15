@@ -810,6 +810,16 @@ InMemory 実装はプレフィックス一致での安全なループ削除を�
 - `Neo4jGraphAdapter` — neo4j-python-driver (async) ベース
 - `RedisCacheAdapter` — redis-py (async) ベース
 
+**Prisma Accelerate モード（HTTPS 接続、社内ネットワーク DPI 回避用）:**
+
+> **⚠️ セキュリティ・コンプライアンス警告**:
+> 企業内ネットワーク（Fortinet等のUTM/次世代ファイアウォール）環境下において、標準データベースポート（5432等）やバイナリプロトコルがDPIにより遮断される問題への対策として提供されています。通信をHTTPS (443) にカプセル化してプロキシサーバー経由で送信するため、VPNなしで通過可能ですが、本機能の利用にあたっては必ず組織のセキュリティ部門の事前承認を得て、社内ポリシーおよび関連法規を遵守してください。
+
+- `PrismaStorageAdapter` — Prisma Client Python (`query_raw`/`execute_raw` ベース)
+- **制約**: Graph 機能をサポートしない（Neo4j Bolt は HTTPS でカプセル化できないため）
+- **フェールセーフ**: 5MB / 10s 制約回避のため、`top_k` は最大 200 にクランプされ、一括取得は 250 件ごとにチャンク化。エラー時（P6004/P6009等）は半減リトライを自動実行。
+- **補足**: 開発環境では Prisma Client 生成のために Node.js と `prisma generate` の実行が必要です。
+
 **ライトウェイトモード（SQLite、ゼロコンフィグ）:**
 
 - `SQLiteStorageAdapter` — `sqlite-vec`（ベクトル検索）+ `FTS5`（全文検索）、単一ファイルで完結
@@ -1435,6 +1445,7 @@ Blocking モードで待機中の承認を解決するための REST エンド�
 |------|------|
 | SQLite バックエンド（Read-Only 対応含む） | `file:...?mode=ro` URI モード実装済み |
 | PostgreSQL + pgvector バックエンド | |
+| Prisma Accelerate バックエンド | HTTPS (443) 経由、フェールセーフ実装済み |
 | Neo4j グラフアダプタ（READ_ACCESS 対応） | |
 | Ingestion Pipeline（全 Source Adapter） | ConversationAdapter / ManualAdapter / URLAdapter |
 | Retrieval Pipeline（ハイブリッド検索・RRF） | |
@@ -1485,6 +1496,13 @@ Blocking モードで待機中の承認を解決するための REST エンド�
 - [engram](https://zenn.dev/kimmaru/articles/3dbd92dea9ede8) — sui-memory の MCP サーバー化
 - [MAGMA](https://arxiv.org/html/2601.03236v1) — Multi-Graph based Agentic Memory Architecture
 - [MCP 仕様](https://modelcontextprotocol.io/) — Model Context Protocol
+- [CrewAI Memory](https://docs.crewai.com/en/concepts/memory) — 複合スコアリングの参照実装
+- AIエージェントの長期記憶と強化学習プラグイン開発 — コグニティブアーキテクチャ / 複合スコアリング / RL
+- [LayerX ccgate (Zenn)](https://zenn.dev/layerx/articles/20260428-ccgate) — Server-defined Prompts / Permission Hook 概念の基礎
+- [tak848/ccgate (GitHub)](https://github.com/tak848/ccgate) — ccgate 参照実装
+.com/tak848/ccgate) — ccgate 参照実装
+ — ccgate 参照実装
+otocol
 - [CrewAI Memory](https://docs.crewai.com/en/concepts/memory) — 複合スコアリングの参照実装
 - AIエージェントの長期記憶と強化学習プラグイン開発 — コグニティブアーキテクチャ / 複合スコアリング / RL
 - [LayerX ccgate (Zenn)](https://zenn.dev/layerx/articles/20260428-ccgate) — Server-defined Prompts / Permission Hook 概念の基礎

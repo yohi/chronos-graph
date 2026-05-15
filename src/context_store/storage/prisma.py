@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 PRISMA_BATCH_FETCH_CHUNK_SIZE = 250
 PRISMA_MAX_TOP_K = 200
 PRISMA_PAYLOAD_TOO_LARGE_CODES = {"P2010", "P2021", "P6009"}
-PRISMA_TIMEOUT_CODES = {"P2024", "P2025", "P2028", "P6004"}
+PRISMA_TIMEOUT_CODES = {"P2024", "P2028", "P6004"}
 
 
 # Placeholder for Prisma-specific error types that tests might expect
@@ -209,6 +209,8 @@ class PrismaStorageAdapter:
                     recoverable=False,
                 )
             return str(row["id"])
+        except StorageError:
+            raise
         except Exception as e:
             raise self._map_to_storage_error(e) from e
 
@@ -424,6 +426,7 @@ class PrismaStorageAdapter:
                 if classified is None:
                     raise self._map_to_storage_error(exc) from exc
                 retry_top_k = max(1, effective_top_k // 2)
+                logger.warning("Accelerate error (%s); retrying with top_k=%d", exc, retry_top_k)
                 try:
                     rows = await self._client.query_raw(sql, embedding_str, retry_top_k, project)
                 except Exception as retry_exc:
@@ -443,6 +446,7 @@ class PrismaStorageAdapter:
                 if classified is None:
                     raise self._map_to_storage_error(exc) from exc
                 retry_top_k = max(1, effective_top_k // 2)
+                logger.warning("Accelerate error (%s); retrying with top_k=%d", exc, retry_top_k)
                 try:
                     rows = await self._client.query_raw(sql, embedding_str, retry_top_k)
                 except Exception as retry_exc:
@@ -489,6 +493,7 @@ class PrismaStorageAdapter:
                 if classified is None:
                     raise self._map_to_storage_error(exc) from exc
                 retry_top_k = max(1, effective_top_k // 2)
+                logger.warning("Accelerate error (%s); retrying with top_k=%d", exc, retry_top_k)
                 try:
                     rows = await self._client.query_raw(
                         sql, like_query, retry_top_k, project, query
@@ -509,6 +514,7 @@ class PrismaStorageAdapter:
                 if classified is None:
                     raise self._map_to_storage_error(exc) from exc
                 retry_top_k = max(1, effective_top_k // 2)
+                logger.warning("Accelerate error (%s); retrying with top_k=%d", exc, retry_top_k)
                 try:
                     rows = await self._client.query_raw(sql, like_query, retry_top_k, query)
                 except Exception as retry_exc:
@@ -717,7 +723,7 @@ class _PrismaMigrationRunner:
         migrations_path = Path(__file__).parent / "migrations" / "postgres"
 
         if not migrations_path.exists():
-            logger.warning(f"Migrations directory '{migrations_path}' not found.")
+            logger.warning("Migrations directory '%s' not found.", migrations_path)
             return
 
         sql_files = sorted(migrations_path.glob("*.sql"))

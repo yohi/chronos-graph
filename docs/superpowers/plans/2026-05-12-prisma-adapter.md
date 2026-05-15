@@ -1184,8 +1184,13 @@ class _PrismaMigrationRunner:
     async def _apply_migration(self, file_path: "Path") -> None:  # type: ignore[name-defined]
         sql = file_path.read_text()
         version = file_path.name
+        import sqlparse
+        statements = [s.strip().rstrip(";") for s in sqlparse.split(sql) if s.strip()]
+        
         async with self._client.tx() as tx:
-            await tx.execute_raw(sql)
+            for stmt in statements:
+                if stmt:
+                    await tx.execute_raw(stmt)
             await tx.execute_raw(
                 "INSERT INTO schema_migrations (version) VALUES ($1)", version
             )

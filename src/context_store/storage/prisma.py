@@ -558,11 +558,14 @@ class _PrismaMigrationRunner:
             logger.info(f"Applying migration: {sql_file.name}")
             content = sql_file.read_text()
             # Use sqlparse for SQL-aware splitting to avoid breaking on semicolons in strings.
-            statements = [s.strip().rstrip(";") for s in sqlparse.split(content) if s.strip()]
+            statements = [
+                s.strip().rstrip(";") for s in sqlparse.split(content) if s.strip()
+            ]
 
             async with self._client.tx() as tx:
                 for stmt in statements:
-                    await tx.execute_raw(stmt)
+                    if stmt:
+                        await tx.execute_raw(stmt)
                 await tx.execute_raw(
                     "INSERT INTO schema_migrations (version) VALUES ($1)", sql_file.name
                 )

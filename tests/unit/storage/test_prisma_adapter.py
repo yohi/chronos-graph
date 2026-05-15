@@ -201,6 +201,45 @@ async def test_migration_runner_applies_sequential_files(
 
 
 @pytest.mark.asyncio
+async def test_migration_runner_filters_empty_statements(
+    mock_prisma, mock_tx_context, tmp_path, monkeypatch
+):
+    """' ; ' のような空ステートメントが execute_raw に渡されないことを検証。"""
+    from context_store.storage.prisma import _PrismaMigrationRunner
+
+    prisma_file = tmp_path / "src" / "context_store" / "storage" / "prisma.py"
+    prisma_file.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("context_store.storage.prisma.__file__", str(prisma_file))
+
+    migrations_dir = tmp_path / "docker" / "postgres"
+    migrations_dir.mkdir(parents=True)
+    # セミコロンのみの行や、空白＋セミコロンの行を含む SQL
+    (migrations_dir / "0001_initial.sql").write_text(
+        "CREATE TABLE t1(id INT);\n  ;  \nCREATE TABLE t2(id INT);"
+    )
+
+    mock_prisma.query_raw = AsyncMock(
+        side_effect=[
+            [{"1": 1}],  # _ensure_system_migration: 存在
+            [],  # _get_applied_migrations: 空
+            [],  # _tables_exist: 不在
+        ]
+    )
+    mock_prisma.execute_raw = AsyncMock(return_value=1)
+
+    runner = _PrismaMigrationRunner(mock_prisma)
+    await runner.run()
+
+    sql_sequence = [call.args[0] for call in mock_tx_context.execute_raw.await_args_list]
+    # 空の文字列 "" で execute_raw が呼ばれていないことを確認
+    assert "" not in sql_sequence
+    assert "CREATE TABLE t1(id INT)" in sql_sequence
+    assert "CREATE TABLE t2(id INT)" in sql_sequence
+    # INSERT を含めて合計 3 回 (t1, t2, schema_migrations)
+    assert len(sql_sequence) == 3
+
+
+@pytest.mark.asyncio
 async def test_migration_runner_transaction_failure_propagates(mock_prisma, tmp_path, monkeypatch):
     """tx 内の execute_raw が失敗した場合、例外が伝播し INSERT は実行されない。"""
     from context_store.storage.prisma import _PrismaMigrationRunner

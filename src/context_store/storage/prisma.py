@@ -351,7 +351,7 @@ class PrismaStorageAdapter:
         # NOTE: Dynamic SQL is used here for UPDATE fields, but it is SAFE from SQL injection
         # because 'set_parts' only contains column names from the 'allowed_columns' whitelist.
         # Values are passed via parameters ($1, $2, etc.).
-        sql = f"UPDATE memories SET {', '.join(set_parts)} WHERE id = ${len(params)}"  # noqa: S608
+        sql = f"UPDATE memories SET {', '.join(set_parts)} WHERE id = ${len(params)}"  # noqa: S608 # nosec
         try:
             affected = await self._client.execute_raw(sql, *params)
         except Exception as exc:

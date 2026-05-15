@@ -665,12 +665,20 @@ git checkout -b feature/phase1-task5_ci_prisma
 > - 該当 commit のセキュリティアドバイザリ ([https://github.com/actions/setup-node/security/advisories](https://github.com/actions/setup-node/security/advisories)) に有効な脆弱性報告がないこと
 > - YAML 内のコメント `# vX.Y.Z` がタグ名と一致すること
 
-[x] **Step 3: ワークフローの YAML 構文を検証 (Devcontainer 内)**
+[x] **Step 3: ワークフローの YAML 構文を検証し、SHA プレースホルダーの残存をチェック (Devcontainer 内)**
 
 ```bash
+# YAML 構文チェック
 uv run python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"
+
+# SHA プレースホルダーチェック (残っている場合は非ゼロで終了)
+if grep -q "COMMIT_SHA_TO_BE_LOOKED_UP" .github/workflows/ci.yml; then
+  echo "Error: COMMIT_SHA_TO_BE_LOOKED_UP placeholder found in ci.yml."
+  echo "Please replace it with the actual commit SHA and corresponding '# vX.Y.Z' tag comment."
+  exit 1
+fi
 ```
-Expected: エラーなく完了。
+Expected: プレースホルダーが置換されていれば、エラーなく完了。
 
 [x] **Step 4: コミット**
 

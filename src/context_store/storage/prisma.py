@@ -579,9 +579,12 @@ class PrismaStorageAdapter:
         """List memories matching the given filters."""
         where_clause, params = self._build_where_clause(filters)
 
-        order_clause = "ORDER BY created_at DESC"
+        # Build ORDER BY clause
+        order_parts: list[str] = []
+        primary_sort_col = "created_at"
+        primary_is_desc = True
+
         if filters.order_by:
-            order_parts: list[str] = []
             for part in str(filters.order_by).split(","):
                 tokens = part.strip().split()
                 if not tokens:
@@ -602,8 +605,46 @@ class PrismaStorageAdapter:
                         )
                     direction = dir_token
                 order_parts.append(f"{col} {direction}")
+
+            # Extract primary sort for cursor consistency check
             if order_parts:
-                order_clause = f"ORDER BY {', '.join(order_parts)}"
+                first_parts = order_parts[0].split()
+                primary_sort_col = first_parts[0]
+                primary_is_desc = first_parts[1] == "DESC"
+        else:
+            order_parts.append("created_at DESC")
+
+        # Ensure deterministic ordering by appending id if not present
+        if not any(p.split()[0] == "id" for p in order_parts):
+            # Use same direction as primary sort for consistency
+            direction = "DESC" if primary_is_desc else "ASC"
+            order_parts.append(f"id {direction}")
+
+        # Validation: If id_after is used with timestamp-based sort,
+        # the first order column must match the cursor type.
+        if filters.id_after is not None:
+            if filters.created_after is not None and primary_sort_col != "created_at":
+                raise StorageError(
+                    message="id_after with created_after requires ordering by created_at",
+                    code="INVALID_PARAMETER",
+                )
+            if filters.archived_after is not None and primary_sort_col != "archived_at":
+                raise StorageError(
+                    message="id_after with archived_after requires ordering by archived_at",
+                    code="INVALID_PARAMETER",
+                )
+            if (
+                filters.created_after is None
+                and filters.archived_after is None
+                and primary_sort_col != "id"
+            ):
+                # ID-only pagination requires primary sort by ID
+                raise StorageError(
+                    message="id_after without timestamp requires primary ordering by id",
+                    code="INVALID_PARAMETER",
+                )
+
+        order_clause = f"ORDER BY {', '.join(order_parts)}"
 
         limit_clause = ""
         if filters.limit is not None:
@@ -745,13 +786,27 @@ class _PrismaMigrationRunner:
             logger.info(f"Applying migration: {sql_file.name}")
             await self._apply_migration(sql_file)
 
+    def _is_missing_table_error(self, exc: Exception) -> bool:
+        """Check if the exception indicates a missing table."""
+        exc_str = str(exc).lower()
+        # P2010/P2021 are Prisma's codes for "Raw query failed" / "Table does not exist".
+        # 42P01: undefined_table (PostgreSQL error code)
+        if "relation" in exc_str and "does not exist" in exc_str:
+            return True
+        if "p2010" in exc_str or "p2021" in exc_str or "42p01" in exc_str:
+            return True
+        return False
+
     async def _ensure_system_migration(self, sql_file: Path) -> None:
         """Ensure the schema_migrations table exists."""
         try:
             await self._client.query_raw("SELECT 1 FROM schema_migrations LIMIT 1")
             return
-        except Exception:
-            logger.debug("schema_migrations table check failed, will apply system migration.")
+        except Exception as exc:
+            if not self._is_missing_table_error(exc):
+                logger.error("Unexpected error checking schema_migrations table: %s", exc)
+                raise
+            logger.debug("schema_migrations table missing, will apply system migration.")
 
         logger.info("Applying system migration: %s", sql_file.name)
         await self._apply_migration(sql_file)
@@ -763,11 +818,7 @@ class _PrismaMigrationRunner:
             rows = await self._client.query_raw(sql)
             return {row["version"] for row in rows}
         except Exception as exc:
-            exc_str = str(exc).lower()
-            # P2010 is Prisma's code for "Raw query failed" (e.g. table missing).
-            if "relation" in exc_str and "does not exist" in exc_str:
-                return set()
-            if "p2010" in exc_str:
+            if self._is_missing_table_error(exc):
                 return set()
 
             logger.exception("Failed to fetch applied migrations from schema_migrations table")
@@ -775,16 +826,15 @@ class _PrismaMigrationRunner:
 
     async def _tables_exist(self, tables: list[str]) -> bool:
         """Check if specified tables exist in the database."""
-        sql = "SELECT tablename FROM pg_catalog.pg_tables WHERE tablename = ANY($1)"
+        sql = (
+            "SELECT tablename FROM pg_catalog.pg_tables "
+            "WHERE tablename = ANY($1) AND schemaname = ANY(current_schemas(true))"
+        )
         try:
             rows = await self._client.query_raw(sql, tables)
             return len(rows) >= len(tables)
         except Exception as exc:
-            exc_str = str(exc).lower()
-            code = getattr(exc, "code", "")
-            # P2021: Table does not exist in current database.
-            # 42P01: undefined_table (PostgreSQL error code)
-            if code == "P2021" or "42p01" in exc_str or "relation" in exc_str:
+            if self._is_missing_table_error(exc):
                 return False
             raise
 

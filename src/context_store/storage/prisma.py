@@ -578,8 +578,7 @@ class _PrismaMigrationRunner:
             if res:
                 return
         except Exception:
-            pass
-
+            logger.debug("schema_migrations table check failed, will attempt to create it.")
         logger.info("Creating schema_migrations table")
         create_sql = (
             "CREATE TABLE IF NOT EXISTS schema_migrations "

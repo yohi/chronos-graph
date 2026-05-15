@@ -20,14 +20,10 @@ except ImportError:
     PrismaError = Exception  # type: ignore
 
 try:
-    from prisma.errors import PrismaClientKnownRequestError  # type: ignore
+    from prisma.errors import DataError, UniqueViolationError  # type: ignore
 except ImportError:
-    PrismaClientKnownRequestError = PrismaError  # type: ignore
-
-try:
-    from prisma.errors import PrismaClientUnknownRequestError  # type: ignore
-except ImportError:
-    PrismaClientUnknownRequestError = PrismaError  # type: ignore
+    DataError = PrismaError  # type: ignore
+    UniqueViolationError = PrismaError  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -82,25 +78,25 @@ class PrismaStorageAdapter:
 
     async def save_memory(self, memory: "Memory") -> str:  # type: ignore[name-defined]
         """Persist a memory and return its string ID."""
-        embedding_str = _embedding_to_pg(memory.embedding)
-        content_hash = _content_hash(memory.content)
-
-        sql = """
-            INSERT INTO memories (
-                id, content, memory_type, source_type, source_metadata,
-                embedding, semantic_relevance, importance_score, access_count,
-                last_accessed_at, created_at, updated_at, archived_at,
-                tags, project, content_hash
-            ) VALUES (
-                $1, $2, $3, $4, $5::jsonb,
-                $6::vector, $7, $8, $9,
-                $10, $11, $12, $13,
-                $14, $15, $16
-            )
-            RETURNING id
-        """
-
         try:
+            embedding_str = _embedding_to_pg(memory.embedding)
+            content_hash = _content_hash(memory.content)
+
+            sql = """
+                INSERT INTO memories (
+                    id, content, memory_type, source_type, source_metadata,
+                    embedding, semantic_relevance, importance_score, access_count,
+                    last_accessed_at, created_at, updated_at, archived_at,
+                    tags, project, content_hash
+                ) VALUES (
+                    $1, $2, $3, $4, $5::jsonb,
+                    $6::vector, $7, $8, $9,
+                    $10, $11, $12, $13,
+                    $14, $15, $16
+                )
+                RETURNING id
+            """
+
             row = await self._client.query_first_raw(  # type: ignore[attr-defined]
                 sql,
                 memory.id,
@@ -120,13 +116,23 @@ class PrismaStorageAdapter:
                 memory.project,
                 content_hash,
             )
+        except UniqueViolationError as e:
+            # P2002: Unique constraint failed
+            raise StorageError(
+                message=str(e),
+                code="DUPLICATE_CONTENT",
+                recoverable=False,
+            ) from e
+        except DataError as e:
+            # Other Prisma data-related errors (Accelerate/Prisma Engine)
+            raise StorageError(
+                message=str(e),
+                code="STORAGE_ERROR",
+                recoverable=False,
+            ) from e
         except Exception as e:
-            if e.__class__.__name__ == "UniqueViolationError":
-                raise StorageError(
-                    message=str(e),
-                    code="DUPLICATE_CONTENT",
-                    recoverable=False,
-                ) from e
+            if isinstance(e, StorageError):
+                raise
             raise StorageError(
                 message=str(e),
                 code="STORAGE_ERROR",
@@ -193,8 +199,7 @@ class _PrismaMigrationRunner:
             await self._client.query_raw("SELECT 1 FROM schema_migrations LIMIT 1")
             return
         except (
-            PrismaClientKnownRequestError,
-            PrismaClientUnknownRequestError,
+            DataError,
             PrismaError,
         ) as e:
             # We catch specific Prisma errors and check the message to ensure
@@ -211,8 +216,7 @@ class _PrismaMigrationRunner:
         try:
             rows = await self._client.query_raw("SELECT version FROM schema_migrations")
         except (
-            PrismaClientKnownRequestError,
-            PrismaClientUnknownRequestError,
+            DataError,
             PrismaError,
         ) as e:
             msg = str(e).lower()

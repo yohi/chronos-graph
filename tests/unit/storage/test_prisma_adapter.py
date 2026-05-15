@@ -274,17 +274,33 @@ async def test_save_memory_inserts_and_returns_id(mock_prisma):
 
 @pytest.mark.asyncio
 async def test_save_memory_raises_duplicate_content(mock_prisma):
-    # Simulate UniqueViolationError
-    class UniqueViolationError(Exception):
-        pass
+    # Simulate UniqueViolationError (actual Prisma unique violation)
+    from prisma.errors import UniqueViolationError
+
+    # UniqueViolationError typically takes the raw data dict
+    error = UniqueViolationError(
+        {"user_facing_error": {"error_code": "P2002", "message": "duplicate content_hash"}}
+    )
 
     memory = _build_memory("dup")
-    mock_prisma.query_first_raw = AsyncMock(
-        side_effect=UniqueViolationError("duplicate content_hash")
-    )
+    mock_prisma.query_first_raw = AsyncMock(side_effect=error)
 
     adapter = PrismaStorageAdapter(client=mock_prisma)
     with pytest.raises(StorageError) as exc_info:
         await adapter.save_memory(memory)
     assert exc_info.value.code == "DUPLICATE_CONTENT"
+    assert exc_info.value.recoverable is False
+
+
+@pytest.mark.asyncio
+async def test_save_memory_raises_storage_error_on_none_row(mock_prisma):
+    """row is None ケースのテスト。"""
+    memory = _build_memory("no row")
+    mock_prisma.query_first_raw = AsyncMock(return_value=None)
+
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    with pytest.raises(StorageError) as exc_info:
+        await adapter.save_memory(memory)
+    assert exc_info.value.code == "STORAGE_ERROR"
+    assert "INSERT RETURNING returned no row" in str(exc_info.value)
     assert exc_info.value.recoverable is False

@@ -202,7 +202,7 @@ async def test_migration_runner_transaction_failure_propagates(mock_prisma, tmp_
 
     migrations_dir = tmp_path / "migrations" / "postgres"
     migrations_dir.mkdir(parents=True)
-    (migrations_dir / "0001_initial.sql").write_text("-- broken")
+    (migrations_dir / "0001_initial.sql").write_text("INVALID SQL")
 
     monkeypatch.setattr(
         "context_store.storage.prisma.__file__",

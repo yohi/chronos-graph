@@ -29,6 +29,7 @@ storage-postgres = [
 ]
 storage-prisma = [
     "prisma>=0.15.0",
+    "sqlparse>=0.5.0",
 ]
 embedding-local = [
     "sentence-transformers>=3.0.0",

@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 # but we use a reasonable chunk size for consistency and memory safety.
 PRISMA_BATCH_FETCH_CHUNK_SIZE = 250
 PRISMA_MAX_TOP_K = 200
-PRISMA_PAYLOAD_TOO_LARGE_CODES = {"P2010", "P2021", "P6009"}
+PRISMA_PAYLOAD_TOO_LARGE_CODES = {"P6009"}
 PRISMA_TIMEOUT_CODES = {"P2024", "P2028", "P6004"}
 
 

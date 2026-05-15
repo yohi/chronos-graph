@@ -182,7 +182,7 @@ class _PrismaMigrationRunner:
         try:
             import sqlparse
 
-            statements = [s.strip() for s in sqlparse.split(sql) if s.strip()]
+            statements = [s.strip().rstrip(";") for s in sqlparse.split(sql) if s.strip()]
         except ImportError:
             # Fallback to a scanner-based approach if sqlparse is not available.
             # This handles both standard $$ and tagged $tag$ dollar quotes,

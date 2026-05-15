@@ -233,8 +233,8 @@ async def test_migration_runner_transaction_failure_propagates(mock_prisma, tmp_
 
     mock_prisma.query_raw = AsyncMock(
         side_effect=[
+            [],  # _ensure_system_migration: schema_migrations 不在
             [],  # _get_applied_migrations: 空
-            [],  # _tables_exist for 0001: 不在
             [],  # baseline 後の _get_applied_migrations
         ]
     )

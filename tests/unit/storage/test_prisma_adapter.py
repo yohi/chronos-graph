@@ -26,6 +26,7 @@ def mock_prisma() -> MagicMock:
     client = MagicMock()
     client.connect = AsyncMock()
     client.disconnect = AsyncMock()
+    client.is_connected = MagicMock(return_value=True)
     client.query_raw = AsyncMock(return_value=[])
     client.query_first_raw = AsyncMock(return_value=None)
     client.execute_raw = AsyncMock(return_value=0)
@@ -83,8 +84,6 @@ async def test_migration_runner_filters_out_graph_migrations(
     )
 
     # ダミーの migrations ディレクトリを構築
-    # prisma.py が src/context_store/storage/ にある場合、
-    # 2つ上の parent (src/) の隣に docker/ があると想定される (通常はプロジェクトルート)
     migrations_dir = tmp_path / "docker" / "postgres"
     migrations_dir.mkdir(parents=True)
     (migrations_dir / "0000_system.sql").write_text("CREATE TABLE schema_migrations(version TEXT);")
@@ -133,6 +132,7 @@ async def test_migration_runner_baselines_existing_memories_table(
 
     migrations_dir = tmp_path / "docker" / "postgres"
     migrations_dir.mkdir(parents=True)
+    (migrations_dir / "0001_initial.sql").write_text("CREATE TABLE memories(id UUID);")
 
     mock_prisma.query_raw = AsyncMock(
         side_effect=[
@@ -198,6 +198,45 @@ async def test_migration_runner_applies_sequential_files(
     assert "INSERT INTO schema_migrations" in sql_sequence[1]
     assert sql_sequence[2] == "CREATE TABLE memories(id UUID)"
     assert "INSERT INTO schema_migrations" in sql_sequence[3]
+
+
+@pytest.mark.asyncio
+async def test_migration_runner_filters_empty_statements(
+    mock_prisma, mock_tx_context, tmp_path, monkeypatch
+):
+    """' ; ' のような空ステートメントが execute_raw に渡されないことを検証。"""
+    from context_store.storage.prisma import _PrismaMigrationRunner
+
+    prisma_file = tmp_path / "src" / "context_store" / "storage" / "prisma.py"
+    prisma_file.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("context_store.storage.prisma.__file__", str(prisma_file))
+
+    migrations_dir = tmp_path / "docker" / "postgres"
+    migrations_dir.mkdir(parents=True)
+    # セミコロンのみの行や、空白+セミコロンの行を含む SQL
+    (migrations_dir / "0001_initial.sql").write_text(
+        "CREATE TABLE t1(id INT);\n  ;  \nCREATE TABLE t2(id INT);"
+    )
+
+    mock_prisma.query_raw = AsyncMock(
+        side_effect=[
+            [{"1": 1}],  # _ensure_system_migration: 存在
+            [],  # _get_applied_migrations: 空
+            [],  # _tables_exist: 不在
+        ]
+    )
+    mock_prisma.execute_raw = AsyncMock(return_value=1)
+
+    runner = _PrismaMigrationRunner(mock_prisma)
+    await runner.run()
+
+    sql_sequence = [call.args[0] for call in mock_tx_context.execute_raw.await_args_list]
+    # 空の文字列 "" で execute_raw が呼ばれていないことを確認
+    assert "" not in sql_sequence
+    assert "CREATE TABLE t1(id INT)" in sql_sequence
+    assert "CREATE TABLE t2(id INT)" in sql_sequence
+    # INSERT を含めて合計 3 回 (t1, t2, schema_migrations)
+    assert len(sql_sequence) == 3
 
 
 @pytest.mark.asyncio
@@ -461,18 +500,75 @@ async def test_get_memories_batch_deduplicates_ids(mock_prisma):
 @pytest.mark.asyncio
 async def test_create_raises_import_error_when_prisma_not_available(monkeypatch):
     """Test that PrismaStorageAdapter.create raises ImportError when Prisma is not installed."""
-    from pydantic import SecretStr
-
     import context_store.storage.prisma
-    from context_store.config import Settings
 
     monkeypatch.setattr(context_store.storage.prisma, "prisma_available", False)
-    settings = Settings(
-        storage_backend="prisma",
-        graph_enabled=False,
-        prisma_database_url=SecretStr("prisma://accelerate.prisma-data.net/?api_key=test"),
-    )
 
     with pytest.raises(ImportError) as excinfo:
-        await context_store.storage.prisma.PrismaStorageAdapter.create(settings)
+        await context_store.storage.prisma.PrismaStorageAdapter.create(None)
     assert "Prisma is not installed" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_vector_search_executes_correct_sql(mock_prisma):
+    mock_prisma.query_raw = AsyncMock(return_value=[])
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    await adapter.vector_search([0.1, 0.2], top_k=5, project="test-project")
+
+    mock_prisma.query_raw.assert_awaited_once()
+    sql = mock_prisma.query_raw.await_args.args[0]
+    assert "ORDER BY embedding <=> $1::vector" in sql
+    assert "project = $3" in sql
+
+
+@pytest.mark.asyncio
+async def test_keyword_search_returns_empty_on_empty_query(mock_prisma):
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    # empty string
+    assert await adapter.keyword_search("", top_k=5) == []
+    # whitespace
+    assert await adapter.keyword_search("   ", top_k=5) == []
+    # No query_raw call should happen
+    mock_prisma.query_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_keyword_search_executes_correct_sql(mock_prisma):
+    mock_prisma.query_raw = AsyncMock(return_value=[])
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    await adapter.keyword_search("hello", top_k=5)
+
+    mock_prisma.query_raw.assert_awaited_once()
+    sql = mock_prisma.query_raw.await_args.args[0]
+    params = mock_prisma.query_raw.await_args.args[1:]
+    assert "content LIKE $1 ESCAPE '\\'" in sql
+    assert params == ("%hello%", 5)
+    # params: (like_query, effective_top_k)
+    assert params == ("%hello%", 5)
+
+
+@pytest.mark.asyncio
+async def test_get_applied_migrations_raises_unknown_exception(mock_prisma):
+    """未知の例外が発生した場合、_get_applied_migrations がそれを再スローすることを確認。"""
+    from context_store.storage.prisma import _PrismaMigrationRunner
+
+    # 1. _ensure_system_migration の table check (query_raw) -> 成功 (テーブルあり)
+    # 2. _get_applied_migrations の version fetch (query_raw) -> 失敗 (未知の例外)
+    mock_prisma.query_raw = AsyncMock(
+        side_effect=[
+            [{"1": 1}],  # table exists
+            RuntimeError("Connection lost"),  # version fetch fails
+        ]
+    )
+    runner = _PrismaMigrationRunner(mock_prisma)
+    with pytest.raises(RuntimeError, match="Connection lost"):
+        await runner.run()
+
+
+@pytest.mark.asyncio
+async def test_vector_search_returns_empty_on_empty_embedding(mock_prisma):
+    """空の embedding リストが渡された場合、即座に空リストを返すことを確認。"""
+    adapter = PrismaStorageAdapter(client=mock_prisma)
+    result = await adapter.vector_search([], top_k=5)
+    assert result == []
+    mock_prisma.query_raw.assert_not_called()

@@ -541,7 +541,8 @@ async def test_keyword_search_executes_correct_sql(mock_prisma):
     sql = mock_prisma.query_raw.await_args.args[0]
     params = mock_prisma.query_raw.await_args.args[1:]
     assert "content LIKE $1 ESCAPE '\\'" in sql
-    assert params == ("%hello%", 5)
+    assert "bigm_similarity(content, $3)" in sql
+    assert params == ("%hello%", 5, "hello")
 
 
 @pytest.mark.asyncio

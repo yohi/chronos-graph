@@ -104,10 +104,13 @@ def build_start_command(
 ) -> tuple[str, list[str]]:
     """起動コマンドと引数を生成する。"""
 
+    def _is_url(s: str) -> bool:
+        return s.startswith(("http://", "https://", "git+")) or "://" in s or s.endswith(".git")
+
     def _with_extras(pkg: str | None) -> str | None:
         if pkg is None:
             return None
-        return f"context-store-mcp[all] @ {pkg}"
+        return f"context-store-mcp[all] @ {pkg}" if _is_url(pkg) else f"{pkg}[all]"
 
     if method == "uv":
         command = "uv"

@@ -49,7 +49,7 @@ ChronosGraph は、AIエージェント（Claude Code / Gemini CLI / Cursor 等�
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/yohi/chronos-graph.git[all]",
+        "context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git",
         "context-store"
       ],
       "env": {

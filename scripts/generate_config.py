@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shutil
 import sys
 from typing import Any, Literal, get_args
@@ -108,7 +107,7 @@ def build_start_command(
     def _with_extras(pkg: str | None) -> str | None:
         if pkg is None:
             return None
-        return pkg if re.search(r"\[.*\]$", pkg) else f"{pkg}[all]"
+        return f"context-store-mcp[all] @ {pkg}"
 
     if method == "uv":
         command = "uv"

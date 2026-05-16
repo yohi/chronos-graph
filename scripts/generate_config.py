@@ -103,17 +103,28 @@ def build_start_command(
     method: str, uv_from: str | None, python_path: str
 ) -> tuple[str, list[str]]:
     """起動コマンドと引数を生成する。"""
+
+    def _is_url(s: str) -> bool:
+        return s.startswith(("http://", "https://", "git+")) or "://" in s or s.endswith(".git")
+
+    def _with_extras(pkg: str | None) -> str | None:
+        if pkg is None:
+            return None
+        return f"context-store-mcp[all] @ {pkg}" if _is_url(pkg) else f"{pkg}[all]"
+
     if method == "uv":
         command = "uv"
         args = ["run", "--quiet"]
-        if uv_from:
-            args.extend(["--from", uv_from])
+        uv_from_extras = _with_extras(uv_from)
+        if uv_from_extras:
+            args.extend(["--from", uv_from_extras])
         args.append("context-store")
     elif method == "uvx":
         command = "uvx"
         args = ["--quiet"]
-        if uv_from:
-            args.extend(["--from", uv_from])
+        uv_from_extras = _with_extras(uv_from)
+        if uv_from_extras:
+            args.extend(["--from", uv_from_extras])
         args.append("context-store")
     else:
         command = python_path

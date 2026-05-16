@@ -49,7 +49,7 @@ ChronosGraph は、AIエージェント（Claude Code / Gemini CLI / Cursor 等�
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/yohi/chronos-graph.git",
+        "git+https://github.com/yohi/chronos-graph.git[all]",
         "context-store"
       ],
       "env": {
@@ -99,7 +99,7 @@ https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
     *   `uv` (推奨) または `pip` を使用して、開発用依存関係をインストールしてください。
     *   `uv sync --all-extras` または `pip install -e ".[all]"`
     3.  **[ ] 環境設定:**
-    *   `.env.example` を `.env` にコピーし、選択された構成に合わせて環境変数を設定してください。
+     *   `.env.example` を **MCPクライアントの設定ファイルと同じディレクトリ**に `.env` としてコピーし、選択された構成に合わせて環境変数を設定してください。
     *   `bootstrap.sh` を使用すると、基本設定を自動化できます：
         - **ライトウェイト (A)**: `bash scripts/bootstrap.sh --backend sqlite`
         - **フルモード (B)**: `bash scripts/bootstrap.sh --backend postgres`
@@ -111,10 +111,12 @@ https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
     *   ユニットテストを実行して、環境が正しく構築されているか確認してください。
     *   `uv run pytest tests/unit/ -v`
 5.  **[ ] MCP設定の生成:**
-    *   `uv run python scripts/generate_config.py > mcp_config.json` を実行し、MCPクライアント用の設定ファイルを生成してください。
-    *   **重要**: ユーザーが使用している各エージェント（ClaudeCode, GeminiCLI, Codex, OpenCode 等）に合わせた設定例を出力し、適用方法を説明してください。
+    *   プロジェクトルートで `uv run python scripts/generate_config.py` を実行し、出力結果を **MCPクライアントの設定ファイルと同じディレクトリ**に `mcp_config.json` として保存してください。
+    *   生成された `mcp_config.json` の `mcpServers` ブロックの内容を、ユーザーが使用しているAIエージェントのMCP設定に追加してください（設定方法は各AIエージェントのルールに従うこと）。エージェントごとに設定ファイルの場所は異なります（例: Claude Desktop の `claude_desktop_config.json`、OpenCode の `opencode.jsonc`、Cursor の `~/.cursor/mcp.json` 等）。
+    *   **重要**: `mcp_config.json` はプロジェクトルートのリファレンス用です。各エージェントのMCP設定には直接読み込まれませんので、必ず各エージェントの設定に追加するようユーザーに説明してください。
 6.  **[ ] エージェントへの指示の追加 (Personal/Global):**
-    *   `docs/agent-prompts/memory-save-system-prompt.md` の内容を、あなたのエージェントの**グローバル設定**（`~/.gemini/GEMINI.md`, `~/.clauderules`, または Cursor の `Rules for AI`）に追加してください。
+    *   あなたがこの手順を実行しているAIエージェントそのものである場合、`docs/agent-prompts/memory-save-system-prompt.md` の内容をあなた自身の**グローバル設定**に追加してください。
+    *   **注意**: プロジェクト内のファイルとして作成するのではなく、あなたの設定ファイル・ルールディレクトリに直接追加する必要があります（例: Gemini CLI は `~/.gemini/GEMINI.md`、Claude Code は `~/.clauderules/`、OpenCode は `AGENTS.md`、Cursor は `Rules for AI`）。設定方法は各エージェントのルールに従うこと。
 
 上記の全手順（手順1を除く）を自律的に行うには、`bash scripts/bootstrap.sh` に適切なフラグを渡して実行してください。
 </details>

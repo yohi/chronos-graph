@@ -106,14 +106,16 @@ def build_start_command(
     if method == "uv":
         command = "uv"
         args = ["run", "--quiet"]
-        if uv_from:
-            args.extend(["--from", uv_from])
+        uv_from_extras = f"{uv_from}[all]" if uv_from else None
+        if uv_from_extras:
+            args.extend(["--from", uv_from_extras])
         args.append("context-store")
     elif method == "uvx":
         command = "uvx"
         args = ["--quiet"]
-        if uv_from:
-            args.extend(["--from", uv_from])
+        uv_from_extras = f"{uv_from}[all]" if uv_from else None
+        if uv_from_extras:
+            args.extend(["--from", uv_from_extras])
         args.append("context-store")
     else:
         command = python_path

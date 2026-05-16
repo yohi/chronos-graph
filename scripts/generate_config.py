@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 from typing import Any, Literal, get_args
@@ -103,17 +104,23 @@ def build_start_command(
     method: str, uv_from: str | None, python_path: str
 ) -> tuple[str, list[str]]:
     """起動コマンドと引数を生成する。"""
+
+    def _with_extras(pkg: str | None) -> str | None:
+        if pkg is None:
+            return None
+        return pkg if re.search(r"\[.*\]$", pkg) else f"{pkg}[all]"
+
     if method == "uv":
         command = "uv"
         args = ["run", "--quiet"]
-        uv_from_extras = f"{uv_from}[all]" if uv_from else None
+        uv_from_extras = _with_extras(uv_from)
         if uv_from_extras:
             args.extend(["--from", uv_from_extras])
         args.append("context-store")
     elif method == "uvx":
         command = "uvx"
         args = ["--quiet"]
-        uv_from_extras = f"{uv_from}[all]" if uv_from else None
+        uv_from_extras = _with_extras(uv_from)
         if uv_from_extras:
             args.extend(["--from", uv_from_extras])
         args.append("context-store")

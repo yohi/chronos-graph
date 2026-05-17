@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     postgres_ssl: bool = False
     postgres_ssl_no_verify: bool = False
 
+    # pgBouncer (transaction mode) など prepared statement をサポートしない
+    # プロキシを利用する場合は 0 に設定してください（Supabase 等）。
+    # asyncpg デフォルトは 256。
+    postgres_statement_cache_size: int = Field(default=256, ge=0)
+
     # --- Prisma Accelerate (storage_backend=prisma の場合) ---
     prisma_database_url: SecretStr = SecretStr("")
 

@@ -1182,6 +1182,9 @@ POSTGRES_PORT=5432
 POSTGRES_DB=context_store
 POSTGRES_USER=context_store
 POSTGRES_PASSWORD=<secret>
+POSTGRES_SSL=false
+POSTGRES_SSL_NO_VERIFY=false   # true で証明書検証をスキップ (Supabase 等)
+POSTGRES_STATEMENT_CACHE_SIZE=256  # 0 で prepared statement キャッシュ無効化 (pgBouncer)
 
 # === Neo4j (GRAPH_ENABLED=true の場合) ===
 NEO4J_URI=bolt://localhost:7687

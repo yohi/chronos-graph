@@ -52,6 +52,7 @@ class PostgresStorageAdapter:
             min_size=1,
             max_size=10,
             ssl=ssl_opt,
+            statement_cache_size=settings.postgres_statement_cache_size,
         )
         adapter = cls(pool)
         try:

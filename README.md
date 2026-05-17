@@ -99,13 +99,18 @@ https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
     *   `uv` (推奨) または `pip` を使用して、開発用依存関係をインストールしてください。
     *   `uv sync --all-extras` または `pip install -e ".[all]"`
     3.  **[ ] 環境設定:**
-     *   `.env.example` を **MCPクライアントの設定ファイルと同じディレクトリ**に `.env` としてコピーし、選択された構成に合わせて環境変数を設定してください。
+     *   `.env` は **Pydantic が CWD から読み込む**ため、MCP プロセスが起動されるディレクトリに配置する必要があります。
+        - **ローカル (uv run)**: chronos-graph リポジトリルートに `.env.example` をコピーして `.env` として配置。
+        - **リモート (uvx)**: MCPクライアント（例: `claude_desktop_config.json` や `opencode.json`）と同じディレクトリに `.env` を配置。
+        - **bootstrap.sh 使用時**: カレントディレクトリに `.env` が生成されるため、MCPクライアント設定のディレクトリで実行するか、手動で移動してください。
     *   `bootstrap.sh` を使用すると、基本設定を自動化できます：
         - **ライトウェイト (A)**: `bash scripts/bootstrap.sh --backend sqlite`
         - **フルモード (B)**: `bash scripts/bootstrap.sh --backend postgres`
         - **フルモード (C)**: `bash scripts/bootstrap.sh --backend postgres --ssl`
 
-    *   **重要**: クラウド利用（Supabase/Aura/Upstash）の場合は、`.env` の接続情報を適宜編集してください。Upstash を使用する場合は `REDIS_SSL=true` を設定してください。
+    *   **重要**: クラウド利用（Supabase + Neo4j Aura + Upstash）の場合、`.env` の接続情報を適宜編集してください。特に以下を設定しないと接続エラーになります：
+        - **Supabase (PostgreSQL)**: `POSTGRES_SSL_NO_VERIFY=true` と `POSTGRES_STATEMENT_CACHE_SIZE=0`（pgBouncer transaction mode 対応）
+        - **Upstash (Redis)**: `REDIS_SSL=true`
 4.  **[ ] 動作確認:**
     *   DB/Redis/Neo4j を使用する構成の場合、各サービスへの疎通（Connectivity）が取れるか確認してください。
     *   ユニットテストを実行して、環境が正しく構築されているか確認してください。
@@ -291,6 +296,9 @@ SQLite および PostgreSQL ストレージを使用している場合、テー�
 | `DEDUP_THRESHOLD` | `0.90` | 重複排除の閾値 |
 | `DEFAULT_TOP_K` | `10` | デフォルト検索件数 |
 | `GRAPH_MAX_LOGICAL_DEPTH` | `5` | グラフ検索の最大論理深さ |
+| `POSTGRES_SSL` | `false` | PostgreSQL SSL 接続の有効化 |
+| `POSTGRES_SSL_NO_VERIFY` | `false` | SSL証明書検証をスキップ（Supabase 等の自己署名チェーン対策） |
+| `POSTGRES_STATEMENT_CACHE_SIZE` | `256` | asyncpg prepared statement キャッシュサイズ。pgBouncer transaction mode では `0` |
 | `URL_FETCH_CONCURRENCY` | `3` | URL フェッチの同時実行数 |
 | `ALLOW_PRIVATE_URLS` | `false` | プライベート URL の許可 (SSRF 対策) |
 | `DASHBOARD_HOST` | `0.0.0.0` | Dashboard サーバーのバインドアドレス |

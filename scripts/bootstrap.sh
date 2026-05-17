@@ -31,7 +31,7 @@ while [[ "$#" -gt 0 ]]; do
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --embedding requires a value (openai|litellm|local|custom)"; exit 1; fi
             EMBEDDING_PROVIDER="$2"; EXPLICIT_FLAGS="$EXPLICIT_FLAGS EMBEDDING_PROVIDER"; shift ;;
         --skip-tests) SKIP_TESTS=true ;;
-        --ssl) POSTGRES_SSL=true; EXPLICIT_FLAGS="$EXPLICIT_FLAGS POSTGRES_SSL" ;;
+        --ssl) POSTGRES_SSL=true; POSTGRES_SSL_NO_VERIFY=false; POSTGRES_STATEMENT_CACHE_SIZE=256; EXPLICIT_FLAGS="$EXPLICIT_FLAGS POSTGRES_SSL POSTGRES_SSL_NO_VERIFY POSTGRES_STATEMENT_CACHE_SIZE" ;;
         --ssl-no-verify) POSTGRES_SSL=true; POSTGRES_SSL_NO_VERIFY=true; POSTGRES_STATEMENT_CACHE_SIZE=0; EXPLICIT_FLAGS="$EXPLICIT_FLAGS POSTGRES_SSL POSTGRES_SSL_NO_VERIFY POSTGRES_STATEMENT_CACHE_SIZE" ;;
         --cache)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --cache requires a value (inmemory|redis)"; exit 1; fi

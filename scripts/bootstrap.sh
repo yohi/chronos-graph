@@ -31,7 +31,8 @@ while [[ "$#" -gt 0 ]]; do
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --embedding requires a value (openai|litellm|local|custom)"; exit 1; fi
             EMBEDDING_PROVIDER="$2"; EXPLICIT_FLAGS="$EXPLICIT_FLAGS EMBEDDING_PROVIDER"; shift ;;
         --skip-tests) SKIP_TESTS=true ;;
-        --ssl) POSTGRES_SSL=true; EXPLICIT_FLAGS="$EXPLICIT_FLAGS POSTGRES_SSL" ;;
+        --ssl) POSTGRES_SSL=true; POSTGRES_SSL_NO_VERIFY=true; POSTGRES_STATEMENT_CACHE_SIZE=0; EXPLICIT_FLAGS="$EXPLICIT_FLAGS POSTGRES_SSL POSTGRES_SSL_NO_VERIFY POSTGRES_STATEMENT_CACHE_SIZE" ;;
+
         --cache)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --cache requires a value (inmemory|redis)"; exit 1; fi
             CACHE_BACKEND="$2"; EXPLICIT_FLAGS="$EXPLICIT_FLAGS CACHE_BACKEND"; shift ;;
@@ -58,7 +59,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --backend [sqlite|postgres]      Set storage backend (default: sqlite)"
             echo "  --embedding [openai|litellm|local|custom] Set embedding provider (default: openai)"
             echo "  --skip-tests                      Skip running unit tests"
-            echo "  --ssl                             Enable SSL for PostgreSQL (default: false)"
+            echo "  --ssl                             Enable SSL for PostgreSQL. Also sets SSL_NO_VERIFY=true and STATEMENT_CACHE_SIZE=0 for cloud compatibility (Supabase)"
             echo "  --cache [inmemory|redis]          Set cache backend (default: inmemory)"
             echo "  --mcp-output [claude|cursor|generic] Set MCP configuration output format (default: generic)"
             echo "  --mcp-method [python|uv|uvx]         Set MCP activation method (default: python)"

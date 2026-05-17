@@ -99,7 +99,7 @@ https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
     *   `uv` (推奨) または `pip` を使用して、開発用依存関係をインストールしてください。
     *   `uv sync --all-extras` または `pip install -e ".[all]"`
     3.  **[ ] 環境設定:**
-     *   `.env` は **Pydantic が CWD から読み込む**ため、MCP プロセスが起動されるディレクトリに配置する必要があります。
+    *   `.env` は **Pydantic が CWD から読み込む**ため、MCP プロセスが起動されるディレクトリに配置する必要があります。
         - **ローカル (uv run)**: chronos-graph リポジトリルートに `.env.example` をコピーして `.env` として配置。
         - **リモート (uvx)**: MCPクライアント（例: `claude_desktop_config.json` や `opencode.json`）と同じディレクトリに `.env` を配置。
         - **bootstrap.sh 使用時**: カレントディレクトリに `.env` が生成されるため、MCPクライアント設定のディレクトリで実行するか、手動で移動してください。

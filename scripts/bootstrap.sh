@@ -31,8 +31,8 @@ while [[ "$#" -gt 0 ]]; do
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --embedding requires a value (openai|litellm|local|custom)"; exit 1; fi
             EMBEDDING_PROVIDER="$2"; EXPLICIT_FLAGS="$EXPLICIT_FLAGS EMBEDDING_PROVIDER"; shift ;;
         --skip-tests) SKIP_TESTS=true ;;
-        --ssl) POSTGRES_SSL=true; POSTGRES_SSL_NO_VERIFY=true; POSTGRES_STATEMENT_CACHE_SIZE=0; EXPLICIT_FLAGS="$EXPLICIT_FLAGS POSTGRES_SSL POSTGRES_SSL_NO_VERIFY POSTGRES_STATEMENT_CACHE_SIZE" ;;
-
+        --ssl) POSTGRES_SSL=true; EXPLICIT_FLAGS="$EXPLICIT_FLAGS POSTGRES_SSL" ;;
+        --ssl-no-verify) POSTGRES_SSL=true; POSTGRES_SSL_NO_VERIFY=true; POSTGRES_STATEMENT_CACHE_SIZE=0; EXPLICIT_FLAGS="$EXPLICIT_FLAGS POSTGRES_SSL POSTGRES_SSL_NO_VERIFY POSTGRES_STATEMENT_CACHE_SIZE" ;;
         --cache)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --cache requires a value (inmemory|redis)"; exit 1; fi
             CACHE_BACKEND="$2"; EXPLICIT_FLAGS="$EXPLICIT_FLAGS CACHE_BACKEND"; shift ;;
@@ -59,7 +59,8 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --backend [sqlite|postgres]      Set storage backend (default: sqlite)"
             echo "  --embedding [openai|litellm|local|custom] Set embedding provider (default: openai)"
             echo "  --skip-tests                      Skip running unit tests"
-            echo "  --ssl                             Enable SSL for PostgreSQL. Also sets SSL_NO_VERIFY=true and STATEMENT_CACHE_SIZE=0 for cloud compatibility (Supabase)"
+            echo "  --ssl                             Enable SSL for PostgreSQL"
+            echo "  --ssl-no-verify                   Enable SSL without certificate verification and with statement cache disabled (for Supabase/pgBouncer)"
             echo "  --cache [inmemory|redis]          Set cache backend (default: inmemory)"
             echo "  --mcp-output [claude|cursor|generic] Set MCP configuration output format (default: generic)"
             echo "  --mcp-method [python|uv|uvx]         Set MCP activation method (default: python)"
@@ -111,17 +112,19 @@ if [ ! -f .env ]; then
 fi
 
 # Update .env variables
-for VAR in "STORAGE_BACKEND" "EMBEDDING_PROVIDER" "GRAPH_ENABLED" "POSTGRES_SSL" "CACHE_BACKEND"; do
+for VAR in "STORAGE_BACKEND" "EMBEDDING_PROVIDER" "GRAPH_ENABLED" "POSTGRES_SSL" "CACHE_BACKEND" "POSTGRES_SSL_NO_VERIFY" "POSTGRES_STATEMENT_CACHE_SIZE"; do
     case $VAR in
         STORAGE_BACKEND) VAL=$BACKEND; EXPLICIT_VAR="STORAGE_BACKEND" ;;
         EMBEDDING_PROVIDER) VAL=$EMBEDDING_PROVIDER; EXPLICIT_VAR="EMBEDDING_PROVIDER" ;;
         GRAPH_ENABLED) VAL=$GRAPH_ENABLED; EXPLICIT_VAR="GRAPH_ENABLED" ;;
         POSTGRES_SSL) VAL=$POSTGRES_SSL; EXPLICIT_VAR="POSTGRES_SSL" ;;
+        POSTGRES_SSL_NO_VERIFY) VAL=$POSTGRES_SSL_NO_VERIFY; EXPLICIT_VAR="POSTGRES_SSL_NO_VERIFY" ;;
+        POSTGRES_STATEMENT_CACHE_SIZE) VAL=$POSTGRES_STATEMENT_CACHE_SIZE; EXPLICIT_VAR="POSTGRES_STATEMENT_CACHE_SIZE" ;;
         CACHE_BACKEND) VAL=$CACHE_BACKEND; EXPLICIT_VAR="CACHE_BACKEND" ;;
     esac
 
     # Skip if variable is empty (e.g. CACHE_BACKEND not provided)
-    if [[ -z "$VAL" && "$VAR" == "CACHE_BACKEND" ]]; then
+    if [[ -z "$VAL" && ( "$VAR" == "CACHE_BACKEND" || "$VAR" == "POSTGRES_SSL_NO_VERIFY" || "$VAR" == "POSTGRES_STATEMENT_CACHE_SIZE" ) ]]; then
         continue
     fi
 

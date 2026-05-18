@@ -392,19 +392,27 @@ GRANT EXECUTE ON FUNCTION increment_memory_access_count(uuid)    TO service_role
 
 - [ ] **Step 3: devcontainer 内で SQL 構文確認**
 
-`service_role` ロールは Supabase 専用のため、ローカル Postgres には存在しない。**スタブロールを冪等に作成してから**本体を `ON_ERROR_STOP=on` で厳格検証することで、構文/型エラーを握りつぶさずに GRANT 文だけは通せるようにする:
+`service_role` ロールは Supabase 専用のため、ローカル Postgres には存在しない。**SQL 側の存在チェック (PL/pgSQL `DO` ブロック + `pg_roles` 参照)** でロール既存を benign にハンドリングし、migration 本体と合成して **1 回の psql 呼出** に集約する。`ON_ERROR_STOP=on` + シェルの `\|\| true` 不使用で、接続/認証/SQL 構文エラーをすべて確実に検知する:
 
 ```bash
-# service_role スタブ作成 (既存ならエラーで終わるがそれだけは許容)
-docker compose exec -T postgres psql -U context_store -d context_store \
-    -c "CREATE ROLE service_role" 2>/dev/null || true
-
-# 本体は ON_ERROR_STOP=on で厳格に構文/権限エラーを検知
-docker compose exec -T postgres psql -U context_store -d context_store \
-    --set=ON_ERROR_STOP=on -f - < supabase/migrations/20260518000002_rpc_functions.sql
+{
+    cat <<'SQL'
+-- service_role はローカル Postgres には存在しないため、SQL レベルで冪等に作成する。
+-- 真のエラー (接続失敗・認証失敗・構文エラー等) は ON_ERROR_STOP=on で fail-fast 検知。
+DO $do$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+        CREATE ROLE service_role;
+    END IF;
+END
+$do$;
+SQL
+    cat supabase/migrations/20260518000002_rpc_functions.sql
+} | docker compose exec -T postgres psql -U context_store -d context_store \
+        --set=ON_ERROR_STOP=on
 ```
 
-Expected: 終了コード 0。構文/型エラーが出た場合は SQL を修正して再実行する。
+Expected: 終了コード 0。`Connection refused` / 認証失敗 / 構文エラー / GRANT エラー等が出た場合は原因を特定して修正し再実行する (`\|\| true` で握りつぶさない設計のため、エラーは必ず stderr に表示される)。
 
 - [ ] **Step 4: コミット**
 
@@ -2668,7 +2676,7 @@ SUPABASE_LIVE_TEST=1 uv run pytest tests/storage/integration/test_supabase_live.
 
 | リスク | 対応策 |
 | --- | --- |
-| `vector(1024)` で運用中の既存環境がある可能性 | Phase 0 の README 追記で次元確認を促す + Task 3.2 の起動時 probe で fail-fast |
+| `vector(1024)` で運用中の既存環境がある可能性 | Phase 6 Task 6.1 の README 追記で次元確認を促す + Task 3.2 の起動時 probe で fail-fast |
 | supabase-py の `or_` 構文が表記揺れする可能性 | Task 3.6 の cursor pagination テストで実装と仕様の双方を固定。実装時に supabase-py の最新ドキュメントを確認 |
 | `client.postgrest.aclose()` の属性名がバージョン差で異なる | Task 3.1 の `dispose` 実装で `hasattr` ガード済み |
 | 将来 `EMBEDDING_DIMENSION` 変更時に SQL/Python の二重更新が必要 | Task 2.2 で `SUPABASE_VECTOR_DIMENSION` 定数を導入し、変更箇所を 2 つ (定数 + migrations) に限定 |

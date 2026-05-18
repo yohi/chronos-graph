@@ -250,12 +250,15 @@ CREATE INDEX IF NOT EXISTS idx_memories_content_fts
 
 - [ ] **Step 3: devcontainer 内で SQL の構文妥当性を簡易確認**
 
-PostgreSQL クライアントを使った文法チェックを devcontainer 内で実行 (ローカル `docker compose` の `postgres` コンテナを利用):
+PostgreSQL クライアントを使った文法チェックを devcontainer 内で実行 (ローカル `docker compose` の `postgres` コンテナを利用)。本 migration は DDL のみで GRANT を含まないため、`ON_ERROR_STOP=on` で全エラーを fail させる:
 
 ```bash
 docker compose up -d postgres
-docker compose exec -T postgres psql -U context_store -d context_store -f - < supabase/migrations/20260518000001_initial_schema.sql || true
+docker compose exec -T postgres psql -U context_store -d context_store \
+    --set=ON_ERROR_STOP=on -f - < supabase/migrations/20260518000001_initial_schema.sql
 ```
+
+Expected: 終了コード 0。失敗した場合は SQL の構文/拡張に問題があるため修正して再実行。
 
 (本番 Supabase への適用は `Phase 1: 完了後の手順` で別途実施)
 
@@ -389,11 +392,19 @@ GRANT EXECUTE ON FUNCTION increment_memory_access_count(uuid)    TO service_role
 
 - [ ] **Step 3: devcontainer 内で SQL 構文確認**
 
+`service_role` ロールは Supabase 専用のため、ローカル Postgres には存在しない。**スタブロールを冪等に作成してから**本体を `ON_ERROR_STOP=on` で厳格検証することで、構文/型エラーを握りつぶさずに GRANT 文だけは通せるようにする:
+
 ```bash
-docker compose exec -T postgres psql -U context_store -d context_store -f - < supabase/migrations/20260518000002_rpc_functions.sql || true
+# service_role スタブ作成 (既存ならエラーで終わるがそれだけは許容)
+docker compose exec -T postgres psql -U context_store -d context_store \
+    -c "CREATE ROLE service_role" 2>/dev/null || true
+
+# 本体は ON_ERROR_STOP=on で厳格に構文/権限エラーを検知
+docker compose exec -T postgres psql -U context_store -d context_store \
+    --set=ON_ERROR_STOP=on -f - < supabase/migrations/20260518000002_rpc_functions.sql
 ```
 
-(`service_role` ロールが存在しない場合は GRANT 文のみエラーになるが、本番 Supabase には標準で存在するためここでは無視)
+Expected: 終了コード 0。構文/型エラーが出た場合は SQL を修正して再実行する。
 
 - [ ] **Step 4: コミット**
 
@@ -1764,7 +1775,14 @@ git checkout -b feat/supabase-adapter/phase-3-task-3.6-filter-list
 
 - [ ] **Step 2: 失敗テストを書く (Red)**
 
-設計書 Section 7.1.2 の `test_list_by_filter_cursor_pagination`, `test_count_by_filter_uses_head_true`, `test_list_projects_invokes_rpc`, `test_increment_access_count_invokes_rpc`, `test_list_by_filter_archived_logic` を追加。代表例:
+設計書 Section 7.1.2 の `test_list_by_filter_cursor_pagination`, `test_count_by_filter_uses_head_true`, `test_list_projects_invokes_rpc`, `test_increment_access_count_invokes_rpc`, `test_list_by_filter_archived_logic` を追加。さらに **本タスクで対応するレビュー指摘** に対する以下の回帰テストも追加する:
+
+- `test_format_pg_datetime_preserves_microseconds_and_tz`: `_format_pg_datetime` の出力に μs と `+00:00` が含まれることを assert
+- `test_list_by_filter_cursor_keeps_microseconds`: `or_()` に渡される文字列に μs が含まれることを assert
+- `test_archived_after_auto_coerces_to_archived_true`: `archived=None` + `archived_after` 指定時に `not_.is_("archived_at","null")` が呼ばれることを assert
+- `test_archived_false_returns_both`: `archived=False` の場合 `is_("archived_at",...)` が呼ばれないことを assert
+
+代表例:
 
 ```python
 from datetime import datetime, timezone
@@ -1836,6 +1854,73 @@ async def test_list_by_filter_cursor_pagination():
     assert "created_at.lt." in or_arg
     assert "and(created_at.eq." in or_arg
     assert "id.lt.550e8400-e29b-41d4-a716-446655440000" in or_arg
+
+
+def test_format_pg_datetime_preserves_microseconds_and_tz():
+    from context_store.storage.supabase import _format_pg_datetime
+
+    dt = datetime(2026, 5, 18, 12, 34, 56, 123456, tzinfo=timezone.utc)
+    result = _format_pg_datetime(dt)
+    assert "123456" in result, f"μs が欠落: {result!r}"
+    assert result.endswith("+00:00"), f"TZ 情報が欠落: {result!r}"
+
+
+@pytest.mark.asyncio
+async def test_list_by_filter_cursor_keeps_microseconds():
+    client = make_mock_client()
+    builder = client.table.return_value.select.return_value
+    builder.or_.return_value.order.return_value.limit.return_value.execute = AsyncMock(
+        return_value=make_mock_response(data=[])
+    )
+
+    adapter = SupabaseStorageAdapter(client)
+    cutoff = datetime(2026, 5, 1, 0, 0, 0, 654321, tzinfo=timezone.utc)
+    await adapter.list_by_filter(
+        MemoryFilters(
+            created_after=cutoff,
+            id_after="550e8400-e29b-41d4-a716-446655440000",
+            order_by="created_at DESC",
+            limit=20,
+        )
+    )
+
+    or_arg = builder.or_.call_args[0][0]
+    assert "654321" in or_arg, f"μs が cursor から欠落: {or_arg!r}"
+
+
+@pytest.mark.asyncio
+async def test_archived_after_auto_coerces_to_archived_true():
+    """archived_after 指定時は archived=None でも archived only にコアース"""
+    client = make_mock_client()
+    builder = client.table.return_value.select.return_value
+    builder.not_.is_.return_value.gte.return_value.execute = AsyncMock(
+        return_value=make_mock_response(data=[])
+    )
+
+    adapter = SupabaseStorageAdapter(client)
+    await adapter.list_by_filter(
+        MemoryFilters(archived_after=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    )
+
+    # archived=None のままだと is_("archived_at", "null") が呼ばれてしまうので、
+    # not_.is_(...) (= archived only) が呼ばれることを確認
+    builder.not_.is_.assert_called_with("archived_at", "null")
+    # archived_at IS NULL の追加呼出は発生していない
+    builder.is_.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_archived_false_returns_both():
+    """archived=False は active/archived 両方返す (フィルタを足さない)"""
+    client = make_mock_client()
+    builder = client.table.return_value.select.return_value
+    builder.execute = AsyncMock(return_value=make_mock_response(data=[]))
+
+    adapter = SupabaseStorageAdapter(client)
+    await adapter.list_by_filter(MemoryFilters(archived=False))
+
+    builder.is_.assert_not_called()
+    builder.not_.is_.assert_not_called()
 ```
 
 - [ ] **Step 3: 失敗を確認 (Red)**
@@ -1853,7 +1938,10 @@ from context_store.storage.protocols import ALLOWED_SORT_COLUMNS, MemoryFilters
 
 
 def _format_pg_datetime(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    # isoformat(timespec="microseconds") で μs + TZ オフセット (+00:00) を残す。
+    # 秒精度に丸めると cursor pagination の (created_at.eq.X) 比較が
+    # PostgreSQL TIMESTAMPTZ (μs 精度) と一致せず、ページ間で行の重複/欠落を起こす。
+    return dt.astimezone(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _apply_common_filters(builder, filters: MemoryFilters):
@@ -1867,10 +1955,23 @@ def _apply_common_filters(builder, filters: MemoryFilters):
         builder = builder.gte("importance_score", filters.min_importance)
     if filters.tags:
         builder = builder.contains("tags", filters.tags)
-    if filters.archived is None:
+
+    # Protocol セマンティクス (protocols.py:28):
+    #   archived = None  → active only   (archived_at IS NULL)
+    #   archived = True  → archived only (archived_at IS NOT NULL)
+    #   archived = False → 両方 (フィルタ無し)
+    # archived_after が指定された場合、デフォルトの archived=None と矛盾するため
+    # 自動で archived=True にコアースしてアーカイブ済みのみ返す挙動とする。
+    effective_archived = filters.archived
+    if filters.archived_after is not None and effective_archived is None:
+        effective_archived = True
+
+    if effective_archived is None:
         builder = builder.is_("archived_at", "null")
-    elif filters.archived is True:
+    elif effective_archived is True:
         builder = builder.not_.is_("archived_at", "null")
+    # effective_archived is False の場合は何も追加しない (両方返す意図)
+
     if filters.archived_after is not None:
         builder = builder.gte("archived_at", _format_pg_datetime(filters.archived_after))
     return builder
@@ -2357,6 +2458,13 @@ STORAGE_BACKEND=supabase
 GRAPH_ENABLED=false
 
 # === Supabase (storage_backend=supabase の場合に必須) ===
+# ⚠ SECURITY: SUPABASE_KEY (service_role) は RLS をバイパスする最高権限キー。
+#   - クライアントサイドコード/ブラウザに**絶対に**埋め込まない (この .env はサーバ専用)
+#   - サーバの環境変数 / Secrets Manager (AWS Secrets Manager, Doppler 等) で管理し、
+#     git に commit しない (.gitignore で `.env` を除外)
+#   - 漏洩時は Supabase Dashboard > Settings > API から直ちに再生成
+#   - 定期ローテーションを運用に組み込む
+#   - クライアント側からも参照する場合は anon key + RLS ポリシーを使う
 SUPABASE_URL=https://xxxxxxxxxxxx.supabase.co
 SUPABASE_KEY=replace-with-service-role-key
 
@@ -2476,6 +2584,13 @@ EMBEDDING_DIMENSION=768
 EMBEDDING_PROVIDER=local-model
 LOCAL_MODEL_NAME=cl-nagoya/ruri-v3-310m
 ```
+
+> ⚠ **SUPABASE_KEY のセキュリティ**
+> `service_role` キーは Row Level Security をバイパスする最高権限キーです。
+> - **クライアントコード / ブラウザに絶対に埋め込まない** (サーバサイド専用)
+> - サーバの環境変数 / Secrets Manager (AWS Secrets Manager, Doppler 等) で管理し、 git に commit しない
+> - 漏洩時は Supabase Dashboard > Settings > API から直ちに再生成 (rotate)
+> - クライアントからも参照する用途では **anon key + RLS ポリシー** を利用する
 
 `EMBEDDING_DIMENSION` は `supabase/migrations/20260518000001_initial_schema.sql` の `vector(768)` と一致しなければ起動時に `INVALID_STATE` で fail-fast します。次元数を変更したい場合は SQL と環境変数を同時に更新してください。
 

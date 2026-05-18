@@ -163,14 +163,11 @@ Phase 1 の回答に基づき、物理的な設定を行います。
     ChronosGraph 用 env を作る補助ツールです：
 
     ```bash
-    # 機密情報を環境変数としてエクスポート（推奨）
-    export ACCELERATE_URL="prisma://accelerate.prisma-data.net/?api_key=..."
-    export REDIS_URL="rediss://default:...@example.upstash.io:6379"
+    # .env ファイルに機密情報を追加（推奨）
+    # ACCELERATE_URL="prisma://..."
+    # REDIS_URL="rediss://..."
 
-    uv run python scripts/setup_prisma_accelerate.py \
-      --accelerate-url "$ACCELERATE_URL" \
-      --cache redis \
-      --redis-url "$REDIS_URL"
+    uv run python scripts/setup_prisma_accelerate.py --cache redis
     ```
 
   - ユーザーが `postgresql://...` / `postgres://...` を入力した場合は、この direct database URL を

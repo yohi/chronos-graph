@@ -157,19 +157,6 @@ Phase 1 の回答に基づき、物理的な設定を行います。
     8. **Generate API key** で connection string を発行する。
     9. 発行された `prisma://...` / `prismas://...` を `PRISMA_DATABASE_URL` に設定する。
 
-  - 発行済み Accelerate URL を取得できたら、必要に応じてセットアップ支援スクリプトで
-    ChronosGraph 用 env を生成できます。このスクリプトは `postgresql://...` を文字列変換で
-    `prisma://...` に変えるものではなく、Console で発行された Accelerate URL から
-    ChronosGraph 用 env を作る補助ツールです：
-
-    ```bash
-    # .env ファイルに機密情報を追加（推奨）
-    # ACCELERATE_URL="prisma://..."
-    # REDIS_URL="rediss://..."
-
-    uv run python scripts/setup_prisma_accelerate.py --cache redis
-    ```
-
   - ユーザーが `postgresql://...` / `postgres://...` を入力した場合は、この direct database URL を
     Prisma Console の **Database connection string** に入力し、Prisma Data Platform 側で Accelerate を有効化して
     `prisma://...` / `prismas://...` connection string を発行してください。

@@ -163,10 +163,14 @@ Phase 1 の回答に基づき、物理的な設定を行います。
     ChronosGraph 用 env を作る補助ツールです：
 
     ```bash
+    # 機密情報を環境変数としてエクスポート（推奨）
+    export ACCELERATE_URL="prisma://accelerate.prisma-data.net/?api_key=..."
+    export REDIS_URL="rediss://default:...@example.upstash.io:6379"
+
     uv run python scripts/setup_prisma_accelerate.py \
-      --accelerate-url "prisma://accelerate.prisma-data.net/?api_key=..." \
+      --accelerate-url "$ACCELERATE_URL" \
       --cache redis \
-      --redis-url "rediss://default:...@example.upstash.io:6379"
+      --redis-url "$REDIS_URL"
     ```
 
   - ユーザーが `postgresql://...` / `postgres://...` を入力した場合は、この direct database URL を
@@ -186,8 +190,8 @@ Phase 1 の回答に基づき、物理的な設定を行います。
 1. **疎通確認**:
    - ローカルソース (`uv run`): `uv run python scripts/check_connectivity.py` を実行。
    - リモートソース (`uvx`): 生成される MCP 設定の `command` が `uvx`、
-     `args` が `--from git+https://github.com/yohi/chronos-graph.git` を含むことを確認し、
-     MCPクライアント側で起動確認する。
+     `args` 配列に `"--from"` と、パッケージ指定子を含む URL (`"context-store-mcp[all] @ git+https://..."`) が
+     個別に含まれていることを確認し、MCPクライアント側で起動確認する。
    - Prisma Accelerate 構成を選択した場合は、起動ログまたは Adapter Factory の
      初期化結果で `PrismaStorageAdapter` が選択されていることを確認する。
      `SQLiteStorageAdapter` / `PostgresStorageAdapter` が選択されていないこと、

@@ -266,12 +266,56 @@ class SupabaseStorageAdapter:
     def __init__(self, client: AsyncClient) -> None: ...
 
     @classmethod
-    async def create(cls, settings: Settings) -> "SupabaseStorageAdapter": ...
+    async def create(cls, settings: Settings) -> "SupabaseStorageAdapter":
+        """
+        起動時責務:
+          1. supabase ライブラリ存在チェック → ImportError
+          2. URL/KEY 検証は Settings 側の validator で済んでいる前提
+          3. create_async_client(url, key) で AsyncClient 生成
+          4. オプション: get_vector_dimension() で DB 実次元を取得し
+             settings.embedding_dimension と照合。不一致なら StorageError(
+             code='INVALID_STATE', recoverable=False) で fail-fast。
+             ただしテーブル未投入時 (= 既存 embedding がない) は None が返るので
+             スキップ。
+        """
+        ...
 
     async def dispose(self) -> None: ...
 
     def _map_to_storage_error(self, exc: Exception) -> StorageError: ...
 ```
+
+`create()` での次元検証ロジック（擬似コード）:
+
+```python
+@classmethod
+async def create(cls, settings: Settings) -> "SupabaseStorageAdapter":
+    if not _supabase_available:
+        raise ImportError("supabase is not installed. ...")
+    client = await create_async_client(
+        settings.supabase_url, settings.supabase_key.get_secret_value()
+    )
+    adapter = cls(client)
+    try:
+        actual_dim = await adapter.get_vector_dimension()
+    except Exception as exc:
+        # 起動時に DB 接続不能 → 致命的
+        await adapter.dispose()
+        raise adapter._map_to_storage_error(exc) from exc
+
+    if actual_dim is not None and actual_dim != settings.embedding_dimension:
+        await adapter.dispose()
+        raise StorageError(
+            f"Supabase memories.embedding dimension ({actual_dim}) does not match "
+            f"settings.embedding_dimension ({settings.embedding_dimension}). "
+            "Apply the matching supabase/migrations SQL or reconcile EMBEDDING_DIMENSION.",
+            code="INVALID_STATE",
+            recoverable=False,
+        )
+    return adapter
+```
+
+これにより **Settings レベル（次元定数チェック）と DB レベル（実次元チェック）の二重防御** を構築する。
 
 ### 5.3 メソッドマッピング
 
@@ -361,9 +405,51 @@ supabase_key: SecretStr = Field(
     default=SecretStr(""),
     description="Service Role Key または Anon Key",
 )
+
+# CHANGE: embedding_dimension のデフォルト値を 1024 → 768 に修正
+# 理由:
+#   1. supabase/migrations/20260518000001_initial_schema.sql で vector(768) を定義
+#   2. 既存 migrations/postgres/0001_initial.sql も vector(768)
+#   3. 現行ローカルモデル cl-nagoya/ruri-v3-310m は 768 次元
+# 旧 Prisma schema.prisma の vector(1024) は誤設定（削除対象）。
+embedding_dimension: int = Field(default=768, ge=1)
 ```
 
 `_validate_storage_config` に `supabase` 分岐を追加し、`graph_enabled=true` との併用を拒否。`graph_backend` computed_field も `supabase → "disabled"` を返すよう修正。
+
+加えて、**`embedding_dimension` と Supabase スキーマの不一致を起動前に検出する**ためのバリデーションを追加する:
+
+```python
+# Supabase スキーマが期待する次元数 (supabase/migrations と同期)
+SUPABASE_VECTOR_DIMENSION: Final[int] = 768
+
+@model_validator(mode="after")
+def _validate_storage_config(self) -> "Settings":
+    # ... 既存の postgres 分岐 ...
+    if self.storage_backend == "supabase":
+        if not self.supabase_url.strip():
+            raise ValueError("SUPABASE_URL は storage_backend=supabase の場合に必須です。")
+        if not self.supabase_key.get_secret_value().strip():
+            raise ValueError("SUPABASE_KEY は storage_backend=supabase の場合に必須です。")
+        if not self.supabase_url.startswith("https://"):
+            raise ValueError("SUPABASE_URL は https:// で始まる必要があります。")
+        if self.graph_enabled:
+            raise ValueError(
+                "storage_backend=supabase は graph_enabled=true をサポートしません "
+                "(Neo4j Bolt は HTTPS にカプセル化できないため)。"
+            )
+        # 次元数の起動前検証 (本番障害防止)
+        if self.embedding_dimension != SUPABASE_VECTOR_DIMENSION:
+            raise ValueError(
+                f"EMBEDDING_DIMENSION={self.embedding_dimension} は "
+                f"storage_backend=supabase のスキーマ vector({SUPABASE_VECTOR_DIMENSION}) "
+                "と一致しません。次元数を変更する場合は "
+                "supabase/migrations/ の SQL とこの定数を同時に更新してください。"
+            )
+    return self
+```
+
+この validator は **Pydantic Settings の初期化時 = アプリ起動時に評価される**ため、設定ミスを fail-fast で検知できる。
 
 ### 6.3 `src/context_store/storage/factory.py`
 
@@ -399,31 +485,165 @@ if settings.storage_backend == "supabase":
 
 `AsyncClient` 全体を `unittest.mock.AsyncMock` で差し替え。HTTP 経由なしでアダプタロジックを検証。
 
-主要ケース (抜粋):
-- `test_save_memory_inserts_with_content_hash`
-- `test_save_memory_raises_duplicate_on_23505`
-- `test_get_memory_returns_none_when_not_found`
-- `test_get_memory_invalid_uuid_returns_none`
-- `test_get_memories_batch_preserves_input_order`
-- `test_get_memories_batch_chunks_at_200`
-- `test_get_memories_batch_skips_invalid_uuid`
-- `test_delete_memory_returns_false_when_not_found`
-- `test_update_memory_recomputes_content_hash`
-- `test_update_memory_rejects_disallowed_columns`
-- `test_vector_search_invokes_rpc`
-- `test_vector_search_clamps_top_k`
-- `test_vector_search_with_project_filter`
-- `test_keyword_search_uses_ilike`
-- `test_keyword_search_does_not_escape_like_wildcards`
-- `test_list_by_filter_archived_logic`
-- `test_list_by_filter_cursor_pagination`
-- `test_count_by_filter_uses_head_true`
-- `test_increment_access_count_invokes_rpc`
-- `test_list_projects_distinct`
-- `test_get_vector_dimension_returns_length`
-- `test_dispose_closes_client`
-- `test_timeout_maps_to_storage_timeout`
-- `test_no_secret_in_exception_message`
+#### 7.1.1 モックの基本構造
+
+supabase-py の `client.table(name).select(...).eq(...).execute()` チェーンは fluent インターフェースなので、各メソッドが自分自身（または別の Mock）を返すよう設定する。`execute()` の戻り値は `APIResponse(data=[...], count=...)` 相当の `MagicMock` を返す。
+
+```python
+# 共通ヘルパ (conftest.py)
+def make_mock_response(data, count=None):
+    resp = MagicMock()
+    resp.data = data
+    resp.count = count
+    return resp
+
+def make_mock_client():
+    client = MagicMock()
+    client.table = MagicMock()
+    client.rpc = MagicMock()
+    client.postgrest = AsyncMock()
+    return client
+```
+
+#### 7.1.2 代表ケースの具体仕様
+
+##### `test_save_memory_inserts_with_content_hash`
+**入力:** `Memory(content="hello world", memory_type=SEMANTIC, source_type=MANUAL, ...)`
+**モック設定:**
+```python
+mock_client.table.return_value.insert.return_value.execute = AsyncMock(
+    return_value=make_mock_response(
+        data=[{"id": "550e8400-e29b-41d4-a716-446655440000"}]
+    )
+)
+```
+**期待出力:** `await adapter.save_memory(memory)` が `"550e8400-e29b-41d4-a716-446655440000"` を返す
+**検証点:**
+- `insert()` の呼出引数 dict 内の `content_hash` が `hashlib.sha256(b"hello world").hexdigest()` と一致
+- `embedding` が `_embedding_to_pg(memory.embedding)` で文字列化されている
+- `source_metadata` が JSON 互換 dict として渡されている
+
+##### `test_save_memory_raises_duplicate_on_23505`
+**モック設定:** `execute()` が `PostgrestAPIError` をスロー (`code="23505"`, `message="duplicate key value"`)
+**期待出力:** `StorageError(code="DUPLICATE_CONTENT", recoverable=False)` が raise される
+
+##### `test_get_memory_returns_none_when_not_found`
+**入力:** 任意の有効 UUID
+**モック設定:**
+```python
+mock_client.table.return_value.select.return_value.eq.return_value\
+    .maybe_single.return_value.execute = AsyncMock(
+        return_value=make_mock_response(data=None)
+    )
+```
+**期待出力:** `None`
+
+##### `test_get_memory_invalid_uuid_returns_none`
+**入力:** `"not-a-uuid"`
+**期待出力:** `None` （PostgREST 呼出は発生しない＝`table.return_value.select` が呼ばれない）
+
+##### `test_get_memories_batch_preserves_input_order`
+**入力:** `["id-3", "id-1", "id-2"]` （いずれも有効 UUID 文字列）
+**モック設定:** `in_()` の戻りで `data=[{"id": "id-1", ...}, {"id": "id-2", ...}, {"id": "id-3", ...}]`（順不同）を返す
+**期待出力:** 返却 list の順序は `[memory_3, memory_1, memory_2]` （入力順）
+
+##### `test_get_memories_batch_chunks_at_200`
+**入力:** 有効 UUID 250 個
+**モック設定:** `in_()` を MagicMock として呼出回数記録
+**期待出力:** `in_()` が **2 回** 呼ばれる（200 + 50 のチャンクで分割）
+
+##### `test_update_memory_recomputes_content_hash`
+**入力:** `updates={"content": "new content"}`
+**モック設定:** `update().eq().execute()` を AsyncMock
+**期待出力:**
+- `update()` の引数 dict が `{"content": "new content", "content_hash": sha256("new content")}` を含む
+- 戻り値は `True` (data に 1 行あった場合)
+
+##### `test_update_memory_rejects_disallowed_columns`
+**入力:** `updates={"id": "999", "secret_field": "x", "content": "ok"}`
+**期待出力:**
+- `update()` の引数 dict には `"content"` と `"content_hash"` のみ含まれ、`id` と `secret_field` は除外
+
+##### `test_vector_search_invokes_rpc`
+**入力:** `embedding=[0.1]*768`, `top_k=10`, `project=None`
+**モック設定:**
+```python
+mock_client.rpc.return_value.execute = AsyncMock(
+    return_value=make_mock_response(data=[
+        {"id": "uuid1", "content": "...", "memory_type": "semantic",
+         "source_type": "manual", "source_metadata": {}, "embedding": "[0.1,...]",
+         "semantic_relevance": 0.5, "importance_score": 0.5, "access_count": 0,
+         "last_accessed_at": "2026-05-18T00:00:00Z",
+         "created_at": "2026-05-18T00:00:00Z", "updated_at": "2026-05-18T00:00:00Z",
+         "archived_at": None, "tags": [], "project": None, "content_hash": "abc",
+         "score": 0.95}
+    ])
+)
+```
+**期待出力:**
+- `client.rpc("vector_search", {"query_embedding": [0.1]*768, "match_count": 10, "p_project": None})` で呼ばれる
+- 戻り値は `[ScoredMemory(memory=..., score=0.95, source=MemorySource.VECTOR)]`
+
+##### `test_vector_search_clamps_top_k`
+**入力:** `top_k=300`
+**期待出力:** `rpc()` への `match_count` 引数が **200** (`SUPABASE_MAX_TOP_K`)
+**追加検証:** `logger.warning` が呼ばれている (`caplog` フィクスチャで捕捉)
+
+##### `test_keyword_search_uses_ilike`
+**入力:** `query="hello"`, `top_k=5`, `project=None`
+**期待出力:**
+- `ilike("content", "%hello%")` で呼ばれる
+- `is_("archived_at", "null")` で archived 除外
+- `limit(5)` が呼ばれる
+
+##### `test_keyword_search_does_not_escape_like_wildcards`
+**入力:** `query="%hack_"`
+**期待出力:** `ilike()` の第 2 引数は `"%%hack_%"` （`%` / `_` はエスケープされない）
+
+##### `test_list_by_filter_cursor_pagination`
+**入力:** `MemoryFilters(created_after=datetime(2026,5,1), id_after="uuid-X", order_by="created_at DESC")`
+**期待出力:** `or_("created_at.lt.2026-05-01T00:00:00,and(created_at.eq.2026-05-01T00:00:00,id.lt.uuid-X)")` 相当の文字列が `or_()` に渡される
+
+##### `test_count_by_filter_uses_head_true`
+**期待出力:** `client.table("memories").select("*", count="exact", head=True)` で呼ばれ、戻り値は `response.count` を int 化
+
+##### `test_increment_access_count_invokes_rpc`
+**入力:** UUID 文字列
+**モック設定:** `rpc().execute()` が `make_mock_response(data=True)` を返す
+**期待出力:** `client.rpc("increment_memory_access_count", {"p_memory_id": "<uuid>"})` で呼ばれ、戻り値は `True`
+
+##### `test_get_vector_dimension_returns_length`
+**モック設定:** `select("embedding").not_.is_().limit(1).execute()` が `data=[{"embedding": "[0.1,0.2,0.3,...(768個)...]"}]` を返す
+**期待出力:** `768`
+
+##### `test_get_vector_dimension_returns_none_when_empty`
+**モック設定:** `data=[]`
+**期待出力:** `None`
+
+##### `test_create_fails_when_dimension_mismatch`
+**前提:** Settings.embedding_dimension=768
+**モック設定:** `get_vector_dimension()` が `1024` を返す
+**期待出力:** `StorageError(code="INVALID_STATE", recoverable=False)` が raise され、メッセージに `768` と `1024` の両方が含まれる。`dispose()` が呼ばれている。
+
+##### `test_dispose_closes_client`
+**期待出力:** `client.postgrest.aclose()` が呼ばれている (hasattr ガードあり)
+
+##### `test_timeout_maps_to_storage_timeout`
+**モック設定:** `execute()` が `httpx.ReadTimeout("504 Gateway Timeout")` をスロー
+**期待出力:** `StorageError(code="STORAGE_TIMEOUT", recoverable=True)`
+
+##### `test_no_secret_in_exception_message`
+**前提:** Settings.supabase_key=`"super-secret-jwt-token"`
+**モック設定:** 任意の操作で例外をスロー
+**期待出力:** raise された `StorageError` の `str()` および `repr()` に `"super-secret-jwt-token"` が含まれない（PostgREST のエラーメッセージ仕様に依存するが、wrapper では Authorization ヘッダを露出させないことを保証）
+
+#### 7.1.3 残るテストケース（簡易仕様）
+
+以下は上記パターンの応用で網羅:
+- `test_get_memories_batch_skips_invalid_uuid` — 不正 UUID 含む入力 → 除外して `in_()` を呼ぶ
+- `test_delete_memory_returns_false_when_not_found` — `delete()` 戻りの `data=[]` → `False`
+- `test_list_by_filter_archived_logic` — `archived=None/True/False` の各ケースで WHERE 句相当の呼出が変わる
+- `test_list_projects_distinct` — 重複あり `data=[{"project":"a"},{"project":"a"},{"project":"b"}]` → `["a","b"]` (set 化)
 
 ### 7.2 静的検証
 - `mypy --strict` を `src/context_store/storage/supabase.py` で実行
@@ -484,20 +704,22 @@ LOCAL_MODEL_NAME=cl-nagoya/ruri-v3-310m
 
 | リスク | 影響 | 対応 |
 | --- | --- | --- |
-| `Settings.embedding_dimension` デフォルト値 1024 と SQL の `vector(768)` の不整合 | 起動時にミスマッチを誤検知 | 別 issue として記録。本スコープでは `vector(768)` を採用 |
-| `Prisma schema.prisma` の `vector(1024)` 表記の歴史的経緯不明 | 既存環境で次元 1024 で運用中の可能性 | 移行前にユーザーが既存データの埋め込み次元を確認する案内を README に追加 |
-| Supabase RPC 関数の戻り値型と `_record_to_memory` の互換性 | テスト時点で発覚 | 単体テストで `dict[str, Any]` 形式の応答をモックして検証 |
+| ~~`Settings.embedding_dimension` デフォルト値 1024 と SQL の `vector(768)` の不整合~~ | ~~起動時にミスマッチを誤検知~~ | **解決済み (Section 6.2 / 5.2)**: デフォルトを 768 に修正し、Settings validator と adapter.create() の二重防御を導入 |
+| `Prisma schema.prisma` の `vector(1024)` 表記の歴史的経緯不明 | 既存環境で次元 1024 で運用中の可能性 | 移行前にユーザーが既存データの埋め込み次元を確認する案内を README に追加。adapter.create() の起動時 probe で実次元と Settings の不一致を fail-fast 検知 |
+| Supabase RPC 関数の戻り値型と `_record_to_memory` の互換性 | テスト時点で発覚 | 単体テストで `dict[str, Any]` 形式の応答をモックして検証 (Section 7.1.2 参照) |
 | PostgREST `or_` フィルタの構文の表記揺れ | カーソルページングが動かない | 実装時に supabase-py のドキュメント/ソースで確認 |
 | `dispose()` で参照する `client.postgrest.aclose()` の属性名がバージョン差で異なる可能性 | リソースリーク | 実装時に `hasattr` ガードで安全に呼出し、テストでクローズ呼出を検証 |
+| 将来 `EMBEDDING_DIMENSION` を変更したい場合の運用負荷 | SQL と Python 定数の二重更新が必要 | `SUPABASE_VECTOR_DIMENSION` 定数を `config.py` 内で集中管理し、変更時の対応箇所を 2 つ (定数 + supabase/migrations) に限定。手順を README に記載 |
 
 ## 11. 受け入れ基準
 
-1. `pytest tests/storage/test_supabase_adapter.py` がすべて成功
-2. `mypy --strict src/context_store/storage/supabase.py` がエラーゼロ
+1. `pytest tests/storage/test_supabase_adapter.py` がすべて成功 (Section 7.1.2 の各テストを含む)
+2. `mypy --strict src/context_store/storage/supabase.py` および変更後の `config.py` / `factory.py` がエラーゼロ
 3. `ruff check` / `ruff format --check` がパス
 4. `storage_backend=supabase` で `factory.create_storage()` が正常に `SupabaseStorageAdapter` を返す
 5. Prisma 関連ファイル・依存・テストが削除済み
-6. `supabase/migrations/*.sql` を Supabase プロジェクトに適用後、本アダプタが期待通り動作する手順が README に明記
+6. `Settings.embedding_dimension` デフォルトが 768 で、`SUPABASE_VECTOR_DIMENSION` と一致するバリデータが動作する (`test_create_fails_when_dimension_mismatch` で検証)
+7. `supabase/migrations/*.sql` を Supabase プロジェクトに適用後、本アダプタが期待通り動作する手順が README に明記
 
 ## 12. 次フェーズ
 

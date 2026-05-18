@@ -36,7 +36,9 @@ def test_generate_config_supports_prisma_uvx_backend(monkeypatch, capsys) -> Non
             "uvx",
             "--uv-from",
             "git+https://github.com/yohi/chronos-graph.git",
+            "--ssl",
         ],
+
     )
 
     module.main()

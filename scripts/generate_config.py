@@ -198,11 +198,15 @@ def generate_postgres_config(
     if redis_url == default_redis and not os.environ.get("REDIS_URL"):
         redis_url = "rediss://default:your-password@your-instance.upstash.io:6379"
 
-    # SSL設定の優先順位: 1. settings.redis_ssl (明示的な指定) 2. SSL引数 3. URLスキーム
-    redis_ssl_explicit = getattr(settings, "redis_ssl", None)
-    if redis_ssl_explicit is not None:
-        redis_ssl = redis_ssl_explicit
+    # SSL設定の優先順位:
+    # 1. settings.redis_ssl (デフォルト値 False 以外なら明示的な指定とみなす)
+    # 2. SSL引数
+    # 3. URLスキーム
+    redis_ssl_val = getattr(settings, "redis_ssl", False)
+    if redis_ssl_val:  # 明示的に True の場合のみ優先
+        redis_ssl = True
     else:
+        # デフォルトの False の場合は、引数や URL スキームから判断する
         redis_ssl = ssl or redis_url.startswith("rediss://")
 
     env = {
@@ -246,6 +250,7 @@ def generate_prisma_config(
     python_path: str,
     embedding: str,
     cache: str,
+    ssl: bool,
     method: str = "python",
     uv_from: str | None = None,
 ) -> dict[str, Any]:
@@ -270,12 +275,16 @@ def generate_prisma_config(
         if redis_url == default_redis and not os.environ.get("REDIS_URL"):
             redis_url = "rediss://default:your-password@your-instance.upstash.io:6379"
 
-        # SSL設定の優先順位: 1. settings.redis_ssl (明示的な指定) 2. URLスキーム
-        redis_ssl_explicit = getattr(settings, "redis_ssl", None)
-        if redis_ssl_explicit is not None:
-            redis_ssl = redis_ssl_explicit
+        # SSL設定の優先順位:
+        # 1. settings.redis_ssl (デフォルト値 False 以外なら明示的な指定とみなす)
+        # 2. SSL引数
+        # 3. URLスキーム
+        redis_ssl_val = getattr(settings, "redis_ssl", False)
+        if redis_ssl_val:  # 明示的に True の場合のみ優先
+            redis_ssl = True
         else:
-            redis_ssl = redis_url.startswith("rediss://")
+            # デフォルトの False の場合は、引数や URL スキームから判断する
+            redis_ssl = ssl or redis_url.startswith("rediss://")
 
         env.update(
             {
@@ -381,6 +390,7 @@ def main() -> None:
             python_path,
             args.embedding,
             cache_backend,
+            args.ssl,
             args.method,
             args.uv_from,
         )

@@ -74,56 +74,97 @@ https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
 ```
 
 <details>
-<summary><b>For Agents (AIエージェント向け手順)</b></summary>
+<summary><b>For Agents (AIエージェント向けセットアップ手順)</b></summary>
 
 > [!CAUTION]
-> **重要 (CRITICAL):** あなたが自律モードで動作しているAIエージェントであっても、**手順1（モード選択の確認）を決してスキップしないでください。** ユーザーの環境や意図に反する構成（例：Docker不要な環境でのフルモード構築）を避けるため、必ず最初に問いかけを行ってください。
+> **Agent Setup Protocol:**
+> このセクションは、ChronosGraph をセットアップする AI エージェント向けの実行手順です。
+> YOLO/Autonomous モードであっても、Phase 1 でユーザー確認が完了するまで、
+> 依存関係のインストール、`.env` 作成、設定ファイル変更などの副作用を伴う操作を開始しないでください。
 >
-> **エージェントへの行動規範:** セットアップやテストの実行中に失敗が発生した場合、**安易に既存のコアソースコード（`src/` 配下）を編集して解決を図らないでください。** ほとんどの失敗は環境変数（`.env`）、ネットワーク接続、または外部サービスの権限設定に起因します。まずは設定の整合性を徹底的に疑い、コードの修正が必要と判断した場合は、必ずユーザーにその理由と影響を説明し、許可を得てください。
+> **行動規範 (CODE OF CONDUCT):**
+>
+> 1. **安易なソース修正の禁止**: `src/` 配下のコードを編集してエラーを解決しないでください。
+>    失敗の 99% は `.env`、ネットワーク、権限に起因します。
+> 2. **Pydantic仕様の遵守**: `.env` は実行時の CWD から読み込まれます。配置場所を間違えると動作しません。
+> 3. **スキップの禁止**: `--skip-tests` はユーザーの明示的な指示がない限り、使用を禁じます。
 
-あなたがターミナル操作可能なAIエージェントであるなら、以下の手順でインストールとセットアップを自律的に遂行してください：
+以下のフェーズを順番に実行し、各フェーズの完了をユーザーに報告してください。
 
-1.  **[ ] 構成・実行方法の確認 (Interactive Ask):**
-    **このステップは必須です。** インストールを開始する前に、ユーザーに以下の構成を選択してもらってください：
-    - **A) モードの選択**:
-        - **(A) ライトウェイトモード (推奨)**: SQLite + sqlite-vec。
-        - **(B) フルモード (Docker利用)**: PostgreSQL + Neo4j + Redis (Docker Compose)。
-        - **(C) フルモード (クラウド利用)**: Supabase + Neo4j Aura 等。
-    - **B) 実行方法の選択**:
-        - **uv (推奨)**: `uv run` を使用して依存関係を管理。
-        - **python**: システムまたは仮想環境の `python` を直接使用。
-    - **C) ソースコードの取得元**:
-        - **ローカル**: 現在のディレクトリのソースを使用。
-        - **リモート (git+https)**: GitHub から最新のソースを直接取得して実行。
-    2.  **[ ] 依存関係の解決:**
-    *   `uv` (推奨) または `pip` を使用して、開発用依存関係をインストールしてください。
-    *   `uv sync --all-extras` または `pip install -e ".[all]"`
-    3.  **[ ] 環境設定:**
-    *   `.env` は **Pydantic が CWD から読み込む**ため、MCP プロセスが起動されるディレクトリに配置する必要があります。
-        - **ローカル (uv run)**: chronos-graph リポジトリルートに `.env.example` をコピーして `.env` として配置。
-        - **リモート (uvx)**: MCPクライアント（例: `claude_desktop_config.json` や `opencode.json`）と同じディレクトリに `.env` を配置。
-        - **bootstrap.sh 使用時**: カレントディレクトリに `.env` が生成されるため、MCPクライアント設定のディレクトリで実行するか、手動で移動してください。
-    *   `bootstrap.sh` を使用すると、基本設定を自動化できます：
-        - **ライトウェイト (A)**: `bash scripts/bootstrap.sh --backend sqlite`
-        - **フルモード (B)**: `bash scripts/bootstrap.sh --backend postgres`
-        - **フルモード (C)**: `bash scripts/bootstrap.sh --backend postgres --ssl`
+#### 🟦 Phase 1: 構成の確定 (BLOCKING STEP)
 
-    *   **重要**: クラウド利用（Supabase + Neo4j Aura + Upstash）の場合、`.env` の接続情報を適宜編集してください。特に以下を設定しないと接続エラーになります：
-        - **Supabase (PostgreSQL)**: `POSTGRES_SSL_NO_VERIFY=true` と `POSTGRES_STATEMENT_CACHE_SIZE=0`（pgBouncer transaction mode 対応）
-        - **Upstash (Redis)**: `REDIS_SSL=true`
-4.  **[ ] 動作確認:**
-    *   DB/Redis/Neo4j を使用する構成の場合、各サービスへの疎通（Connectivity）が取れるか確認してください。
-    *   ユニットテストを実行して、環境が正しく構築されているか確認してください。
-    *   `uv run pytest tests/unit/ -v`
-5.  **[ ] MCP設定の生成:**
-    *   プロジェクトルートで `uv run python scripts/generate_config.py` を実行し、出力結果を **MCPクライアントの設定ファイルと同じディレクトリ**に `mcp_config.json` として保存してください。
-    *   生成された `mcp_config.json` の `mcpServers` ブロックの内容を、ユーザーが使用しているAIエージェントのMCP設定に追加してください（設定方法は各AIエージェントのルールに従うこと）。エージェントごとに設定ファイルの場所は異なります（例: Claude Desktop の `claude_desktop_config.json`、OpenCode の `opencode.jsonc`、Cursor の `~/.cursor/mcp.json` 等）。
-    *   **重要**: `mcp_config.json` はプロジェクトルートのリファレンス用です。各エージェントのMCP設定には直接読み込まれませんので、必ず各エージェントの設定に追加するようユーザーに説明してください。
-6.  **[ ] エージェントへの指示の追加 (Personal/Global):**
-    *   あなたがこの手順を実行しているAIエージェントそのものである場合、`docs/agent-prompts/memory-save-system-prompt.md` の内容をあなた自身の**グローバル設定**に追加してください。
-    *   **注意**: プロジェクト内のファイルとして作成するのではなく、あなたの設定ファイル・ルールディレクトリに直接追加する必要があります（例: Gemini CLI は `~/.gemini/GEMINI.md`、Claude Code は `~/.clauderules/`、OpenCode は `AGENTS.md`、Cursor は `Rules for AI`）。設定方法は各エージェントのルールに従うこと。
+いかなる変更ツールも呼び出す前に、ユーザーに以下の情報を確認し、
+構成を **確定（Lock-in）** させてください。利用可能な場合は、
+各エージェントの確認ツール（例: `ask_user` / `question` 等）を使ってください。
+回答を得るまで Phase 2 に進むことは禁じられています。
 
-上記の全手順（手順1を除く）を自律的に行うには、`bash scripts/bootstrap.sh` に適切なフラグを渡して実行してください。
+1. **実行・配置モードの選択**:
+    - **(A) ローカルソース (`uv run`)**: カレントディレクトリに `.env` を配置し、
+      設定生成・検証もローカルソースのスクリプトを使用する。
+    - **(B) リモートソース (`uvx`)**: **MCPクライアントの設定ディレクトリ** に `.env` を配置し、
+      MCP起動設定も `uvx --from git+https://github.com/yohi/chronos-graph.git` 形式を使用する。
+2. **ストレージと機能の選択**:
+    - (A) ライトウェイト (SQLite) / (B) フルモード (PostgreSQL) / (C) クラウド (Supabase等)
+    - グラフ機能（`GRAPH_ENABLED`）の有無。
+3. **詳細パラメータのヒアリング**:
+    - Embeddingモデル名、各DBの接続URL、ユーザー、パスワード。
+    - *注意:* APIキー、DBパスワード、接続URLなどの秘密情報は、
+      原則としてチャットに貼り付けさせないでください。`.env.example` からテンプレートを作成し、
+      ユーザーにローカルで手動編集してもらう方式を優先してください。
+
+#### 🟩 Phase 2: 環境構築と `.env` の配置
+
+Phase 1 の回答に基づき、物理的な設定を行います。
+
+- **配置先の厳守**:
+  - モード(A)ならリポジトリルート、モード(B)なら
+    **ユーザーにディレクトリパスを確認した上で**、そこに `.env` を作成してください。
+- **テンプレート利用**:
+  - `.env` は `.env.example` をコピーして作成し、必要な値のみ更新してください。
+- **クラウド最適化**: クラウド利用（Supabase等）の場合、以下の値を必ず `.env` に含めてください：
+  - `POSTGRES_SSL_NO_VERIFY=true`, `POSTGRES_STATEMENT_CACHE_SIZE=0`, `REDIS_SSL=true`
+
+#### 🟨 Phase 3: 動作検証 (MANDATORY)
+
+環境が正しく構築されたか、ツールを用いて実証してください。
+選択した実行・配置モードと同じ方式で検証し、ローカルソース前提のコマンドを
+リモートソース (`uvx`) 選択時に混在させないでください。
+
+1. **疎通確認**:
+   - ローカルソース (`uv run`): `uv run python scripts/check_connectivity.py` を実行。
+   - リモートソース (`uvx`): 生成される MCP 設定の `command` が `uvx`、
+     `args` が `--from git+https://github.com/yohi/chronos-graph.git` を含むことを確認し、
+     MCPクライアント側で起動確認する。
+2. **ユニットテスト**:
+   - ローカルソース (`uv run`): `uv run pytest tests/unit/ -v` を実行。
+   - リモートソース (`uvx`): リポジトリをクローンしていない場合、ユニットテストは実行できません。
+     代わりに `uvx` ベースの MCP 起動確認結果をエビデンスとして報告してください。
+   - *FAIL時の対応:* テストが失敗した状態で「完了」を報告することは
+     「タスク失敗」を意味します。まず `.env`、サービス起動状態、ネットワーク、
+     認証情報を確認してください。ユーザー承認なしに `src/` 配下を変更してはいけません。
+     設定の不整合を修正したら再テストしてください。
+
+#### 🟧 Phase 4: MCP設定の生成と自己指示の追加
+
+1. **設定生成**: Phase 1 で選択した実行方式に合わせて生成し、生成されたJSONを提示。
+   - ローカルソース (`uv run`):
+     `uv run python scripts/generate_config.py --method uv` を実行。
+   - リモートソース (`uvx`):
+     `uv run python scripts/generate_config.py --method uvx --uv-from git+https://github.com/yohi/chronos-graph.git`
+     を実行。リポジトリをクローンしていない場合は、Quick Start の `uvx` 設定例を基に、
+     `command: "uvx"` と `args: ["--from", "context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git", "context-store"]`
+     を含む設定を提示する。
+2. **グローバルプロンプトの追加**: `docs/agent-prompts/memory-save-system-prompt.md` を読み込み、
+   **あなた自身のグローバル設定ファイル**（例: `~/.gemini/GEMINI.md` 等）にその内容を追記してください。
+    - *理由:* これを行わないと、あなたは「記憶できる機能」を持っていても「いつ保存すべきか」を判断できません。
+    - *承認:* グローバル設定への追記は、対象ファイルパスと追記内容を提示し、
+      ユーザーの明示的な承認を得てから実行してください。直接編集できない環境では、
+      追記すべき内容を提示してユーザーに手動適用してもらってください。
+
+**すべてのフェーズが完了したことをエビデンス（テスト成功ログ等）と共に報告して、タスクを終了してください。**
+最終報告には、選択された実行方式・ストレージ構成、`.env` の配置先、
+実行した検証コマンド、テスト成功ログの要約、生成した MCP 設定 JSON、
+未完了項目・ユーザー側で必要な手動作業を含めてください。
 </details>
 
 ---

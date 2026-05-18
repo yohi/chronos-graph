@@ -65,13 +65,17 @@ async def check_connectivity() -> None:
             success = False
 
         # Verify Cache
-        if settings.cache_backend == "redis" and cache:
-            try:
-                await cache.set("chronos_check", "ok", ttl=10)
-                val = await cache.get("chronos_check")
-                print(f"✅ Cache (redis) connected! Check value: {val}")
-            except Exception as e:
-                print(f"❌ Cache (redis) failed: {sanitize_error(e)}")
+        if settings.cache_backend == "redis":
+            if cache:
+                try:
+                    await cache.set("chronos_check", "ok", ttl=10)
+                    val = await cache.get("chronos_check")
+                    print(f"✅ Cache (redis) connected! Check value: {val}")
+                except Exception as e:
+                    print(f"❌ Cache (redis) failed: {sanitize_error(e)}")
+                    success = False
+            else:
+                print("❌ Cache (redis) not initialized")
                 success = False
 
     except Exception as e:
@@ -79,11 +83,20 @@ async def check_connectivity() -> None:
         success = False
     finally:
         if storage:
-            await storage.dispose()
+            try:
+                await storage.dispose()
+            except Exception as e:
+                print(f"⚠️ Error disposing storage: {sanitize_error(e)}")
         if graph:
-            await graph.dispose()
+            try:
+                await graph.dispose()
+            except Exception as e:
+                print(f"⚠️ Error disposing graph: {sanitize_error(e)}")
         if cache:
-            await cache.dispose()
+            try:
+                await cache.dispose()
+            except Exception as e:
+                print(f"⚠️ Error disposing cache: {sanitize_error(e)}")
 
     if not success:
         sys.exit(1)

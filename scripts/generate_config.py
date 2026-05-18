@@ -36,6 +36,8 @@ try:
 except ImportError:
     # インポート失敗時のフォールバック(スタンドアロン実行用)
     class SettingsFallback:
+        DEFAULT_REDIS_URL = "redis://localhost:6379"
+
         @property
         def model_fields(self) -> dict[str, Any]:
             """イミュータブルな定義を返すプロパティ。"""
@@ -133,6 +135,20 @@ def build_start_command(
     return command, args
 
 
+def get_secret(name: str, default: str) -> str:
+    """Settings から秘密情報を安全に取得する。"""
+    if hasattr(settings, name):
+        raw = getattr(settings, name)
+        if raw is not None:
+            if hasattr(raw, "get_secret_value"):
+                val = raw.get_secret_value()
+                if isinstance(val, str) and val:
+                    return val
+            elif isinstance(raw, str) and raw:
+                return raw
+    return default
+
+
 def generate_sqlite_config(
     python_path: str,
     embedding: str,
@@ -175,18 +191,19 @@ def generate_postgres_config(
 ) -> dict[str, Any]:
     """PostgreSQL + Neo4j + Redis フルモードの設定を生成する。"""
 
-    # helper for secret strings
-    def get_secret(name: str, default: str) -> str:
-        if hasattr(settings, name):
-            raw = getattr(settings, name)
-            if raw is not None:
-                if hasattr(raw, "get_secret_value"):
-                    val = raw.get_secret_value()
-                    if isinstance(val, str) and val:
-                        return val
-                elif isinstance(raw, str) and raw:
-                    return raw
-        return default
+    default_redis = getattr(settings, "DEFAULT_REDIS_URL", "redis://localhost:6379")
+    redis_url = getattr(settings, "redis_url", default_redis)
+    # ユーザーが明示的に環境変数や引数で指定していない、
+    # かつデフォルト値のままの場合はクラウド用プレースホルダを提示する
+    if redis_url == default_redis and not os.environ.get("REDIS_URL"):
+        redis_url = "rediss://default:your-password@your-instance.upstash.io:6379"
+
+    # SSL設定の優先順位: 1. settings.redis_ssl (明示的な指定) 2. SSL引数 3. URLスキーム
+    redis_ssl_explicit = getattr(settings, "redis_ssl", None)
+    if redis_ssl_explicit is not None:
+        redis_ssl = redis_ssl_explicit
+    else:
+        redis_ssl = ssl or redis_url.startswith("rediss://")
 
     env = {
         "STORAGE_BACKEND": "postgres",
@@ -201,10 +218,8 @@ def generate_postgres_config(
         "NEO4J_USER": getattr(settings, "neo4j_user", "neo4j"),
         "NEO4J_PASSWORD": get_secret("neo4j_password", "<your-neo4j-password>"),
         "CACHE_BACKEND": cache,
-        "REDIS_URL": getattr(
-            settings, "redis_url", "rediss://default:your-password@your-instance.upstash.io:6379"
-        ),
-        "REDIS_SSL": "true" if ssl or getattr(settings, "redis_ssl", False) else "false",
+        "REDIS_URL": redis_url,
+        "REDIS_SSL": "true" if redis_ssl else "false",
         "DECAY_HALF_LIFE_DAYS": str(getattr(settings, "decay_half_life_days", "30")),
         "SIMILARITY_THRESHOLD": f"{getattr(settings, 'similarity_threshold', 0.70):.2f}",
         "DEDUP_THRESHOLD": f"{getattr(settings, 'dedup_threshold', 0.90):.2f}",
@@ -236,13 +251,7 @@ def generate_prisma_config(
 ) -> dict[str, Any]:
     """Prisma Accelerate モードの設定を生成する。"""
 
-    prisma_url = "<your-prisma-accelerate-url>"
-    if hasattr(settings, "prisma_database_url"):
-        raw = settings.prisma_database_url
-        if raw is not None:
-            val = raw.get_secret_value()
-            if val:
-                prisma_url = val
+    prisma_url = get_secret("prisma_database_url", "<your-prisma-accelerate-url>")
 
     env = {
         "STORAGE_BACKEND": "prisma",
@@ -254,10 +263,20 @@ def generate_prisma_config(
         "DEDUP_THRESHOLD": f"{getattr(settings, 'dedup_threshold', 0.90):.2f}",
     }
     if cache == "redis":
-        redis_url = getattr(settings, "redis_url", "redis://localhost:6379")
-        if redis_url == "redis://localhost:6379":
+        default_redis = getattr(settings, "DEFAULT_REDIS_URL", "redis://localhost:6379")
+        redis_url = getattr(settings, "redis_url", default_redis)
+        # ユーザーが明示的に環境変数や引数で指定していない、
+        # かつデフォルト値のままの場合はクラウド用プレースホルダを提示する
+        if redis_url == default_redis and not os.environ.get("REDIS_URL"):
             redis_url = "rediss://default:your-password@your-instance.upstash.io:6379"
-        redis_ssl = getattr(settings, "redis_ssl", False) or redis_url.startswith("rediss://")
+
+        # SSL設定の優先順位: 1. settings.redis_ssl (明示的な指定) 2. URLスキーム
+        redis_ssl_explicit = getattr(settings, "redis_ssl", None)
+        if redis_ssl_explicit is not None:
+            redis_ssl = redis_ssl_explicit
+        else:
+            redis_ssl = redis_url.startswith("rediss://")
+
         env.update(
             {
                 "REDIS_URL": redis_url,

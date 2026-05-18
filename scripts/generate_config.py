@@ -6,6 +6,7 @@ Claude Desktop / Cursor / その他 MCP クライアント用の設定 JSON を�
 Usage:
     python scripts/generate_config.py                    # SQLite (デフォルト)
     python scripts/generate_config.py --backend postgres # PostgreSQL モード
+    python scripts/generate_config.py --backend prisma   # Prisma Accelerate モード
     python scripts/generate_config.py --output claude    # Claude Desktop 形式
     python scripts/generate_config.py --method uv       # uv モード
 
@@ -226,6 +227,58 @@ def generate_postgres_config(
     }
 
 
+def generate_prisma_config(
+    python_path: str,
+    embedding: str,
+    cache: str,
+    method: str = "python",
+    uv_from: str | None = None,
+) -> dict[str, Any]:
+    """Prisma Accelerate モードの設定を生成する。"""
+
+    prisma_url = "<your-prisma-accelerate-url>"
+    if hasattr(settings, "prisma_database_url"):
+        raw = settings.prisma_database_url
+        if raw is not None:
+            val = raw.get_secret_value()
+            if val:
+                prisma_url = val
+
+    env = {
+        "STORAGE_BACKEND": "prisma",
+        "PRISMA_DATABASE_URL": prisma_url,
+        "GRAPH_ENABLED": "false",
+        "CACHE_BACKEND": cache,
+        "DECAY_HALF_LIFE_DAYS": str(getattr(settings, "decay_half_life_days", "30")),
+        "SIMILARITY_THRESHOLD": f"{getattr(settings, 'similarity_threshold', 0.70):.2f}",
+        "DEDUP_THRESHOLD": f"{getattr(settings, 'dedup_threshold', 0.90):.2f}",
+    }
+    if cache == "redis":
+        redis_url = getattr(settings, "redis_url", "redis://localhost:6379")
+        if redis_url == "redis://localhost:6379":
+            redis_url = "rediss://default:your-password@your-instance.upstash.io:6379"
+        redis_ssl = getattr(settings, "redis_ssl", False) or redis_url.startswith("rediss://")
+        env.update(
+            {
+                "REDIS_URL": redis_url,
+                "REDIS_SSL": "true" if redis_ssl else "false",
+            }
+        )
+    env.update(get_embedding_envs(embedding))
+
+    command, args = build_start_command(method, uv_from, python_path)
+
+    return {
+        "mcpServers": {
+            "chronos-graph": {
+                "command": command,
+                "args": args,
+                "env": env,
+            }
+        }
+    }
+
+
 def generate_cursor_config(base_config: dict[str, Any]) -> dict[str, Any]:
     """Cursor 用の設定形式に変換する (mcpServers キーがそのまま使える)。"""
     # Cursor は Claude Desktop と同じ形式
@@ -235,7 +288,11 @@ def generate_cursor_config(base_config: dict[str, Any]) -> dict[str, Any]:
 def main() -> None:
     """メインエントリポイント。"""
     # Settings インスタンスから埋め込みプロバイダーの選択肢を取得
-    provider_field = settings.model_fields["embedding_provider"]
+    class_model_fields = getattr(type(settings), "model_fields", None)
+    model_fields = (
+        class_model_fields if isinstance(class_model_fields, dict) else settings.model_fields
+    )
+    provider_field = model_fields["embedding_provider"]
     embedding_choices = list(get_args(provider_field.annotation))
     if not embedding_choices:
         # get_args が解決できない場合の明示的なフォールバック
@@ -244,13 +301,16 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="ChronosGraph MCP client config generator")
     parser.add_argument(
-        "--backend", choices=["sqlite", "postgres"], default="sqlite", help="Storage backend"
+        "--backend",
+        choices=["sqlite", "postgres", "prisma"],
+        default="sqlite",
+        help="Storage backend",
     )
     parser.add_argument(
         "--cache",
         choices=["inmemory", "redis"],
         default=None,
-        help="Cache backend (default: inmemory, or redis if --ssl is set)",
+        help="Cache backend (postgres: inmemory, or redis if --ssl is set; prisma: redis)",
     )
     parser.add_argument(
         "--embedding",
@@ -280,7 +340,7 @@ def main() -> None:
         config = generate_sqlite_config(
             python_path, args.embedding, args.graph, args.method, args.uv_from
         )
-    else:
+    elif args.backend == "postgres":
         # ユーザーが指定していない場合のみ、デフォルト値を決定する
         # --ssl があれば redis、なければ inmemory をデフォルトにする
         cache_backend = args.cache
@@ -292,6 +352,15 @@ def main() -> None:
             args.embedding,
             args.graph,
             args.ssl,
+            cache_backend,
+            args.method,
+            args.uv_from,
+        )
+    else:
+        cache_backend = args.cache or "redis"
+        config = generate_prisma_config(
+            python_path,
+            args.embedding,
             cache_backend,
             args.method,
             args.uv_from,

@@ -4,9 +4,6 @@ import sys
 from typing import Any
 
 from context_store.config import Settings
-from context_store.storage.neo4j import Neo4jGraphAdapter
-from context_store.storage.postgres import PostgresStorageAdapter
-from context_store.storage.redis import RedisCacheAdapter
 
 
 def mask_url(url: Any) -> str:
@@ -29,49 +26,64 @@ async def check_connectivity() -> None:
     print(f"Checking connectivity for storage_backend={settings.storage_backend}...")
     success = True
 
-    # 1. PostgreSQL
+    from context_store.storage.factory import create_storage
+
+    # 1. Storage & Graph & Cache
+    storage = None
+    graph = None
+    cache = None
     try:
-        print(f"Connecting to PostgreSQL at {settings.postgres_host}...")
-        postgres = await PostgresStorageAdapter.create(settings)
-        try:
-            stats = await postgres.list_projects()
-        finally:
-            await postgres.dispose()
-        print(f"✅ PostgreSQL connected! Projects count: {len(stats)}")
-    except Exception as e:
-        print(f"❌ PostgreSQL failed: {sanitize_error(e)}")
-        success = False
+        msg = (
+            f"Initializing adapters (backend={settings.storage_backend}, "
+            f"cache={settings.cache_backend})..."
+        )
+        print(msg)
+        storage, graph, cache = await create_storage(settings)
 
-    # 2. Neo4j
-    if settings.graph_enabled:
+        # Verify Storage
         try:
-            print(f"Connecting to Neo4j at {mask_url(settings.neo4j_uri)}...")
-            neo4j = await Neo4jGraphAdapter.create(
-                settings.neo4j_uri, settings.neo4j_user, settings.neo4j_password
+            projects = await storage.list_projects()
+            success_msg = (
+                f"✅ Storage ({settings.storage_backend}) connected! "
+                f"Projects count: {len(projects)}"
             )
-            try:
-                count = await neo4j.count_edges()
-            finally:
-                await neo4j.dispose()
-            print(f"✅ Neo4j connected! Edge count: {count}")
+            print(success_msg)
         except Exception as e:
-            print(f"❌ Neo4j failed: {sanitize_error(e)}")
+            print(f"❌ Storage ({settings.storage_backend}) failed: {sanitize_error(e)}")
             success = False
 
-    # 3. Redis
-    if settings.cache_backend == "redis":
-        try:
-            print(f"Connecting to Redis at {mask_url(settings.redis_url)}...")
-            redis = await RedisCacheAdapter.create(settings.redis_url, settings.redis_ssl)
+        # Verify Graph
+        if settings.graph_enabled and graph:
             try:
-                await redis.set("chronos_check", "ok", ttl=10)
-                val = await redis.get("chronos_check")
-            finally:
-                await redis.dispose()
-            print(f"✅ Redis connected! Check value: {val}")
-        except Exception as e:
-            print(f"❌ Redis failed: {sanitize_error(e)}")
+                count = await graph.count_edges()
+                print(f"✅ Graph connected! Edge count: {count}")
+            except Exception as e:
+                print(f"❌ Graph failed: {sanitize_error(e)}")
+                success = False
+        elif settings.graph_enabled and not graph:
+            print("⚠️ Graph enabled but no adapter created (check logs).")
             success = False
+
+        # Verify Cache
+        if settings.cache_backend == "redis" and cache:
+            try:
+                await cache.set("chronos_check", "ok", ttl=10)
+                val = await cache.get("chronos_check")
+                print(f"✅ Cache (redis) connected! Check value: {val}")
+            except Exception as e:
+                print(f"❌ Cache (redis) failed: {sanitize_error(e)}")
+                success = False
+
+    except Exception as e:
+        print(f"❌ Initialization failed: {sanitize_error(e)}")
+        success = False
+    finally:
+        if storage:
+            await storage.dispose()
+        if graph:
+            await graph.dispose()
+        if cache:
+            await cache.dispose()
 
     if not success:
         sys.exit(1)

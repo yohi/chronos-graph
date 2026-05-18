@@ -8,7 +8,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("PRISMA_DATABASE_URL")
+  url      = "postgresql://dummy@localhost:5432/dummy"
 }
 
 model memories {

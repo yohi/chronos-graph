@@ -38,7 +38,7 @@ Supabase Data API (PostgREST) を利用したストレージアダプタへ置�
 
 ### 3.1 コンポーネント図
 
-```
+```text
 ┌────────────────────────────────────────────────────────────┐
 │                    Application (Python 3.12+)              │
 │  Orchestrator / MCP Server                                 │
@@ -61,6 +61,7 @@ Supabase Data API (PostgREST) を利用したストレージアダプタへ置�
 ```
 
 ### 3.2 主要決定事項
+
 | 決定 | 採用案 | 根拠 |
 | --- | --- | --- |
 | クライアント初期化 | `classmethod .create(settings)` パターン | 既存 `PrismaStorageAdapter` と一貫、factory が同期コードのまま |
@@ -76,7 +77,7 @@ Supabase Data API (PostgREST) を利用したストレージアダプタへ置�
 ### 4.1 配置
 プロジェクトルートに `supabase/migrations/` を新設。Supabase CLI 規約 `YYYYMMDDHHMMSS_<description>.sql`。
 
-```
+```text
 supabase/
 └── migrations/
     ├── 20260518000001_initial_schema.sql
@@ -186,6 +187,23 @@ AS $$
 $$;
 
 -- ============================================================
+-- list_projects: DISTINCT project をサーバサイドで取得。
+-- PostgREST 単独では DISTINCT を表現できないため RPC で提供する。
+-- 大規模データ (数万〜数十万件) でも全件転送せず一意な project のみ返す。
+-- ============================================================
+CREATE OR REPLACE FUNCTION list_projects()
+RETURNS TABLE (project text)
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = public
+AS $$
+    SELECT DISTINCT m.project
+    FROM memories m
+    WHERE m.project IS NOT NULL AND m.project <> '';
+$$;
+
+-- ============================================================
 -- increment_memory_access_count: アトミック increment + 時刻更新
 -- ============================================================
 CREATE OR REPLACE FUNCTION increment_memory_access_count(
@@ -211,10 +229,14 @@ END;
 $$;
 
 -- 権限付与
-GRANT EXECUTE ON FUNCTION vector_search(vector, integer, text)
-    TO anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION increment_memory_access_count(uuid)
-    TO anon, authenticated, service_role;
+-- ⚠ RLS (Row Level Security) 未適用の現状では、誤って anon キーが漏洩した場合に
+--   全メモリへの匿名アクセスを許してしまうため、本マイグレーションでは
+--   service_role のみに EXECUTE 権限を付与する (defense-in-depth)。
+--   RLS ポリシー定義後、必要に応じて別マイグレーションで anon / authenticated への
+--   GRANT を段階的に追加する。
+GRANT EXECUTE ON FUNCTION vector_search(vector, integer, text)   TO service_role;
+GRANT EXECUTE ON FUNCTION list_projects()                         TO service_role;
+GRANT EXECUTE ON FUNCTION increment_memory_access_count(uuid)    TO service_role;
 ```
 
 ### 4.4 設計上の SQL ノート
@@ -330,7 +352,7 @@ async def create(cls, settings: Settings) -> "SupabaseStorageAdapter":
 | `keyword_search(query, top_k, project)` | `ilike` フィルタ | `.ilike("content", f"%{q}%").is_("archived_at","null").limit(k).execute()` |
 | `list_by_filter(filters)` | クエリビルダ複合条件 | チェーン構築 → `.execute()` |
 | `count_by_filter(filters)` | `count="exact", head=True` | `.select("*", count="exact", head=True)...` |
-| `list_projects()` | DISTINCT 相当 | Python 側で `set()` 重複除去 |
+| `list_projects()` | **RPC** `list_projects` (サーバサイド DISTINCT) | `client.rpc("list_projects", {}).execute()` |
 | `increment_memory_access_count(id)` | **RPC** | `client.rpc("increment_memory_access_count", ...)` |
 | `get_vector_dimension()` | LIMIT 1 で `embedding` 長算出 | `_parse_embedding` 利用 |
 | `dispose()` | PostgREST httpx クローズ | `client.postgrest.aclose()` |
@@ -353,7 +375,12 @@ def _map_to_storage_error(self, exc: Exception) -> StorageError:
     if any(kw in exc_str for kw in ("timeout", "408", "504", "503", "connecterror")):
         return StorageError(message, code="STORAGE_TIMEOUT", recoverable=True)
     if "413" in exc_str or "payload too large" in exc_str:
-        return StorageError(message, code="STORAGE_PAYLOAD_TOO_LARGE", recoverable=True)
+        # ペイロードサイズが原因のため、同一リクエストの単純リトライでは解消しない。
+        # 呼出側が入力を分割しない限り再現性を持って失敗するため recoverable=False。
+        # (Prisma 実装は get_memories_batch のチャンク分割リトライを前提に True を返すが、
+        #  本アダプタの 200 件チャンクは事前に固定サイズで適用されており、
+        #  HTTP 413 発生時は入力縮小の判断を呼出側に委ねる方針)
+        return StorageError(message, code="STORAGE_PAYLOAD_TOO_LARGE", recoverable=False)
 
     return StorageError(message, code="STORAGE_ERROR", recoverable=True)
 ```
@@ -366,6 +393,7 @@ def _map_to_storage_error(self, exc: Exception) -> StorageError:
 - **`count_by_filter`**: `head=True` で行データを返さず count のみ取得
 - **PostgREST URL 長制限**: バッチサイズ 200 件で URL 長 < 8KB
 - **機密情報保護**: `SUPABASE_KEY` を例外メッセージ・ログ・スタックトレースに含めない
+- **`keyword_search` ワイルドカード**: Prisma 実装互換のため `%` / `_` を**意図的にエスケープしない**。ユーザーが `%` / `_` を含むクエリを送ると LIKE のワイルドカードとして機能し、想定外のマッチや性能劣化を招く可能性がある — サニタイズは呼出側の責務 (`test_keyword_search_does_not_escape_like_wildcards` で挙動を固定)
 
 ## 6. 設定・依存関係の変更
 
@@ -643,7 +671,7 @@ mock_client.rpc.return_value.execute = AsyncMock(
 - `test_get_memories_batch_skips_invalid_uuid` — 不正 UUID 含む入力 → 除外して `in_()` を呼ぶ
 - `test_delete_memory_returns_false_when_not_found` — `delete()` 戻りの `data=[]` → `False`
 - `test_list_by_filter_archived_logic` — `archived=None/True/False` の各ケースで WHERE 句相当の呼出が変わる
-- `test_list_projects_distinct` — 重複あり `data=[{"project":"a"},{"project":"a"},{"project":"b"}]` → `["a","b"]` (set 化)
+- `test_list_projects_invokes_rpc` — `client.rpc("list_projects", {})` で呼ばれ、`data=[{"project":"a"},{"project":"b"}]` → `["a","b"]`。Python 側での set 化は不要 (RPC がサーバサイド DISTINCT)
 
 ### 7.2 静的検証
 - `mypy --strict` を `src/context_store/storage/supabase.py` で実行
@@ -686,7 +714,7 @@ STORAGE_BACKEND=supabase
 GRAPH_ENABLED=false
 CACHE_BACKEND=inmemory
 SUPABASE_URL=https://xxxxxxxxxxxx.supabase.co
-SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...   # Service Role Key
+SUPABASE_KEY=<SUPABASE_SERVICE_ROLE_KEY>               # Supabase Dashboard > Settings > API > service_role secret
 EMBEDDING_DIMENSION=768
 EMBEDDING_PROVIDER=local-model
 LOCAL_MODEL_NAME=cl-nagoya/ruri-v3-310m

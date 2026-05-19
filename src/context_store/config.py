@@ -294,7 +294,6 @@ class Settings(BaseSettings):
                 )
         return self
 
-
     @model_validator(mode="after")
     def _validate_embedding_config(self) -> "Settings":
         # 明示的に provider が指定され、かつ api_key が空の場合にのみエラーとする

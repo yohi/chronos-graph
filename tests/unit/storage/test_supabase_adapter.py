@@ -432,6 +432,7 @@ async def test_increment_memory_access_count_invokes_rpc():
         "increment_memory_access_count", {"p_memory_id": "550e8400-e29b-41d4-a716-446655440000"}
     )
 
+
 @pytest.mark.asyncio
 async def test_vector_search_calls_rpc():
     client = make_mock_client()
@@ -520,9 +521,9 @@ async def test_keyword_search_uses_ilike():
             "project": None,
         },
     ]
-    chain = (
-        client.table.return_value.select.return_value.ilike.return_value.is_.return_value.limit.return_value
-    )
+    # Break the long chain into steps to satisfy E501
+    table = client.table.return_value
+    chain = table.select.return_value.ilike.return_value.is_.return_value.limit.return_value
     chain.execute = AsyncMock(return_value=make_mock_response(data=rows))
 
     adapter = SupabaseStorageAdapter(client)

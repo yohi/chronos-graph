@@ -36,7 +36,6 @@ def make_settings(**kwargs: Any) -> Settings:
         "supabase_key": "test-service-role-key",
     }
 
-
     # Detect unknown override keys using the actual Settings schema.
     allowed_fields = set(Settings.model_fields.keys())
     unknown = set(kwargs.keys()) - allowed_fields

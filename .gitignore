@@ -82,3 +82,4 @@ frontend/test-results/
 /GEMINI.md
 /CLAUDE.md
 /mcp_config_*.json
+.worktrees/

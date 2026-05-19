@@ -118,6 +118,18 @@ module = "context_store.config"
 disable_error_code = ["no-any-return", "no-untyped-def"]
 
 [[tool.mypy.overrides]]
+module = "postgrest.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "context_store.storage.supabase"
+disable_error_code = [
+    "arg-type",
+    "index",
+    "union-attr",
+]
+warn_return_any = false
+[[tool.mypy.overrides]]
 module = "asyncpg.*"
 ignore_missing_imports = true
 

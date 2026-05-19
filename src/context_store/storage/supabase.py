@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Iterator, cast
 
 try:  # noqa: I001
-    from postgrest.exceptions import (
+    from postgrest.exceptions import (  # type: ignore[import-not-found]
         APIError as PostgrestAPIError,  # type: ignore[import-not-found]  # noqa: F401
     )
 
@@ -345,7 +345,7 @@ class SupabaseStorageAdapter:
             response = await self._client.rpc("list_projects", {}).execute()
         except Exception as exc:
             raise self._map_to_storage_error(exc) from exc
-        return [row["project"] for row in response.data or [] if row.get("project")]
+        data = cast(list[dict[str, Any]], response.data or [])
 
     async def increment_memory_access_count(self, memory_id: str) -> bool:
         if not _is_valid_uuid(memory_id):
@@ -363,7 +363,7 @@ def _format_pg_datetime(dt: "datetime") -> str:
     return dt.astimezone(timezone.utc).isoformat(timespec="microseconds")
 
 
-def _apply_common_filters(builder, filters: "MemoryFilters"):
+def _apply_common_filters(builder: Any, filters: MemoryFilters) -> Any:
     if filters.project is not None:
         builder = builder.eq("project", filters.project)
     if filters.memory_type is not None:

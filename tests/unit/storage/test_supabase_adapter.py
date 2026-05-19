@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
@@ -58,6 +59,7 @@ def test_error_mapping_not_found_PGRST116(adapter):
     exc = type("E", (Exception,), {"code": "PGRST116", "message": "not found"})("not found")
     err = adapter._map_to_storage_error(exc)
     assert err.code == "NOT_FOUND"
+    assert err.recoverable is False
 
 
 def test_error_mapping_timeout_recoverable(adapter):
@@ -146,7 +148,7 @@ async def test_create_fails_when_dimension_mismatch():
         with pytest.raises(StorageError) as exc_info:
             await SupabaseStorageAdapter.create(settings)
     assert exc_info.value.code == "INVALID_STATE"
-    assert "768" in str(exc_info.value) and "1024" in str(exc_info.value)
+    assert re.search(r"768.*1024|1024.*768", str(exc_info.value))
     client.postgrest.aclose.assert_awaited()
 
 

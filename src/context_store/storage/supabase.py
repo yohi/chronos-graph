@@ -180,6 +180,8 @@ class SupabaseStorageAdapter:
         return cast(str, rows[0]["id"])  # type: ignore[call-overload,index]
 
     async def update_memory(self, memory_id: str, updates: dict[str, Any]) -> bool:
+        if not _is_valid_uuid(memory_id):
+            return False
         filtered = {k: v for k, v in updates.items() if k in ALLOWED_UPDATE_COLUMNS}
         if "content" in filtered:
             filtered["content_hash"] = _content_hash(filtered["content"])
@@ -233,6 +235,8 @@ class SupabaseStorageAdapter:
         return results
 
     async def delete_memory(self, memory_id: str) -> bool:
+        if not _is_valid_uuid(memory_id):
+            return False
         try:
             response = await self._client.table("memories").delete().eq("id", memory_id).execute()
         except Exception as exc:

@@ -332,20 +332,33 @@ class RLDataStore(Protocol):
     async def insert_reward_signal(self, signal: RewardSignalRecord) -> str: ...
     async def fetch_actions_by_session(
         self, session_id: str, limit: int = 1000
-    ) -> list[AgentAction]: ...
+    ) -> list[AgentAction]:
+        """Fetch actions for a session ordered by (step ASC, created_at ASC).
+
+        順序保証は `fetch_action_ids_by_session` と一致しており、両者を zip すれば
+        `(action_log.id, AgentAction)` ペアを復元できる (MDP 系列再構築用)。
+        """
+        ...
     async def fetch_action_ids_by_session(
         self, session_id: str, limit: int = 1000
-    ) -> list[str]: ...
+    ) -> list[str]:
+        """Fetch action_log.id UUIDs for a session ordered by (step ASC, created_at ASC).
+
+        順序は `fetch_actions_by_session` と一致する。
+        """
+        ...
     async def fetch_rewards_by_session(
         self, session_id: str, limit: int = 1000
     ) -> list[RewardSignalRecord]: ...
     async def dispose(self) -> None: ...
 ```
 
+> **Ordering contract (`fetch_actions_by_session` / `fetch_action_ids_by_session`):**
+> 両メソッドは同一の順序 (`step ASC, created_at ASC`) で結果を返却することを Protocol レベルで保証する。3 バックエンド (Postgres / SQLite / InMemory) の実装はいずれもこの順序を遵守し、ユニットテストで明示的に検証する (§8.2 参照)。これにより `zip(fetch_action_ids_by_session(sid), fetch_actions_by_session(sid))` で `(id, AgentAction)` ペアを Phase 2 の MDP 系列復元時に安全に再構築できる。
+
 > **Note on `fetch_action_ids_by_session`:**
 > `AgentAction` dataclass は永続化前の純粋なドメインオブジェクトであり、DB 上の `action_log.id` (UUID) を保持しない (frozen dataclass の不変性を維持するため `id` フィールドは追加しない)。
 > Phase 2 の MDP 系列復元や、E2E テストにおける「search 直後 feedback の race-free 検証」で `action_log_id` が必要なケースのため、`fetch_action_ids_by_session` を独立メソッドとして公開する。
-> 戻り順序は `fetch_actions_by_session` と一致 (`step ASC, created_at ASC`) し、両メソッドを併用することで `(id, AgentAction)` のペアを zip で復元できる。
 
 ### 5.3 ファイル構成
 
@@ -593,8 +606,9 @@ tests/unit/
 | `AgentAction` / `RewardSignalRecord` | `frozen=True`、`score` レンジ違反は `ValueError` |
 | `NoOp` 実装 | 戻り値は `""`、Protocol 準拠 |
 | `session_context` | デフォルト None、set/reset、`asyncio.gather` 越し伝播、タスク間独立 |
-| `RLDataStore` (SQLite 統合) | insert/fetch、CHECK 制約違反、`ON DELETE SET NULL`、dispose 冪等、FK 違反時の `action_log_id=NULL` 格下げと `context.unverified_action_log_id` 保存、`fetch_action_ids_by_session` の戻り順序が `fetch_actions_by_session` と一致 |
-| `RLDataStore` (Postgres) | asyncpg モックで SQL 発行を検証 (FK 違反フォールバックの SQL 順序を含む)、`fetch_action_ids_by_session` の SQL が `step ASC, created_at ASC` 並びを要求 |
+| `RLDataStore` (InMemory) | insert/fetch、dispose 冪等、`fetch_actions_by_session` と `fetch_action_ids_by_session` がともに `(step ASC, created_at ASC)` 順序で返却すること (zip ペアリング契約) |
+| `RLDataStore` (SQLite 統合) | insert/fetch、CHECK 制約違反、`ON DELETE SET NULL`、dispose 冪等、FK 違反時の `action_log_id=NULL` 格下げと `context.unverified_action_log_id` 保存、`fetch_actions_by_session` / `fetch_action_ids_by_session` の戻り順序が `(step ASC, created_at ASC)` で一致 |
+| `RLDataStore` (Postgres) | asyncpg モックで SQL 発行を検証 (FK 違反フォールバックの SQL 順序を含む)、`fetch_actions_by_session` / `fetch_action_ids_by_session` の SQL がともに `ORDER BY step ASC, created_at ASC` を発行 |
 | `RetrievalPipeline` | 4 step の発火条件、`context_volume`、例外吸収、`session_id` 未設定時は無発火、**応答返却時点で全 ActionLog が DB に確定済み** (pending タスクを `gather` で待機) |
 | `Orchestrator` | contextvar の set/reset、`_emit_internal_eval` のスコア計算、`record_reward` 公開 API、`dispose` で `rl_store` 解放 |
 | `memory_search` (MCP) | `session_id` の自動採番とレスポンスエコー |
@@ -621,7 +635,7 @@ tests/unit/
 
 | Phase 2 機能 | Phase 1 で予約済みの基盤 |
 | --- | --- |
-| RL バッチ Worker (PPO/DQN) | `RLDataStore.fetch_actions_by_session` / `fetch_rewards_by_session` |
+| RL バッチ Worker (PPO/DQN) | `RLDataStore.fetch_actions_by_session` / `fetch_action_ids_by_session` / `fetch_rewards_by_session` (§5.2 順序契約により MDP 系列復元が可能) |
 | 動的 PolicyHook | `Orchestrator.policy_hook` 注入口、`action_log` の系列データ |
 | IMPLICIT_USER 自動生成 | `signal_type` enum と DB 列、`RewardSignal.record_reward` Python API |
 | `actionType` の拡張 | migration 0004 で CHECK 制約を `DROP/ADD` |

@@ -76,7 +76,7 @@
 | 新規 | `tests/unit/test_session_context.py` | `contextvars` 伝播テスト |
 | 新規 | `tests/unit/test_rl_inmemory.py` | `InMemoryRLDataStore` 単体 (CHECK 制約、FK 違反フォールバック、`fetch_action_ids_by_session`) |
 | 新規 | `tests/unit/test_rl_sqlite.py` | `SQLiteRLDataStore` 単体 (PRAGMA、CHECK 制約、`ON DELETE SET NULL`、FK 違反フォールバック、`fetch_action_ids_by_session`) |
-| 新規 | `tests/unit/test_rl_postgres.py` | `PostgresRLDataStore` 単体 (asyncpg モックで SQL 発行検証、FK 違反フォールバック) |
+| 新規 | `tests/unit/test_rl_postgres.py` | `PostgresRLDataStore` 単体 (asyncpg モックで SQL 発行検証、FK 違反フォールバック、`fetch_actions_by_session` / `fetch_action_ids_by_session` の `ORDER BY step ASC, created_at ASC`) |
 | 新規 | `tests/unit/test_rl_factory.py` | `create_rl_data_store` ファクトリの 4 分岐 (auto/postgres/sqlite/inmemory) |
 | 新規 | `tests/unit/test_rl_storage_logger.py` | `StorageActionLogger` / `StorageRewardSignal` 単体 |
 | 新規 | `tests/unit/test_rl_basis.py` | エンド to エンド (search → 4 ActionLog → INTERNAL_EVAL → EXPLICIT_FEEDBACK) と race-free 検証 |
@@ -909,7 +909,23 @@ class RLDataStore(Protocol):
 
     async def fetch_actions_by_session(
         self, session_id: str, limit: int = 1000
-    ) -> list[AgentAction]: ...
+    ) -> list[AgentAction]:
+        """Fetch actions for a session ordered by (step ASC, created_at ASC).
+
+        順序保証は ``fetch_action_ids_by_session`` と一致しており、両者を zip すれば
+        ``(action_log.id, AgentAction)`` ペアを Phase 2 の MDP 系列復元用に再構築できる。
+        """
+        ...
+
+    async def fetch_action_ids_by_session(
+        self, session_id: str, limit: int = 1000
+    ) -> list[str]:
+        """Fetch action_log.id UUIDs for a session ordered by (step ASC, created_at ASC).
+
+        順序は ``fetch_actions_by_session`` と一致する。E2E テストの race-free 検証や
+        Phase 2 の MDP 系列復元で利用される。
+        """
+        ...
 
     async def fetch_rewards_by_session(
         self, session_id: str, limit: int = 1000
@@ -1762,6 +1778,22 @@ async def test_fetch_action_ids_sql_orders_by_step_then_created_at() -> None:
     try:
         ids = await store.fetch_action_ids_by_session("s1", limit=10)
         assert ids == ["id-a", "id-b"]
+        sql = fake_conn.fetch.call_args.args[0]
+        assert "ORDER BY step ASC" in sql
+        assert "created_at ASC" in sql
+    finally:
+        await store.dispose()
+
+
+@pytest.mark.asyncio
+async def test_fetch_actions_sql_orders_by_step_then_created_at() -> None:
+    """fetch_actions_by_session の SQL が step ASC, created_at ASC を含む (§5.2 順序契約)"""
+    fake_pool, fake_conn = _make_fake_pool()
+    fake_conn.fetch = AsyncMock(return_value=[])
+
+    store = PostgresRLDataStore(pool=fake_pool)
+    try:
+        await store.fetch_actions_by_session("s1", limit=10)
         sql = fake_conn.fetch.call_args.args[0]
         assert "ORDER BY step ASC" in sql
         assert "created_at ASC" in sql
@@ -3378,7 +3410,7 @@ Expected: すべて PASS、対象モジュールカバレッジ 100%
 
 設計書 §9 のテーブル各行について、Phase 1 で予約済みの基盤が実装されていることを確認:
 
-- `RLDataStore.fetch_actions_by_session` / `fetch_rewards_by_session` — Protocol と 3 実装に存在
+- `RLDataStore.fetch_actions_by_session` / `fetch_action_ids_by_session` / `fetch_rewards_by_session` — Protocol と 3 実装に存在 (§5.2 の順序契約により MDP 系列復元が可能であることをユニットテストで確認済)
 - `Orchestrator.policy_hook` 注入口 — 既存
 - `signal_type` enum と DB 列 — 実装済
 - `actionType` 拡張のための CHECK 制約 — migration 0003 で `DROP/ADD` 可能な形で定義済

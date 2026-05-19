@@ -388,7 +388,8 @@ def _map_to_storage_error(self, exc: Exception) -> StorageError:
 ### 5.5 重要な実装ノート
 - **入力順保持** (`get_memories_batch`): `dict[str(UUID), Memory]` 経由で元順序を復元
 - **UPDATE 列ホワイトリスト**: Prisma 実装と同じセット。`content` 更新時は `content_hash` 再計算
-- **`list_by_filter` カーソル**: `or_("created_at.lt.X,and(created_at.eq.X,id.lt.Y)")` で `(ts, id)` 比較を表現
+- **`list_by_filter` カーソル**: `or_("created_at.lt.X,and(created_at.eq.X,id.lt.Y)")` で `(ts, id)` 比較を表現。日時は `datetime.astimezone(timezone.utc).isoformat(timespec="microseconds")` で μs と TZ オフセット (`+00:00`) を含めた完全表現に変換すること。秒精度に切り捨てると PostgreSQL `TIMESTAMPTZ` (μs 精度) との等価比較が成立せず、ページ間で行の重複/欠落が発生する
+- **`archived` セマンティクス**: Protocol 定義 (`protocols.py:28`) のとおり `None=active only / True=archived only / False=両方`。`archived_after` 指定時は `archived=None` の "active only" 条件と矛盾するため、自動的に `archived=True` にコアースしてアーカイブ済みのみ返す。Prisma 実装 (削除予定) と挙動差があるが、呼出側のミスを防ぐ安全側の仕様
 - **`top_k` clamp**: `SUPABASE_MAX_TOP_K=200` で頭打ち、`logger.warning` 出力
 - **`count_by_filter`**: `head=True` で行データを返さず count のみ取得
 - **PostgREST URL 長制限**: バッチサイズ 200 件で URL 長 < 8KB
@@ -714,6 +715,11 @@ STORAGE_BACKEND=supabase
 GRAPH_ENABLED=false
 CACHE_BACKEND=inmemory
 SUPABASE_URL=https://xxxxxxxxxxxx.supabase.co
+# ⚠ SECURITY: service_role キーは RLS をバイパスする最高権限。
+#   - クライアントコード/ブラウザに**絶対に**埋め込まない (サーバサイド専用)
+#   - サーバの環境変数 / Secrets Manager (AWS Secrets Manager, Doppler 等) で管理し、git に commit しない
+#   - 漏洩時は Dashboard > Settings > API から直ちに再生成 (rotate)
+#   - クライアントからも参照する用途では anon key + RLS ポリシーを使う
 SUPABASE_KEY=<SUPABASE_SERVICE_ROLE_KEY>               # Supabase Dashboard > Settings > API > service_role secret
 EMBEDDING_DIMENSION=768
 EMBEDDING_PROVIDER=local-model

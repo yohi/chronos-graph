@@ -333,11 +333,19 @@ class RLDataStore(Protocol):
     async def fetch_actions_by_session(
         self, session_id: str, limit: int = 1000
     ) -> list[AgentAction]: ...
+    async def fetch_action_ids_by_session(
+        self, session_id: str, limit: int = 1000
+    ) -> list[str]: ...
     async def fetch_rewards_by_session(
         self, session_id: str, limit: int = 1000
     ) -> list[RewardSignalRecord]: ...
     async def dispose(self) -> None: ...
 ```
+
+> **Note on `fetch_action_ids_by_session`:**
+> `AgentAction` dataclass は永続化前の純粋なドメインオブジェクトであり、DB 上の `action_log.id` (UUID) を保持しない (frozen dataclass の不変性を維持するため `id` フィールドは追加しない)。
+> Phase 2 の MDP 系列復元や、E2E テストにおける「search 直後 feedback の race-free 検証」で `action_log_id` が必要なケースのため、`fetch_action_ids_by_session` を独立メソッドとして公開する。
+> 戻り順序は `fetch_actions_by_session` と一致 (`step ASC, created_at ASC`) し、両メソッドを併用することで `(id, AgentAction)` のペアを zip で復元できる。
 
 ### 5.3 ファイル構成
 
@@ -585,13 +593,13 @@ tests/unit/
 | `AgentAction` / `RewardSignalRecord` | `frozen=True`、`score` レンジ違反は `ValueError` |
 | `NoOp` 実装 | 戻り値は `""`、Protocol 準拠 |
 | `session_context` | デフォルト None、set/reset、`asyncio.gather` 越し伝播、タスク間独立 |
-| `RLDataStore` (SQLite 統合) | insert/fetch、CHECK 制約違反、`ON DELETE SET NULL`、dispose 冪等、FK 違反時の `action_log_id=NULL` 格下げと `context.unverified_action_log_id` 保存 |
-| `RLDataStore` (Postgres) | asyncpg モックで SQL 発行を検証 (FK 違反フォールバックの SQL 順序を含む) |
+| `RLDataStore` (SQLite 統合) | insert/fetch、CHECK 制約違反、`ON DELETE SET NULL`、dispose 冪等、FK 違反時の `action_log_id=NULL` 格下げと `context.unverified_action_log_id` 保存、`fetch_action_ids_by_session` の戻り順序が `fetch_actions_by_session` と一致 |
+| `RLDataStore` (Postgres) | asyncpg モックで SQL 発行を検証 (FK 違反フォールバックの SQL 順序を含む)、`fetch_action_ids_by_session` の SQL が `step ASC, created_at ASC` 並びを要求 |
 | `RetrievalPipeline` | 4 step の発火条件、`context_volume`、例外吸収、`session_id` 未設定時は無発火、**応答返却時点で全 ActionLog が DB に確定済み** (pending タスクを `gather` で待機) |
 | `Orchestrator` | contextvar の set/reset、`_emit_internal_eval` のスコア計算、`record_reward` 公開 API、`dispose` で `rl_store` 解放 |
 | `memory_search` (MCP) | `session_id` の自動採番とレスポンスエコー |
 | `memory_feedback` (MCP) | 正常系、レンジ違反、コメント切り詰め、**存在しない `action_log_id` でも 200 応答** (`unverified_action_log_id` に格下げ) |
-| `test_rl_basis.py` | エンド to エンド (search → 4 ActionLog → INTERNAL_EVAL → EXPLICIT_FEEDBACK)、および **search 直後 feedback の race-free 検証** (`memory_search` 戻り直後に `memory_feedback(action_log_id=...)` を `asyncio.sleep` なしで呼び出し、FK 違反フォールバックに **頼らず** 成功することを確認) |
+| `test_rl_basis.py` | エンド to エンド (search → 4 ActionLog → INTERNAL_EVAL → EXPLICIT_FEEDBACK)、および **search 直後 feedback の race-free 検証** (`memory_search` 戻り直後に `RLDataStore.fetch_action_ids_by_session` で実 DB ID を取得し、`memory_feedback(action_log_id=<実 ID>)` を `asyncio.sleep` なしで呼び出して、FK 違反フォールバックに **頼らず** 成功することを確認 — feedback 後の `reward_signal.context` に `unverified_action_log_id` が含まれないことで検証) |
 
 ### 8.3 カバレッジと CI
 

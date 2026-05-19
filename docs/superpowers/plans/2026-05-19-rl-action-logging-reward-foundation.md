@@ -74,7 +74,10 @@
 | 変更 | `src/context_store/server.py` | `memory_search(... session_id)` 拡張、`memory_feedback(...)` 新設 |
 | 変更 | `tests/unit/test_extensions.py` | 新 Protocol / NoOp に追従改修 |
 | 新規 | `tests/unit/test_session_context.py` | `contextvars` 伝播テスト |
-| 新規 | `tests/unit/test_rl_data_store.py` | 3 バックエンドを `parametrize` で網羅 (CHECK 制約、`ON DELETE SET NULL`、FK 違反フォールバック) |
+| 新規 | `tests/unit/test_rl_inmemory.py` | `InMemoryRLDataStore` 単体 (CHECK 制約、FK 違反フォールバック、`fetch_action_ids_by_session`) |
+| 新規 | `tests/unit/test_rl_sqlite.py` | `SQLiteRLDataStore` 単体 (PRAGMA、CHECK 制約、`ON DELETE SET NULL`、FK 違反フォールバック、`fetch_action_ids_by_session`) |
+| 新規 | `tests/unit/test_rl_postgres.py` | `PostgresRLDataStore` 単体 (asyncpg モックで SQL 発行検証、FK 違反フォールバック) |
+| 新規 | `tests/unit/test_rl_factory.py` | `create_rl_data_store` ファクトリの 4 分岐 (auto/postgres/sqlite/inmemory) |
 | 新規 | `tests/unit/test_rl_storage_logger.py` | `StorageActionLogger` / `StorageRewardSignal` 単体 |
 | 新規 | `tests/unit/test_rl_basis.py` | エンド to エンド (search → 4 ActionLog → INTERNAL_EVAL → EXPLICIT_FEEDBACK) と race-free 検証 |
 | 変更 | `tests/unit/test_retrieval_pipeline.py` | 4 step 発火、`context_volume`、`gather` 確定待ちの検証追加 |
@@ -985,14 +988,14 @@ git merge-base --is-ancestor $EXPECTED_BASE $CURRENT_BRANCH || { echo "ERROR: �
 
 **派生元ブランチ:** `feat/rl-foundation/phase-3`
 
-**実行モード:** 並列可能 (独立) — Task 3.2 / 3.3 とは別ファイルを触り、互いに依存しないため並列実行可能。
+**実行モード:** 並列可能 (独立) — Task 3.2 / 3.3 とは別ファイルのみを触る (テストファイルもバックエンド別に分割)。Phase Base から真に並列実行可能。
 
 **前提条件:** Task 3.0 の Phase Base ブランチが push 済みであること
 
 **Files:**
 
 - Create: `src/context_store/storage/rl_inmemory.py`
-- Create: `tests/unit/test_rl_data_store.py` (まず InMemory 用のパラメタライズ枠だけ実装。後続 Task 3.2 / 3.3 で SQLite / Postgres を追加)
+- Create: `tests/unit/test_rl_inmemory.py` (InMemory 専用テストファイル)
 
 - [ ] **Step 1: ブランチ作成とポカヨケ検証**
 
@@ -1005,14 +1008,12 @@ CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 git merge-base --is-ancestor $EXPECTED_BASE $CURRENT_BRANCH || { echo "ERROR: 派生元ブランチが $EXPECTED_BASE ではありません。スタック構造が壊れています。"; exit 1; }
 ```
 
-- [ ] **Step 2: 失敗するテストを `tests/unit/test_rl_data_store.py` に作成**
+- [ ] **Step 2: 失敗するテストを `tests/unit/test_rl_inmemory.py` に作成**
 
 ```python
-"""Parametrized tests for RLDataStore backends."""
+"""Tests for InMemoryRLDataStore."""
 
 from __future__ import annotations
-
-from collections.abc import AsyncIterator
 
 import pytest
 
@@ -1022,17 +1023,12 @@ from context_store.extensions.protocols import (
     RewardSignalRecord,
     SignalType,
 )
-from context_store.storage.protocols import RLDataStore
 from context_store.storage.rl_inmemory import InMemoryRLDataStore
 
 
-@pytest.fixture(params=["inmemory"])
-async def store(request: pytest.FixtureRequest) -> AsyncIterator[RLDataStore]:
-    backend = request.param
-    if backend == "inmemory":
-        s: RLDataStore = InMemoryRLDataStore()
-    else:
-        pytest.skip(f"backend {backend} added in later tasks")
+@pytest.fixture
+async def store():
+    s = InMemoryRLDataStore()
     try:
         yield s
     finally:
@@ -1040,7 +1036,7 @@ async def store(request: pytest.FixtureRequest) -> AsyncIterator[RLDataStore]:
 
 
 @pytest.mark.asyncio
-async def test_insert_and_fetch_action(store: RLDataStore) -> None:
+async def test_insert_and_fetch_action(store: InMemoryRLDataStore) -> None:
     action = AgentAction(
         session_id="s1", step=0, action_type=ActionType.VECTOR_SEARCH,
         action_details={"k": 10}, context_volume=100,
@@ -1056,7 +1052,7 @@ async def test_insert_and_fetch_action(store: RLDataStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_insert_reward_with_valid_action_log_id(store: RLDataStore) -> None:
+async def test_insert_reward_with_valid_action_log_id(store: InMemoryRLDataStore) -> None:
     action = AgentAction(
         session_id="s1", step=0, action_type=ActionType.VECTOR_SEARCH,
     )
@@ -1076,7 +1072,7 @@ async def test_insert_reward_with_valid_action_log_id(store: RLDataStore) -> Non
 
 
 @pytest.mark.asyncio
-async def test_insert_reward_with_unknown_action_log_id_falls_back(store: RLDataStore) -> None:
+async def test_insert_reward_with_unknown_action_log_id_falls_back(store: InMemoryRLDataStore) -> None:
     """FK 違反相当 → action_log_id=NULL に格下げ、context.unverified_action_log_id に元 ID 保存"""
     reward = RewardSignalRecord(
         session_id="s1", signal_type=SignalType.EXPLICIT_FEEDBACK,
@@ -1093,7 +1089,25 @@ async def test_insert_reward_with_unknown_action_log_id_falls_back(store: RLData
 
 
 @pytest.mark.asyncio
-async def test_dispose_is_idempotent(store: RLDataStore) -> None:
+async def test_fetch_action_ids_matches_fetch_actions_order(store: InMemoryRLDataStore) -> None:
+    """fetch_action_ids_by_session の戻り順序は fetch_actions_by_session と一致"""
+    ids: list[str] = []
+    for step in range(3):
+        action = AgentAction(
+            session_id="s1", step=step, action_type=ActionType.VECTOR_SEARCH,
+        )
+        ids.append(await store.insert_action_log(action))
+
+    fetched_actions = await store.fetch_actions_by_session("s1")
+    fetched_ids = await store.fetch_action_ids_by_session("s1")
+    assert len(fetched_ids) == len(fetched_actions) == 3
+    assert fetched_ids == ids
+    # step 順で並ぶ
+    assert [a.step for a in fetched_actions] == [0, 1, 2]
+
+
+@pytest.mark.asyncio
+async def test_dispose_is_idempotent(store: InMemoryRLDataStore) -> None:
     await store.dispose()
     await store.dispose()  # 2 度呼んでも例外なし
 ```
@@ -1101,7 +1115,7 @@ async def test_dispose_is_idempotent(store: RLDataStore) -> None:
 - [ ] **Step 3: テスト失敗を確認**
 
 ```bash
-uv run pytest tests/unit/test_rl_data_store.py -v
+uv run pytest tests/unit/test_rl_inmemory.py -v
 ```
 
 Expected: import エラー (`rl_inmemory` 未定義)
@@ -1129,27 +1143,42 @@ __all__ = ["InMemoryRLDataStore"]
 
 class InMemoryRLDataStore(RLDataStore):
     def __init__(self) -> None:
-        self._actions: dict[str, AgentAction] = {}
+        # 挿入順を維持するため list[(id, AgentAction)] で保持
+        self._actions: list[tuple[str, AgentAction]] = []
         self._rewards: list[tuple[str, RewardSignalRecord]] = []
 
     async def insert_action_log(self, action: AgentAction) -> str:
         action_id = str(uuid.uuid4())
-        self._actions[action_id] = action
+        self._actions.append((action_id, action))
         return action_id
 
     async def insert_reward_signal(self, signal: RewardSignalRecord) -> str:
         reward_id = str(uuid.uuid4())
-        if signal.action_log_id is not None and signal.action_log_id not in self._actions:
+        known_ids = {aid for aid, _ in self._actions}
+        if signal.action_log_id is not None and signal.action_log_id not in known_ids:
             ctx = dict(signal.context)
             ctx["unverified_action_log_id"] = signal.action_log_id
             signal = replace(signal, action_log_id=None, context=ctx)
         self._rewards.append((reward_id, signal))
         return reward_id
 
+    def _ordered_session_pairs(
+        self, session_id: str, limit: int
+    ) -> list[tuple[str, AgentAction]]:
+        # step ASC, 挿入順 (≒ created_at ASC) で並べる
+        pairs = [(aid, a) for aid, a in self._actions if a.session_id == session_id]
+        pairs.sort(key=lambda p: p[1].step)
+        return pairs[:limit]
+
     async def fetch_actions_by_session(
         self, session_id: str, limit: int = 1000
     ) -> list[AgentAction]:
-        return [a for a in self._actions.values() if a.session_id == session_id][:limit]
+        return [a for _, a in self._ordered_session_pairs(session_id, limit)]
+
+    async def fetch_action_ids_by_session(
+        self, session_id: str, limit: int = 1000
+    ) -> list[str]:
+        return [aid for aid, _ in self._ordered_session_pairs(session_id, limit)]
 
     async def fetch_rewards_by_session(
         self, session_id: str, limit: int = 1000
@@ -1164,9 +1193,9 @@ class InMemoryRLDataStore(RLDataStore):
 - [ ] **Step 5: テスト成功と静的解析を確認**
 
 ```bash
-uv run ruff check src/context_store/storage/rl_inmemory.py tests/unit/test_rl_data_store.py
+uv run ruff check src/context_store/storage/rl_inmemory.py tests/unit/test_rl_inmemory.py
 uv run mypy src/context_store/storage/rl_inmemory.py
-uv run pytest tests/unit/test_rl_data_store.py -v --cov=context_store.storage.rl_inmemory --cov-report=term-missing
+uv run pytest tests/unit/test_rl_inmemory.py -v --cov=context_store.storage.rl_inmemory --cov-report=term-missing
 ```
 
 Expected: すべて PASS、`rl_inmemory.py` カバレッジ 100%
@@ -1174,8 +1203,8 @@ Expected: すべて PASS、`rl_inmemory.py` カバレッジ 100%
 - [ ] **Step 6: コミット**
 
 ```bash
-git add src/context_store/storage/rl_inmemory.py tests/unit/test_rl_data_store.py
-git commit -m "feat(rl): InMemoryRLDataStore を実装 (FK 違反フォールバック含む)"
+git add src/context_store/storage/rl_inmemory.py tests/unit/test_rl_inmemory.py
+git commit -m "feat(rl): InMemoryRLDataStore を実装 (FK 違反フォールバック + fetch_action_ids_by_session)"
 ```
 
 - [ ] **Step 7: Draft PR を Phase Base 向けに作成**
@@ -1195,14 +1224,14 @@ PR URL を記録します。
 
 **派生元ブランチ:** `feat/rl-foundation/phase-3`
 
-**実行モード:** 並列可能 (独立) — Task 3.1 / 3.3 とは別ファイル。Phase Base から並列で派生可能。
+**実行モード:** 並列可能 (独立) — Task 3.1 / 3.3 とは別ファイルのみを触る。テストファイルもバックエンド別に分割しているためファイル競合なし。
 
 **前提条件:** Task 3.0 の Phase Base ブランチが push 済み、Task 1.1 (0003 migration) が `master` 経由で Phase Base に反映済みであること
 
 **Files:**
 
 - Create: `src/context_store/storage/rl_sqlite.py`
-- Modify: `tests/unit/test_rl_data_store.py` (`store` フィクスチャの `params` に `"sqlite"` を追加)
+- Create: `tests/unit/test_rl_sqlite.py` (SQLite 専用テストファイル、新規)
 
 - [ ] **Step 1: ブランチ作成とポカヨケ検証**
 
@@ -1215,37 +1244,100 @@ CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 git merge-base --is-ancestor $EXPECTED_BASE $CURRENT_BRANCH || { echo "ERROR: 派生元ブランチが $EXPECTED_BASE ではありません。スタック構造が壊れています。"; exit 1; }
 ```
 
-- [ ] **Step 2: テストフィクスチャに `"sqlite"` を追加 (失敗を確認)**
-
-`tests/unit/test_rl_data_store.py` の `store` フィクスチャを以下に差し替え:
+- [ ] **Step 2: 失敗するテストを `tests/unit/test_rl_sqlite.py` に作成**
 
 ```python
-@pytest.fixture(params=["inmemory", "sqlite"])
-async def store(request: pytest.FixtureRequest, tmp_path) -> AsyncIterator[RLDataStore]:
-    backend = request.param
-    if backend == "inmemory":
-        s: RLDataStore = InMemoryRLDataStore()
-    elif backend == "sqlite":
-        from context_store.storage.rl_sqlite import SQLiteRLDataStore
-        db_path = tmp_path / "rl.db"
-        s = await SQLiteRLDataStore.create(db_path=str(db_path))
-    else:
-        pytest.skip(f"backend {backend} added in later tasks")
+"""Tests for SQLiteRLDataStore."""
+
+from __future__ import annotations
+
+import aiosqlite
+import pytest
+
+from context_store.extensions.protocols import (
+    ActionType,
+    AgentAction,
+    RewardSignalRecord,
+    SignalType,
+)
+from context_store.storage.rl_sqlite import SQLiteRLDataStore
+
+
+@pytest.fixture
+async def store(tmp_path):
+    db_path = tmp_path / "rl.db"
+    s = await SQLiteRLDataStore.create(db_path=str(db_path))
     try:
         yield s
     finally:
         await s.dispose()
-```
 
-加えて以下の SQLite 固有テストを追記:
 
-```python
 @pytest.mark.asyncio
-async def test_sqlite_pragmas_are_set(tmp_path) -> None:
-    """foreign_keys=ON, journal_mode=WAL, busy_timeout=5000 が設定されていること"""
-    import aiosqlite
-    from context_store.storage.rl_sqlite import SQLiteRLDataStore
+async def test_insert_and_fetch_action(store: SQLiteRLDataStore) -> None:
+    action = AgentAction(
+        session_id="s1", step=0, action_type=ActionType.VECTOR_SEARCH,
+        action_details={"k": 10}, context_volume=100,
+    )
+    action_id = await store.insert_action_log(action)
+    assert action_id
 
+    actions = await store.fetch_actions_by_session("s1")
+    assert len(actions) == 1
+    assert actions[0].session_id == "s1"
+    assert actions[0].action_type == ActionType.VECTOR_SEARCH
+
+
+@pytest.mark.asyncio
+async def test_insert_reward_with_valid_action_log_id(store: SQLiteRLDataStore) -> None:
+    action = AgentAction(session_id="s1", step=0, action_type=ActionType.VECTOR_SEARCH)
+    action_id = await store.insert_action_log(action)
+    reward = RewardSignalRecord(
+        session_id="s1", signal_type=SignalType.EXPLICIT_FEEDBACK,
+        score=0.5, action_log_id=action_id,
+    )
+    await store.insert_reward_signal(reward)
+
+    rewards = await store.fetch_rewards_by_session("s1")
+    assert len(rewards) == 1
+    assert rewards[0].action_log_id == action_id
+
+
+@pytest.mark.asyncio
+async def test_insert_reward_with_unknown_action_log_id_falls_back(store: SQLiteRLDataStore) -> None:
+    """FK 違反 → action_log_id=NULL に格下げ、context.unverified_action_log_id 保存"""
+    bogus = "00000000-0000-4000-8000-000000000000"
+    reward = RewardSignalRecord(
+        session_id="s1", signal_type=SignalType.EXPLICIT_FEEDBACK,
+        score=-0.5, action_log_id=bogus,
+    )
+    await store.insert_reward_signal(reward)
+
+    rewards = await store.fetch_rewards_by_session("s1")
+    assert len(rewards) == 1
+    assert rewards[0].action_log_id is None
+    assert rewards[0].context.get("unverified_action_log_id") == bogus
+
+
+@pytest.mark.asyncio
+async def test_fetch_action_ids_matches_fetch_actions_order(store: SQLiteRLDataStore) -> None:
+    """fetch_action_ids_by_session の戻り順序は fetch_actions_by_session と一致 (step ASC)"""
+    ids: list[str] = []
+    # 挿入順を step と逆にして並び替え動作を検証
+    for step in (2, 0, 1):
+        action = AgentAction(session_id="s1", step=step, action_type=ActionType.VECTOR_SEARCH)
+        ids.append(await store.insert_action_log(action))
+
+    fetched_actions = await store.fetch_actions_by_session("s1")
+    fetched_ids = await store.fetch_action_ids_by_session("s1")
+    assert [a.step for a in fetched_actions] == [0, 1, 2]
+    # ids は挿入順だったので、step=0 (元 index=1), step=1 (元 index=2), step=2 (元 index=0)
+    assert fetched_ids == [ids[1], ids[2], ids[0]]
+
+
+@pytest.mark.asyncio
+async def test_pragmas_are_set(tmp_path) -> None:
+    """foreign_keys=ON, journal_mode=WAL が設定されていること"""
     db_path = tmp_path / "pragma.db"
     s = await SQLiteRLDataStore.create(db_path=str(db_path))
     try:
@@ -1262,30 +1354,17 @@ async def test_sqlite_pragmas_are_set(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_sqlite_score_check_constraint(tmp_path) -> None:
-    from context_store.storage.rl_sqlite import SQLiteRLDataStore
-    from context_store.extensions.protocols import RewardSignalRecord, SignalType
-
-    s = await SQLiteRLDataStore.create(db_path=str(tmp_path / "ck.db"))
-    try:
-        # dataclass __post_init__ で先に弾かれるので、低レベル INSERT で CHECK 制約を検証
-        with pytest.raises(ValueError):
-            RewardSignalRecord(
-                session_id="s1", signal_type=SignalType.EXPLICIT_FEEDBACK, score=2.0
-            )
-    finally:
-        await s.dispose()
+async def test_score_validation_on_dataclass() -> None:
+    """RewardSignalRecord の __post_init__ で score レンジ違反は弾かれる"""
+    with pytest.raises(ValueError):
+        RewardSignalRecord(
+            session_id="s1", signal_type=SignalType.EXPLICIT_FEEDBACK, score=2.0
+        )
 
 
 @pytest.mark.asyncio
-async def test_sqlite_on_delete_set_null(tmp_path) -> None:
+async def test_on_delete_set_null(tmp_path) -> None:
     """ActionLog 削除時に reward_signal.action_log_id が NULL になる"""
-    import aiosqlite
-    from context_store.storage.rl_sqlite import SQLiteRLDataStore
-    from context_store.extensions.protocols import (
-        ActionType, AgentAction, RewardSignalRecord, SignalType,
-    )
-
     db_path = tmp_path / "fk.db"
     s = await SQLiteRLDataStore.create(db_path=str(db_path))
     try:
@@ -1307,10 +1386,17 @@ async def test_sqlite_on_delete_set_null(tmp_path) -> None:
         assert rewards[0].action_log_id is None
     finally:
         await s.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dispose_is_idempotent(tmp_path) -> None:
+    s = await SQLiteRLDataStore.create(db_path=str(tmp_path / "dispose.db"))
+    await s.dispose()
+    await s.dispose()
 ```
 
 ```bash
-uv run pytest tests/unit/test_rl_data_store.py -v
+uv run pytest tests/unit/test_rl_sqlite.py -v
 ```
 
 Expected: FAIL (`rl_sqlite` 未定義)
@@ -1465,6 +1551,22 @@ class SQLiteRLDataStore(RLDataStore):
             for row in rows
         ]
 
+    async def fetch_action_ids_by_session(
+        self, session_id: str, limit: int = 1000
+    ) -> list[str]:
+        cur = await self._conn.execute(
+            """
+            SELECT id
+            FROM action_log
+            WHERE session_id = ?
+            ORDER BY step ASC, created_at ASC
+            LIMIT ?
+            """,
+            (session_id, limit),
+        )
+        rows = await cur.fetchall()
+        return [row[0] for row in rows]
+
     async def fetch_rewards_by_session(
         self, session_id: str, limit: int = 1000
     ) -> list[RewardSignalRecord]:
@@ -1515,9 +1617,9 @@ class SQLiteRLDataStore(RLDataStore):
 - [ ] **Step 4: テスト成功と静的解析を確認**
 
 ```bash
-uv run ruff check src/context_store/storage/rl_sqlite.py tests/unit/test_rl_data_store.py
+uv run ruff check src/context_store/storage/rl_sqlite.py tests/unit/test_rl_sqlite.py
 uv run mypy src/context_store/storage/rl_sqlite.py
-uv run pytest tests/unit/test_rl_data_store.py -v --cov=context_store.storage.rl_sqlite --cov-report=term-missing
+uv run pytest tests/unit/test_rl_sqlite.py -v --cov=context_store.storage.rl_sqlite --cov-report=term-missing
 ```
 
 Expected: すべて PASS、`rl_sqlite.py` カバレッジ 100%
@@ -1525,8 +1627,8 @@ Expected: すべて PASS、`rl_sqlite.py` カバレッジ 100%
 - [ ] **Step 5: コミット**
 
 ```bash
-git add src/context_store/storage/rl_sqlite.py tests/unit/test_rl_data_store.py
-git commit -m "feat(rl): SQLiteRLDataStore を実装 (WAL + busy_timeout + FK 違反フォールバック)"
+git add src/context_store/storage/rl_sqlite.py tests/unit/test_rl_sqlite.py
+git commit -m "feat(rl): SQLiteRLDataStore を実装 (WAL + busy_timeout + FK 違反フォールバック + fetch_action_ids_by_session)"
 ```
 
 - [ ] **Step 6: Draft PR を Phase Base 向けに作成**
@@ -1546,14 +1648,14 @@ PR URL を記録します。
 
 **派生元ブランチ:** `feat/rl-foundation/phase-3`
 
-**実行モード:** 並列可能 (独立) — Task 3.1 / 3.2 とは別ファイル。
+**実行モード:** 並列可能 (独立) — Task 3.1 / 3.2 とは別ファイルのみを触る。テストファイルもバックエンド別に分割しているためファイル競合なし。
 
 **前提条件:** Task 3.0 の Phase Base ブランチが push 済み、Task 1.1 (0003 migration) が `master` 経由で Phase Base に反映済みであること
 
 **Files:**
 
 - Create: `src/context_store/storage/rl_postgres.py`
-- Modify: `tests/unit/test_rl_data_store.py` (Postgres は `AsyncMock` で SQL 発行検証のみ。実 DB に依存しない別テストとして配置)
+- Create: `tests/unit/test_rl_postgres.py` (Postgres 専用、`AsyncMock` で SQL 発行検証)
 
 - [ ] **Step 1: ブランチ作成とポカヨケ検証**
 
@@ -1566,73 +1668,120 @@ CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 git merge-base --is-ancestor $EXPECTED_BASE $CURRENT_BRANCH || { echo "ERROR: 派生元ブランチが $EXPECTED_BASE ではありません。スタック構造が壊れています。"; exit 1; }
 ```
 
-- [ ] **Step 2: 失敗するテストを追加 (`AsyncMock` でプール/接続を差し替え)**
-
-`tests/unit/test_rl_data_store.py` の末尾に以下を追加:
+- [ ] **Step 2: 失敗するテストを `tests/unit/test_rl_postgres.py` に作成**
 
 ```python
-@pytest.mark.asyncio
-async def test_postgres_insert_action_log_emits_expected_sql() -> None:
-    from unittest.mock import AsyncMock, MagicMock
-    from context_store.storage.rl_postgres import PostgresRLDataStore
-    from context_store.extensions.protocols import AgentAction, ActionType
+"""Tests for PostgresRLDataStore (asyncpg mock-based)."""
 
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock
+
+import asyncpg
+import pytest
+
+from context_store.extensions.protocols import (
+    ActionType,
+    AgentAction,
+    RewardSignalRecord,
+    SignalType,
+)
+from context_store.storage.rl_postgres import PostgresRLDataStore
+
+
+def _make_fake_pool(fetchval_returns=None, fetchval_side_effect=None,
+                    fetch_returns=None) -> tuple[MagicMock, AsyncMock]:
     fake_conn = AsyncMock()
-    fake_conn.fetchval = AsyncMock(return_value="00000000-0000-4000-8000-000000000abc")
+    if fetchval_side_effect is not None:
+        fake_conn.fetchval = AsyncMock(side_effect=fetchval_side_effect)
+    else:
+        fake_conn.fetchval = AsyncMock(return_value=fetchval_returns)
+    if fetch_returns is not None:
+        fake_conn.fetch = AsyncMock(return_value=fetch_returns)
     fake_pool = MagicMock()
     fake_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=fake_conn)
     fake_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
     fake_pool.close = AsyncMock()
-
-    store = PostgresRLDataStore(pool=fake_pool)
-    action = AgentAction(session_id="s1", step=2, action_type=ActionType.GRAPH_TRAVERSAL)
-    aid = await store.insert_action_log(action)
-
-    assert aid == "00000000-0000-4000-8000-000000000abc"
-    # 1 回 fetchval が呼ばれ、SQL に "INSERT INTO action_log" を含む
-    call_args = fake_conn.fetchval.call_args_list[0]
-    assert "INSERT INTO action_log" in call_args.args[0]
-    await store.dispose()
+    return fake_pool, fake_conn
 
 
 @pytest.mark.asyncio
-async def test_postgres_insert_reward_falls_back_on_fk_violation() -> None:
-    from unittest.mock import AsyncMock, MagicMock
-    import asyncpg
-    from context_store.storage.rl_postgres import PostgresRLDataStore
-    from context_store.extensions.protocols import RewardSignalRecord, SignalType
+async def test_insert_action_log_emits_expected_sql() -> None:
+    fake_pool, fake_conn = _make_fake_pool(
+        fetchval_returns="00000000-0000-4000-8000-000000000abc"
+    )
+    store = PostgresRLDataStore(pool=fake_pool)
+    try:
+        action = AgentAction(session_id="s1", step=2, action_type=ActionType.GRAPH_TRAVERSAL)
+        aid = await store.insert_action_log(action)
+        assert aid == "00000000-0000-4000-8000-000000000abc"
+        call_args = fake_conn.fetchval.call_args_list[0]
+        assert "INSERT INTO action_log" in call_args.args[0]
+    finally:
+        await store.dispose()
 
-    fake_conn = AsyncMock()
-    # 1 回目: FK 違反、2 回目: 成功
-    fake_conn.fetchval = AsyncMock(
-        side_effect=[
+
+@pytest.mark.asyncio
+async def test_insert_reward_falls_back_on_fk_violation() -> None:
+    fake_pool, fake_conn = _make_fake_pool(
+        fetchval_side_effect=[
             asyncpg.ForeignKeyViolationError("fk"),
             "00000000-0000-4000-8000-000000000def",
         ]
     )
-    fake_pool = MagicMock()
-    fake_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=fake_conn)
-    fake_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
-    fake_pool.close = AsyncMock()
+    store = PostgresRLDataStore(pool=fake_pool)
+    try:
+        reward = RewardSignalRecord(
+            session_id="s1", signal_type=SignalType.EXPLICIT_FEEDBACK,
+            score=0.7, action_log_id="00000000-0000-4000-8000-000000000999",
+        )
+        rid = await store.insert_reward_signal(reward)
+        assert rid == "00000000-0000-4000-8000-000000000def"
+        # 2 回目の SQL 引数では action_log_id=None、context に unverified_action_log_id が入る
+        second_call = fake_conn.fetchval.call_args_list[1]
+        args = second_call.args
+        # args = (sql, session_id, action_log_id, signal_type, score, context_json, ts)
+        assert args[2] is None
+        assert "unverified_action_log_id" in args[5]
+    finally:
+        await store.dispose()
+
+
+@pytest.mark.asyncio
+async def test_fetch_action_ids_sql_orders_by_step_then_created_at() -> None:
+    """fetch_action_ids_by_session の SQL が step ASC, created_at ASC を含む"""
+    fake_pool, fake_conn = _make_fake_pool(fetch_returns=[{"id": "id-a"}, {"id": "id-b"}])
+    # asyncpg.Record は dict-like なので AsyncMock の戻り値で MagicMock を使う
+    record_a = MagicMock()
+    record_a.__getitem__ = lambda self, k: "id-a" if k == "id" else None
+    record_b = MagicMock()
+    record_b.__getitem__ = lambda self, k: "id-b" if k == "id" else None
+    fake_conn.fetch = AsyncMock(return_value=[record_a, record_b])
 
     store = PostgresRLDataStore(pool=fake_pool)
-    reward = RewardSignalRecord(
-        session_id="s1", signal_type=SignalType.EXPLICIT_FEEDBACK,
-        score=0.7, action_log_id="00000000-0000-4000-8000-000000000999",
-    )
-    rid = await store.insert_reward_signal(reward)
-    assert rid == "00000000-0000-4000-8000-000000000def"
-    # 2 回目の SQL 引数では action_log_id=None、context に unverified_action_log_id が入る
-    second_call = fake_conn.fetchval.call_args_list[1]
-    args = second_call.args
-    # args = (sql, session_id, action_log_id, signal_type, score, context_json, ts)
-    assert args[2] is None
-    assert "unverified_action_log_id" in args[5]
+    try:
+        ids = await store.fetch_action_ids_by_session("s1", limit=10)
+        assert ids == ["id-a", "id-b"]
+        sql = fake_conn.fetch.call_args.args[0]
+        assert "ORDER BY step ASC" in sql
+        assert "created_at ASC" in sql
+    finally:
+        await store.dispose()
+
+
+@pytest.mark.asyncio
+async def test_dispose_closes_pool() -> None:
+    fake_pool, _ = _make_fake_pool(fetchval_returns="anything")
+    store = PostgresRLDataStore(pool=fake_pool)
     await store.dispose()
+    fake_pool.close.assert_awaited_once()
+    # 2 回呼んでも close は 1 度のみ
+    await store.dispose()
+    fake_pool.close.assert_awaited_once()
 ```
 
 ```bash
-uv run pytest tests/unit/test_rl_data_store.py::test_postgres_insert_action_log_emits_expected_sql tests/unit/test_rl_data_store.py::test_postgres_insert_reward_falls_back_on_fk_violation -v
+uv run pytest tests/unit/test_rl_postgres.py -v
 ```
 
 Expected: import エラー (`rl_postgres` 未定義)
@@ -1755,6 +1904,22 @@ class PostgresRLDataStore(RLDataStore):
             for r in rows
         ]
 
+    async def fetch_action_ids_by_session(
+        self, session_id: str, limit: int = 1000
+    ) -> list[str]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id::text AS id
+                FROM action_log
+                WHERE session_id = $1
+                ORDER BY step ASC, created_at ASC
+                LIMIT $2
+                """,
+                session_id, limit,
+            )
+        return [r["id"] for r in rows]
+
     async def fetch_rewards_by_session(
         self, session_id: str, limit: int = 1000
     ) -> list[RewardSignalRecord]:
@@ -1795,9 +1960,9 @@ class PostgresRLDataStore(RLDataStore):
 - [ ] **Step 4: テスト成功と静的解析を確認**
 
 ```bash
-uv run ruff check src/context_store/storage/rl_postgres.py tests/unit/test_rl_data_store.py
+uv run ruff check src/context_store/storage/rl_postgres.py tests/unit/test_rl_postgres.py
 uv run mypy src/context_store/storage/rl_postgres.py
-uv run pytest tests/unit/test_rl_data_store.py -v --cov=context_store.storage.rl_postgres --cov-report=term-missing
+uv run pytest tests/unit/test_rl_postgres.py -v --cov=context_store.storage.rl_postgres --cov-report=term-missing
 ```
 
 Expected: すべて PASS、`rl_postgres.py` カバレッジ 100%
@@ -1805,7 +1970,7 @@ Expected: すべて PASS、`rl_postgres.py` カバレッジ 100%
 - [ ] **Step 5: コミット**
 
 ```bash
-git add src/context_store/storage/rl_postgres.py tests/unit/test_rl_data_store.py
+git add src/context_store/storage/rl_postgres.py tests/unit/test_rl_postgres.py
 git commit -m "feat(rl): PostgresRLDataStore を実装 (asyncpg + FK 違反フォールバック)"
 ```
 
@@ -1833,7 +1998,7 @@ PR URL を記録します。
 **Files:**
 
 - Modify: `src/context_store/storage/factory.py`
-- Modify: `tests/unit/test_rl_data_store.py` (ファクトリ経由でストアを作るテストを追加)
+- Create: `tests/unit/test_rl_factory.py` (ファクトリ経由で 4 バックエンド分岐をテスト)
 
 - [ ] **Step 1: 派生元更新とブランチ作成、ポカヨケ検証**
 
@@ -1846,43 +2011,93 @@ CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 git merge-base --is-ancestor $EXPECTED_BASE $CURRENT_BRANCH || { echo "ERROR: 派生元ブランチが $EXPECTED_BASE ではありません。スタック構造が壊れています。"; exit 1; }
 ```
 
-- [ ] **Step 2: 失敗するテストを追加**
+- [ ] **Step 2: 失敗するテストを作成**
 
-`tests/unit/test_rl_data_store.py` の末尾に以下を追加:
+新規ファイル `tests/unit/test_rl_factory.py` を作成:
 
 ```python
-@pytest.mark.asyncio
-async def test_factory_inmemory_backend() -> None:
+"""create_rl_data_store ファクトリのテスト (auto/postgres/sqlite/inmemory 4 分岐網羅)."""
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+
+def _make_settings(**overrides):
+    """Settings を _env_file=None で生成 (tests/unit/conftest.py の make_settings と同等)."""
     from context_store.config import Settings
+
+    defaults = {
+        "storage_backend": "inmemory",
+        "rl_data_store_backend": "auto",
+    }
+    defaults.update(overrides)
+    return Settings(_env_file=None, **defaults)
+
+
+@pytest.mark.asyncio
+async def test_factory_explicit_inmemory_backend() -> None:
     from context_store.storage.factory import create_rl_data_store
     from context_store.storage.rl_inmemory import InMemoryRLDataStore
 
-    settings = Settings(rl_data_store_backend="inmemory")
-    s = await create_rl_data_store(settings)
+    settings = _make_settings(rl_data_store_backend="inmemory")
+    store = await create_rl_data_store(settings)
     try:
-        assert isinstance(s, InMemoryRLDataStore)
+        assert isinstance(store, InMemoryRLDataStore)
     finally:
-        await s.dispose()
+        await store.dispose()
 
 
 @pytest.mark.asyncio
-async def test_factory_auto_resolves_from_storage_backend(tmp_path, monkeypatch) -> None:
-    """rl_data_store_backend='auto' のとき storage_backend に追従"""
-    from context_store.config import Settings
+async def test_factory_auto_resolves_to_inmemory_when_storage_inmemory() -> None:
     from context_store.storage.factory import create_rl_data_store
     from context_store.storage.rl_inmemory import InMemoryRLDataStore
 
-    # storage_backend が 'inmemory' のとき auto → inmemory
-    settings = Settings(storage_backend="inmemory", rl_data_store_backend="auto")
-    s = await create_rl_data_store(settings)
+    settings = _make_settings(storage_backend="inmemory", rl_data_store_backend="auto")
+    store = await create_rl_data_store(settings)
     try:
-        assert isinstance(s, InMemoryRLDataStore)
+        assert isinstance(store, InMemoryRLDataStore)
     finally:
-        await s.dispose()
+        await store.dispose()
+
+
+@pytest.mark.asyncio
+async def test_factory_auto_resolves_to_sqlite_when_storage_sqlite(tmp_path) -> None:
+    from context_store.storage.factory import create_rl_data_store
+    from context_store.storage.rl_sqlite import SQLiteRLDataStore
+
+    db_path = str(tmp_path / "rl.db")
+    settings = _make_settings(
+        storage_backend="sqlite",
+        rl_data_store_backend="auto",
+        sqlite_db_path=db_path,
+    )
+    store = await create_rl_data_store(settings)
+    try:
+        assert isinstance(store, SQLiteRLDataStore)
+    finally:
+        await store.dispose()
+
+
+@pytest.mark.asyncio
+async def test_factory_auto_resolves_to_postgres_when_storage_postgres() -> None:
+    """storage_backend='postgres' のとき auto → PostgresRLDataStore.create が呼ばれる"""
+    from context_store.storage.factory import create_rl_data_store
+
+    settings = _make_settings(storage_backend="postgres", rl_data_store_backend="auto")
+    fake_store = AsyncMock()
+    with patch(
+        "context_store.storage.rl_postgres.PostgresRLDataStore.create",
+        new=AsyncMock(return_value=fake_store),
+    ) as mock_create:
+        store = await create_rl_data_store(settings)
+        mock_create.assert_awaited_once_with(settings)
+        assert store is fake_store
 ```
 
 ```bash
-uv run pytest tests/unit/test_rl_data_store.py::test_factory_inmemory_backend tests/unit/test_rl_data_store.py::test_factory_auto_resolves_from_storage_backend -v
+uv run pytest tests/unit/test_rl_factory.py -v
 ```
 
 Expected: FAIL (`create_rl_data_store` 未定義)
@@ -1909,29 +2124,27 @@ async def create_rl_data_store(settings: "Settings") -> "RLDataStore":
         return await PostgresRLDataStore.create(settings)
     if backend == "sqlite":
         from context_store.storage.rl_sqlite import SQLiteRLDataStore
-        # SQLite はデフォルトで storage と同じ場所か、専用パスを使う
-        db_path = settings.sqlite_database_path  # 既存 Settings の SQLite パスを流用
-        return await SQLiteRLDataStore.create(db_path=db_path)
+        return await SQLiteRLDataStore.create(db_path=settings.sqlite_db_path)
     from context_store.storage.rl_inmemory import InMemoryRLDataStore
     return InMemoryRLDataStore()
 ```
 
-> **注:** `settings.sqlite_database_path` フィールドが既存 Settings に存在することを前提とします。命名が異なる場合は対応する Settings プロパティに置き換えてください。
+> **注:** Settings の SQLite パスフィールドは `sqlite_db_path` (既存 `src/context_store/config.py:62` で定義済み)。
 
 - [ ] **Step 4: テスト成功と静的解析を確認**
 
 ```bash
-uv run ruff check src/context_store/storage/factory.py tests/unit/test_rl_data_store.py
+uv run ruff check src/context_store/storage/factory.py tests/unit/test_rl_factory.py
 uv run mypy src/context_store/storage/factory.py
-uv run pytest tests/unit/test_rl_data_store.py -v --cov=context_store.storage --cov-report=term-missing
+uv run pytest tests/unit/test_rl_factory.py -v --cov=context_store.storage.factory --cov-report=term-missing
 ```
 
-Expected: すべて PASS。Factory の `create_rl_data_store` を含む 3 バックエンド網羅。
+Expected: すべて PASS。Factory の `create_rl_data_store` の 4 分岐 (explicit-inmemory / auto→inmemory / auto→sqlite / auto→postgres) を網羅。
 
 - [ ] **Step 5: コミット**
 
 ```bash
-git add src/context_store/storage/factory.py tests/unit/test_rl_data_store.py
+git add src/context_store/storage/factory.py tests/unit/test_rl_factory.py
 git commit -m "feat(rl): create_rl_data_store ファクトリを統合 (auto/postgres/sqlite/inmemory)"
 ```
 
@@ -2151,7 +2364,7 @@ PR URL を記録します。
 **Files:**
 
 - Modify: `src/context_store/retrieval/pipeline.py`
-- Modify: `tests/unit/test_retrieval_pipeline.py`
+- Create: `tests/unit/test_retrieval_pipeline.py`
 
 - [ ] **Step 1: ブランチ作成とポカヨケ検証**
 
@@ -2166,56 +2379,111 @@ git merge-base --is-ancestor $EXPECTED_BASE $CURRENT_BRANCH || { echo "ERROR: �
 
 > Task 4.1 が未マージの場合は `EXPECTED_BASE="origin/feat/rl-foundation/phase-4-task-4.1-storage-logger"` に置き換えてください。
 
-- [ ] **Step 2: 失敗するテストを `tests/unit/test_retrieval_pipeline.py` に追加**
+- [ ] **Step 2: 失敗するテストファイル `tests/unit/test_retrieval_pipeline.py` を新規作成**
 
-`tests/unit/test_retrieval_pipeline.py` の末尾に以下を追加:
+新規ファイル `tests/unit/test_retrieval_pipeline.py` を作成し、共通ヘルパ `_build_pipeline()` を定義します。`RetrievalPipeline` の DI 引数 7 種 (query_analyzer / vector_search / keyword_search / graph_traversal / result_fusion / post_processor / storage_adapter) は `AsyncMock` / `MagicMock` で組み立て、Task 5.1 で追加される `action_logger` 引数のみテストでカスタマイズします。
 
 ```python
+"""RetrievalPipeline の RL ActionLog 統合テスト。"""
+from __future__ import annotations
+
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+
+def _build_pipeline(
+    *,
+    vector_results=None,
+    keyword_results=None,
+    graph_traversal_nodes=None,
+    fused_items=None,
+):
+    """RetrievalPipeline を AsyncMock 依存で構築する共通ヘルパ。"""
+    from context_store.models.memory import MemorySource
+    from context_store.models.search import SearchStrategy
+    from context_store.retrieval.pipeline import RetrievalPipeline
+
+    query_analyzer = MagicMock()
+    query_analyzer.analyze = MagicMock(
+        return_value=SearchStrategy(
+            vector_weight=0.5,
+            keyword_weight=0.3,
+            graph_weight=0.2,
+            graph_depth=1,
+            time_decay_enabled=False,
+        )
+    )
+
+    vector_search = AsyncMock()
+    vector_search.search = AsyncMock(return_value=vector_results or [])
+
+    keyword_search = AsyncMock()
+    keyword_search.search = AsyncMock(return_value=keyword_results or [])
+
+    graph_traversal = AsyncMock()
+    graph_result = MagicMock()
+    graph_result.nodes = graph_traversal_nodes or []
+    graph_traversal.traverse = AsyncMock(return_value=graph_result)
+
+    result_fusion = MagicMock()
+    result_fusion.fuse_multiple_sources = MagicMock(return_value=fused_items or [])
+
+    post_processor = AsyncMock()
+    post_processor.process = AsyncMock(side_effect=lambda results, project, max_tokens: results)
+
+    storage_adapter = AsyncMock()
+    storage_adapter.get_memories_batch = AsyncMock(return_value=[])
+
+    return RetrievalPipeline(
+        query_analyzer=query_analyzer,
+        vector_search=vector_search,
+        keyword_search=keyword_search,
+        graph_traversal=graph_traversal,
+        result_fusion=result_fusion,
+        post_processor=post_processor,
+        storage_adapter=storage_adapter,
+    )
+
+
 @pytest.mark.asyncio
-async def test_pipeline_emits_4_actions_when_session_id_set() -> None:
-    """session_id 設定時、4 サブステップで log_action が発火する"""
-    from unittest.mock import AsyncMock
+async def test_pipeline_emits_actions_when_session_id_set() -> None:
+    """session_id 設定時、各サブステップで log_action が発火する"""
     from context_store.extensions import session_context as sc
     from context_store.extensions.protocols import ActionType
-    from context_store.retrieval.pipeline import RetrievalPipeline
 
     logger = AsyncMock()
     logger.log_action = AsyncMock(return_value="aid")
 
-    pipeline = RetrievalPipeline(...)  # 既存 fixture/builder を流用
+    pipeline = _build_pipeline()
     token = sc.set_session_id("s1")
     try:
-        await pipeline.search(query="...", action_logger=logger, ...)
+        await pipeline.search(query="q", action_logger=logger)
     finally:
         sc.reset_session_id(token)
 
-    # 4 ステップ (VECTOR, KEYWORD, GRAPH (条件次第), RESULT_FUSION) が発火
     action_types = [c.args[0].action_type for c in logger.log_action.call_args_list]
     assert ActionType.RESULT_FUSION in action_types
     assert ActionType.VECTOR_SEARCH in action_types
+    assert ActionType.KEYWORD_SEARCH in action_types
 
 
 @pytest.mark.asyncio
 async def test_pipeline_no_emission_without_session_id() -> None:
     """session_id 未設定時は log_action が発火しない"""
-    from unittest.mock import AsyncMock
-    from context_store.retrieval.pipeline import RetrievalPipeline
-
     logger = AsyncMock()
     logger.log_action = AsyncMock(return_value="aid")
 
-    pipeline = RetrievalPipeline(...)
-    await pipeline.search(query="...", action_logger=logger, ...)
+    pipeline = _build_pipeline()
+    await pipeline.search(query="q", action_logger=logger)
     assert logger.log_action.call_count == 0
 
 
 @pytest.mark.asyncio
 async def test_pipeline_awaits_pending_tasks_before_returning() -> None:
     """search 応答返却時点で全 ActionLog が DB 確定済み (gather 待機)"""
-    import asyncio
-    from unittest.mock import AsyncMock
     from context_store.extensions import session_context as sc
-    from context_store.retrieval.pipeline import RetrievalPipeline
 
     slow_done = asyncio.Event()
 
@@ -2227,10 +2495,10 @@ async def test_pipeline_awaits_pending_tasks_before_returning() -> None:
     logger = AsyncMock()
     logger.log_action = slow_insert
 
-    pipeline = RetrievalPipeline(...)
+    pipeline = _build_pipeline()
     token = sc.set_session_id("s1")
     try:
-        await pipeline.search(query="...", action_logger=logger, ...)
+        await pipeline.search(query="q", action_logger=logger)
     finally:
         sc.reset_session_id(token)
 
@@ -2241,30 +2509,27 @@ async def test_pipeline_awaits_pending_tasks_before_returning() -> None:
 @pytest.mark.asyncio
 async def test_pipeline_logger_exception_is_swallowed() -> None:
     """log_action 例外は search の戻り値に影響しない"""
-    from unittest.mock import AsyncMock
     from context_store.extensions import session_context as sc
-    from context_store.retrieval.pipeline import RetrievalPipeline
 
     logger = AsyncMock()
     logger.log_action = AsyncMock(side_effect=RuntimeError("boom"))
 
-    pipeline = RetrievalPipeline(...)
+    pipeline = _build_pipeline()
     token = sc.set_session_id("s1")
     try:
-        result = await pipeline.search(query="...", action_logger=logger, ...)
+        result = await pipeline.search(query="q", action_logger=logger)
     finally:
         sc.reset_session_id(token)
 
     assert result is not None  # search は正常終了
+    assert "results" in result
 ```
-
-> 上記 `...` は既存テストの fixture / builder に合わせて差し替えてください。テスト本体の組み立ては既存 `test_retrieval_pipeline.py` の慣習に従います。
 
 ```bash
 uv run pytest tests/unit/test_retrieval_pipeline.py -v
 ```
 
-Expected: 4 件の新テストが FAIL
+Expected: 4 件の新テストが FAIL (`action_logger` 引数未対応のため)
 
 - [ ] **Step 3: `RetrievalPipeline.search()` を改修**
 
@@ -2402,12 +2667,13 @@ git merge-base --is-ancestor $EXPECTED_BASE $CURRENT_BRANCH || { echo "ERROR: �
 
 - [ ] **Step 2: 失敗するテストを `tests/unit/test_orchestrator.py` に追加**
 
+> 既存ヘルパ `_build_orchestrator(...)` (`tests/unit/test_orchestrator.py:107`) を使用します。これは Orchestrator を 13 個の DI 引数で構築するための共有 fixture で、`(orch, storage, graph, cache, embedding, ingestion_pipeline, retrieval_pipeline, lifecycle_manager, task_registry)` の tuple を返します。`retrieval_pipeline` / `reward_signal` / `action_logger` などをキーワード引数で差し替えられます。
+
 ```python
 @pytest.mark.asyncio
 async def test_orchestrator_sets_contextvar_during_search() -> None:
     from unittest.mock import AsyncMock
     from context_store.extensions import session_context as sc
-    from context_store.orchestrator import Orchestrator
 
     captured: list[str | None] = []
 
@@ -2415,10 +2681,15 @@ async def test_orchestrator_sets_contextvar_during_search() -> None:
         captured.append(sc.get_session_id())
         return {"results": [{"score": 0.8, "content": "hi"}], "query": query}
 
-    orch = Orchestrator(...)  # 既存 fixture
-    orch._retrieval_pipeline.search = fake_pipeline_search  # type: ignore[assignment]
-    orch.reward_signal = AsyncMock()
-    orch.reward_signal.record_reward = AsyncMock(return_value="rid")
+    retrieval_pipeline = AsyncMock()
+    retrieval_pipeline.search = fake_pipeline_search
+    reward_signal = AsyncMock()
+    reward_signal.record_reward = AsyncMock(return_value="rid")
+
+    orch, *_ = await _build_orchestrator(
+        retrieval_pipeline=retrieval_pipeline,
+        reward_signal=reward_signal,
+    )
 
     await orch.search("q", session_id="my-session")
     assert captured == ["my-session"]
@@ -2431,20 +2702,25 @@ async def test_orchestrator_emits_internal_eval_with_correct_score() -> None:
     """results の平均 score=0.8 → 2*0.8 - 1 = 0.6"""
     from unittest.mock import AsyncMock
     from context_store.extensions.protocols import SignalType
-    from context_store.orchestrator import Orchestrator
 
-    orch = Orchestrator(...)
-    orch._retrieval_pipeline.search = AsyncMock(
+    retrieval_pipeline = AsyncMock()
+    retrieval_pipeline.search = AsyncMock(
         return_value={"results": [{"score": 0.8}, {"score": 0.8}], "query": "q"}
     )
+
     captured: list = []
 
     async def fake_record(record):
         captured.append(record)
         return "rid"
 
-    orch.reward_signal = AsyncMock()
-    orch.reward_signal.record_reward = fake_record
+    reward_signal = AsyncMock()
+    reward_signal.record_reward = fake_record
+
+    orch, *_ = await _build_orchestrator(
+        retrieval_pipeline=retrieval_pipeline,
+        reward_signal=reward_signal,
+    )
 
     await orch.search("q", session_id="s1")
     # _background_tasks の完了待ち
@@ -2459,20 +2735,25 @@ async def test_orchestrator_emits_internal_eval_with_correct_score() -> None:
 async def test_orchestrator_internal_eval_empty_results_is_negative() -> None:
     from unittest.mock import AsyncMock
     from context_store.extensions.protocols import SignalType
-    from context_store.orchestrator import Orchestrator
 
-    orch = Orchestrator(...)
-    orch._retrieval_pipeline.search = AsyncMock(
+    retrieval_pipeline = AsyncMock()
+    retrieval_pipeline.search = AsyncMock(
         return_value={"results": [], "query": "q"}
     )
+
     captured: list = []
 
     async def fake_record(record):
         captured.append(record)
         return "rid"
 
-    orch.reward_signal = AsyncMock()
-    orch.reward_signal.record_reward = fake_record
+    reward_signal = AsyncMock()
+    reward_signal.record_reward = fake_record
+
+    orch, *_ = await _build_orchestrator(
+        retrieval_pipeline=retrieval_pipeline,
+        reward_signal=reward_signal,
+    )
 
     await orch.search("q", session_id="s1")
     await orch._wait_background_tasks_for_test()
@@ -2485,7 +2766,6 @@ async def test_orchestrator_dispose_waits_background_tasks() -> None:
     """dispose 直前の INTERNAL_EVAL がロストしない"""
     import asyncio
     from unittest.mock import AsyncMock
-    from context_store.orchestrator import Orchestrator
 
     done = asyncio.Event()
 
@@ -2494,12 +2774,18 @@ async def test_orchestrator_dispose_waits_background_tasks() -> None:
         done.set()
         return "rid"
 
-    orch = Orchestrator(...)
-    orch._retrieval_pipeline.search = AsyncMock(
+    retrieval_pipeline = AsyncMock()
+    retrieval_pipeline.search = AsyncMock(
         return_value={"results": [{"score": 0.9}], "query": "q"}
     )
-    orch.reward_signal = AsyncMock()
-    orch.reward_signal.record_reward = slow_record
+
+    reward_signal = AsyncMock()
+    reward_signal.record_reward = slow_record
+
+    orch, *_ = await _build_orchestrator(
+        retrieval_pipeline=retrieval_pipeline,
+        reward_signal=reward_signal,
+    )
 
     await orch.search("q", session_id="s1")
     await orch.dispose()
@@ -2510,11 +2796,11 @@ async def test_orchestrator_dispose_waits_background_tasks() -> None:
 async def test_orchestrator_record_reward_public_api() -> None:
     from unittest.mock import AsyncMock
     from context_store.extensions.protocols import SignalType
-    from context_store.orchestrator import Orchestrator
 
-    orch = Orchestrator(...)
-    orch.reward_signal = AsyncMock()
-    orch.reward_signal.record_reward = AsyncMock(return_value="rid")
+    reward_signal = AsyncMock()
+    reward_signal.record_reward = AsyncMock(return_value="rid")
+
+    orch, *_ = await _build_orchestrator(reward_signal=reward_signal)
 
     result = await orch.record_reward(
         session_id="s1", score=0.4,
@@ -2522,7 +2808,7 @@ async def test_orchestrator_record_reward_public_api() -> None:
         action_log_id="aid", context={"comment": "ok"},
     )
     assert result == "rid"
-    args = orch.reward_signal.record_reward.call_args.args
+    args = reward_signal.record_reward.call_args.args
     assert args[0].score == 0.4
     assert args[0].action_log_id == "aid"
 ```
@@ -2917,23 +3203,28 @@ import pytest
 from context_store.config import Settings
 from context_store.extensions.protocols import SignalType
 from context_store.orchestrator import create_orchestrator
-from context_store.storage.rl_sqlite import SQLiteRLDataStore
 
 
 @pytest.mark.asyncio
-async def test_e2e_search_emits_4_actions_internal_eval_and_explicit_feedback(
+async def test_e2e_search_emits_actions_internal_eval_and_explicit_feedback(
     tmp_path,
 ) -> None:
+    """search → ActionLog 確定 → INTERNAL_EVAL → EXPLICIT_FEEDBACK の一連の流れを検証。
+
+    `fetch_action_ids_by_session` (設計書 §5.2) で DB 上の action_log_id を race-free に
+    取得し、`memory_feedback` 相当の `record_reward` で FK が解決できることを保証する。
+    """
     settings = Settings(
+        _env_file=None,
         storage_backend="sqlite",
         rl_logging_enabled=True,
         rl_data_store_backend="sqlite",
-        sqlite_database_path=str(tmp_path / "e2e.db"),
+        sqlite_db_path=str(tmp_path / "e2e.db"),
     )
     orch = await create_orchestrator(settings)
     try:
-        # 何か memory を事前に登録する (既存ヘルパを利用)
-        await orch.add_memory(content="hello world", ...)
+        # 何か memory を事前に登録する (既存ヘルパに合わせる)
+        await orch.add_memory(content="hello world", source_type="text")
 
         # search 実行
         result = await orch.search(query="hello", session_id="e2e-session")
@@ -2941,33 +3232,35 @@ async def test_e2e_search_emits_4_actions_internal_eval_and_explicit_feedback(
 
         assert result["session_id"] == "e2e-session"
 
-        # action_log と reward_signal を取得
+        # action_log を取得
         actions = await orch._rl_store.fetch_actions_by_session("e2e-session")
+        action_ids = await orch._rl_store.fetch_action_ids_by_session("e2e-session")
         rewards = await orch._rl_store.fetch_rewards_by_session("e2e-session")
 
         # 4 ステップ (GRAPH は条件次第なので 3 or 4)
         assert 3 <= len(actions) <= 4
+        # action_ids は actions と同じ順序・長さで取得できる
+        assert len(action_ids) == len(actions)
+        assert all(isinstance(aid, str) and aid for aid in action_ids)
         # INTERNAL_EVAL が 1 件入っている
         assert any(r.signal_type == SignalType.INTERNAL_EVAL for r in rewards)
 
-        # EXPLICIT_FEEDBACK を発火 (race-free を期待)
-        first_action_id = await orch._rl_store.fetch_actions_by_session("e2e-session")
-        aid = await orch._rl_store.insert_action_log(actions[0])  # dummy alt: 実 ID を使う
-        # ※ 実装では fetch 経由で取った action の id を直接使えるよう store API を拡張するか、
-        #    fetch_actions_by_session 戻り値に id を含める形に整える。
-        #    本テストでは Orchestrator.record_reward 経由のレース検証を主眼とする。
+        # EXPLICIT_FEEDBACK を確定済みの action_log_id にぶら下げて発火 → FK 違反なし
         rid = await orch.record_reward(
             session_id="e2e-session", score=0.7,
             signal_type=SignalType.EXPLICIT_FEEDBACK,
-            action_log_id=None,
+            action_log_id=action_ids[0],
         )
         assert rid
 
         rewards2 = await orch._rl_store.fetch_rewards_by_session("e2e-session")
-        assert any(
-            r.signal_type == SignalType.EXPLICIT_FEEDBACK and r.score == 0.7
-            for r in rewards2
-        )
+        feedback = [
+            r for r in rewards2
+            if r.signal_type == SignalType.EXPLICIT_FEEDBACK and r.score == 0.7
+        ]
+        assert feedback
+        # FK は解決済みなので unverified_action_log_id は context に含まれない
+        assert "unverified_action_log_id" not in feedback[0].context
     finally:
         await orch.dispose()
 
@@ -2979,37 +3272,37 @@ async def test_e2e_search_then_immediate_feedback_is_race_free(tmp_path) -> None
     from context_store.server import build_app
 
     settings = Settings(
+        _env_file=None,
         storage_backend="sqlite",
         rl_logging_enabled=True,
         rl_data_store_backend="sqlite",
-        sqlite_database_path=str(tmp_path / "race.db"),
+        sqlite_db_path=str(tmp_path / "race.db"),
     )
-    # 既存 server 構築フローに合わせて MCP ツールを直接呼ぶ
     app = await build_app(settings)
     try:
         search_resp = await app.call_tool("memory_search", query="q", session_id="race")
         sid = search_resp["session_id"]
-        # action_log のうち最初の ID を取り出す内部 API (テスト専用) を利用
-        actions = await app.orchestrator._rl_store.fetch_actions_by_session(sid)
-        assert actions  # 確実に存在 (gather 確定済み)
+        # action_log の DB 上 ID を Protocol API 経由で race-free に取得 (RLDataStore.fetch_action_ids_by_session)
+        action_ids = await app.orchestrator._rl_store.fetch_action_ids_by_session(sid)
+        assert action_ids  # 確実に存在 (search 内で gather 確定済み)
 
         # 即時 feedback (sleep なし) — FK 違反が起きないこと
-        result = await app.call_tool(
+        await app.call_tool(
             "memory_feedback",
             session_id=sid,
             score=0.5,
-            action_log_id=...,  # actions[0] の DB 上 ID。store API 経由で取得可能であることが前提
+            action_log_id=action_ids[0],
         )
-        # 取得した reward_signal が unverified_action_log_id を持たない
         rewards = await app.orchestrator._rl_store.fetch_rewards_by_session(sid)
         feedback_rewards = [r for r in rewards if r.signal_type == SignalType.EXPLICIT_FEEDBACK]
         assert feedback_rewards
+        # FK 解決済み → fallback の unverified_action_log_id が含まれない
         assert "unverified_action_log_id" not in feedback_rewards[0].context
     finally:
         await app.orchestrator.dispose()
 ```
 
-> **注:** `action_log_id` を取得するため、`InMemoryRLDataStore` / `SQLiteRLDataStore` / `PostgresRLDataStore` の `fetch_actions_by_session` 戻り値に DB 上の ID を含める拡張が必要であれば、ここで AgentAction を継承した dataclass `StoredAgentAction(AgentAction, id: str)` を別途定義するか、戻り値型を `list[tuple[str, AgentAction]]` に変更してください。**設計書 §5.2 の Protocol で戻り値を `list[AgentAction]` と固定しているため、テスト上の ID 取得手段を別途用意 (例: `fetch_action_ids_by_session(session_id)` をテスト専用に追加) するのが Phase 1 の最小拡張です。**
+> **注:** action_log の DB 上 ID 取得は、設計書 §5.2 で Protocol に追加された `fetch_action_ids_by_session(session_id, limit=1000) -> list[str]` を使用します (3 バックエンドすべてが ScopedAction の `step ASC, created_at ASC` 順で返却するよう Task 3.1 / 3.2 / 3.3 で実装済み)。Phase 1 でテスト専用 API を追加する必要はありません。
 
 - [ ] **Step 3: テスト成功とカバレッジ 100% を devcontainer で確認**
 
@@ -3104,7 +3397,15 @@ Expected: すべて PASS、対象モジュールカバレッジ 100%
 5. **設計書 §4.2 末尾の SQLite PRAGMA 必須化** が Task 3.2 で実装かつテストで検証
 6. **設計書 §10 のリスク表** に挙がる FK 違反フォールバック / WAL / busy_timeout / バックグラウンドタスク GC ロスト対策が Task 3.2 / 3.3 / 5.2 で実装かつ各テストで検証
 7. **Phase 1 (Task 1.1, 1.2, 1.3) は `master` ベースで並列実行可能**
-8. **Phase 3 (Task 3.1, 3.2, 3.3) は Phase Base から並列実行可能**、Task 3.4 のみ直列必須
+8. **Phase 3 (Task 3.1, 3.2, 3.3) は Phase Base から並列実行可能** — テストファイルもバックエンドごとに `test_rl_inmemory.py` / `test_rl_sqlite.py` / `test_rl_postgres.py` に分割しているため、同時編集による衝突は発生しない。Task 3.4 (`test_rl_factory.py` を新規作成) のみ直列必須
 9. **Phase 2, 4, 5, 6, 7 はスタック構造で直列必須**、各 Task の前提条件として先行タスクの Draft PR URL を要求
 
 すべての Task の Step 1 に `git merge-base --is-ancestor $EXPECTED_BASE $CURRENT_BRANCH` のポカヨケスクリプトが、各 Task の派生元ブランチ名 (`$EXPECTED_BASE`) を埋め込んだ状態で組み込まれています。
+
+### コードレビュー対応 (2026-05-19)
+
+Plan/Spec 整合性レビューで挙がった以下 3 点に対応済み:
+
+1. **Phase 3 並列タスクのファイル衝突解消** — Task 3.1 / 3.2 / 3.3 が共通の `test_rl_data_store.py` を編集する設計だったため、`master` への Stacked PR 取り込み時にマージ衝突が発生していた。バックエンドごとにテストファイルを分割 (`tests/unit/test_rl_inmemory.py` / `test_rl_sqlite.py` / `test_rl_postgres.py`) し、Task 3.4 はファクトリ専用の `tests/unit/test_rl_factory.py` を新規作成する形に変更。File Structure テーブル (§ファイル構成) も更新済み。
+2. **テストコードの `Orchestrator(...)` / `RetrievalPipeline(...)` プレースホルダ撤去** — Task 5.2 の 5 件のテストは既存ヘルパ `_build_orchestrator(...)` (`tests/unit/test_orchestrator.py:107`) を流用する形に書き換えた。Task 5.1 では `RetrievalPipeline` 用の `_build_pipeline()` ヘルパを新規テストファイル冒頭で定義し、7 種類の DI 引数を `AsyncMock` / `MagicMock` で組み立てる具体実装を埋め込み。これにより "No Placeholders" 原則を満たす。
+3. **E2E テストでの `action_log_id` 取得手段の確立** — 設計書 §5.2 の `RLDataStore` Protocol に `fetch_action_ids_by_session(session_id, limit=1000) -> list[str]` を追加。3 バックエンドすべてが ScopedAction の `step ASC, created_at ASC` 順で DB 上 ID を返却し、Task 7.1 の E2E テストは `record_reward(action_log_id=action_ids[0])` で FK 違反フォールバックに頼らない race-free 検証が可能になった。設計書 §5.2 / §8.2 / E2E 行とも追記済み。

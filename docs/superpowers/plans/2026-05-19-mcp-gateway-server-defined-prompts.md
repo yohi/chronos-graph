@@ -4,7 +4,7 @@
 
 **Goal:** ChronosGraph MCP Gateway に MCP プロトコルの `prompts/list` / `prompts/get` を実装し、`intents.yaml` から決定論的に生成したプロンプト（役割と利用可能ツール）をエージェントへサーバー側から自動配布する。
 
-**Architecture:** 起動時 lifespan で `PromptBuilder` が `policy + tools + language` から全 intent 分の `Prompt` を合成し、不変な `PromptRegistry` に格納する。`/messages` ディスパッチャはセッション `record.intent` をキーに `tools/list` と完全対称なフィルタリングで応答する。
+**Architecture:** 起動時 lifespan で `PromptBuilder` が `policy + tools + language` から全 intent 分の `Prompt` を合成し、起動時のみ差し替え可能・以降は事実上不変な `PromptRegistry`（`ToolRegistry.replace_tools()` と同じパターン）に格納する。`/messages` ディスパッチャはセッション `record.intent` をキーに `tools/list` と完全対称なフィルタリングで応答する。
 
 **Tech Stack:** Python 3.12 / FastAPI / Pydantic v2 / pytest（既存 `mcp_gateway` パッケージに準拠）
 

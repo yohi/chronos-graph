@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
@@ -257,7 +258,7 @@ async def test_get_memory_invalid_uuid_returns_none():
 async def test_get_memory_returns_record():
     client = make_mock_client()
     now = datetime.now(timezone.utc)
-    row = {
+    row: dict[str, Any] = {
         "id": "550e8400-e29b-41d4-a716-446655440000",
         "content": "hello",
         "memory_type": "semantic",
@@ -288,7 +289,7 @@ async def test_get_memories_batch_preserves_input_order():
     client = make_mock_client()
     now = datetime.now(timezone.utc).isoformat()
     ids = [f"550e8400-e29b-41d4-a716-44665544000{i}" for i in range(3)]
-    rows = [
+    rows: list[dict[str, Any]] = [
         {
             "id": ids[2],
             "content": "c",
@@ -351,7 +352,7 @@ async def test_get_memories_batch_skips_invalid_uuid():
     client = make_mock_client()
     now = datetime.now(timezone.utc).isoformat()
     ids = ["550e8400-e29b-41d4-a716-446655440000", "short", "550e8400-e29b-41d4-a716-446655440001"]
-    rows = [
+    rows: list[dict[str, Any]] = [
         {
             "id": ids[0],
             "content": "a",
@@ -410,7 +411,7 @@ async def test_delete_memory_returns_false_when_not_found():
 @pytest.mark.asyncio
 async def test_list_projects_invokes_rpc():
     client = make_mock_client()
-    rows = [{"project": "p1"}, {"project": "p2"}]
+    rows: list[dict[str, Any]] = [{"project": "p1"}, {"project": "p2"}]
     client.rpc.return_value.execute = AsyncMock(return_value=make_mock_response(data=rows))
 
     adapter = SupabaseStorageAdapter(client)
@@ -430,3 +431,110 @@ async def test_increment_memory_access_count_invokes_rpc():
     client.rpc.assert_called_once_with(
         "increment_memory_access_count", {"p_memory_id": "550e8400-e29b-41d4-a716-446655440000"}
     )
+
+
+@pytest.mark.asyncio
+async def test_vector_search_calls_rpc():
+    client = make_mock_client()
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    rows: list[dict[str, Any]] = [
+        {
+            "id": "550e8400-e29b-41d4-a716-446655440001",
+            "content": "hello",
+            "memory_type": "semantic",
+            "source_type": "manual",
+            "source_metadata": {},
+            "embedding": None,
+            "semantic_relevance": 0.5,
+            "importance_score": 0.5,
+            "access_count": 0,
+            "last_accessed_at": now.isoformat(),
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+            "archived_at": None,
+            "tags": [],
+            "project": None,
+            "score": 0.95,
+        },
+    ]
+    client.rpc.return_value.execute = AsyncMock(return_value=make_mock_response(data=rows))
+
+    adapter = SupabaseStorageAdapter(client)
+    vec = [0.1] * 768
+    results = await adapter.vector_search(vec, top_k=5, project="p1")
+    assert len(results) == 1
+    from context_store.models.memory import ScoredMemory
+
+    assert isinstance(results[0], ScoredMemory)
+    assert results[0].score == 0.95
+
+    call_args = client.rpc.call_args
+    assert call_args[0][0] == "vector_search"
+    assert call_args[0][1]["query_embedding"] == "[" + ",".join("0.1" for _ in range(768)) + "]"
+    assert call_args[0][1]["match_count"] == 5
+    assert call_args[0][1]["p_project"] == "p1"
+
+
+@pytest.mark.asyncio
+async def test_vector_search_clamps_top_k():
+    client = make_mock_client()
+    client.rpc.return_value.execute = AsyncMock(return_value=make_mock_response(data=[]))
+
+    adapter = SupabaseStorageAdapter(client)
+    await adapter.vector_search([0.1] * 768, top_k=500)
+    call_args = client.rpc.call_args
+    assert call_args[0][1]["match_count"] == 200
+
+
+@pytest.mark.asyncio
+async def test_vector_search_returns_empty_on_empty_embedding():
+    client = make_mock_client()
+    adapter = SupabaseStorageAdapter(client)
+    assert await adapter.vector_search([], top_k=5) == []
+    client.rpc.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_keyword_search_uses_ilike():
+    client = make_mock_client()
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    rows: list[dict[str, Any]] = [
+        {
+            "id": "550e8400-e29b-41d4-a716-446655440002",
+            "content": "hello world",
+            "memory_type": "semantic",
+            "source_type": "manual",
+            "source_metadata": {},
+            "embedding": None,
+            "semantic_relevance": 0.5,
+            "importance_score": 0.5,
+            "access_count": 0,
+            "last_accessed_at": now.isoformat(),
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+            "archived_at": None,
+            "tags": [],
+            "project": None,
+        },
+    ]
+    # Break the long chain into steps to satisfy E501
+    table = client.table.return_value
+    chain = table.select.return_value.ilike.return_value.is_.return_value.limit.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=rows))
+
+    adapter = SupabaseStorageAdapter(client)
+    results = await adapter.keyword_search("hello", top_k=5)
+    assert len(results) == 1
+    assert results[0].score == 1.0
+
+
+@pytest.mark.asyncio
+async def test_keyword_search_returns_empty_on_blank_query():
+    client = make_mock_client()
+    adapter = SupabaseStorageAdapter(client)
+    assert await adapter.keyword_search("   ", top_k=5) == []
+    client.table.assert_not_called()

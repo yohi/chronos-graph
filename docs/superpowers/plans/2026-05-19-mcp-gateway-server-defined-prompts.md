@@ -76,9 +76,10 @@ def test_prompt_message_is_frozen_dataclass() -> None:
         msg.text = "mutated"  # type: ignore[misc]
 
 
-def test_prompt_message_rejects_invalid_role() -> None:
-    # role is Literal["user", "assistant"]; runtime check is left to type system,
-    # but ensure dataclass accepts both valid literals.
+def test_prompt_message_accepts_valid_roles() -> None:
+    # role is Literal["user", "assistant"]; runtime enforcement is delegated
+    # to the type system (mypy). This test guarantees both literals are
+    # accepted by the dataclass without raising.
     assert PromptMessage(role="user", text="x").role == "user"
     assert PromptMessage(role="assistant", text="y").role == "assistant"
 

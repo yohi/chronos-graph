@@ -123,6 +123,7 @@ async def test_create_succeeds_when_table_empty():
         adapter = await SupabaseStorageAdapter.create(settings)
     assert isinstance(adapter, SupabaseStorageAdapter)
 
+
 @pytest.mark.asyncio
 async def test_create_fails_when_dimension_mismatch():
     client = make_mock_client()

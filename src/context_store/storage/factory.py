@@ -376,12 +376,6 @@ async def _create_graph_adapter(
         )
 
     raise ValueError(f"Unsupported storage_backend for graph: {settings.storage_backend!r}")
-        raise ValueError(
-            "Graph adapter is not supported for storage_backend=prisma "
-            "(Neo4j Bolt cannot be tunneled over HTTPS)"
-        )
-
-    raise ValueError(f"Unsupported storage_backend for graph: {settings.storage_backend!r}")
 
 
 async def _create_cache_adapter(settings: "Settings") -> "CacheAdapter":

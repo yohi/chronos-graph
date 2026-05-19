@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Final, Literal, assert_never
+from typing import Any, Literal, assert_never
 from urllib.parse import quote
 
 from pydantic import Field, SecretStr, computed_field, field_validator, model_validator
@@ -265,7 +265,6 @@ class Settings(BaseSettings):
                     "storage_backend=prisma は graph_enabled=true をサポートしません "
                     "(Neo4j Bolt は HTTPS にカプセル化できないため)。"
                 )
-        return self
         if self.storage_backend == "supabase":
             if not self.supabase_url.strip():
                 raise ValueError("SUPABASE_URL は storage_backend=supabase の場合に必須です。")

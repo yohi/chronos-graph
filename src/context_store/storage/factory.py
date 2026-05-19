@@ -319,9 +319,7 @@ async def _create_storage_adapter(
         from context_store.storage.supabase import SupabaseStorageAdapter
 
         if read_only:
-            raise NotImplementedError(
-                "read_only mode for supabase backend is not yet supported"
-            )
+            raise NotImplementedError("read_only mode for supabase backend is not yet supported")
         return await SupabaseStorageAdapter.create(settings)
 
     raise ValueError(f"Unsupported storage_backend: {settings.storage_backend!r}")

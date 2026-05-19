@@ -184,11 +184,7 @@ class SupabaseStorageAdapter:
         if len(memory_id) != UUID_HEX_LEN:
             return None
         try:
-            chain = (
-                self._client.table("memories")
-                .select("*")
-                .eq("id", memory_id)
-            )
+            chain = self._client.table("memories").select("*").eq("id", memory_id)
             response = await chain.execute()
         except Exception as exc:
             raise self._map_to_storage_error(exc) from exc
@@ -205,10 +201,7 @@ class SupabaseStorageAdapter:
                 continue
             try:
                 response = await (
-                    self._client.table("memories")
-                    .select("*")
-                    .in_("id", valid_ids)
-                    .execute()
+                    self._client.table("memories").select("*").in_("id", valid_ids).execute()
                 )
             except Exception as exc:
                 raise self._map_to_storage_error(exc) from exc
@@ -221,9 +214,7 @@ class SupabaseStorageAdapter:
 
     async def delete_memory(self, memory_id: str) -> bool:
         try:
-            response = await (
-                self._client.table("memories").delete().eq("id", memory_id).execute()
-            )
+            response = await self._client.table("memories").delete().eq("id", memory_id).execute()
         except Exception as exc:
             raise self._map_to_storage_error(exc) from exc
         return bool(response.data)
@@ -257,9 +248,7 @@ class SupabaseStorageAdapter:
         for row in response.data or []:
             score = float(row.pop("score", 0.0))
             memory = _record_to_memory(row)
-            results.append(
-                ScoredMemory(memory=memory, score=score, source=MemorySource.VECTOR)
-            )
+            results.append(ScoredMemory(memory=memory, score=score, source=MemorySource.VECTOR))
         return results
 
     async def keyword_search(
@@ -283,9 +272,7 @@ class SupabaseStorageAdapter:
         results: list[ScoredMemory] = []
         for row in response.data or []:
             memory = _record_to_memory(row)
-            results.append(
-                ScoredMemory(memory=memory, score=1.0, source=MemorySource.KEYWORD)
-            )
+            results.append(ScoredMemory(memory=memory, score=1.0, source=MemorySource.KEYWORD))
         return results
 
     async def list_by_filter(self, filters: MemoryFilters) -> list[Memory]:

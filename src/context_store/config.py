@@ -6,6 +6,8 @@ from urllib.parse import quote
 from pydantic import Field, SecretStr, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
+SUPABASE_VECTOR_DIM = 768
+
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
@@ -283,10 +285,10 @@ class Settings(BaseSettings):
                     "storage_backend=supabase は graph_enabled=true をサポートしません "
                     "(Neo4j Bolt は HTTPS にカプセル化できないため)。"
                 )
-            if self.embedding_dimension != 768:
+            if self.embedding_dimension != SUPABASE_VECTOR_DIM:
                 raise ValueError(
                     f"EMBEDDING_DIMENSION={self.embedding_dimension} は "
-                    "storage_backend=supabase のスキーマ vector(768) "
+                    f"storage_backend=supabase のスキーマ vector({SUPABASE_VECTOR_DIM}) "
                     "と一致しません。次元数を変更する場合は "
                     "supabase/migrations/ の SQL とこの定数を同時に更新してください。"
                 )

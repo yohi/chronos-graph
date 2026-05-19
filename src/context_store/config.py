@@ -293,26 +293,6 @@ class Settings(BaseSettings):
                     "supabase/migrations/ の SQL とこの定数を同時に更新してください。"
                 )
         return self
-        if self.storage_backend == "supabase":
-            if not self.supabase_url.strip():
-                raise ValueError("SUPABASE_URL は storage_backend=supabase の場合に必須です。")
-            if not self.supabase_key.get_secret_value().strip():
-                raise ValueError("SUPABASE_KEY は storage_backend=supabase の場合に必須です。")
-            if not self.supabase_url.startswith("https://"):
-                raise ValueError("SUPABASE_URL は https:// で始まる必要があります。")
-            if self.graph_enabled:
-                raise ValueError(
-                    "storage_backend=supabase は graph_enabled=true をサポートしません "
-                    "(Neo4j Bolt は HTTPS にカプセル化できないため)。"
-                )
-            if self.embedding_dimension != 768:
-                raise ValueError(
-                    f"EMBEDDING_DIMENSION={self.embedding_dimension} は "
-                    "storage_backend=supabase のスキーマ vector(768) "
-                    "と一致しません。次元数を変更する場合は "
-                    "supabase/migrations/ の SQL とこの定数を同時に更新してください。"
-                )
-        return self
 
 
     @model_validator(mode="after")

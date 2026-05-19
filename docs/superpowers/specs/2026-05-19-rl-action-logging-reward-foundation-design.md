@@ -113,7 +113,8 @@ Baselines3) を導入するには、その入力となる ActionLog と RewardSi
 | 抽象境界 | `RLDataStore` Protocol を `storage/protocols.py` に追加 | StorageAdapter と独立。Prisma 廃止/Supabase 移行の影響を受けない |
 | ログ粒度 | サブステップ (4 step/request) | 要件の `actionType` 列挙と一致、Phase 2 の MDP 構造に直結 |
 | `session_id` 伝播 | `contextvars.ContextVar` + MCP 引数 | Pipeline 各層への引数注入を避ける |
-| 永続化レイテンシ | `asyncio.create_task` で fire-and-forget | クエリレイテンシに影響させない |
+| 永続化レイテンシ | INSERT を `asyncio.create_task` で並行発火し、`RetrievalPipeline.search()` の応答前に `gather` で確定待ち | クエリレイテンシ影響を実質ゼロに保ちつつ、`memory_feedback` との Race Condition を構造的に排除 |
+| `action_log_id` の整合性 | 事前存在確認はせず、DB FK 違反を捕捉して `action_log_id=NULL` で再 INSERT (`context.unverified_action_log_id` に元 ID 保存) | search 直後 feedback でも race を起こさず、孤立 ID も graceful に取り込む |
 | 報酬収集 | 内部 EVAL 自動 + MCP `memory_feedback` (Explicit) | Implicit は Phase 2 へ繰延 |
 | Prisma 取扱 | スキーマ追加なし | Supabase 置換予定により凍結 |
 | Protocol | 既存 (`AgentAction`/`ActionLogger`/`RewardSignal`) を破壊的拡張 | 「初期実装は行わない、NoOp デフォルト」段階の今が確定タイミング |
@@ -439,8 +440,14 @@ async def record_reward(
 
 ### 6.3 RetrievalPipeline 変更
 
-各サブステップ完了直後に `action_logger.log_action()` を `asyncio.create_task` で fire-and-forget。
+各サブステップ完了直後に `action_logger.log_action()` を `asyncio.create_task` で発火し、
+`pending: list[asyncio.Task[str]]` に蓄積する。`RetrievalPipeline.search()` の **応答返却前** に
+`await asyncio.gather(*pending, return_exceptions=True)` で全 INSERT の確定を待つ。
 
+- INSERT 自体は検索処理と並行実行されるためレイテンシ影響は実質ゼロ
+  (各タスクは独立した DB 接続を使うため検索クエリと直列化されない)
+- **応答返却時点で全 ActionLog が DB に確定済み** となるため、後続の `memory_feedback` で
+  `action_log_id` を渡されても Race Condition が発生しない
 - step=0 `VECTOR_SEARCH` / step=1 `KEYWORD_SEARCH` は `asyncio.gather` 後にまとめて発火
 - step=2 `GRAPH_TRAVERSAL` は `strategy.graph_weight > 0` かつ vector ヒットあり時のみ
 - step=3 `RESULT_FUSION` は常に発火
@@ -448,6 +455,7 @@ async def record_reward(
 - `action_details.unit = "chars"` を明示
 - `session_id` 未設定 (contextvar が None) のときは発火しない (後方互換)
 - 例外は `_safe_log` 内でログにダウングレード、`search()` は正常応答
+  (`gather(..., return_exceptions=True)` で個別失敗を吸収)
 
 ### 6.4 ファクトリ統合
 
@@ -498,8 +506,13 @@ async def memory_feedback(
 - `comment` は **1024 文字** (Python の `str` スライス `comment[:1024]`) で切り詰め
 - `reward_signal.context` JSON 全体は **4096 バイト** 上限
   (`rl_reward_context_max_bytes`、`json.dumps(...).encode("utf-8")` バイト長で評価)
-- `action_log_id` 指定時は事前存在確認、不正なら `{"error": ...}` を返す
+- `action_log_id` の **事前存在確認 (SELECT) は行わない**。Race Condition の温床になるため
+  廃止。UUID 文字列としての形式バリデーションのみ実施し、DB の FK 制約に整合性を委ねる
+- `action_log_id` が DB に存在しないケース (古い ID / セッション跨ぎの誤指定など) は
+  `insert_reward_signal` 内で FK 違反例外を捕捉し、`action_log_id=NULL` で再 INSERT する。
+  元の ID は `context["unverified_action_log_id"]` に保存する (feedback は失敗させずに取り込む)
 - 戻り値: `{"reward_signal_id": "<uuid>", "score": <float>}`
+  (`unverified_action_log_id` が記録されたかは Phase 2 の監査クエリで把握可能)
 
 ### 7.3 Phase 1 で公開しないもの
 
@@ -530,13 +543,13 @@ tests/unit/
 | `AgentAction` / `RewardSignalRecord` | `frozen=True`、`score` レンジ違反は `ValueError` |
 | `NoOp` 実装 | 戻り値は `""`、Protocol 準拠 |
 | `session_context` | デフォルト None、set/reset、`asyncio.gather` 越し伝播、タスク間独立 |
-| `RLDataStore` (SQLite 統合) | insert/fetch、CHECK 制約違反、`ON DELETE SET NULL`、dispose 冪等 |
-| `RLDataStore` (Postgres) | asyncpg モックで SQL 発行を検証 |
-| `RetrievalPipeline` | 4 step の発火条件、`context_volume`、例外吸収、`session_id` 未設定時は無発火 |
+| `RLDataStore` (SQLite 統合) | insert/fetch、CHECK 制約違反、`ON DELETE SET NULL`、dispose 冪等、FK 違反時の `action_log_id=NULL` 格下げと `context.unverified_action_log_id` 保存 |
+| `RLDataStore` (Postgres) | asyncpg モックで SQL 発行を検証 (FK 違反フォールバックの SQL 順序を含む) |
+| `RetrievalPipeline` | 4 step の発火条件、`context_volume`、例外吸収、`session_id` 未設定時は無発火、**応答返却時点で全 ActionLog が DB に確定済み** (pending タスクを `gather` で待機) |
 | `Orchestrator` | contextvar の set/reset、`_emit_internal_eval` のスコア計算、`record_reward` 公開 API、`dispose` で `rl_store` 解放 |
 | `memory_search` (MCP) | `session_id` の自動採番とレスポンスエコー |
-| `memory_feedback` (MCP) | 正常系、レンジ違反、コメント切り詰め、`action_log_id` 不正 |
-| `test_rl_basis.py` | エンド to エンド (search → 4 ActionLog → INTERNAL_EVAL → EXPLICIT_FEEDBACK) |
+| `memory_feedback` (MCP) | 正常系、レンジ違反、コメント切り詰め、**存在しない `action_log_id` でも 200 応答** (`unverified_action_log_id` に格下げ) |
+| `test_rl_basis.py` | エンド to エンド (search → 4 ActionLog → INTERNAL_EVAL → EXPLICIT_FEEDBACK)、および **search 直後 feedback の race-free 検証** (`memory_search` 戻り直後に `memory_feedback(action_log_id=...)` を `asyncio.sleep` なしで呼び出し、FK 違反フォールバックに **頼らず** 成功することを確認) |
 
 ### 8.3 カバレッジと CI
 
@@ -568,8 +581,9 @@ tests/unit/
 
 | リスク | 緩和策 |
 | --- | --- |
-| RL ログ書込みでレイテンシ増 | `asyncio.create_task` で fire-and-forget、例外は `_safe_log` で吸収 |
-| DB 障害で検索が落ちる | RL ログ失敗は警告ログのみ、`search` のレスポンスには影響なし |
+| RL ログ書込みでレイテンシ増 | INSERT を `asyncio.create_task` で並行発火し、検索処理と独立 DB 接続で並行実行。`search()` 応答前に `gather(return_exceptions=True)` で確定待ちすることで、レイテンシは検索本体の処理時間に吸収される (実測影響は数 ms 以内を想定)。例外は `_safe_log` で吸収 |
+| `memory_feedback` と ActionLog 書込みの Race Condition | (1) `search()` 応答返却前に全 INSERT を `gather` で確定。(2) それでも整合しない `action_log_id` は FK 違反捕捉で `NULL` 格下げ + `context.unverified_action_log_id` 保存 |
+| DB 障害で検索が落ちる | RL ログ失敗は警告ログのみ、`search` のレスポンスには影響なし。`gather(return_exceptions=True)` により個別タスクの失敗は他に波及しない |
 | `session_id` 漏洩 | UUID v4 を自動採番、ユーザ入力は受けるが PII 紐付けはアプリ層で禁止 |
 | `comment` フィールドからの長文流入 | 1024 文字で切り詰め、`context` JSON 全体 4096 バイト上限 |
 | Prisma 撤去との競合 | 本仕様は Prisma スキーマに触れない (`storage_backend == "prisma"` 時は `rl_data_store_backend="auto"` で Postgres を選択) |

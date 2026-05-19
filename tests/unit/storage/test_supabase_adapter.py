@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+import hashlib
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
+from context_store.config import Settings
+from context_store.models.memory import Memory, MemoryType, SourceType
 from context_store.storage.protocols import StorageError
 from context_store.storage.supabase import SupabaseStorageAdapter
 
@@ -71,3 +74,144 @@ def test_error_mapping_default_recoverable(adapter):
     err = adapter._map_to_storage_error(Exception("something else"))
     assert err.code == "STORAGE_ERROR"
     assert err.recoverable is True
+
+
+@pytest.mark.asyncio
+async def test_get_vector_dimension_returns_length():
+    client = make_mock_client()
+    vec_768 = "[" + ",".join(["0.1"] * 768) + "]"
+    chain = client.table.return_value.select.return_value.not_.is_.return_value.limit.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[{"embedding": vec_768}]))
+
+    adapter = SupabaseStorageAdapter(client)
+    assert await adapter.get_vector_dimension() == 768
+
+
+@pytest.mark.asyncio
+async def test_get_vector_dimension_returns_none_when_empty():
+    client = make_mock_client()
+    chain = client.table.return_value.select.return_value.not_.is_.return_value.limit.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[]))
+
+    adapter = SupabaseStorageAdapter(client)
+    assert await adapter.get_vector_dimension() is None
+
+
+@pytest.mark.asyncio
+async def test_create_succeeds_when_table_empty():
+    client = make_mock_client()
+    chain = client.table.return_value.select.return_value.not_.is_.return_value.limit.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[]))
+
+    settings = Settings(
+        storage_backend="supabase",
+        supabase_url="https://x.supabase.co",
+        supabase_key="k",
+        embedding_dimension=768,
+    )
+    with patch(
+        "context_store.storage.supabase.create_async_client",
+        new=AsyncMock(return_value=client),
+        create=True,
+    ):
+        adapter = await SupabaseStorageAdapter.create(settings)
+    assert isinstance(adapter, SupabaseStorageAdapter)
+
+
+@pytest.mark.asyncio
+async def test_create_fails_when_dimension_mismatch():
+    client = make_mock_client()
+    vec_1024 = "[" + ",".join(["0.1"] * 1024) + "]"
+    chain = client.table.return_value.select.return_value.not_.is_.return_value.limit.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[{"embedding": vec_1024}]))
+
+    settings = Settings(
+        storage_backend="supabase",
+        supabase_url="https://x.supabase.co",
+        supabase_key="k",
+        embedding_dimension=768,
+    )
+    with patch(
+        "context_store.storage.supabase.create_async_client",
+        new=AsyncMock(return_value=client),
+        create=True,
+    ):
+        with pytest.raises(StorageError) as exc_info:
+            await SupabaseStorageAdapter.create(settings)
+    assert exc_info.value.code == "INVALID_STATE"
+    assert "768" in str(exc_info.value) and "1024" in str(exc_info.value)
+    client.postgrest.aclose.assert_awaited()
+
+
+def _sample_memory(content: str = "hello world", embedding=None) -> Memory:
+    return Memory(
+        content=content,
+        memory_type=MemoryType.SEMANTIC,
+        source_type=SourceType.MANUAL,
+        embedding=embedding or [0.1] * 768,
+    )
+
+
+@pytest.mark.asyncio
+async def test_save_memory_inserts_with_content_hash():
+    client = make_mock_client()
+    inserted_id = "550e8400-e29b-41d4-a716-446655440000"
+    client.table.return_value.insert.return_value.execute = AsyncMock(
+        return_value=make_mock_response(data=[{"id": inserted_id}])
+    )
+
+    adapter = SupabaseStorageAdapter(client)
+    mem = _sample_memory("hello world")
+    result = await adapter.save_memory(mem)
+
+    assert result == inserted_id
+    insert_args = client.table.return_value.insert.call_args[0][0]
+    assert insert_args["content_hash"] == hashlib.sha256(b"hello world").hexdigest()
+    assert insert_args["content"] == "hello world"
+    expected_emb = "[" + ",".join(str(v) for v in [0.1] * 768) + "]"
+    assert insert_args["embedding"] == expected_emb
+
+
+@pytest.mark.asyncio
+async def test_save_memory_raises_duplicate_on_23505():
+    client = make_mock_client()
+    err = type("E", (Exception,), {"code": "23505", "message": "duplicate key value"})("dup")
+    client.table.return_value.insert.return_value.execute = AsyncMock(side_effect=err)
+
+    adapter = SupabaseStorageAdapter(client)
+    with pytest.raises(StorageError) as exc_info:
+        await adapter.save_memory(_sample_memory())
+    assert exc_info.value.code == "DUPLICATE_CONTENT"
+    assert exc_info.value.recoverable is False
+
+
+@pytest.mark.asyncio
+async def test_update_memory_recomputes_content_hash():
+    client = make_mock_client()
+    chain = client.table.return_value.update.return_value.eq.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[{"id": "x"}]))
+
+    adapter = SupabaseStorageAdapter(client)
+    ok = await adapter.update_memory(
+        "550e8400-e29b-41d4-a716-446655440000",
+        {"content": "new content"},
+    )
+    assert ok is True
+    update_args = client.table.return_value.update.call_args[0][0]
+    assert update_args["content"] == "new content"
+    assert update_args["content_hash"] == hashlib.sha256(b"new content").hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_update_memory_rejects_disallowed_columns():
+    client = make_mock_client()
+    chain = client.table.return_value.update.return_value.eq.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[{"id": "x"}]))
+
+    adapter = SupabaseStorageAdapter(client)
+    await adapter.update_memory(
+        "550e8400-e29b-41d4-a716-446655440000",
+        {"id": "999", "secret_field": "x", "content": "ok"},
+    )
+    update_args = client.table.return_value.update.call_args[0][0]
+    assert set(update_args.keys()) == {"content", "content_hash"}

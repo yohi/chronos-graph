@@ -6,7 +6,7 @@ SECURITY INVOKER
 SET search_path = public
 AS $$
     SELECT COALESCE(
-        (SELECT vector_dims(embedding) FROM memories WHERE embedding IS NOT NULL LIMIT 1),
+        (SELECT vector_dims(embedding) FROM memories WHERE embedding IS NOT NULL ORDER BY id LIMIT 1),
         (SELECT a.atttypmod
          FROM pg_catalog.pg_class c
          JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid

@@ -135,6 +135,8 @@ class SupabaseStorageAdapter:
             await postgrest.aclose()
 
     def _map_to_storage_error(self, exc: Exception) -> StorageError:
+        if isinstance(exc, StorageError):
+            return exc
         code = getattr(exc, "code", None) or ""
         message = getattr(exc, "message", "") or str(exc)
 
@@ -281,10 +283,11 @@ class SupabaseStorageAdapter:
         self, query: str, top_k: int, project: str | None = None
     ) -> list[ScoredMemory]:
         effective_top_k = max(1, min(top_k, SUPABASE_MAX_TOP_K))
+        escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         builder = (
             self._client.table("memories")
             .select("*")
-            .ilike("content", f"%{query}%")
+            .ilike("content", f"%{escaped_query}%")
             .is_("archived_at", "null")
             .limit(effective_top_k)
         )
@@ -378,7 +381,9 @@ class SupabaseStorageAdapter:
 
 
 def _format_pg_datetime(dt: "datetime") -> str:
-    return dt.astimezone(timezone.utc).isoformat(timespec="microseconds")
+    # +00:00 を Z に置換することで PostgREST の or_() フィルター文字列内で
+    # タイムゾーンオフセットの + がパーサーに誤解釈されるのを防ぐ
+    return dt.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _apply_common_filters(builder: Any, filters: MemoryFilters) -> Any:

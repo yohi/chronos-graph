@@ -80,6 +80,14 @@ def test_error_mapping_default_recoverable(adapter):
     assert err.recoverable is True
 
 
+def test_error_mapping_passthrough_storage_error(adapter):
+    original_err = StorageError("already mapped", code="SOME_CODE", recoverable=True)
+    err = adapter._map_to_storage_error(original_err)
+    assert err is original_err
+    assert err.code == "SOME_CODE"
+    assert err.recoverable is True
+
+
 @pytest.mark.asyncio
 async def test_get_vector_dimension_returns_length():
     client = make_mock_client()

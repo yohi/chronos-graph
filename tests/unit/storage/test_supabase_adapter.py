@@ -3,9 +3,9 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
-from typing import Any
 
 import httpx
 import pytest

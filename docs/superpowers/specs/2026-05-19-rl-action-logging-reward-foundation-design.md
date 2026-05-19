@@ -180,7 +180,7 @@ CREATE TABLE action_log (
     ),
     action_details  TEXT    NOT NULL DEFAULT '{}',  -- JSON encoded
     context_volume  INTEGER NOT NULL DEFAULT 0 CHECK (context_volume >= 0),
-    created_at      TEXT    NOT NULL                -- ISO8601 UTC
+    created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))  -- ISO8601 UTC
 );
 
 CREATE INDEX idx_action_log_session_id   ON action_log (session_id);
@@ -196,7 +196,7 @@ CREATE TABLE reward_signal (
     ),
     score           REAL    NOT NULL CHECK (score >= -1.0 AND score <= 1.0),
     context         TEXT    NOT NULL DEFAULT '{}',  -- JSON encoded
-    created_at      TEXT    NOT NULL                -- ISO8601 UTC
+    created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))  -- ISO8601 UTC
 );
 
 CREATE INDEX idx_reward_signal_session_id    ON reward_signal (session_id);
@@ -204,6 +204,21 @@ CREATE INDEX idx_reward_signal_action_log_id ON reward_signal (action_log_id);
 CREATE INDEX idx_reward_signal_signal_type   ON reward_signal (signal_type);
 CREATE INDEX idx_reward_signal_created_at    ON reward_signal (created_at DESC);
 ```
+
+> ⚠️ **SQLite 接続初期化の前提**:
+> SQLite では外部キー制約はデフォルトで **無効**。`SQLiteRLDataStore` が新規接続を開く際は、
+> 必ず以下の PRAGMA を実行すること:
+>
+> ```sql
+> PRAGMA foreign_keys = ON;        -- 必須: §7.2 の FK 違反フォールバック / ON DELETE SET NULL を機能させる
+> PRAGMA journal_mode = WAL;       -- 必須: 並行 INSERT 時の SQLITE_BUSY 抑制 (§10 リスク参照)
+> PRAGMA busy_timeout = 5000;      -- 必須: 5 秒の自動再試行 (§10 リスク参照)
+> ```
+>
+> `foreign_keys = ON` を実行しないと、`REFERENCES action_log(id) ON DELETE SET NULL` と
+> `insert_reward_signal` の FK 違反捕捉ロジック (§5.3 / §7.2) が **両方とも無効化** され、存在しない
+> `action_log_id` がそのまま INSERT 成功してしまう。接続プール / `aiosqlite.connect` のラッパー初期化で
+> 一律適用すること。
 
 ### 4.3 要件との対応
 
@@ -411,9 +426,15 @@ async def search(self, query, *, session_id: str | None = None, ...) -> Retrieva
 
 
 async def _emit_internal_eval(self, session_id, response):
+    # 前提: response["results"][i]["score"] は [0.0, 1.0] の正規化済みスコア。
+    #   - VectorSearch / KeywordSearch / GraphTraversal の出力は ResultFusion (RRF) と
+    #     `_coerce_graph_score()` により [0, 1] にクランプ済み (`retrieval/pipeline.py` 参照)
+    #   - 線形変換 2*avg - 1 で [0, 1] → [-1, 1] にマップし、INTERNAL_EVAL の符号付き報酬とする
+    #   - 将来 VectorSearch がコサイン類似度 (-1..1) を直接返すなど前提が崩れた場合の防御として、
+    #     式の外側で `max(-1.0, min(1.0, ...))` クランプを保持する
     results = response.get("results", [])
     if not results:
-        score = -0.5
+        score = -0.5  # ヒット 0 件 = 弱負のシグナル
     else:
         avg = sum(float(r.get("score", 0.0)) for r in results) / len(results)
         score = max(-1.0, min(1.0, 2.0 * avg - 1.0))
@@ -424,7 +445,13 @@ async def _emit_internal_eval(self, session_id, response):
         score=score,
         context={"top_k_count": len(results), "query": response.get("query")},
     )
-    asyncio.create_task(self._safe_record_reward(record))
+
+    # asyncio 公式推奨パターン: タスク参照を強参照セットに保持しないと、GC により
+    # 実行完了前に破棄されサイレントロスする可能性がある。完了時に自動掃除する。
+    # (Orchestrator.__init__ で `self._background_tasks: set[asyncio.Task] = set()` を初期化)
+    task = asyncio.create_task(self._safe_record_reward(record))
+    self._background_tasks.add(task)
+    task.add_done_callback(self._background_tasks.discard)
 
 
 async def record_reward(
@@ -444,8 +471,12 @@ async def record_reward(
 `pending: list[asyncio.Task[str]]` に蓄積する。`RetrievalPipeline.search()` の **応答返却前** に
 `await asyncio.gather(*pending, return_exceptions=True)` で全 INSERT の確定を待つ。
 
-- INSERT 自体は検索処理と並行実行されるためレイテンシ影響は実質ゼロ
-  (各タスクは独立した DB 接続を使うため検索クエリと直列化されない)
+- **Postgres バックエンド**: INSERT は検索処理と独立した接続で並行実行されるため、レイテンシ影響は実質ゼロ
+  (MVCC により検索クエリと直列化されない)
+- **SQLite バックエンド**: DB 全体で writer は 1 つのみ(WAL モードでも同じ)。並行 INSERT は
+  暗黙的に直列化され、`busy_timeout` 内で自動再試行される。検索本体は SELECT 主体のため WAL モードでは
+  reader と writer は競合しないが、4 サブステップの INSERT は順次処理される点に注意
+  (§10 リスク参照)。`PRAGMA foreign_keys = ON` が **必須** (§4.2 末尾)
 - **応答返却時点で全 ActionLog が DB に確定済み** となるため、後続の `memory_feedback` で
   `action_log_id` を渡されても Race Condition が発生しない
 - step=0 `VECTOR_SEARCH` / step=1 `KEYWORD_SEARCH` は `asyncio.gather` 後にまとめて発火
@@ -481,7 +512,18 @@ async def create_rl_data_store(settings: Settings) -> RLDataStore:
 
 `create_orchestrator` 内: `settings.rl_logging_enabled and action_logger is None and reward_signal is None`
 のとき自動的に `StorageActionLogger` / `StorageRewardSignal` を注入し、Orchestrator が `rl_store` を保持。
-`Orchestrator.dispose()` 末尾で `await rl_store.dispose()`。
+
+`Orchestrator.dispose()` の末尾で以下を順に実行する:
+
+1. **未完了バックグラウンドタスクの待機**: `_emit_internal_eval` 由来の `_background_tasks` セットに残っている
+   タスクを `await asyncio.gather(*self._background_tasks, return_exceptions=True)` で確定待ち。
+   これを欠くと、`Orchestrator.dispose()` 直前に発火された INTERNAL_EVAL がイベントループ終了でキャンセル
+   され、書込みがロストする。
+2. **RLDataStore 解放**: `await rl_store.dispose()`。
+
+`SQLiteRLDataStore.create()` の責務として、新規 `aiosqlite` 接続を開いた直後に §4.2 末尾で示した
+`PRAGMA foreign_keys = ON;` / `PRAGMA journal_mode = WAL;` / `PRAGMA busy_timeout = 5000;` を **必ず** 実行
+する。プールを採用する場合は接続生成フック(`init` コールバック等)で一律適用すること。
 
 ## 7. MCP 公開面
 
@@ -588,3 +630,8 @@ tests/unit/
 | `comment` フィールドからの長文流入 | 1024 文字で切り詰め、`context` JSON 全体 4096 バイト上限 |
 | Prisma 撤去との競合 | 本仕様は Prisma スキーマに触れない (`storage_backend == "prisma"` 時は `rl_data_store_backend="auto"` で Postgres を選択) |
 | 既存テストの破壊 | `test_extensions.py` は新シグネチャへ追従改修、その他は後方互換維持 |
+| SQLite の単一-writer 制約による INSERT 直列化 / `SQLITE_BUSY` | (1) `PRAGMA journal_mode = WAL` を必須化し reader と writer の競合を排除。(2) `PRAGMA busy_timeout = 5000` (5 秒) で自動再試行。(3) `aiosqlite` 接続は **単一 writer 接続** を `SQLiteRLDataStore` 内で保持し、4 サブステップ INSERT は同接続上で逐次実行される (`asyncio.create_task` でも aiosqlite のシリアル化により安全)。(4) 上記でも `OperationalError("database is locked")` が起きた場合は最大 3 回、指数バックオフ (50ms / 100ms / 200ms) で再試行し、超過時は警告ログを出して当該 ActionLog を破棄する (検索は成功させる) |
+| SQLite FK 制約のデフォルト無効化 | `SQLiteRLDataStore` の接続初期化で `PRAGMA foreign_keys = ON` を必須実行。欠落すると `ON DELETE SET NULL` と `insert_reward_signal` の FK 違反フォールバックが両方無効化される (§4.2 末尾 / §6.4 参照) |
+| Postgres / SQLite の挙動差 | Postgres: MVCC で完全並行、`gather` 確定待ちのコスト ≒ 0。SQLite: 直列化されるが `WAL + busy_timeout` で `memory_search` の P95 への影響は < 50ms を目標。ベンチマークは Phase 1 完了時に取得 |
+| バックグラウンドタスクの GC ロスト | `Orchestrator._background_tasks: set[asyncio.Task]` で強参照保持、`add_done_callback(set.discard)` で完了時に自動掃除、`dispose()` 末尾で `gather` 確定待ち (§6.2 / §6.4 参照) |
+| 検索パイプラインのスコアレンジ前提崩壊 | `_emit_internal_eval` の `2*avg - 1` は `results[].score ∈ [0, 1]` を前提とする (現行 RRF + `_coerce_graph_score` で保証)。将来 VectorSearch がコサイン類似度を直接返すなど前提が崩れる場合は、外側の `max(-1, min(1, ...))` クランプで暴走を抑制しつつ、`RetrievalPipeline` 側で正規化を保証することを Phase 2 で再点検する |

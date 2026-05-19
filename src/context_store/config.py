@@ -266,10 +266,16 @@ class Settings(BaseSettings):
                     "(Neo4j Bolt は HTTPS にカプセル化できないため)。"
                 )
         if self.storage_backend == "supabase":
-            if not self.supabase_url.strip():
+            url = self.supabase_url.strip()
+            if not url:
                 raise ValueError("SUPABASE_URL は storage_backend=supabase の場合に必須です。")
-            if not self.supabase_key.get_secret_value().strip():
+            key = self.supabase_key.get_secret_value().strip()
+            if not key:
                 raise ValueError("SUPABASE_KEY は storage_backend=supabase の場合に必須です。")
+            
+            self.supabase_url = url
+            self.supabase_key = SecretStr(key)
+            
             if not self.supabase_url.startswith("https://"):
                 raise ValueError("SUPABASE_URL は https:// で始まる必要があります。")
             if self.graph_enabled:

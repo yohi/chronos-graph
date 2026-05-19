@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal, assert_never
+from typing import Any, Final, Literal, assert_never
 from urllib.parse import quote
 
 from pydantic import Field, SecretStr, computed_field, field_validator, model_validator
@@ -54,7 +54,7 @@ class Settings(BaseSettings):
         return init_settings, dotenv_settings, env_settings, file_secret_settings
 
     # --- Storage Backend ---
-    storage_backend: Literal["sqlite", "postgres", "prisma"] = "sqlite"
+    storage_backend: Literal["sqlite", "postgres", "prisma", "supabase"] = "sqlite"
     graph_enabled: bool = False
     cache_backend: Literal["inmemory", "redis"] = "inmemory"
 
@@ -78,6 +78,16 @@ class Settings(BaseSettings):
     # --- Prisma Accelerate (storage_backend=prisma の場合) ---
     prisma_database_url: SecretStr = SecretStr("")
 
+    # --- Supabase (storage_backend=supabase の場合) ---
+    supabase_url: str = Field(
+        default="",
+        description="Supabase Project URL (例: https://xxxxx.supabase.co)",
+    )
+    supabase_key: SecretStr = Field(
+        default=SecretStr(""),
+        description="Service Role Key または Anon Key",
+    )
+
     # --- Neo4j (graph_enabled=true の場合) ---
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"
@@ -93,7 +103,7 @@ class Settings(BaseSettings):
     local_model_name: str = "cl-nagoya/ruri-v3-310m"
     litellm_api_base: str = "http://localhost:4000"
     litellm_model: str = "openai/text-embedding-3-small"
-    embedding_dimension: int = Field(default=1024, ge=1)
+    embedding_dimension: int = Field(default=768, ge=1)
     custom_api_endpoint: str = ""
     custom_api_model_name: str = "custom-model"
 
@@ -256,6 +266,27 @@ class Settings(BaseSettings):
                     "(Neo4j Bolt は HTTPS にカプセル化できないため)。"
                 )
         return self
+        if self.storage_backend == "supabase":
+            if not self.supabase_url.strip():
+                raise ValueError("SUPABASE_URL は storage_backend=supabase の場合に必須です。")
+            if not self.supabase_key.get_secret_value().strip():
+                raise ValueError("SUPABASE_KEY は storage_backend=supabase の場合に必須です。")
+            if not self.supabase_url.startswith("https://"):
+                raise ValueError("SUPABASE_URL は https:// で始まる必要があります。")
+            if self.graph_enabled:
+                raise ValueError(
+                    "storage_backend=supabase は graph_enabled=true をサポートしません "
+                    "(Neo4j Bolt は HTTPS にカプセル化できないため)。"
+                )
+            if self.embedding_dimension != 768:
+                raise ValueError(
+                    f"EMBEDDING_DIMENSION={self.embedding_dimension} は "
+                    "storage_backend=supabase のスキーマ vector(768) "
+                    "と一致しません。次元数を変更する場合は "
+                    "supabase/migrations/ の SQL とこの定数を同時に更新してください。"
+                )
+        return self
+
 
     @model_validator(mode="after")
     def _validate_embedding_config(self) -> "Settings":
@@ -292,7 +323,7 @@ class Settings(BaseSettings):
             return "sqlite"
         if self.storage_backend == "postgres":
             return "neo4j"
-        return "disabled"
+        return "disabled"  # prisma / supabase
 
     @computed_field  # type: ignore[prop-decorator]
     @property

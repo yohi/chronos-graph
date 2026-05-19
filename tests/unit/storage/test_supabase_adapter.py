@@ -3,9 +3,9 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import datetime, timezone
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
-from typing import Any
 
 import httpx
 import pytest
@@ -432,6 +432,7 @@ async def test_increment_memory_access_count_invokes_rpc():
         "increment_memory_access_count", {"p_memory_id": "550e8400-e29b-41d4-a716-446655440000"}
     )
 
+
 @pytest.mark.asyncio
 async def test_vector_search_calls_rpc():
     client = make_mock_client()
@@ -514,9 +515,9 @@ async def test_keyword_search_uses_ilike():
             "project": None,
         },
     ]
-    chain = (
-        client.table.return_value.select.return_value.ilike.return_value.is_.return_value.limit.return_value
-    )
+    # Break the long chain into steps to satisfy E501
+    table = client.table.return_value
+    chain = table.select.return_value.ilike.return_value.is_.return_value.limit.return_value
     chain.execute = AsyncMock(return_value=make_mock_response(data=rows))
 
     adapter = SupabaseStorageAdapter(client)
@@ -558,11 +559,11 @@ async def test_list_by_filter_applies_conditions():
     # mock chain logic will just return rows if execute is called
     chain = MagicMock()
     chain.execute = AsyncMock(return_value=make_mock_response(data=rows))
-    
+
     # Allow chain to return itself on any method call
-    for method in ['select', 'eq', 'is_', 'contains', 'limit', 'order', 'offset', 'not_']:
+    for method in ["select", "eq", "is_", "contains", "limit", "order", "offset", "not_"]:
         getattr(chain, method).return_value = chain
-    
+
     client.table.return_value.select.return_value = chain
 
     adapter = SupabaseStorageAdapter(client)
@@ -583,14 +584,13 @@ async def test_count_by_filter_returns_exact_count():
     client = make_mock_client()
     chain = MagicMock()
     chain.execute = AsyncMock(return_value=make_mock_response(data=[], count=42))
-    
-    for method in ['select', 'eq', 'is_', 'contains', 'limit', 'not_']:
+
+    for method in ["select", "eq", "is_", "contains", "limit", "not_"]:
         getattr(chain, method).return_value = chain
-        
+
     client.table.return_value.select.return_value = chain
 
     adapter = SupabaseStorageAdapter(client)
     filters = MemoryFilters(project="p1", archived=False)
     count = await adapter.count_by_filter(filters)
     assert count == 42
-

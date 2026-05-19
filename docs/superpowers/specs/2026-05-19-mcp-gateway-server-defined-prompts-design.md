@@ -68,7 +68,7 @@ ChronosGraph MCP Gateway に MCP プロトコルの `prompts/list` および `pr
 
 設計原則：
 
-- `PromptRegistry` は **不変** (`frozen=True` dataclass + `MappingProxyType`) → 起動後の意図しない変更を防止
+- `PromptRegistry` は **起動時のみ差し替え可能・以降は事実上不変** (`MappingProxyType`)。lifespan 内の `replace()` 1 回のみがミューテーションの正規経路で、それ以外の経路からは内部 mapping を変更できない → `ToolRegistry.replace_tools()` と同じ設計言語
 - セッションフィルタリングは `tools/list` と完全対称：`tools/list` が `record.caps` でフィルタするのと同じく、`prompts/list` は `record.intent` でフィルタ
 - `PromptBuilder` は純粋関数的（policy/tools/lang を入力に、決定論的出力）→ 単体テスト最小コスト
 - セッション未登録 intent（policy 未整合）に対して `PromptRegistry.list_for()` は空リストを返す安全防御
@@ -137,10 +137,28 @@ class PromptBuilder:
 
 ```python
 from types import MappingProxyType
+from typing import Mapping
 
 class PromptRegistry:
-    def __init__(self, prompts_by_intent: dict[str, Prompt]) -> None:
-        self._prompts = MappingProxyType(dict(prompts_by_intent))  # 不変ビュー
+    """Startup-only mutable, post-lifespan effectively immutable cache.
+
+    `build_router` is invoked before `lifespan` runs, so the registry
+    instance must exist at app construction time. We therefore create an
+    empty instance up front, share the SAME instance with both
+    `app.state.prompt_registry` and `build_router(...)`, and call
+    `replace()` exactly once during lifespan startup to populate the
+    real mapping. After that single call, the internal `MappingProxyType`
+    view is treated as immutable by all readers.
+    """
+
+    def __init__(self, prompts_by_intent: Mapping[str, Prompt] | None = None) -> None:
+        self._prompts: Mapping[str, Prompt] = MappingProxyType(
+            dict(prompts_by_intent or {})
+        )
+
+    def replace(self, prompts_by_intent: Mapping[str, Prompt]) -> None:
+        """Swap the underlying mapping. Call exactly once from lifespan startup."""
+        self._prompts = MappingProxyType(dict(prompts_by_intent))
 
     def list_for(self, intent: str) -> list[PromptSummary]:
         """セッションの intent に対応する 1 件のサマリ（未登録なら空リスト）。"""
@@ -223,15 +241,22 @@ if method == "prompts/get":
 
 ### 3.5 `app.py` 配線
 
+`build_router` は `lifespan` 開始**前**に実行されるため、空の `PromptRegistry` インスタンスを先に生成し、その**同一インスタンス**を `app.state.prompt_registry` と `build_router(..., prompt_registry=...)` の両方に渡す。lifespan 内では `replace()` で内部 mapping を差し替えるのみとする（`ToolRegistry.replace_tools()` と同型）。
+
 ```python
-# lifespan 内、ToolRegistry.replace_tools(all_tools) の直後
-prompts_by_intent = PromptBuilder.build_all(
-    policy=policy, tools=all_tools, language=settings.prompt_language,
-)
-prompt_registry = PromptRegistry(prompts_by_intent)
+# build_router 呼び出し前（registry = ToolRegistry(initial_tools or []) の直後）
+prompt_registry = PromptRegistry()
 app.state.prompt_registry = prompt_registry
 
 # build_router(...) の引数に prompt_registry を追加
+app.include_router(build_router(..., prompt_registry=prompt_registry, ...))
+
+# lifespan 内、ToolRegistry.replace_tools(all_tools) の直後
+prompt_registry.replace(
+    PromptBuilder.build_all(
+        policy=policy, tools=all_tools, language=settings.prompt_language,
+    )
+)
 ```
 
 ### 3.6 `config.py` 拡張

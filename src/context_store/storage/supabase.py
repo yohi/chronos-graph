@@ -308,13 +308,13 @@ class SupabaseStorageAdapter:
         if filters.created_after is not None and filters.id_after is not None:
             if not _is_valid_uuid(filters.id_after):
                 return []
-            
+
             # ソート順に基づいて比較演算子を選択
             is_desc = True
             if filters.order_by:
                 _, _, direction = filters.order_by.partition(" ")
                 is_desc = direction.upper() == "DESC"
-            
+
             op = "lt" if is_desc else "gt"
             ts = _format_pg_datetime(filters.created_after)
             builder = builder.or_(
@@ -325,7 +325,7 @@ class SupabaseStorageAdapter:
             if filters.order_by:
                 _, _, direction = filters.order_by.partition(" ")
                 is_desc = direction.upper() == "DESC"
-            
+
             ts = _format_pg_datetime(filters.created_after)
             if is_desc:
                 builder = builder.lt("created_at", ts)

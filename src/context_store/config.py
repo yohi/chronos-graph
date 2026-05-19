@@ -272,10 +272,10 @@ class Settings(BaseSettings):
             key = self.supabase_key.get_secret_value().strip()
             if not key:
                 raise ValueError("SUPABASE_KEY は storage_backend=supabase の場合に必須です。")
-            
+
             self.supabase_url = url
             self.supabase_key = SecretStr(key)
-            
+
             if not self.supabase_url.startswith("https://"):
                 raise ValueError("SUPABASE_URL は https:// で始まる必要があります。")
             if self.graph_enabled:

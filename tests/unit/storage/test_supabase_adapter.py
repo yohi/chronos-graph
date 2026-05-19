@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import UUID
 
 import httpx
 import pytest
@@ -215,3 +217,144 @@ async def test_update_memory_rejects_disallowed_columns():
     )
     update_args = client.table.return_value.update.call_args[0][0]
     assert set(update_args.keys()) == {"content", "content_hash"}
+
+
+@pytest.mark.asyncio
+async def test_get_memory_returns_none_when_not_found():
+    client = make_mock_client()
+    chain = client.table.return_value.select.return_value.eq.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[]))
+
+    adapter = SupabaseStorageAdapter(client)
+    assert await adapter.get_memory("550e8400-e29b-41d4-a716-446655440000") is None
+
+
+@pytest.mark.asyncio
+async def test_get_memory_invalid_uuid_returns_none():
+    client = make_mock_client()
+    adapter = SupabaseStorageAdapter(client)
+    # Short UUID should skip query
+    assert await adapter.get_memory("invalid") is None
+    client.table.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_memory_returns_record():
+    client = make_mock_client()
+    now = datetime.now(timezone.utc)
+    row = {
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "content": "hello",
+        "memory_type": "semantic",
+        "source_type": "manual",
+        "source_metadata": {},
+        "embedding": None,
+        "semantic_relevance": 0.5,
+        "importance_score": 0.5,
+        "access_count": 0,
+        "last_accessed_at": now.isoformat(),
+        "created_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+        "archived_at": None,
+        "tags": [],
+        "project": None,
+    }
+    chain = client.table.return_value.select.return_value.eq.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[row]))
+
+    adapter = SupabaseStorageAdapter(client)
+    mem = await adapter.get_memory("550e8400-e29b-41d4-a716-446655440000")
+    assert mem is not None
+    assert mem.content == "hello"
+
+
+@pytest.mark.asyncio
+async def test_get_memories_batch_preserves_input_order():
+    client = make_mock_client()
+    now = datetime.now(timezone.utc).isoformat()
+    ids = [f"550e8400-e29b-41d4-a716-44665544000{i}" for i in range(3)]
+    rows = [
+        {
+            "id": ids[2], "content": "c", "memory_type": "semantic",
+            "source_type": "manual", "source_metadata": {},
+            "embedding": None, "semantic_relevance": 0.5,
+            "importance_score": 0.5, "access_count": 0,
+            "last_accessed_at": now, "created_at": now,
+            "updated_at": now, "archived_at": None,
+            "tags": [], "project": None,
+        },
+        {
+            "id": ids[0], "content": "a", "memory_type": "semantic",
+            "source_type": "manual", "source_metadata": {},
+            "embedding": None, "semantic_relevance": 0.5,
+            "importance_score": 0.5, "access_count": 0,
+            "last_accessed_at": now, "created_at": now,
+            "updated_at": now, "archived_at": None,
+            "tags": [], "project": None,
+        },
+    ]
+    chain = client.table.return_value.select.return_value.in_.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=rows))
+
+    adapter = SupabaseStorageAdapter(client)
+    results = await adapter.get_memories_batch(ids)
+    assert len(results) == 2
+    assert results[0].id == UUID(ids[0])
+    assert results[1].id == UUID(ids[2])
+
+
+@pytest.mark.asyncio
+async def test_get_memories_batch_chunks_at_200():
+    client = make_mock_client()
+    ids = [f"550e8400-e29b-41d4-a716-44665544{i:04d}" for i in range(250)]
+    chain = client.table.return_value.select.return_value.in_.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[]))
+
+    adapter = SupabaseStorageAdapter(client)
+    await adapter.get_memories_batch(ids)
+    assert chain.execute.call_count == 2  # 200 + 50
+
+
+@pytest.mark.asyncio
+async def test_get_memories_batch_skips_invalid_uuid():
+    client = make_mock_client()
+    now = datetime.now(timezone.utc).isoformat()
+    ids = ["550e8400-e29b-41d4-a716-446655440000", "short", "550e8400-e29b-41d4-a716-446655440001"]
+    rows = [
+        {
+            "id": ids[0], "content": "a", "memory_type": "semantic",
+            "source_type": "manual", "source_metadata": {},
+            "embedding": None, "semantic_relevance": 0.5,
+            "importance_score": 0.5, "access_count": 0,
+            "last_accessed_at": now, "created_at": now,
+            "updated_at": now, "archived_at": None,
+            "tags": [], "project": None,
+        },
+        {
+            "id": ids[2], "content": "b", "memory_type": "semantic",
+            "source_type": "manual", "source_metadata": {},
+            "embedding": None, "semantic_relevance": 0.5,
+            "importance_score": 0.5, "access_count": 0,
+            "last_accessed_at": now, "created_at": now,
+            "updated_at": now, "archived_at": None,
+            "tags": [], "project": None,
+        },
+    ]
+    chain = client.table.return_value.select.return_value.in_.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=rows))
+
+    adapter = SupabaseStorageAdapter(client)
+    results = await adapter.get_memories_batch(ids)
+    assert len(results) == 2
+    assert results[0].content == "a"
+    assert results[1].content == "b"
+
+
+@pytest.mark.asyncio
+async def test_delete_memory_returns_false_when_not_found():
+    client = make_mock_client()
+    chain = client.table.return_value.delete.return_value.eq.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[]))
+
+    adapter = SupabaseStorageAdapter(client)
+    assert await adapter.delete_memory("550e8400-e29b-41d4-a716-446655440000") is False

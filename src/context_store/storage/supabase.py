@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Iterator, cast
 
 try:  # noqa: I001
     from postgrest.exceptions import (
@@ -28,6 +28,7 @@ from context_store.storage.postgres_helpers import (
     _content_hash,
     _embedding_to_pg,
     _parse_embedding,
+    _record_to_memory,
 )
 from context_store.storage.protocols import StorageError
 
@@ -39,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 SUPABASE_BATCH_FETCH_CHUNK_SIZE = 200
 SUPABASE_MAX_TOP_K = 200
+UUID_HEX_LEN = 36
 
 ALLOWED_UPDATE_COLUMNS: frozenset[str] = frozenset(
     {
@@ -166,6 +168,59 @@ class SupabaseStorageAdapter:
         try:
             response = (
                 await self._client.table("memories").update(filtered).eq("id", memory_id).execute()
+            )
+        except Exception as exc:
+            raise self._map_to_storage_error(exc) from exc
+        return bool(response.data)
+
+    @staticmethod
+    def _chunked(items: list[str], size: int) -> Iterator[list[str]]:
+        for i in range(0, len(items), size):
+            yield items[i : i + size]
+
+    async def get_memory(self, memory_id: str) -> Memory | None:
+        if len(memory_id) != UUID_HEX_LEN:
+            return None
+        try:
+            chain = (
+                self._client.table("memories")
+                .select("*")
+                .eq("id", memory_id)
+            )
+            response = await chain.execute()
+        except Exception as exc:
+            raise self._map_to_storage_error(exc) from exc
+        rows = response.data or []
+        if not rows:
+            return None
+        return _record_to_memory(rows[0])  # type: ignore[arg-type]
+
+    async def get_memories_batch(self, memory_ids: list[str]) -> list[Memory]:
+        results: list[Memory] = []
+        for chunk in self._chunked(memory_ids, SUPABASE_BATCH_FETCH_CHUNK_SIZE):
+            valid_ids = [mid for mid in chunk if len(mid) == UUID_HEX_LEN]
+            if not valid_ids:
+                continue
+            try:
+                response = await (
+                    self._client.table("memories")
+                    .select("*")
+                    .in_("id", valid_ids)
+                    .execute()
+                )
+            except Exception as exc:
+                raise self._map_to_storage_error(exc) from exc
+            rows = response.data or []
+            row_map: dict[str, Any] = {row["id"]: row for row in rows}  # type: ignore[index,call-overload,misc]
+            for mid in chunk:
+                if mid in row_map:
+                    results.append(_record_to_memory(row_map[mid]))  # type: ignore[arg-type]
+        return results
+
+    async def delete_memory(self, memory_id: str) -> bool:
+        try:
+            response = await (
+                self._client.table("memories").delete().eq("id", memory_id).execute()
             )
         except Exception as exc:
             raise self._map_to_storage_error(exc) from exc

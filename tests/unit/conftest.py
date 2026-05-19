@@ -32,6 +32,8 @@ def make_settings(**kwargs: Any) -> Settings:
         "local_model_name": "cl-nagoya/ruri-v3-310m",
         "litellm_api_base": "http://localhost:4000",
         "custom_api_endpoint": "http://localhost:8080/embed",
+        "supabase_url": "https://example.supabase.co",
+        "supabase_key": "test-service-role-key",
     }
 
     # Detect unknown override keys using the actual Settings schema.

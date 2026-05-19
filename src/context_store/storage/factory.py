@@ -315,6 +315,13 @@ async def _create_storage_adapter(
             raise NotImplementedError("read_only mode for prisma backend is not yet supported")
         return await PrismaStorageAdapter.create(settings)  # type: ignore[return-value]
 
+    if settings.storage_backend == "supabase":
+        from context_store.storage.supabase import SupabaseStorageAdapter
+
+        if read_only:
+            raise NotImplementedError("read_only mode for supabase backend is not yet supported")
+        return await SupabaseStorageAdapter.create(settings)
+
     raise ValueError(f"Unsupported storage_backend: {settings.storage_backend!r}")
 
 
@@ -358,6 +365,11 @@ async def _create_graph_adapter(
     if settings.storage_backend == "prisma":
         raise ValueError(
             "Graph adapter is not supported for storage_backend=prisma "
+            "(Neo4j Bolt cannot be tunneled over HTTPS)"
+        )
+    if settings.storage_backend == "supabase":
+        raise ValueError(
+            "Graph adapter is not supported for storage_backend=supabase "
             "(Neo4j Bolt cannot be tunneled over HTTPS)"
         )
 

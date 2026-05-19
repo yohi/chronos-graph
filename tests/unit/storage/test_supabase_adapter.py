@@ -616,6 +616,7 @@ async def test_count_by_filter_returns_exact_count():
     chain.is_.assert_called_once_with("archived_at", "null")
     chain.execute.assert_awaited_once()
 
+
 @pytest.mark.asyncio
 async def test_list_by_filter_archived_true_uses_not_is():
     client = make_mock_client()

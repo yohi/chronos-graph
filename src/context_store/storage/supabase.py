@@ -427,4 +427,3 @@ def _is_valid_uuid(value: str) -> bool:
         return True
     except (TypeError, ValueError, AttributeError):
         return False
-

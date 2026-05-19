@@ -279,7 +279,7 @@ def test_render_prompt_body_ja_uses_japanese_section_headers() -> None:
     assert "要承認" in body
 
 
-def test_render_prompt_body_when_no_tools() -> None:
+def test_render_prompt_body_when_no_tools_en() -> None:
     body = render_prompt_body(
         language="en",
         intent_name="x",
@@ -287,6 +287,18 @@ def test_render_prompt_body_when_no_tools() -> None:
         tool_lines=(),
     )
     assert "(none)" in body
+
+
+def test_render_prompt_body_when_no_tools_ja() -> None:
+    body = render_prompt_body(
+        language="ja",
+        intent_name="x",
+        intent_description="d",
+        tool_lines=(),
+    )
+    assert "（なし）" in body
+    # Ensure English fallback did not leak into the Japanese template.
+    assert "(none)" not in body
 
 
 def test_render_unsupported_language_raises() -> None:
@@ -382,7 +394,7 @@ def _render_en(
 def _render_ja(
     intent_name: str, intent_description: str, tool_lines: tuple[str, ...]
 ) -> str:
-    tools_block = "\n".join(tool_lines) if tool_lines else "(none)"
+    tools_block = "\n".join(tool_lines) if tool_lines else "（なし）"
     return (
         f"あなたは ChronosGraph MCP Gateway の '{intent_name}' ロールで動作しています。\n"
         "\n"
@@ -822,6 +834,32 @@ def test_internal_map_is_immutable_view() -> None:
     prompt = reg.get_for("curate_memories", "chronos-graph.curate_memories")
     assert prompt is not None
     assert prompt.messages[0].text == "body-curate_memories"
+
+
+def test_default_constructor_yields_empty_registry() -> None:
+    # The no-arg form is what app.py uses before lifespan runs.
+    reg = PromptRegistry()
+    assert reg.list_for("anything") == []
+
+
+def test_replace_swaps_underlying_mapping() -> None:
+    reg = PromptRegistry()
+    assert reg.list_for("curate_memories") == []
+    reg.replace({"curate_memories": _make_prompt("curate_memories")})
+    summaries = reg.list_for("curate_memories")
+    assert len(summaries) == 1
+    assert summaries[0].name == "chronos-graph.curate_memories"
+
+
+def test_replace_isolates_caller_dict_mutation() -> None:
+    reg = PromptRegistry()
+    new_map = {"curate_memories": _make_prompt("curate_memories")}
+    reg.replace(new_map)
+    # Mutating the caller's dict afterward must not bleed into the registry.
+    new_map["curate_memories"] = _make_prompt("other")
+    prompt = reg.get_for("curate_memories", "chronos-graph.curate_memories")
+    assert prompt is not None
+    assert prompt.messages[0].text == "body-curate_memories"
 ```
 
 - [ ] **Step 3: テスト失敗を確認**
@@ -837,7 +875,7 @@ Expected: `ImportError: cannot import name 'PromptRegistry'`
 `src/mcp_gateway/prompts/registry.py`:
 
 ```python
-"""Immutable cache of intent → Prompt mappings (built once at startup)."""
+"""Startup-only mutable, post-lifespan effectively immutable prompt cache."""
 
 from __future__ import annotations
 
@@ -848,7 +886,20 @@ from mcp_gateway.prompts.models import Prompt, PromptSummary
 
 
 class PromptRegistry:
-    """Read-only, intent-keyed prompt store wired into `app.state`.
+    """Intent-keyed prompt store wired into `app.state` and `build_router`.
+
+    Lifecycle:
+        * `__init__` creates an empty instance at app-construction time
+          (before `lifespan` runs, so the same instance can be injected
+          into both `app.state.prompt_registry` and `build_router(...)`).
+        * `replace()` is the ONLY mutation entry point. It is intended to
+          be invoked exactly once during lifespan startup with the result
+          of `PromptBuilder.build_all(...)`. After that single call, the
+          internal `MappingProxyType` view is treated as immutable by all
+          readers (`list_for`, `get_for`).
+        * No other code path mutates the registry. This mirrors the
+          `ToolRegistry.replace_tools()` pattern used elsewhere in the
+          gateway.
 
     Authorization boundary: every lookup is keyed by the caller's session
     intent. `get_for` returns the prompt **only** when both intent and the
@@ -856,9 +907,15 @@ class PromptRegistry:
     design (see specs §4.5).
     """
 
-    def __init__(self, prompts_by_intent: Mapping[str, Prompt]) -> None:
-        # Defensive copy so external mutation cannot reach the immutable view.
-        self._prompts: Mapping[str, Prompt] = MappingProxyType(dict(prompts_by_intent))
+    def __init__(self, prompts_by_intent: Mapping[str, Prompt] | None = None) -> None:
+        # Defensive copy so external mutation cannot reach the proxy view.
+        self._prompts: Mapping[str, Prompt] = MappingProxyType(
+            dict(prompts_by_intent or {})
+        )
+
+    def replace(self, prompts_by_intent: Mapping[str, Prompt]) -> None:
+        """Swap the underlying mapping. Call exactly once from lifespan startup."""
+        self._prompts = MappingProxyType(dict(prompts_by_intent))
 
     def list_for(self, intent: str) -> list[PromptSummary]:
         prompt = self._prompts.get(intent)
@@ -1124,31 +1181,46 @@ Expected: `AttributeError: 'State' object has no attribute 'prompt_registry'`
 
 - [ ] **Step 4: 最小実装**
 
-`src/mcp_gateway/app.py` の import 追加（既存 `from mcp_gateway.tools.registry import ToolRegistry` の直後）:
+`build_router` は `lifespan` 開始**前**に呼ばれるため、`PromptRegistry` インスタンスを `build_router` 呼び出し前に生成し、`app.state.prompt_registry` と `build_router` の両方に**同じインスタンス**を渡す。lifespan 内では `replace()` で内部 mapping を差し替える（`ToolRegistry.replace_tools()` と同型）。`build_router` 引数追加そのものは Task 3.3 で行うため、本 Task では `app.state` への配置と lifespan 内の `replace()` 呼び出しまでを実装する。
+
+a. import 追加（既存 `from mcp_gateway.tools.registry import ToolRegistry` の直後）:
 
 ```python
 from mcp_gateway.prompts.builder import PromptBuilder
 from mcp_gateway.prompts.registry import PromptRegistry
 ```
 
-`lifespan` 関数内、`registry.replace_tools(all_tools)` の直後を以下のように変更:
+b. `build_app` 関数内、`registry = ToolRegistry(initial_tools or [])` の直後に空 `PromptRegistry` を生成:
 
 ```python
-            # Initialize or update tool registry on startup
+    registry = ToolRegistry(initial_tools or [])
+    prompt_registry = PromptRegistry()
+```
+
+c. `lifespan` 関数内、`registry.replace_tools(all_tools)` の直後で `replace()` を呼ぶ:
+
+```python
+            # Initialize or update tool / prompt registry on startup
             if hasattr(upstream, "list_tools"):
                 all_tools = await upstream.list_tools()
                 registry.replace_tools(all_tools)
-                prompts_by_intent = PromptBuilder.build_all(
-                    policy=policy,
-                    tools=all_tools,
-                    language=settings.prompt_language,
+                prompt_registry.replace(
+                    PromptBuilder.build_all(
+                        policy=policy,
+                        tools=all_tools,
+                        language=settings.prompt_language,
+                    )
                 )
-                app.state.prompt_registry = PromptRegistry(prompts_by_intent)
-            else:
-                app.state.prompt_registry = PromptRegistry({})
 ```
 
-> **Note:** `app.state.prompt_registry` は `tool_registry` と並列の位置付けとして app.state へ直接配置する（line 133 付近）。`build_router` への引数追加は Task 3.3 で行う。
+d. `app.state.tool_registry = registry` の直後に `app.state` への配置を追加:
+
+```python
+    app.state.tool_registry = registry
+    app.state.prompt_registry = prompt_registry
+```
+
+> **Note:** `PromptRegistry` インスタンスを 1 回だけ生成し、`app.state` と (Task 3.3 で) `build_router` の双方に共有するため、`lifespan` 内では新規インスタンス化せず `replace()` のみを使う。これが本機能における唯一正規のミューテーション経路。
 
 - [ ] **Step 5: テスト成功を確認**
 
@@ -1175,7 +1247,7 @@ git commit -m "feat(mcp-gateway/app): lifespan で PromptRegistry を構築・ap
 git push -u origin feat/prompts-app
 gh pr create --draft --base phase/3-prompts-wiring \
   --title "feat(mcp-gateway/app): PromptRegistry を lifespan で構築" \
-  --body "Phase 3 Task 3.2: 起動時に \`PromptBuilder.build_all\` で全 intent × 言語のプロンプトを事前合成し、\`app.state.prompt_registry\` に不変キャッシュを配置。Stack base: Task 3.1 (config)"
+  --body "Phase 3 Task 3.2: \`build_router\` 前に空の \`PromptRegistry\` を生成して \`app.state.prompt_registry\` に配置し、lifespan 内で \`PromptBuilder.build_all\` の結果を \`replace()\` で差し替える。以降は事実上不変。\`ToolRegistry.replace_tools\` と対称な配線。Stack base: Task 3.1 (config)"
 ```
 
 ---
@@ -1187,8 +1259,8 @@ gh pr create --draft --base phase/3-prompts-wiring \
 理由: `record.intent` をキーにした `app.state.prompt_registry` の参照と、`build_router` の引数追加が必要。前 Task の差分（registry が app.state に存在する事実）を前提とする Stacked PR。
 
 **Files:**
-- Modify: `src/mcp_gateway/app.py`
-- Modify: `src/mcp_gateway/server.py`
+- Modify: `src/mcp_gateway/server.py`（`build_router` シグネチャ拡張 + dispatcher 分岐 2 つ）
+- Modify: `src/mcp_gateway/app.py`（`build_router` 呼び出しに `prompt_registry` を追加）
 - Create: `tests/unit/test_mcp_gateway_prompts_dispatch.py`
 
 - [ ] **Step 1: ブランチ作成**
@@ -1208,6 +1280,8 @@ git checkout -b feat/prompts-dispatch feat/prompts-app
 
 from __future__ import annotations
 
+import json as _json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -1262,9 +1336,7 @@ agents:
 @pytest.fixture()
 def client(
     monkeypatch: pytest.MonkeyPatch, policy_yaml: Path
-) -> Any:
-    import json as _json
-
+) -> Iterator[TestClient]:
     monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy_yaml))
     monkeypatch.setenv(
         "MCP_GATEWAY_API_KEYS_JSON",
@@ -1281,7 +1353,7 @@ def client(
         yield c
 
 
-def _handshake(client: Any, *, intent: str) -> str:
+def _handshake(client: TestClient, *, intent: str) -> str:
     resp = client.get(
         "/sse",
         headers={
@@ -1304,7 +1376,7 @@ def _handshake(client: Any, *, intent: str) -> str:
         resp.close()
 
 
-def test_prompts_list_returns_one_entry_for_session_intent(client: Any) -> None:
+def test_prompts_list_returns_one_entry_for_session_intent(client: TestClient) -> None:
     sid = _handshake(client, intent="curate_memories")
     r = client.post(
         f"/messages?session_id={sid}",
@@ -1318,7 +1390,7 @@ def test_prompts_list_returns_one_entry_for_session_intent(client: Any) -> None:
     assert prompts[0]["arguments"] == []
 
 
-def test_prompts_get_returns_body_for_own_intent(client: Any) -> None:
+def test_prompts_get_returns_body_for_own_intent(client: TestClient) -> None:
     sid = _handshake(client, intent="curate_memories")
     r = client.post(
         f"/messages?session_id={sid}",
@@ -1343,7 +1415,7 @@ def test_prompts_get_returns_body_for_own_intent(client: Any) -> None:
     assert "[REQUIRES APPROVAL]" in text
 
 
-def test_prompts_get_rejects_other_intent_prompt(client: Any) -> None:
+def test_prompts_get_rejects_other_intent_prompt(client: TestClient) -> None:
     sid = _handshake(client, intent="curate_memories")
     r = client.post(
         f"/messages?session_id={sid}",
@@ -1360,7 +1432,7 @@ def test_prompts_get_rejects_other_intent_prompt(client: Any) -> None:
     assert "unknown prompt" in body["error"]["message"]
 
 
-def test_prompts_get_missing_params_returns_invalid_params(client: Any) -> None:
+def test_prompts_get_missing_params_returns_invalid_params(client: TestClient) -> None:
     sid = _handshake(client, intent="curate_memories")
     r = client.post(
         f"/messages?session_id={sid}",
@@ -1370,7 +1442,7 @@ def test_prompts_get_missing_params_returns_invalid_params(client: Any) -> None:
     assert r.json()["error"]["code"] == -32602
 
 
-def test_prompts_get_missing_name_returns_invalid_params(client: Any) -> None:
+def test_prompts_get_missing_name_returns_invalid_params(client: TestClient) -> None:
     sid = _handshake(client, intent="curate_memories")
     r = client.post(
         f"/messages?session_id={sid}",
@@ -1512,7 +1584,9 @@ c. dispatcher の `if method == "tools/call":` ブロックの直後（既存 `i
 
 - [ ] **Step 5: `app.py` で `build_router` へ `prompt_registry` を渡す**
 
-`src/mcp_gateway/app.py` の `app.include_router(build_router(...))` 呼び出しに引数を追加:
+Task 3.2 で既に `prompt_registry = PromptRegistry()` を `build_router` 呼び出し前に生成し、`app.state.prompt_registry` に配置し、lifespan で `prompt_registry.replace(...)` を呼ぶ構成にしてある。本 Step では `build_router` のキーワード引数を増やすのみ。
+
+`src/mcp_gateway/app.py` の `app.include_router(build_router(...))` 呼び出しに `prompt_registry=prompt_registry` を追加:
 
 ```python
     app.include_router(
@@ -1520,7 +1594,7 @@ c. dispatcher の `if method == "tools/call":` ブロックの直後（既存 `i
             handshake=handshake,
             sessions=sessions,
             tool_registry=registry,
-            prompt_registry=app.state.prompt_registry,  # NEW
+            prompt_registry=prompt_registry,  # NEW: same instance as app.state.prompt_registry
             upstream=upstream,
             policy=policy,
             audit=audit,
@@ -1534,74 +1608,7 @@ c. dispatcher の `if method == "tools/call":` ブロックの直後（既存 `i
     )
 ```
 
-> **CRITICAL:** `build_router` は `lifespan` 開始**前**に呼ばれるため、Task 3.2 で `app.state.prompt_registry` を lifespan 内で設定している現状のままだと、`build_router` 呼び出し時点では未設定。
->
-> 対策: Task 3.2 の lifespan ブロック実装を **以下のように修正する**（Task 3.3 の作業に含めて反映）:
->
-> ```python
-> # lifespan の外、`registry = ToolRegistry(initial_tools or [])` の直後に空 PromptRegistry を先に生成
-> prompt_registry = PromptRegistry({})
-> ```
->
-> そして `lifespan` 関数内では既存の `app.state.prompt_registry = PromptRegistry(...)` を廃止し、代わりにモジュールスコープ変数 `prompt_registry` を再代入できないため、**ミュータブルなラッパー**ではなく `replace_tools` パターンと同じく `PromptRegistry` 自体に `replace()` メソッドを設けるか、シンプルに「外で `PromptRegistry` インスタンスを 1 つ作って `app.state` と `build_router` の両方に渡し、lifespan 内では `app.state.prompt_registry = PromptRegistry(prompts)` で差し替える」方針を取る。
->
-> **採用方針:** Task 3.2 と整合させるため、以下に統一する:
->
-> 1. `build_router` には `prompt_registry_getter: Callable[[], PromptRegistry]` ではなく **lifespan 開始後に呼ばれる前提の `app.state` 経由参照** に書き換える方が変更が小さい。`tool_registry` も同じく `replace_tools` で内部状態を差し替えており、参照は不変オブジェクト。よって `PromptRegistry` も同じ「事前にインスタンスを作り、後で内部マップを差し替える」設計に変更する。
->
-> 具体的には:
-> - `PromptRegistry.__init__` のデフォルト引数を空 dict にする
-> - `PromptRegistry.replace(prompts_by_intent: Mapping[str, Prompt])` メソッドを追加（内部 `_prompts = MappingProxyType(dict(...))` を再代入）
-> - `app.py` で `prompt_registry = PromptRegistry({})` を `build_router` 呼び出し前に生成し、`app.state.prompt_registry = prompt_registry` と `build_router(..., prompt_registry=prompt_registry, ...)` の両方に渡す
-> - lifespan 内で `prompt_registry.replace(PromptBuilder.build_all(...))` を呼ぶ
->
-> この修正は Task 2.1 の `PromptRegistry` にも波及するため、本 Task 内で以下を追加実施する:
-
-サブステップ 5-A: `src/mcp_gateway/prompts/registry.py` に `replace` を追加
-
-```python
-    def replace(self, prompts_by_intent: Mapping[str, Prompt]) -> None:
-        """Replace the underlying immutable map (called once at startup)."""
-        self._prompts = MappingProxyType(dict(prompts_by_intent))
-```
-
-サブステップ 5-B: `tests/unit/test_mcp_gateway_prompts_registry.py` に追加テスト
-
-```python
-def test_replace_swaps_underlying_mapping() -> None:
-    reg = PromptRegistry({})
-    assert reg.list_for("x") == []
-    reg.replace({"x": _make_prompt("x")})
-    summaries = reg.list_for("x")
-    assert len(summaries) == 1
-    assert summaries[0].name == "chronos-graph.x"
-```
-
-サブステップ 5-C: `src/mcp_gateway/app.py` を以下に修正:
-
-`lifespan` 外、`registry = ToolRegistry(initial_tools or [])` の直後:
-
-```python
-    registry = ToolRegistry(initial_tools or [])
-    prompt_registry = PromptRegistry({})
-```
-
-`lifespan` 内、既存の `app.state.prompt_registry = ...` 行を以下に置き換え:
-
-```python
-            if hasattr(upstream, "list_tools"):
-                all_tools = await upstream.list_tools()
-                registry.replace_tools(all_tools)
-                prompt_registry.replace(
-                    PromptBuilder.build_all(
-                        policy=policy,
-                        tools=all_tools,
-                        language=settings.prompt_language,
-                    )
-                )
-```
-
-`app.state.prompt_registry = prompt_registry` を `app.state.tool_registry = registry` の直後に配置。
+> **Note:** `build_router` が lifespan より先に評価される時点では `prompt_registry` の内部 mapping は空。実際の呼び出し（`/messages` 受信時）は lifespan 完了後となるため、`replace()` 済みの状態でハンドラが起動する。これにより `tool_registry` の `replace_tools()` パターンと完全に対称な配線が実現する。
 
 - [ ] **Step 6: テスト成功を確認**
 
@@ -1622,8 +1629,6 @@ Expected: 全パス
 ```bash
 git add src/mcp_gateway/server.py \
         src/mcp_gateway/app.py \
-        src/mcp_gateway/prompts/registry.py \
-        tests/unit/test_mcp_gateway_prompts_registry.py \
         tests/unit/test_mcp_gateway_prompts_dispatch.py
 git commit -m "feat(mcp-gateway/server): prompts/list, prompts/get ディスパッチャを追加"
 ```
@@ -1634,7 +1639,7 @@ git commit -m "feat(mcp-gateway/server): prompts/list, prompts/get ディスパ�
 git push -u origin feat/prompts-dispatch
 gh pr create --draft --base phase/3-prompts-wiring \
   --title "feat(mcp-gateway/server): prompts/list & prompts/get ディスパッチャ" \
-  --body "Phase 3 Task 3.3: JSON-RPC \`prompts/list\` / \`prompts/get\` を実装。\`record.intent\` をキーに認可境界を維持。-32602 \"unknown prompt\" で他 intent 漏洩を構造的に防止。\`PromptRegistry.replace\` で lifespan 後の差し替えに対応。Stack base: Task 3.2 (app)"
+  --body "Phase 3 Task 3.3: JSON-RPC \`prompts/list\` / \`prompts/get\` を実装。\`record.intent\` をキーに認可境界を維持。-32602 \"unknown prompt\" で他 intent 漏洩を構造的に防止。\`build_router\` には Task 3.2 で生成済みの \`PromptRegistry\` 同一インスタンスを渡す。Stack base: Task 3.2 (app)"
 ```
 
 ---
@@ -1994,7 +1999,7 @@ VS Code "Reopen in Container" 後、または `devcontainer exec --workspace-fol
 
 **2. プレースホルダ走査**: 「TBD」「TODO」「適切な〜」「実装する」等の抽象的指示なし。全コードブロックに具体的な実装を記載。
 
-**3. 型整合性**: `PromptRegistry` に `replace()` メソッドを追加する変更を Task 3.3 で実施し、Task 2.1 のテストにも追加検証を入れることで型整合性を保つ。`PromptMessage.role` は Literal、`Prompt.messages` は tuple のまま一貫。`prompt_language: Literal["en", "ja"]` は config / templates / builder で同一型を流用。
+**3. 型整合性**: `PromptRegistry` は Task 2.1 の時点で `__init__(prompts_by_intent=None)` と `replace(prompts_by_intent)` の両 API を持ち、Task 3.2 の `app.py` が `PromptRegistry()` を `build_router` 呼び出し前に生成して `app.state` と `build_router` の同一インスタンスへ渡し、lifespan 内で `replace()` で差し替えるという単一の初期化順序に統一されている（`ToolRegistry.replace_tools` パターンと対称）。`PromptMessage.role` は Literal、`Prompt.messages` は tuple のまま一貫。`prompt_language: Literal["en", "ja"]` は config / templates / builder で同一型を流用。Task 3.3 の `client` フィクスチャは `Iterator[TestClient]`、テスト関数は `client: TestClient` として Task 4.1 と整合。
 
 ---
 

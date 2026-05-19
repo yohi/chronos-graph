@@ -2,25 +2,29 @@
 set -e
 
 cd /workspaces/chronos-graph
+export UV_PROJECT_ENVIRONMENT=/home/vscode/.venv
+export PATH="${UV_PROJECT_ENVIRONMENT}/bin:${PATH}"
 
-# Node.js (Prisma CLI 用) - GPG 署名検証を含むセキュアなインストール
-NODE_MAJOR=20
-if ! node --version 2>/dev/null | grep -q "^v${NODE_MAJOR}\."; then
-  sudo apt-get update && sudo apt-get install -y ca-certificates curl gnupg
-  sudo mkdir -p /etc/apt/keyrings
-  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
-    | sudo gpg --dearmor --yes -o /etc/apt/keyrings/nodesource.gpg
-  echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
-    | sudo tee /etc/apt/sources.list.d/nodesource.list
-  sudo apt-get update && sudo apt-get install -y nodejs
-fi
+# Node.js is installed in .devcontainer/Dockerfile so this setup script can run
+# without sudo in the non-root devcontainer user.
+node --version
 
 echo "Installing dependencies..."
-uv sync --frozen --all-extras
+uv venv "${UV_PROJECT_ENVIRONMENT}"
+uv pip install --python "${UV_PROJECT_ENVIRONMENT}/bin/python" \
+  -e ".[all]" \
+  asgi-lifespan \
+  mypy \
+  pre-commit \
+  pytest \
+  pytest-asyncio \
+  pytest-benchmark \
+  pytest-cov \
+  ruff
 
 # Prisma Client Python の生成 (schema.prisma → ./prisma/ パッケージ生成)
 if [ -f ./prisma/schema.prisma ]; then
-  uv run prisma generate --schema=./prisma/schema.prisma
+  prisma generate --schema=./prisma/schema.prisma
 fi
 
 echo "Devcontainer setup complete!"

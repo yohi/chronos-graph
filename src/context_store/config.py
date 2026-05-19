@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     local_model_name: str = "cl-nagoya/ruri-v3-310m"
     litellm_api_base: str = "http://localhost:4000"
     litellm_model: str = "openai/text-embedding-3-small"
-    embedding_dimension: int = Field(default=1024, ge=1)
+    embedding_dimension: int = Field(default=768, ge=1)
     custom_api_endpoint: str = ""
     custom_api_model_name: str = "custom-model"
 

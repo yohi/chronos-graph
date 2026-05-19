@@ -146,8 +146,24 @@ class PromptRegistry:
         """セッションの intent に対応する 1 件のサマリ（未登録なら空リスト）。"""
 
     def get_for(self, intent: str, name: str) -> Prompt | None:
-        """name が intent と一致しない、または未登録なら None。"""
+        """セッションの intent に対応するエントリを引き、name フル一致時のみ返す。
+        intent 未登録、または name が一致しない場合は None。
+        """
 ```
+
+**`get_for` の内部アルゴリズム**（認可境界の要、§4.5 の動作を保証）：
+
+```python
+def get_for(self, intent: str, name: str) -> Prompt | None:
+    prompt = self._prompts.get(intent)        # 1. session の intent (短形式) で引く
+    if prompt is None:                        # 2. 未登録 intent → None
+        return None
+    if prompt.name != name:                   # 3. クライアント送信の name (フル形式) と
+        return None                           #    保存済み Prompt.name を完全一致比較
+    return prompt
+```
+
+**重要**: `name` のプレフィックス除去によるキー再ルックアップ（例: `name="chronos-graph.read_only_recall"` から `"read_only_recall"` を抽出して別キーで引く）は実装してはならない。これを許すと、`intent="curate_memories"` セッションから他 intent のプロンプトを取得できてしまい、§4.5 の認可境界を破壊する。Registry は常に「session の intent を一次キーとし、name は二次照合のみ」とする。
 
 `Prompt` は frozen dataclass + 内部 `tuple` のため、`ToolRegistry` のように `deepcopy` で防御する必要なし。lookup は O(1)。
 
@@ -158,10 +174,16 @@ class PromptRegistry:
 ```python
 if method == "prompts/list":
     summaries = prompt_registry.list_for(record.intent)
+    # count=0 はセッションの intent が PromptRegistry 未登録のサイン
+    # (ポリシー変更後の古いセッション等)。観測性のため reason を残す。
+    extra_kwargs: dict[str, Any] = {}
+    if not summaries:
+        extra_kwargs["reason"] = "intent_not_registered"
     audit.log(
         ev="prompts_list", decision="allow",
         agent=record.agent_id, intent=record.intent,
         sid=sid, count=len(summaries),
+        **extra_kwargs,
     )
     return JSONResponse({
         "jsonrpc": "2.0", "id": rpc_id,
@@ -341,9 +363,14 @@ messages[0]: role="user", text=
 ### 5.4 監査ログ
 
 ```python
-# prompts/list 成功
+# prompts/list 成功（通常: count=1）
 audit.log(ev="prompts_list", decision="allow",
           agent=record.agent_id, intent=record.intent, sid=sid, count=len(summaries))
+
+# prompts/list で intent が PromptRegistry に未登録 (count=0)
+# ポリシー変更後の古いセッション等を運用観測するためのシグナル
+audit.log(ev="prompts_list", decision="allow", reason="intent_not_registered",
+          agent=record.agent_id, intent=record.intent, sid=sid, count=0)
 
 # prompts/get 成功
 audit.log(ev="prompts_get", decision="allow",
@@ -420,7 +447,7 @@ FastAPI `TestClient` + 既存 `build_app(upstream_override=...)` パターン使
 
 ## 8. 実装フェーズ（writing-plans への引き継ぎ）
 
-```
+```text
 Phase 1: モデル + ビルダー
   1.1 prompts/models.py (Prompt, PromptMessage, PromptSummary) [TDD]
   1.2 prompts/templates.py (en/ja テンプレート関数) [TDD]

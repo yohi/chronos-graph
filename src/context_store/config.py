@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from typing import Any, Final, Literal, assert_never
+from typing import Any, Literal, assert_never
 from urllib.parse import quote
 
 from pydantic import Field, SecretStr, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+
+SUPABASE_VECTOR_DIM = 768
 
 
 class Settings(BaseSettings):
@@ -265,12 +267,17 @@ class Settings(BaseSettings):
                     "storage_backend=prisma は graph_enabled=true をサポートしません "
                     "(Neo4j Bolt は HTTPS にカプセル化できないため)。"
                 )
-        return self
         if self.storage_backend == "supabase":
-            if not self.supabase_url.strip():
+            url = self.supabase_url.strip()
+            if not url:
                 raise ValueError("SUPABASE_URL は storage_backend=supabase の場合に必須です。")
-            if not self.supabase_key.get_secret_value().strip():
+            key = self.supabase_key.get_secret_value().strip()
+            if not key:
                 raise ValueError("SUPABASE_KEY は storage_backend=supabase の場合に必須です。")
+
+            self.supabase_url = url
+            self.supabase_key = SecretStr(key)
+
             if not self.supabase_url.startswith("https://"):
                 raise ValueError("SUPABASE_URL は https:// で始まる必要があります。")
             if self.graph_enabled:
@@ -278,10 +285,10 @@ class Settings(BaseSettings):
                     "storage_backend=supabase は graph_enabled=true をサポートしません "
                     "(Neo4j Bolt は HTTPS にカプセル化できないため)。"
                 )
-            if self.embedding_dimension != 768:
+            if self.embedding_dimension != SUPABASE_VECTOR_DIM:
                 raise ValueError(
                     f"EMBEDDING_DIMENSION={self.embedding_dimension} は "
-                    "storage_backend=supabase のスキーマ vector(768) "
+                    f"storage_backend=supabase のスキーマ vector({SUPABASE_VECTOR_DIM}) "
                     "と一致しません。次元数を変更する場合は "
                     "supabase/migrations/ の SQL とこの定数を同時に更新してください。"
                 )

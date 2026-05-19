@@ -6,10 +6,12 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, cast
+import uuid
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Iterator, cast
 
-try:
-    from postgrest.exceptions import (
+try:  # noqa: I001
+    from postgrest.exceptions import (  # type: ignore[import-not-found]
         APIError as PostgrestAPIError,  # type: ignore[import-not-found]  # noqa: F401
     )
 
@@ -24,24 +26,23 @@ except ImportError:
     PostgrestAPIError = Exception  # type: ignore[misc,assignment]
     _supabase_available = False
 
-from context_store.models.memory import ScoredMemory
+from context_store.models.memory import MemorySource, ScoredMemory
 from context_store.storage.postgres_helpers import (
     _content_hash,
     _embedding_to_pg,
     _parse_embedding,
     _record_to_memory,
 )
-from context_store.storage.protocols import MemoryFilters, StorageError
+from context_store.storage.protocols import ALLOWED_SORT_COLUMNS, MemoryFilters, StorageError
 
 if TYPE_CHECKING:
     from context_store.config import Settings
-    from context_store.models.memory import Memory, ScoredMemory
+    from context_store.models.memory import Memory
 
 logger = logging.getLogger(__name__)
 
 SUPABASE_BATCH_FETCH_CHUNK_SIZE = 200
 SUPABASE_MAX_TOP_K = 200
-UUID_HEX_LEN = 36
 
 ALLOWED_UPDATE_COLUMNS: frozenset[str] = frozenset(
     {
@@ -102,10 +103,30 @@ class SupabaseStorageAdapter:
         )
         response = await chain.execute()
         rows = response.data or []
-        if not rows:
-            return None
-        embedding = _parse_embedding(rows[0].get("embedding"))
-        return len(embedding) if embedding else None
+        if rows:
+            embedding = _parse_embedding(rows[0].get("embedding"))
+            if embedding:
+                return len(embedding)
+        # Empty table: query schema dimension via RPC
+        try:
+            rpc_response = await self._client.rpc("get_embedding_dimension", {}).execute()
+        except Exception as exc:
+            raise self._map_to_storage_error(exc) from exc
+        data = rpc_response.data
+        if isinstance(data, list) and data:
+            dim = data[0]
+        elif isinstance(data, int):
+            dim = data
+        else:
+            dim = None
+        if isinstance(dim, int) and dim > 0:
+            return dim
+        raise StorageError(
+            "Could not determine memories.embedding dimension from schema. "
+            "Ensure pgvector extension is installed and the memories table exists.",
+            code="INVALID_STATE",
+            recoverable=False,
+        )
 
     async def dispose(self) -> None:
         client = self._client
@@ -113,52 +134,9 @@ class SupabaseStorageAdapter:
         if postgrest is not None and hasattr(postgrest, "aclose"):
             await postgrest.aclose()
 
-    @staticmethod
-    def _chunked(items: list[str], size: int):
-        for i in range(0, len(items), size):
-            yield items[i : i + size]
-
-    async def get_memory(self, memory_id: str) -> Memory | None:
-        if len(memory_id) != UUID_HEX_LEN:
-            return None
-        try:
-            response = await (
-                self._client.table("memories").select("*").eq("id", memory_id).execute()
-            )
-        except Exception as exc:
-            raise self._map_to_storage_error(exc) from exc
-        rows = response.data or []
-        if not rows:
-            return None
-        return _record_to_memory(rows[0])
-
-    async def get_memories_batch(self, memory_ids: list[str]) -> list[Memory]:
-        results: list[Memory] = []
-        for chunk in self._chunked(memory_ids, SUPABASE_BATCH_FETCH_CHUNK_SIZE):
-            valid_ids = [mid for mid in chunk if len(mid) == UUID_HEX_LEN]
-            if not valid_ids:
-                continue
-            try:
-                response = await (
-                    self._client.table("memories").select("*").in_("id", valid_ids).execute()
-                )
-            except Exception as exc:
-                raise self._map_to_storage_error(exc) from exc
-            rows = response.data or []
-            row_map = {row["id"]: row for row in rows}
-            for mid in chunk:
-                if mid in row_map:
-                    results.append(_record_to_memory(row_map[mid]))
-        return results
-
-    async def delete_memory(self, memory_id: str) -> bool:
-        try:
-            response = await self._client.table("memories").delete().eq("id", memory_id).execute()
-        except Exception as exc:
-            raise self._map_to_storage_error(exc) from exc
-        return bool(response.data)
-
     def _map_to_storage_error(self, exc: Exception) -> StorageError:
+        if isinstance(exc, StorageError):
+            return exc
         code = getattr(exc, "code", None) or ""
         message = getattr(exc, "message", "") or str(exc)
 
@@ -196,10 +174,16 @@ class SupabaseStorageAdapter:
             raise self._map_to_storage_error(exc) from exc
         rows = response.data or []
         if not rows:
-            raise StorageError("Insert returned no rows", code="STORAGE_ERROR", recoverable=True)
+            raise StorageError(
+                "Insert returned no rows",
+                code="STORAGE_ERROR",
+                recoverable=True,
+            )
         return cast(str, rows[0]["id"])  # type: ignore[call-overload,index]
 
     async def update_memory(self, memory_id: str, updates: dict[str, Any]) -> bool:
+        if not _is_valid_uuid(memory_id):
+            return False
         filtered = {k: v for k, v in updates.items() if k in ALLOWED_UPDATE_COLUMNS}
         if "content" in filtered:
             filtered["content_hash"] = _content_hash(filtered["content"])
@@ -215,30 +199,86 @@ class SupabaseStorageAdapter:
             raise self._map_to_storage_error(exc) from exc
         return bool(response.data)
 
+    @staticmethod
+    def _chunked(items: list[str], size: int) -> Iterator[list[str]]:
+        for i in range(0, len(items), size):
+            yield items[i : i + size]
+
+    async def get_memory(self, memory_id: str) -> Memory | None:
+        if not _is_valid_uuid(memory_id):
+            return None
+        try:
+            chain = self._client.table("memories").select("*").eq("id", memory_id)
+            response = await chain.execute()
+        except Exception as exc:
+            raise self._map_to_storage_error(exc) from exc
+        rows = response.data or []
+        if not rows:
+            return None
+        return _record_to_memory(rows[0])  # type: ignore[arg-type]
+
+    async def get_memories_batch(self, memory_ids: list[str]) -> list[Memory]:
+        results: list[Memory] = []
+        for chunk in self._chunked(memory_ids, SUPABASE_BATCH_FETCH_CHUNK_SIZE):
+            valid_ids = [mid for mid in chunk if _is_valid_uuid(mid)]
+            if not valid_ids:
+                continue
+            try:
+                response = await (
+                    self._client.table("memories").select("*").in_("id", valid_ids).execute()
+                )
+            except Exception as exc:
+                raise self._map_to_storage_error(exc) from exc
+            rows = response.data or []
+            row_map: dict[str, Any] = {row["id"]: row for row in rows}  # type: ignore[index,call-overload,misc]
+            for mid in chunk:
+                if mid in row_map:
+                    results.append(_record_to_memory(row_map[mid]))  # type: ignore[arg-type]
+        return results
+
+    async def delete_memory(self, memory_id: str) -> bool:
+        if not _is_valid_uuid(memory_id):
+            return False
+        try:
+            response = await self._client.table("memories").delete().eq("id", memory_id).execute()
+        except Exception as exc:
+            raise self._map_to_storage_error(exc) from exc
+        return bool(response.data)
+
     async def vector_search(
-        self, embedding: list[float], top_k: int, project: str | None = None
+        self,
+        embedding: list[float],
+        top_k: int,
+        project: str | None = None,
     ) -> list[ScoredMemory]:
         if not embedding:
             return []
-        top_k = min(top_k, SUPABASE_MAX_TOP_K)
-        pg_vec = _embedding_to_pg(embedding)
+        effective_top_k = top_k
+        if top_k > SUPABASE_MAX_TOP_K:
+            logger.warning(
+                "top_k=%d exceeds SUPABASE_MAX_TOP_K=%d; clamping",
+                top_k,
+                SUPABASE_MAX_TOP_K,
+            )
+            effective_top_k = SUPABASE_MAX_TOP_K
+        if effective_top_k < 1:
+            effective_top_k = 1
+
+        params = {
+            "query_embedding": embedding,
+            "match_count": effective_top_k,
+            "p_project": project,
+        }
         try:
-            response = await self._client.rpc(
-                "vector_search",
-                {
-                    "query_embedding": pg_vec,
-                    "match_count": top_k,
-                    "p_project": project,
-                },
-            ).execute()
+            response = await self._client.rpc("vector_search", params).execute()
         except Exception as exc:
             raise self._map_to_storage_error(exc) from exc
 
         results: list[ScoredMemory] = []
         for row in response.data or []:
-            mem = _record_to_memory(row)
-            score = float(row.get("score") or 0.0)
-            results.append(ScoredMemory(memory=mem, score=score))
+            score = float(row.pop("score", 0.0))
+            memory = _record_to_memory(row)
+            results.append(ScoredMemory(memory=memory, score=score, source=MemorySource.VECTOR))
         return results
 
     async def keyword_search(
@@ -246,91 +286,142 @@ class SupabaseStorageAdapter:
     ) -> list[ScoredMemory]:
         if not query.strip():
             return []
-        top_k = min(top_k, SUPABASE_MAX_TOP_K)
-        cleaned = query.strip()
+        effective_top_k = max(1, min(top_k, SUPABASE_MAX_TOP_K))
+        escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        builder = (
+            self._client.table("memories")
+            .select("*")
+            .ilike("content", f"%{escaped_query}%")
+            .is_("archived_at", "null")
+            .limit(effective_top_k)
+        )
+        if project is not None:
+            builder = builder.eq("project", project)
         try:
-            chain = (
-                self._client.table("memories")
-                .select("*, similarity:1.0")
-                .ilike("content", f"%{cleaned}%")
-                .is_("archived_at", "null")
-                .limit(top_k)
-            )
-            if project is not None:
-                chain = chain.eq("project", project)
-            response = await chain.execute()
+            response = await builder.execute()
         except Exception as exc:
             raise self._map_to_storage_error(exc) from exc
 
         results: list[ScoredMemory] = []
         for row in response.data or []:
-            mem = _record_to_memory(row)
-            results.append(ScoredMemory(memory=mem, score=1.0))
+            memory = _record_to_memory(row)
+            results.append(ScoredMemory(memory=memory, score=1.0, source=MemorySource.KEYWORD))
         return results
 
     async def list_by_filter(self, filters: MemoryFilters) -> list[Memory]:
-        try:
-            chain = self._client.table("memories").select("*")
-            if filters.project is not None:
-                chain = chain.eq("project", filters.project)
-            if filters.memory_type is not None:
-                chain = chain.eq("memory_type", filters.memory_type)
-            if filters.archived is False:
-                chain = chain.is_("archived_at", "null")
-            elif filters.archived is True:
-                chain = chain.not_.is_("archived_at", "null")
-            if filters.tags:
-                chain = chain.contains("tags", filters.tags)
-            if filters.limit is not None:
-                chain = chain.limit(filters.limit)
-            if filters.offset is not None:
-                chain = chain.offset(filters.offset)
-            if filters.order_by is not None:
-                chain = chain.order(filters.order_by)
-            if filters.min_importance is not None:
-                chain = chain.gte("importance_score", filters.min_importance)
+        builder = self._client.table("memories").select("*")
+        builder = _apply_common_filters(builder, filters)
 
-            response = await chain.execute()
+        if filters.created_after is not None and filters.id_after is not None:
+            if not _is_valid_uuid(filters.id_after):
+                return []
+
+            # ソート順に基づいて比較演算子を選択
+            is_desc = True
+            if filters.order_by:
+                _, _, direction = filters.order_by.partition(" ")
+                is_desc = direction.upper() == "DESC"
+
+            op = "lt" if is_desc else "gt"
+            ts = _format_pg_datetime(filters.created_after)
+            builder = builder.or_(
+                f"created_at.{op}.{ts},and(created_at.eq.{ts},id.{op}.{filters.id_after})"
+            )
+        elif filters.created_after is not None:
+            is_desc = True
+            if filters.order_by:
+                _, _, direction = filters.order_by.partition(" ")
+                is_desc = direction.upper() == "DESC"
+
+            ts = _format_pg_datetime(filters.created_after)
+            if is_desc:
+                builder = builder.lt("created_at", ts)
+            else:
+                builder = builder.gt("created_at", ts)
+
+        if filters.order_by:
+            column, _, direction = filters.order_by.partition(" ")
+            if column in ALLOWED_SORT_COLUMNS:
+                desc = direction.upper() == "DESC"
+                builder = builder.order(column, desc=desc)
+        if filters.limit is not None:
+            builder = builder.limit(filters.limit)
+        if filters.offset is not None:
+            builder = builder.offset(filters.offset)
+
+        try:
+            response = await builder.execute()
         except Exception as exc:
             raise self._map_to_storage_error(exc) from exc
-        return [_record_to_memory(row) for row in (response.data or [])]
+        return [_record_to_memory(row) for row in response.data or []]
 
     async def count_by_filter(self, filters: MemoryFilters) -> int:
+        builder = self._client.table("memories").select("*", count="exact", head=True)
+        builder = _apply_common_filters(builder, filters)
         try:
-            chain = self._client.table("memories").select("*", count="exact", head=True)
-            if filters.project is not None:
-                chain = chain.eq("project", filters.project)
-            if filters.memory_type is not None:
-                chain = chain.eq("memory_type", filters.memory_type)
-            if filters.archived is False:
-                chain = chain.is_("archived_at", "null")
-            elif filters.archived is True:
-                chain = chain.not_.is_("archived_at", "null")
-            if filters.tags:
-                chain = chain.contains("tags", filters.tags)
-
-            response = await chain.execute()
+            response = await builder.execute()
         except Exception as exc:
             raise self._map_to_storage_error(exc) from exc
-        return response.count or 0
+        return int(response.count or 0)
 
     async def list_projects(self) -> list[str]:
         try:
-            response = await self._client.rpc("list_projects").execute()
+            response = await self._client.rpc("list_projects", {}).execute()
         except Exception as exc:
             raise self._map_to_storage_error(exc) from exc
-        rows = response.data or []
-        return [row["project"] for row in rows if row.get("project")]
+        data = cast(list[dict[str, Any]], response.data or [])
+        return [str(row["project"]) for row in data]
 
     async def increment_memory_access_count(self, memory_id: str) -> bool:
+        if not _is_valid_uuid(memory_id):
+            return False
         try:
             response = await self._client.rpc(
-                "increment_memory_access_count",
-                {"p_memory_id": memory_id},
+                "increment_memory_access_count", {"p_memory_id": memory_id}
             ).execute()
         except Exception as exc:
             raise self._map_to_storage_error(exc) from exc
-        data = response.data
-        if isinstance(data, list) and data:
-            return bool(data[0])
-        return bool(data)
+        return bool(response.data)
+
+
+def _format_pg_datetime(dt: "datetime") -> str:
+    # +00:00 を Z に置換することで PostgREST の or_() フィルター文字列内で
+    # タイムゾーンオフセットの + がパーサーに誤解釈されるのを防ぐ
+    return dt.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _apply_common_filters(builder: Any, filters: MemoryFilters) -> Any:
+    if filters.project is not None:
+        builder = builder.eq("project", filters.project)
+    if filters.memory_type is not None:
+        builder = builder.eq("memory_type", filters.memory_type)
+    if filters.session_id is not None:
+        builder = builder.eq("source_metadata->>session_id", filters.session_id)
+    if filters.min_importance is not None:
+        builder = builder.gte("importance_score", filters.min_importance)
+    if filters.tags:
+        builder = builder.contains("tags", filters.tags)
+
+    effective_archived = filters.archived
+    if filters.archived_after is not None and effective_archived is None:
+        effective_archived = True
+
+    if effective_archived is None:
+        builder = builder.is_("archived_at", "null")
+    elif effective_archived is True:
+        builder = builder.not_.is_("archived_at", "null")
+
+    if filters.archived_after is not None:
+        builder = builder.gte("archived_at", _format_pg_datetime(filters.archived_after))
+    return builder
+
+
+def _is_valid_uuid(value: str) -> bool:
+    """Validate a UUID string (accepts both standard and hex formats)."""
+    if not value:
+        return False
+    try:
+        uuid.UUID(str(value))
+        return True
+    except (TypeError, ValueError, AttributeError):
+        return False

@@ -1,5 +1,4 @@
 import pytest
-from pydantic import ValidationError
 
 from context_store.config import Settings
 

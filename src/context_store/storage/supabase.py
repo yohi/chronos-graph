@@ -346,6 +346,7 @@ class SupabaseStorageAdapter:
         except Exception as exc:
             raise self._map_to_storage_error(exc) from exc
         data = cast(list[dict[str, Any]], response.data or [])
+        return [str(row["project"]) for row in data]
 
     async def increment_memory_access_count(self, memory_id: str) -> bool:
         if not _is_valid_uuid(memory_id):

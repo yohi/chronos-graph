@@ -397,3 +397,28 @@ async def test_delete_memory_returns_false_when_not_found():
 
     adapter = SupabaseStorageAdapter(client)
     assert await adapter.delete_memory("550e8400-e29b-41d4-a716-446655440000") is False
+
+
+@pytest.mark.asyncio
+async def test_list_projects_invokes_rpc():
+    client = make_mock_client()
+    rows = [{"project": "p1"}, {"project": "p2"}]
+    client.rpc.return_value.execute = AsyncMock(return_value=make_mock_response(data=rows))
+
+    adapter = SupabaseStorageAdapter(client)
+    results = await adapter.list_projects()
+    assert results == ["p1", "p2"]
+    client.rpc.assert_called_once_with("list_projects", {})
+
+
+@pytest.mark.asyncio
+async def test_increment_memory_access_count_invokes_rpc():
+    client = make_mock_client()
+    client.rpc.return_value.execute = AsyncMock(return_value=make_mock_response(data=True))
+
+    adapter = SupabaseStorageAdapter(client)
+    ok = await adapter.increment_memory_access_count("550e8400-e29b-41d4-a716-446655440000")
+    assert ok is True
+    client.rpc.assert_called_once_with(
+        "increment_memory_access_count", {"p_memory_id": "550e8400-e29b-41d4-a716-446655440000"}
+    )

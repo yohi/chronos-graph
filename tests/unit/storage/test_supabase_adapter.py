@@ -90,13 +90,15 @@ async def test_get_vector_dimension_returns_length():
 
 
 @pytest.mark.asyncio
-async def test_get_vector_dimension_returns_none_when_empty():
+async def test_get_vector_dimension_queries_schema_when_empty():
     client = make_mock_client()
     chain = client.table.return_value.select.return_value.not_.is_.return_value.limit.return_value
     chain.execute = AsyncMock(return_value=make_mock_response(data=[]))
+    client.rpc.return_value.execute = AsyncMock(return_value=make_mock_response(data=[768]))
 
     adapter = SupabaseStorageAdapter(client)
-    assert await adapter.get_vector_dimension() is None
+    assert await adapter.get_vector_dimension() == 768
+    client.rpc.assert_called_once_with("get_embedding_dimension", {})
 
 
 @pytest.mark.asyncio
@@ -104,12 +106,14 @@ async def test_create_succeeds_when_table_empty():
     client = make_mock_client()
     chain = client.table.return_value.select.return_value.not_.is_.return_value.limit.return_value
     chain.execute = AsyncMock(return_value=make_mock_response(data=[]))
+    client.rpc.return_value.execute = AsyncMock(return_value=make_mock_response(data=[768]))
 
     settings = Settings(
         storage_backend="supabase",
         supabase_url="https://x.supabase.co",
         supabase_key="k",
         embedding_dimension=768,
+        graph_enabled=False,
     )
     with patch(
         "context_store.storage.supabase.create_async_client",
@@ -118,7 +122,6 @@ async def test_create_succeeds_when_table_empty():
     ):
         adapter = await SupabaseStorageAdapter.create(settings)
     assert isinstance(adapter, SupabaseStorageAdapter)
-
 
 @pytest.mark.asyncio
 async def test_create_fails_when_dimension_mismatch():
@@ -132,6 +135,7 @@ async def test_create_fails_when_dimension_mismatch():
         supabase_url="https://x.supabase.co",
         supabase_key="k",
         embedding_dimension=768,
+        graph_enabled=False,
     )
     with patch(
         "context_store.storage.supabase.create_async_client",

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Iterator, cast
 
@@ -42,7 +43,6 @@ logger = logging.getLogger(__name__)
 
 SUPABASE_BATCH_FETCH_CHUNK_SIZE = 200
 SUPABASE_MAX_TOP_K = 200
-UUID_HEX_LEN = 36
 
 ALLOWED_UPDATE_COLUMNS: frozenset[str] = frozenset(
     {
@@ -103,10 +103,30 @@ class SupabaseStorageAdapter:
         )
         response = await chain.execute()
         rows = response.data or []
-        if not rows:
-            return None
-        embedding = _parse_embedding(rows[0].get("embedding"))
-        return len(embedding) if embedding else None
+        if rows:
+            embedding = _parse_embedding(rows[0].get("embedding"))
+            if embedding:
+                return len(embedding)
+        # Empty table: query schema dimension via RPC
+        try:
+            rpc_response = await self._client.rpc("get_embedding_dimension", {}).execute()
+        except Exception as exc:
+            raise self._map_to_storage_error(exc) from exc
+        data = rpc_response.data
+        if isinstance(data, list) and data:
+            dim = data[0]
+        elif isinstance(data, int):
+            dim = data
+        else:
+            dim = None
+        if isinstance(dim, int) and dim > 0:
+            return dim
+        raise StorageError(
+            "Could not determine memories.embedding dimension from schema. "
+            "Ensure pgvector extension is installed and the memories table exists.",
+            code="INVALID_STATE",
+            recoverable=False,
+        )
 
     async def dispose(self) -> None:
         client = self._client
@@ -181,7 +201,7 @@ class SupabaseStorageAdapter:
             yield items[i : i + size]
 
     async def get_memory(self, memory_id: str) -> Memory | None:
-        if len(memory_id) != UUID_HEX_LEN:
+        if not _is_valid_uuid(memory_id):
             return None
         try:
             chain = self._client.table("memories").select("*").eq("id", memory_id)
@@ -196,7 +216,7 @@ class SupabaseStorageAdapter:
     async def get_memories_batch(self, memory_ids: list[str]) -> list[Memory]:
         results: list[Memory] = []
         for chunk in self._chunked(memory_ids, SUPABASE_BATCH_FETCH_CHUNK_SIZE):
-            valid_ids = [mid for mid in chunk if len(mid) == UUID_HEX_LEN]
+            valid_ids = [mid for mid in chunk if _is_valid_uuid(mid)]
             if not valid_ids:
                 continue
             try:
@@ -233,6 +253,8 @@ class SupabaseStorageAdapter:
                 SUPABASE_MAX_TOP_K,
             )
             effective_top_k = SUPABASE_MAX_TOP_K
+        if effective_top_k < 1:
+            effective_top_k = 1
 
         params = {
             "query_embedding": embedding,
@@ -254,7 +276,7 @@ class SupabaseStorageAdapter:
     async def keyword_search(
         self, query: str, top_k: int, project: str | None = None
     ) -> list[ScoredMemory]:
-        effective_top_k = min(top_k, SUPABASE_MAX_TOP_K)
+        effective_top_k = max(1, min(top_k, SUPABASE_MAX_TOP_K))
         builder = (
             self._client.table("memories")
             .select("*")
@@ -280,6 +302,8 @@ class SupabaseStorageAdapter:
         builder = _apply_common_filters(builder, filters)
 
         if filters.created_after is not None and filters.id_after is not None:
+            if not _is_valid_uuid(filters.id_after):
+                return []
             ts = _format_pg_datetime(filters.created_after)
             builder = builder.or_(
                 f"created_at.lt.{ts},and(created_at.eq.{ts},id.lt.{filters.id_after})"
@@ -320,7 +344,7 @@ class SupabaseStorageAdapter:
         return [row["project"] for row in response.data or [] if row.get("project")]
 
     async def increment_memory_access_count(self, memory_id: str) -> bool:
-        if len(memory_id) != UUID_HEX_LEN:
+        if not _is_valid_uuid(memory_id):
             return False
         try:
             response = await self._client.rpc(
@@ -359,3 +383,14 @@ def _apply_common_filters(builder, filters: "MemoryFilters"):
     if filters.archived_after is not None:
         builder = builder.gte("archived_at", _format_pg_datetime(filters.archived_after))
     return builder
+
+
+def _is_valid_uuid(value: str) -> bool:
+    """Validate a UUID string (accepts both standard and hex formats)."""
+    if not value:
+        return False
+    try:
+        uuid.UUID(str(value))
+        return True
+    except (TypeError, ValueError, AttributeError):
+        return False

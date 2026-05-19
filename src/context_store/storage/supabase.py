@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Iterator, cast
 
 try:  # noqa: I001
@@ -24,13 +25,14 @@ except ImportError:
     PostgrestAPIError = Exception  # type: ignore[misc,assignment]
     _supabase_available = False
 
+from context_store.models.memory import MemorySource, ScoredMemory
 from context_store.storage.postgres_helpers import (
     _content_hash,
     _embedding_to_pg,
     _parse_embedding,
     _record_to_memory,
 )
-from context_store.storage.protocols import StorageError
+from context_store.storage.protocols import ALLOWED_SORT_COLUMNS, MemoryFilters, StorageError
 
 if TYPE_CHECKING:
     from context_store.config import Settings
@@ -225,3 +227,148 @@ class SupabaseStorageAdapter:
         except Exception as exc:
             raise self._map_to_storage_error(exc) from exc
         return bool(response.data)
+
+    async def vector_search(
+        self,
+        embedding: list[float],
+        top_k: int,
+        project: str | None = None,
+    ) -> list[ScoredMemory]:
+        effective_top_k = top_k
+        if top_k > SUPABASE_MAX_TOP_K:
+            logger.warning(
+                "top_k=%d exceeds SUPABASE_MAX_TOP_K=%d; clamping",
+                top_k,
+                SUPABASE_MAX_TOP_K,
+            )
+            effective_top_k = SUPABASE_MAX_TOP_K
+
+        params = {
+            "query_embedding": embedding,
+            "match_count": effective_top_k,
+            "p_project": project,
+        }
+        try:
+            response = await self._client.rpc("vector_search", params).execute()
+        except Exception as exc:
+            raise self._map_to_storage_error(exc) from exc
+
+        results: list[ScoredMemory] = []
+        for row in response.data or []:
+            score = float(row.pop("score", 0.0))
+            memory = _record_to_memory(row)
+            results.append(
+                ScoredMemory(memory=memory, score=score, source=MemorySource.VECTOR)
+            )
+        return results
+
+    async def keyword_search(
+        self, query: str, top_k: int, project: str | None = None
+    ) -> list[ScoredMemory]:
+        effective_top_k = min(top_k, SUPABASE_MAX_TOP_K)
+        builder = (
+            self._client.table("memories")
+            .select("*")
+            .ilike("content", f"%{query}%")
+            .is_("archived_at", "null")
+            .limit(effective_top_k)
+        )
+        if project is not None:
+            builder = builder.eq("project", project)
+        try:
+            response = await builder.execute()
+        except Exception as exc:
+            raise self._map_to_storage_error(exc) from exc
+
+        results: list[ScoredMemory] = []
+        for row in response.data or []:
+            memory = _record_to_memory(row)
+            results.append(
+                ScoredMemory(memory=memory, score=1.0, source=MemorySource.KEYWORD)
+            )
+        return results
+
+    async def list_by_filter(self, filters: MemoryFilters) -> list[Memory]:
+        builder = self._client.table("memories").select("*")
+        builder = _apply_common_filters(builder, filters)
+
+        if filters.created_after is not None and filters.id_after is not None:
+            ts = _format_pg_datetime(filters.created_after)
+            builder = builder.or_(
+                f"created_at.lt.{ts},and(created_at.eq.{ts},id.lt.{filters.id_after})"
+            )
+        elif filters.created_after is not None:
+            builder = builder.lt("created_at", _format_pg_datetime(filters.created_after))
+
+        if filters.order_by:
+            column, _, direction = filters.order_by.partition(" ")
+            if column in ALLOWED_SORT_COLUMNS:
+                desc = direction.upper() == "DESC"
+                builder = builder.order(column, desc=desc)
+        if filters.limit is not None:
+            builder = builder.limit(filters.limit)
+        if filters.offset is not None:
+            builder = builder.offset(filters.offset)
+
+        try:
+            response = await builder.execute()
+        except Exception as exc:
+            raise self._map_to_storage_error(exc) from exc
+        return [_record_to_memory(row) for row in response.data or []]
+
+    async def count_by_filter(self, filters: MemoryFilters) -> int:
+        builder = self._client.table("memories").select("*", count="exact", head=True)
+        builder = _apply_common_filters(builder, filters)
+        try:
+            response = await builder.execute()
+        except Exception as exc:
+            raise self._map_to_storage_error(exc) from exc
+        return int(response.count or 0)
+
+    async def list_projects(self) -> list[str]:
+        try:
+            response = await self._client.rpc("list_projects", {}).execute()
+        except Exception as exc:
+            raise self._map_to_storage_error(exc) from exc
+        return [row["project"] for row in response.data or [] if row.get("project")]
+
+    async def increment_memory_access_count(self, memory_id: str) -> bool:
+        if len(memory_id) != UUID_HEX_LEN:
+            return False
+        try:
+            response = await self._client.rpc(
+                "increment_memory_access_count", {"p_memory_id": memory_id}
+            ).execute()
+        except Exception as exc:
+            raise self._map_to_storage_error(exc) from exc
+        return bool(response.data)
+
+
+def _format_pg_datetime(dt: "datetime") -> str:
+    return dt.astimezone(timezone.utc).isoformat(timespec="microseconds")
+
+
+def _apply_common_filters(builder, filters: "MemoryFilters"):
+    if filters.project is not None:
+        builder = builder.eq("project", filters.project)
+    if filters.memory_type is not None:
+        builder = builder.eq("memory_type", filters.memory_type)
+    if filters.session_id is not None:
+        builder = builder.eq("source_metadata->>session_id", filters.session_id)
+    if filters.min_importance is not None:
+        builder = builder.gte("importance_score", filters.min_importance)
+    if filters.tags:
+        builder = builder.contains("tags", filters.tags)
+
+    effective_archived = filters.archived
+    if filters.archived_after is not None and effective_archived is None:
+        effective_archived = True
+
+    if effective_archived is None:
+        builder = builder.is_("archived_at", "null")
+    elif effective_archived is True:
+        builder = builder.not_.is_("archived_at", "null")
+
+    if filters.archived_after is not None:
+        builder = builder.gte("archived_at", _format_pg_datetime(filters.archived_after))
+    return builder

@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
+from typing import Any
 
 import httpx
 import pytest
@@ -257,7 +258,7 @@ async def test_get_memory_invalid_uuid_returns_none():
 async def test_get_memory_returns_record():
     client = make_mock_client()
     now = datetime.now(timezone.utc)
-    row = {
+    row: dict[str, Any] = {
         "id": "550e8400-e29b-41d4-a716-446655440000",
         "content": "hello",
         "memory_type": "semantic",
@@ -288,7 +289,7 @@ async def test_get_memories_batch_preserves_input_order():
     client = make_mock_client()
     now = datetime.now(timezone.utc).isoformat()
     ids = [f"550e8400-e29b-41d4-a716-44665544000{i}" for i in range(3)]
-    rows = [
+    rows: list[dict[str, Any]] = [
         {
             "id": ids[2],
             "content": "c",
@@ -351,7 +352,7 @@ async def test_get_memories_batch_skips_invalid_uuid():
     client = make_mock_client()
     now = datetime.now(timezone.utc).isoformat()
     ids = ["550e8400-e29b-41d4-a716-446655440000", "short", "550e8400-e29b-41d4-a716-446655440001"]
-    rows = [
+    rows: list[dict[str, Any]] = [
         {
             "id": ids[0],
             "content": "a",
@@ -410,7 +411,7 @@ async def test_delete_memory_returns_false_when_not_found():
 @pytest.mark.asyncio
 async def test_list_projects_invokes_rpc():
     client = make_mock_client()
-    rows = [{"project": "p1"}, {"project": "p2"}]
+    rows: list[dict[str, Any]] = [{"project": "p1"}, {"project": "p2"}]
     client.rpc.return_value.execute = AsyncMock(return_value=make_mock_response(data=rows))
 
     adapter = SupabaseStorageAdapter(client)
@@ -435,7 +436,7 @@ async def test_increment_memory_access_count_invokes_rpc():
 async def test_vector_search_calls_rpc():
     client = make_mock_client()
     now = datetime.now(timezone.utc)
-    rows = [
+    rows: list[dict[str, Any]] = [
         {
             "id": "550e8400-e29b-41d4-a716-446655440001",
             "content": "hello",
@@ -466,7 +467,7 @@ async def test_vector_search_calls_rpc():
 
     call_args = client.rpc.call_args
     assert call_args[0][0] == "vector_search"
-    assert call_args[0][1]["query_embedding"] == [0.1] * 768
+    assert call_args[0][1]["query_embedding"] == "[" + ",".join("0.1" for _ in range(768)) + "]"
     assert call_args[0][1]["match_count"] == 5
     assert call_args[0][1]["p_project"] == "p1"
 
@@ -494,7 +495,7 @@ async def test_vector_search_returns_empty_on_empty_embedding():
 async def test_keyword_search_uses_ilike():
     client = make_mock_client()
     now = datetime.now(timezone.utc)
-    rows = [
+    rows: list[dict[str, Any]] = [
         {
             "id": "550e8400-e29b-41d4-a716-446655440002",
             "content": "hello world",
@@ -592,3 +593,4 @@ async def test_count_by_filter_returns_exact_count():
     filters = MemoryFilters(project="p1", archived=False)
     count = await adapter.count_by_filter(filters)
     assert count == 42
+

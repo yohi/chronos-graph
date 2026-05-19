@@ -264,8 +264,9 @@ class SupabaseStorageAdapter:
         if effective_top_k < 1:
             effective_top_k = 1
 
+        pg_vec = _embedding_to_pg(embedding)
         params = {
-            "query_embedding": embedding,
+            "query_embedding": pg_vec,
             "match_count": effective_top_k,
             "p_project": project,
         }
@@ -287,7 +288,8 @@ class SupabaseStorageAdapter:
         if not query.strip():
             return []
         effective_top_k = max(1, min(top_k, SUPABASE_MAX_TOP_K))
-        escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        cleaned = query.strip()
+        escaped_query = cleaned.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         builder = (
             self._client.table("memories")
             .select("*")
@@ -425,3 +427,4 @@ def _is_valid_uuid(value: str) -> bool:
         return True
     except (TypeError, ValueError, AttributeError):
         return False
+

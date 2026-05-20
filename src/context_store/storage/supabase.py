@@ -289,11 +289,10 @@ class SupabaseStorageAdapter:
             return []
         effective_top_k = max(1, min(top_k, SUPABASE_MAX_TOP_K))
         cleaned = query.strip()
-        escaped_query = cleaned.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         builder = (
             self._client.table("memories")
             .select("*")
-            .ilike("content", f"%{escaped_query}%")
+            .ilike("content", f"%{cleaned}%")
             .is_("archived_at", "null")
             .limit(effective_top_k)
         )

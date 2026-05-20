@@ -139,6 +139,28 @@ def test_embedding_provider_validation(default_settings):
             },
             "CUSTOM_API_ENDPOINT",
         ),
+        ({"storage_backend": "supabase", "supabase_url": ""}, "SUPABASE_URL"),
+        (
+            {"storage_backend": "supabase", "supabase_url": "https://url", "supabase_key": ""},
+            "SUPABASE_KEY",
+        ),
+        (
+            {
+                "storage_backend": "supabase",
+                "supabase_url": "http://insecure",
+                "supabase_key": "key",
+            },
+            "https://",
+        ),
+        (
+            {
+                "storage_backend": "supabase",
+                "graph_enabled": True,
+                "supabase_url": "https://url",
+                "supabase_key": "key",
+            },
+            "graph_enabled=true をサポートしません",
+        ),
     ],
 )
 def test_required_settings_validation(default_settings, kwargs_overrides, expected_error_match):
@@ -306,78 +328,6 @@ def test_settings_embedding_model_derivation(monkeypatch, default_settings):
     s.litellm_api_base = "http://localhost:4000"
     s.litellm_model = "openai/text-embedding-3-large"
     assert s.embedding_model == "openai/text-embedding-3-large"
-
-
-def test_settings_accepts_prisma_backend(default_settings):
-    settings = Settings(
-        _env_file=None,
-        storage_backend="prisma",
-        prisma_database_url=SecretStr("prisma://accelerate.prisma-data.net/?api_key=test-key"),
-        graph_enabled=False,
-    )
-    assert settings.storage_backend == "prisma"
-    assert settings.prisma_database_url.get_secret_value().startswith("prisma://")
-
-
-def test_settings_accepts_prismas_tls_scheme(default_settings):
-    settings = Settings(
-        _env_file=None,
-        storage_backend="prisma",
-        prisma_database_url=SecretStr("prismas://accelerate.prisma-data.net/?api_key=test-key"),
-        graph_enabled=False,
-    )
-    assert settings.prisma_database_url.get_secret_value().startswith("prismas://")
-
-
-def test_settings_rejects_empty_prisma_url_when_backend_is_prisma(default_settings):
-    with pytest.raises(ValidationError) as exc_info:
-        Settings(_env_file=None, storage_backend="prisma", prisma_database_url=SecretStr(""))
-    assert "PRISMA_DATABASE_URL" in str(exc_info.value)
-
-
-def test_settings_rejects_non_prisma_scheme_url(default_settings):
-    with pytest.raises(ValidationError) as exc_info:
-        Settings(
-            _env_file=None,
-            storage_backend="prisma",
-            prisma_database_url=SecretStr("postgresql://user:pass@host:5432/db"),
-        )
-    assert "prisma://" in str(exc_info.value) or "prismas://" in str(exc_info.value)
-
-
-def test_settings_rejects_prisma_with_graph_enabled(default_settings):
-    with pytest.raises(ValidationError) as exc_info:
-        Settings(
-            _env_file=None,
-            storage_backend="prisma",
-            prisma_database_url=SecretStr("prisma://accelerate.prisma-data.net/?api_key=test-key"),
-            graph_enabled=True,
-        )
-    assert "graph" in str(exc_info.value).lower()
-
-
-def test_graph_backend_is_disabled_for_prisma(default_settings):
-    settings = Settings(
-        _env_file=None,
-        storage_backend="prisma",
-        prisma_database_url=SecretStr("prisma://accelerate.prisma-data.net/?api_key=test-key"),
-        graph_enabled=False,
-    )
-    assert settings.graph_backend == "disabled"
-
-
-def test_settings_strips_prisma_database_url(default_settings):
-    """PRISMA_DATABASE_URL の前後の空白が削除される。"""
-    settings = Settings(
-        _env_file=None,
-        storage_backend="prisma",
-        prisma_database_url=SecretStr("  prisma://accelerate.prisma-data.net/?api_key=test-key  "),
-        graph_enabled=False,
-    )
-    assert (
-        settings.prisma_database_url.get_secret_value()
-        == "prisma://accelerate.prisma-data.net/?api_key=test-key"
-    )
 
 
 def test_settings_dashboard_allowed_hosts_from_env(monkeypatch, default_settings):

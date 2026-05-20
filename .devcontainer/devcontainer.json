@@ -52,19 +52,7 @@
               "panel": "shared"
             }
           },
-          {
-            "label": "Prisma Generate",
-            "type": "shell",
-            "command": "uv run prisma generate --schema=./prisma/schema.prisma",
-            "problemMatcher": [],
-            "presentation": {
-              "reveal": "always",
-              "panel": "shared"
-            },
-            "dependsOn": [
-              "Install Dependencies"
-            ]
-          },
+
           {
             "label": "Run Tests",
             "type": "shell",

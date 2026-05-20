@@ -240,7 +240,12 @@ class SupabaseStorageAdapter:
         if not _is_valid_uuid(memory_id):
             return False
         try:
-            response = await self._client.table("memories").delete().eq("id", memory_id).execute()
+            response = (
+                await self._client.table("memories")
+                .delete(returning="representation")
+                .eq("id", memory_id)
+                .execute()
+            )
         except Exception as exc:
             raise self._map_to_storage_error(exc) from exc
         return bool(response.data)

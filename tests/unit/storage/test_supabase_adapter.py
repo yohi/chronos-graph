@@ -124,6 +124,7 @@ async def test_create_succeeds_when_table_empty():
         supabase_url="https://x.supabase.co",
         supabase_key="k",
         embedding_dimension=768,
+        similarity_threshold=0.70,
         graph_enabled=False,
     )
     with patch(
@@ -147,6 +148,7 @@ async def test_create_fails_when_dimension_mismatch():
         supabase_url="https://x.supabase.co",
         supabase_key="k",
         embedding_dimension=768,
+        similarity_threshold=0.70,
         graph_enabled=False,
     )
     with patch(

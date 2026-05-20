@@ -1,6 +1,15 @@
 from typing import Any
 
+import pytest
+
 from context_store.config import Settings
+
+
+@pytest.fixture(autouse=True)
+def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """テスト実行前に設定関連の環境変数をクリアする。"""
+    for field_name in Settings.model_fields.keys():
+        monkeypatch.delenv(field_name.upper(), raising=False)
 
 
 def make_settings(**kwargs: Any) -> Settings:

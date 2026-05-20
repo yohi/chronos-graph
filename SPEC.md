@@ -1168,7 +1168,7 @@ context-store-mcp/
 
 ```bash
 # === Storage Backend ===
-STORAGE_BACKEND=sqlite              # sqlite | postgres
+STORAGE_BACKEND=sqlite              # sqlite | postgres | supabase
 GRAPH_ENABLED=false                 # true | false (Neo4j の有効化)
 CACHE_BACKEND=inmemory              # inmemory | redis
 SQLITE_DB_PATH=~/.context-store/memories.db  # sqlite の場合

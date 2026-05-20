@@ -109,10 +109,18 @@ class RetrievalPipeline:
 
         # ステップ 2: ベクトル検索とキーワード検索を並列実行
         vector_task = self._safe_search(
-            self.vector_search.search, query, top_k, strategy.vector_weight
+            self.vector_search.search,
+            query,
+            top_k,
+            strategy.vector_weight,
+            project=project,
         )
         keyword_task = self._safe_search(
-            self.keyword_search.search, query, top_k, strategy.keyword_weight
+            self.keyword_search.search,
+            query,
+            top_k,
+            strategy.keyword_weight,
+            project=project,
         )
         vector_results, keyword_results = await asyncio.gather(vector_task, keyword_task)
 
@@ -216,12 +224,13 @@ class RetrievalPipeline:
         query: str,
         top_k: int,
         weight: float,
+        **kwargs: Any,
     ) -> list[ScoredMemory]:
         """重みが 0 のソースをスキップし、例外を空リストに変換"""
         if weight <= 0:
             return []
         try:
-            results: list[ScoredMemory] = list(await search_func(query, top_k=top_k))
+            results: list[ScoredMemory] = list(await search_func(query, top_k=top_k, **kwargs))
             return results
         except asyncio.CancelledError:
             raise

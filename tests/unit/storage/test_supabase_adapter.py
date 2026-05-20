@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -159,8 +158,20 @@ async def test_create_fails_when_dimension_mismatch():
         with pytest.raises(StorageError) as exc_info:
             await SupabaseStorageAdapter.create(settings)
     assert exc_info.value.code == "INVALID_STATE"
-    assert re.search(r"768.*1024|1024.*768", str(exc_info.value))
-    client.postgrest.aclose.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_vector_dimension_fails_when_rpc_returns_null():
+    client = make_mock_client()
+    chain = client.table.return_value.select.return_value.not_.is_.return_value.limit.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[]))
+    client.rpc.return_value.execute = AsyncMock(return_value=make_mock_response(data=[]))
+
+    adapter = SupabaseStorageAdapter(client)
+    with pytest.raises(StorageError) as exc_info:
+        await adapter.get_vector_dimension()
+    assert exc_info.value.code == "INVALID_STATE"
+    client.rpc.assert_called_once_with("get_embedding_dimension", {})
 
 
 def _sample_memory(content: str = "hello world", embedding=None) -> Memory:

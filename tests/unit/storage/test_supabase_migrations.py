@@ -36,8 +36,25 @@ def test_get_embedding_dimension_rpc_grants_service_role() -> None:
     sql = Path("supabase/migrations/20260519000001_get_embedding_dimension.sql").read_text()
 
     assert "CREATE OR REPLACE FUNCTION get_embedding_dimension()" in sql
-    assert re.search(
-        r"GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+get_embedding_dimension\(\)\s+TO\s+service_role",
-        sql,
-        re.I,
-    ) is not None
+    assert (
+        re.search(
+            r"GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+get_embedding_dimension\(\)\s+TO\s+service_role",
+            sql,
+            re.I,
+        )
+        is not None
+    )
+
+    # ロジック骨格の回帰検出: ORDER BY id LIMIT 1、pg_catalog 結合、型フィルタ
+    assert re.search(r"ORDER\s+BY\s+id\s+LIMIT\s+1", sql, re.I) is not None
+    assert re.search(r"pg_catalog\.pg_class", sql, re.I) is not None
+    assert re.search(r"pg_catalog\.pg_attribute", sql, re.I) is not None
+    assert re.search(r"pg_catalog\.pg_namespace", sql, re.I) is not None
+    assert (
+        re.search(
+            r"a\.atttypid\s*=\s*\(SELECT\s+oid\s+FROM\s+pg_catalog\.pg_type\s+WHERE\s+typname\s*=\s*'vector'\)",
+            sql,
+            re.I,
+        )
+        is not None
+    )

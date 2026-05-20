@@ -46,6 +46,7 @@
 | --- | --- | --- |
 | 新規 | `supabase/migrations/20260518000001_initial_schema.sql` | `memories` テーブル + B-tree/GIN/HNSW インデックス + 拡張 (vector, pg_trgm) |
 | 新規 | `supabase/migrations/20260518000002_rpc_functions.sql` | `vector_search` / `list_projects` / `increment_memory_access_count` RPC + 権限付与 |
+| 新規 | `supabase/migrations/20260519000001_get_embedding_dimension.sql` | 空テーブル起動時に schema 上の embedding 次元を取得する RPC + `service_role` 実行権限 |
 | 新規 | `src/context_store/storage/supabase.py` | `SupabaseStorageAdapter` (Protocol 実装本体) |
 | 新規 | `tests/unit/storage/test_supabase_adapter.py` | アダプタ単体テスト (AsyncMock ベース、`make_mock_*` ヘルパを同ファイル内で定義) |
 | 変更 | `pyproject.toml` | `storage-supabase` extra 追加 → 後フェーズで `storage-prisma` extra と `prisma.*` mypy override を削除 |
@@ -346,6 +347,7 @@ $$;
 
 -- ============================================================
 -- list_projects: DISTINCT project をサーバサイドで取得。
+-- archived_at では絞り込まず、全件 archived 済みの project も返す。
 -- ============================================================
 CREATE OR REPLACE FUNCTION list_projects()
 RETURNS TABLE (project text)
@@ -428,6 +430,53 @@ git push -u origin HEAD
 gh pr create --draft --base feat/supabase-adapter/phase-1-task-1.1-initial-schema \
   --title "feat(supabase): add RPC functions migration" \
   --body "Phase 1 Task 1.2. vector_search / list_projects / increment_memory_access_count RPC + service_role GRANT。Task 1.1 にスタック。"
+```
+
+### Task 1.3: 空テーブル起動時の次元取得 RPC を追加
+
+**派生元:** Task 1.1 / Task 1.2 のブランチ — `memories.embedding vector(768)` と RPC 権限付与の前提に依存するためスタック
+
+**Files:**
+- Create: `supabase/migrations/20260519000001_get_embedding_dimension.sql`
+
+- [ ] **Step 1: migration を作成**
+
+`supabase/migrations/20260519000001_get_embedding_dimension.sql` を作成し、以下を全文書き込み:
+
+```sql
+CREATE OR REPLACE FUNCTION get_embedding_dimension()
+RETURNS integer
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = public
+AS $$
+    SELECT COALESCE(
+        (SELECT vector_dims(embedding) FROM memories WHERE embedding IS NOT NULL ORDER BY id LIMIT 1),
+        (SELECT a.atttypmod
+         FROM pg_catalog.pg_class c
+         JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
+         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+         WHERE c.relname = 'memories'
+           AND n.nspname = 'public'
+           AND a.attname = 'embedding'
+           AND a.atttypid = (SELECT oid FROM pg_catalog.pg_type WHERE typname = 'vector')
+         LIMIT 1)
+    );
+$$;
+
+GRANT EXECUTE ON FUNCTION get_embedding_dimension() TO service_role;
+```
+
+- [ ] **Step 2: 回帰テストを追加**
+
+`tests/unit/storage/test_supabase_migrations.py` に `get_embedding_dimension()` の `service_role` 権限付与を検証するテストを追加する。
+
+- [ ] **Step 3: コミット**
+
+```bash
+git add supabase/migrations/20260519000001_get_embedding_dimension.sql tests/unit/storage/test_supabase_migrations.py
+git commit -m "fix(supabase): get_embedding_dimension RPC に実行権限を付与"
 ```
 
 ---
@@ -2578,7 +2627,7 @@ git checkout -b feat/supabase-adapter/phase-6-task-6.1-docs
    supabase link --project-ref <YOUR_PROJECT_REF>
    supabase db push
    ```
-   あるいは Studio の SQL Editor から `supabase/migrations/20260518000001_initial_schema.sql` → `20260518000002_rpc_functions.sql` の順に手動実行
+   あるいは Studio の SQL Editor から `supabase/migrations/20260518000001_initial_schema.sql` → `20260518000002_rpc_functions.sql` → `20260519000001_get_embedding_dimension.sql` の順に手動実行
 3. **Settings → API** から `Project URL` と `service_role` キーを取得
 
 #### 2. 環境変数
@@ -2600,7 +2649,7 @@ LOCAL_MODEL_NAME=cl-nagoya/ruri-v3-310m
 > - 漏洩時は Supabase Dashboard > Settings > API から直ちに再生成 (rotate)
 > - クライアントからも参照する用途では **anon key + RLS ポリシー** を利用する
 
-`EMBEDDING_DIMENSION` は `supabase/migrations/20260518000001_initial_schema.sql` の `vector(768)` と一致しなければ起動時に `INVALID_STATE` で fail-fast します。次元数を変更したい場合は SQL と環境変数を同時に更新してください。
+`EMBEDDING_DIMENSION` は `supabase/migrations/20260518000001_initial_schema.sql` の `vector(768)` と一致しなければ起動時に `INVALID_STATE` で fail-fast します。空テーブル起動時は `20260519000001_get_embedding_dimension.sql` の RPC で schema 上の次元を取得します。次元数を変更したい場合は SQL と環境変数を同時に更新してください。
 
 #### 3. 依存インストール
 

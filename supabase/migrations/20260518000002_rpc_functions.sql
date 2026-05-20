@@ -2,6 +2,9 @@
 -- vector_search: pgvector の <=> (cosine distance) を使って
 -- 上位 K 件取得。score = 1 - distance でコサイン類似度を返す。
 -- p_project が NULL なら全プロジェクト対象。
+-- 注意: この関数では m.archived_at IS NULL を持つ行のみを対象とする。
+-- list_projects() はアーカイブ済みメモリを含む全プロジェクトを
+-- 返すため、両者間にフィルタ非対称性がある。これは意図的。
 -- ============================================================
 CREATE OR REPLACE FUNCTION vector_search(
     query_embedding vector(768),
@@ -59,7 +62,6 @@ AS $$
     SELECT DISTINCT m.project
     FROM memories m
     WHERE m.project IS NOT NULL AND m.project <> ''
-      AND m.archived_at IS NULL
     ORDER BY m.project;
 $$;
 

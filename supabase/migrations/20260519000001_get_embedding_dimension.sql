@@ -18,3 +18,5 @@ AS $$
          LIMIT 1)
     );
 $$;
+
+GRANT EXECUTE ON FUNCTION get_embedding_dimension() TO service_role;

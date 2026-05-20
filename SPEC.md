@@ -711,6 +711,7 @@ Graceful Degradation:
 | Redis | キャッシュなしで直接 DB 検索 |
 | PostgreSQL | 全ツールがエラーを返す（マスター DB） |
 | SQLite | WAL TRUNCATE中などのロック競合時（`SQLITE_BUSY`等）、`StorageError(code="STORAGE_BUSY", recoverable=True)`を返しMCPクライアントにリトライを促す |
+| Supabase | 通信・接続エラーや `STORAGE_TIMEOUT`、500/502/503 (サーバー側エラー)、429 (Rate Limit) 等は Exponential Backoff リトライを前提とした Recoverable=True。一方、413 Payload Too Large、23505 (Unique Violation)、および 401/403 (認証・認可エラー) は Recoverable=False として直ちに fail-fast 停止 |
 
 ---
 
@@ -933,6 +934,7 @@ SQLファイルベースの軽量なマイグレーションシステムを備�
 - **バージョン管理**: `schema_migrations` テーブルに適用済みのバージョン（SQLファイル名）を記録。
 - **ベースライン検知**: マイグレーション導入前の既存データベースを検知し、初期マイグレーションをスキップして現状を「適用済み」として記録する。
 - **原子性の保証**: スキーマ変更とバージョン記録を同一トランザクション内（SQLite/PostgreSQL）で実行し、不整合を防止。
+- **Supabase の例外**: `STORAGE_BACKEND=supabase` の場合、内蔵のランナーは使用せず、Supabase CLI を用いて `supabase/migrations/` 配下の SQL ファイルでスキーマがデプロイ・管理されます。
 
 ### 8.6 ストレージ選択ロジック
 
@@ -1035,6 +1037,9 @@ context-store-mcp/
 ├── docker-compose.yml
 ├── .env.example
 ├── SPEC.md                        # 本ドキュメント
+│
+├── supabase/
+│   └── migrations/                # Supabase 管理の SQL マイグレーションファイル（supabase CLI を使用）
 │
 ├── src/
 │   ├── context_store/
@@ -1163,7 +1168,7 @@ context-store-mcp/
 
 ```bash
 # === Storage Backend ===
-STORAGE_BACKEND=sqlite              # sqlite | postgres
+STORAGE_BACKEND=sqlite              # sqlite | postgres | supabase
 GRAPH_ENABLED=false                 # true | false (Neo4j の有効化)
 CACHE_BACKEND=inmemory              # inmemory | redis
 SQLITE_DB_PATH=~/.context-store/memories.db  # sqlite の場合
@@ -1495,4 +1500,3 @@ Blocking モードで待機中の承認を解決するための REST エンド�
 - AIエージェントの長期記憶と強化学習プラグイン開発 — コグニティブアーキテクチャ / 複合スコアリング / RL
 - [LayerX ccgate (Zenn)](https://zenn.dev/layerx/articles/20260428-ccgate) — Server-defined Prompts / Permission Hook 概念の基礎
 - [tak848/ccgate (GitHub)](https://github.com/tak848/ccgate) — ccgate 参照実装
-

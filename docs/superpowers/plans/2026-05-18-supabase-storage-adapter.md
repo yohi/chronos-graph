@@ -2106,14 +2106,14 @@ gh pr create --draft --base feat/supabase-adapter/phase-3-task-3.5-search \
 - Modify: `src/context_store/storage/factory.py`
 - Create: `tests/unit/storage/test_factory_supabase.py`
 
-- [ ] **Step 1: ブランチ作成**
+- [x] **Step 1: ブランチ作成**
 
 ```bash
 git checkout feat/supabase-adapter/phase-3-task-3.6-filter-list
 git checkout -b feat/supabase-adapter/phase-4-task-4.1-factory
 ```
 
-- [ ] **Step 2: 失敗テストを書く (Red)**
+- [x] **Step 2: 失敗テストを書く (Red)**
 
 `tests/unit/storage/test_factory_supabase.py`:
 
@@ -2166,7 +2166,7 @@ async def test_factory_graph_disabled_for_supabase():
     assert graph is None
 ```
 
-- [ ] **Step 3: 失敗を確認 (Red)**
+- [x] **Step 3: 失敗を確認 (Red)**
 
 ```bash
 uv run pytest tests/unit/storage/test_factory_supabase.py -v
@@ -2174,7 +2174,7 @@ uv run pytest tests/unit/storage/test_factory_supabase.py -v
 
 Expected: `ValueError: Unsupported storage_backend: 'supabase'` で FAIL
 
-- [ ] **Step 4: `factory.py` に supabase 分岐を追加 (Prisma 分岐は維持)**
+- [x] **Step 4: `factory.py` に supabase 分岐を追加 (Prisma 分岐は維持)**
 
 `_create_storage_adapter` に追加:
 
@@ -2212,7 +2212,7 @@ if settings.storage_backend == "supabase":
 ..."""
 ```
 
-- [ ] **Step 5: テストパス確認 (Green)**
+- [x] **Step 5: テストパス確認 (Green)**
 
 ```bash
 uv run pytest tests/unit/storage/test_factory_supabase.py -v
@@ -2223,14 +2223,14 @@ uv run ruff check src/ tests/
 
 Expected: すべて PASS
 
-- [ ] **Step 6: コミット**
+- [x] **Step 6: コミット**
 
 ```bash
 git add src/context_store/storage/factory.py tests/unit/storage/test_factory_supabase.py
 git commit -m "feat(factory): Supabase backend 分岐を追加 (Prisma 分岐は維持)"
 ```
 
-- [ ] **Step 7: Phase Base 向け Draft PR を作成**
+- [x] **Step 7: Phase Base 向け Draft PR を作成**
 
 ```bash
 git push -u origin HEAD

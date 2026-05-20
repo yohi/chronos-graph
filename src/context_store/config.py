@@ -311,7 +311,7 @@ class Settings(BaseSettings):
             return "sqlite"
         if self.storage_backend == "postgres":
             return "neo4j"
-        return "disabled"  # prisma / supabase
+        return "disabled"  # supabase
 
     @computed_field  # type: ignore[prop-decorator]
     @property

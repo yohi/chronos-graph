@@ -281,8 +281,3 @@ class TestReturnTypes:
         assert isinstance(cache_adp, CacheAdapter)
 
         await dispose_adapters(storage, graph_adp, cache_adp)
-
-
-# ---------------------------------------------------------------------------
-# Tests: Prisma backend (mocked)
-# ---------------------------------------------------------------------------

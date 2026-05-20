@@ -60,38 +60,13 @@ YOLO/Autonomous モードであっても、Phase 1 でユーザー確認が完�
 
 #### 🟦 Phase 1: 構成の確定 (BLOCKING STEP)
 
-リポジトリをクローンせずに、`uvx` を使用して MCP サーバーとして即座に実行することも可能です。Claude Desktop 等の設定に以下のようなエントリを追加してください：
-
-```json
-{
-  "mcpServers": {
-    "chronos-graph": {
-      "command": "uvx",
-      "args": [
-        "--from",
-        "context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git",
-        "context-store"
-      ],
-      "env": {
-        "OPENAI_API_KEY": "YOUR_API_KEY_HERE"
-      }
-    }
-  }
-}
-```
-
-リポジトリをクローンしている場合は `scripts/generate_config.py` を実行して設定を自動生成できます（例: `python scripts/generate_config.py --method uvx --output claude`）。クローンしない場合は生成される JSON を MCP クライアント設定に手動で追加してください。
-
----
-
-### For Humans (人間用)
-
-#### Quick Start (uvx を使用する場合)
-
 いかなる変更ツールも呼び出す前に、ユーザーに以下の情報を確認し、
 構成を **確定（Lock-in）** させてください。利用可能な場合は、
 各エージェントの確認ツール（例: `ask_user` / `question` 等）を使ってください。
 回答を得るまで Phase 2 に進むことは禁じられています。
+
+> [!TIP]
+> 即座に実行可能な `uvx` ベースの起動手順や設定 JSON の例については、後述の [Quick Start (uvx を使用する場合)](#quick-start-uvx-を使用する場合) を参照してください。
 
 1. **実行・配置モードの選択**:
     - **(A) ローカルソース (`uv run`)**: カレントディレクトリに `.env` を配置し、
@@ -131,8 +106,12 @@ Phase 1 の回答に基づき、物理的な設定を行います。
 - **Supabase (Data API) の設定**:
   - `STORAGE_BACKEND=supabase` 構成を選択した場合、`SUPABASE_URL` と `SUPABASE_KEY` (Service Role Key推奨) を `.env` に設定してください。
 - **Supabase (Data API) のスキーマ適用 (CRITICAL)**:
-  - **重要:** Data API 経由ではテーブル作成 (DDL) ができないため、セットアップのこの段階で `supabase/migrations/*.sql` を番号順に統合し、さらに **RLS を許可するポリシー（`CREATE POLICY ...`）を加えた** 統合 SQL スクリプトを生成してチャットに表示し、ユーザーに Supabase ダッシュボードの SQL Editor での実行を依頼してください。
-  - **RLSポリシーの例:** `DROP POLICY IF EXISTS "Allow all for service_role" ON memories; CREATE POLICY "Allow all for service_role" ON memories FOR ALL USING (true) WITH CHECK (true);`
+  - **重要:** Data API 経由ではテーブル作成 (DDL) ができないため、セットアップのこの段階で `supabase/migrations/*.sql` を番号順に統合し、さらに **RLS ポリシーを加えた** 統合 SQL スクリプトを生成してチャットに表示し、ユーザーに Supabase ダッシュボードの SQL Editor での実行を依頼してください。
+  - **セキュリティ上の注意:**
+    - `service_role` キーは RLS をバイパスするため、エージェント専用のアクセスには特別なポリシーは不要です。
+    - 以下の `Allow all` 例は**一時的な開発・疎通確認用**です。本番環境へのコピーは避け、用途に合わせて適切な制限（認証済みユーザーのみ、所有者のみ等）をかけてください。
+  - **RLSポリシーの例 (開発用全許可):** `CREATE POLICY "Dev all" ON memories FOR ALL USING (true) WITH CHECK (true);`
+  - **RLSポリシーの例 (認証済みユーザーのみ):** `CREATE POLICY "Auth access" ON memories FOR ALL TO authenticated USING (true);`
   - ユーザーから「実行が完了した」という報告を受けるまで、絶対に Phase 3 に進んではいけません。
 
 #### 🟨 Phase 3: 動作検証 (MANDATORY & BLOCKING STEP)

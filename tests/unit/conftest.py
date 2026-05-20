@@ -1,6 +1,15 @@
 from typing import Any
 
+import pytest
+
 from context_store.config import Settings
+
+
+@pytest.fixture(autouse=True)
+def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """テスト実行前に設定関連の環境変数をクリアする。"""
+    for field_name in Settings.model_fields.keys():
+        monkeypatch.delenv(field_name.upper(), raising=False)
 
 
 def make_settings(**kwargs: Any) -> Settings:
@@ -32,6 +41,8 @@ def make_settings(**kwargs: Any) -> Settings:
         "local_model_name": "cl-nagoya/ruri-v3-310m",
         "litellm_api_base": "http://localhost:4000",
         "custom_api_endpoint": "http://localhost:8080/embed",
+        "supabase_url": "https://example.supabase.co",
+        "supabase_key": "test-service-role-key",
     }
 
     # Detect unknown override keys using the actual Settings schema.

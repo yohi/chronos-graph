@@ -1,49 +1,21 @@
 {
   "name": "ChronosGraph Dev",
-  "build": {
-    "dockerfile": "Dockerfile",
-    "context": "..",
-    "args": {
-      "UV_VERSION": "0.4.0"
-    }
-  },
-  "features": {
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
-  },
-  "forwardPorts": [
-    5433,
-    7474,
-    7687,
-    6379
-  ],
-  "portsAttributes": {
-    "5433": {
-      "label": "PostgreSQL",
-      "onAutoForward": "openPreview"
-    },
-    "7474": {
-      "label": "Neo4j HTTP",
-      "onAutoForward": "openPreview"
-    },
-    "7687": {
-      "label": "Neo4j Bolt",
-      "onAutoForward": "silent"
-    },
-    "6379": {
-      "label": "Redis",
-      "onAutoForward": "silent"
-    }
-  },
-  "postCreateCommand": "bash .devcontainer/setup.sh && pre-commit install --hook-type pre-push",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspaces/chronos-graph",
+  "runServices": ["postgres", "neo4j", "redis"],
+  "overrideCommand": true,
+  "shutdownAction": "stopCompose",
+  "postCreateCommand": "bash .devcontainer/setup.sh && /home/vscode/.venv/bin/pre-commit install --hook-type pre-push",
   "customizations": {
     "vscode": {
       "settings": {
-        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.defaultInterpreterPath": "/home/vscode/.venv/bin/python",
         "python.linting.enabled": true,
         "python.linting.ruffEnabled": true,
-        "python.linting.ruffPath": "/usr/local/bin/ruff",
+        "python.linting.ruffPath": "/home/vscode/.venv/bin/ruff",
         "python.linting.mypyEnabled": true,
-        "python.linting.mypyPath": "/usr/local/bin/mypy",
+        "python.linting.mypyPath": "/home/vscode/.venv/bin/mypy",
         "python.formatting.provider": "ruff",
         "editor.formatOnSave": true,
         "editor.defaultFormatter": "charliermarsh.ruff",
@@ -73,26 +45,14 @@
           {
             "label": "Install Dependencies",
             "type": "shell",
-            "command": "uv sync --frozen --all-extras",
+            "command": "uv venv /home/vscode/.venv && uv sync --frozen --all-extras",
             "problemMatcher": [],
             "presentation": {
               "clear": true,
               "panel": "shared"
             }
           },
-          {
-            "label": "Prisma Generate",
-            "type": "shell",
-            "command": "uv run prisma generate --schema=./prisma/schema.prisma",
-            "problemMatcher": [],
-            "presentation": {
-              "reveal": "always",
-              "panel": "shared"
-            },
-            "dependsOn": [
-              "Install Dependencies"
-            ]
-          },
+
           {
             "label": "Run Tests",
             "type": "shell",
@@ -242,13 +202,16 @@
     }
   },
   "remoteEnv": {
-    "POSTGRES_HOST": "localhost:5433",
-    "NEO4J_HOST": "localhost:7687",
-    "REDIS_HOST": "localhost:6379"
+    "POSTGRES_HOST": "postgres",
+    "POSTGRES_PORT": "5432",
+    "NEO4J_URI": "bolt://neo4j:7687",
+    "REDIS_URL": "redis://redis:6379",
+    "UV_PROJECT_ENVIRONMENT": "/home/vscode/.venv"
   },
   "remoteUser": "vscode",
   "containerEnv": {
     "PYTHONUNBUFFERED": "1",
-    "PYTHONDONTWRITEBYTECODE": "1"
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "UV_PROJECT_ENVIRONMENT": "/home/vscode/.venv"
   }
 }

@@ -5,13 +5,13 @@ based on application Settings.
 
 Routing logic
 -------------
-- STORAGE_BACKEND=sqlite  → SQLiteStorageAdapter
+- STORAGE_BACKEND=sqlite   → SQLiteStorageAdapter
 - STORAGE_BACKEND=postgres → PostgresStorageAdapter
-- STORAGE_BACKEND=prisma   → PrismaStorageAdapter
+- STORAGE_BACKEND=supabase → SupabaseStorageAdapter
 
 - GRAPH_ENABLED=true + STORAGE_BACKEND=sqlite → SQLiteGraphAdapter
 - GRAPH_ENABLED=true + STORAGE_BACKEND=postgres → Neo4jGraphAdapter (requires NEO4J_PASSWORD)
-- GRAPH_ENABLED=true + STORAGE_BACKEND=prisma   → Not supported (raises ValueError)
+- GRAPH_ENABLED=true + STORAGE_BACKEND=supabase → Not supported (raises ValueError)
 - GRAPH_ENABLED=false → None
 
 - CACHE_BACKEND=inmemory → InMemoryCacheAdapter  (+ SQLiteCacheCoherenceChecker for sqlite)
@@ -308,12 +308,12 @@ async def _create_storage_adapter(
             )
         return await PostgresStorageAdapter.create(settings)
 
-    if settings.storage_backend == "prisma":
-        from context_store.storage.prisma import PrismaStorageAdapter
+    if settings.storage_backend == "supabase":
+        from context_store.storage.supabase import SupabaseStorageAdapter
 
         if read_only:
-            raise NotImplementedError("read_only mode for prisma backend is not yet supported")
-        return await PrismaStorageAdapter.create(settings)  # type: ignore[return-value]
+            raise NotImplementedError("read_only mode for supabase backend is not yet supported")
+        return await SupabaseStorageAdapter.create(settings)
 
     raise ValueError(f"Unsupported storage_backend: {settings.storage_backend!r}")
 
@@ -355,9 +355,9 @@ async def _create_graph_adapter(
             read_only=read_only,
         )
 
-    if settings.storage_backend == "prisma":
+    if settings.storage_backend == "supabase":
         raise ValueError(
-            "Graph adapter is not supported for storage_backend=prisma "
+            "Graph adapter is not supported for storage_backend=supabase "
             "(Neo4j Bolt cannot be tunneled over HTTPS)"
         )
 

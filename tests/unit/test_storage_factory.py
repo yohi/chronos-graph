@@ -18,7 +18,6 @@ from pydantic import SecretStr
 
 from context_store.storage.factory import (
     _create_graph_adapter,
-    _create_storage_adapter,
     create_storage,
 )
 from context_store.storage.inmemory import InMemoryCacheAdapter
@@ -262,6 +261,50 @@ class TestPostgresBackend:
 
 
 # ---------------------------------------------------------------------------
+# Tests: Supabase backend (mocked)
+# ---------------------------------------------------------------------------
+
+
+class TestSupabaseBackend:
+    @pytest.mark.asyncio
+    async def test_supabase_returns_supabase_adapter(self) -> None:
+        """STORAGE_BACKEND=supabase → SupabaseStorageAdapter が返される."""
+        settings = make_settings(
+            storage_backend="supabase",
+            supabase_url="https://example.supabase.co",
+            supabase_key="secret",
+            graph_enabled=False,
+        )
+
+        from context_store.storage.supabase import SupabaseStorageAdapter
+
+        mock_adapter = AsyncMock(spec=SupabaseStorageAdapter)
+        mock_adapter.dispose = AsyncMock()
+
+        with patch(
+            "context_store.storage.supabase.SupabaseStorageAdapter.create",
+            new=AsyncMock(return_value=mock_adapter),
+        ):
+            storage, graph_adp, cache_adp = await create_storage(settings)
+            try:
+                assert storage is mock_adapter
+                assert graph_adp is None
+            finally:
+                await dispose_adapters(storage, graph_adp, cache_adp)
+
+    @pytest.mark.asyncio
+    async def test_supabase_graph_enabled_raises_error(self) -> None:
+        """STORAGE_BACKEND=supabase で graph_enabled=True の場合は ValueError を投げる."""
+        # Settings のバリデータでも弾かれるが、factory 側の安全装置も検証
+        settings = MagicMock()
+        settings.storage_backend = "supabase"
+        settings.graph_enabled = True
+
+        with pytest.raises(ValueError, match="not supported for storage_backend=supabase"):
+            await _create_graph_adapter(settings)
+
+
+# ---------------------------------------------------------------------------
 # Tests: Return type contract
 # ---------------------------------------------------------------------------
 
@@ -282,60 +325,3 @@ class TestReturnTypes:
         assert isinstance(cache_adp, CacheAdapter)
 
         await dispose_adapters(storage, graph_adp, cache_adp)
-
-
-# ---------------------------------------------------------------------------
-# Tests: Prisma backend (mocked)
-# ---------------------------------------------------------------------------
-
-
-def _prisma_settings(monkeypatch):
-    monkeypatch.setenv("STORAGE_BACKEND", "prisma")
-    monkeypatch.setenv("PRISMA_DATABASE_URL", "prisma://accelerate.prisma-data.net/?api_key=test")
-    monkeypatch.setenv("GRAPH_ENABLED", "false")
-    # conftest.make_settings を使わず、直接 Settings をインスタンス化することで
-    # 必要な環境変数のみをセットし、他のテストケースとの分離を図る
-    # .env ファイルの読み込みを明示的に無効化して monkeypatch を優先させる
-    from context_store.config import Settings
-
-    return Settings(_env_file=None)
-
-
-class TestPrismaBackend:
-    @pytest.mark.asyncio
-    async def test_create_storage_adapter_prisma_branch(self, monkeypatch):
-        """_create_storage_adapter が prisma 分岐で PrismaStorageAdapter.create を呼ぶ."""
-        settings = _prisma_settings(monkeypatch)
-        fake_adapter = object()
-        # `prisma` extras が dev/test 依存にない CI 環境を考慮し、存在しない可能性のある
-        # モジュールは文字列で patch する
-        with patch(
-            "context_store.storage.prisma.PrismaStorageAdapter.create",
-            new=AsyncMock(return_value=fake_adapter),
-        ) as create_mock:
-            result = await _create_storage_adapter(settings, read_only=False)
-            assert result is fake_adapter
-            create_mock.assert_awaited_once_with(settings)
-
-    @pytest.mark.asyncio
-    async def test_create_storage_adapter_prisma_read_only_raises(self, monkeypatch):
-        """Prisma バックエンドで read_only=True は NotImplementedError を送出する."""
-        settings = _prisma_settings(monkeypatch)
-        with pytest.raises(NotImplementedError):
-            await _create_storage_adapter(settings, read_only=True)
-
-    @pytest.mark.asyncio
-    async def test_create_graph_adapter_prisma_raises_value_error(self, monkeypatch):
-        """Prisma バックエンドで graph_enabled=True は ValueError を送出する (二重防御)."""
-        # Settings バリデータで graph_enabled=True は弾かれるが、
-        # ここでは factory 単体の防御機構を直接テストする
-        settings = _prisma_settings(monkeypatch)
-        # graph_enabled を強制的に True に上書き (post-init validation bypass のため
-        # model_construct を使う)
-        from context_store.config import Settings
-
-        forced_settings = Settings.model_construct(
-            **{**settings.model_dump(), "graph_enabled": True}
-        )
-        with pytest.raises(ValueError, match="not supported for storage_backend=prisma"):
-            await _create_graph_adapter(forced_settings, read_only=False)

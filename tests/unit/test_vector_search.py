@@ -91,6 +91,17 @@ class TestVectorSearch:
         assert call_args[1]["embedding"] == [0.1, 0.2, 0.3, 0.4, 0.5]
 
     @pytest.mark.asyncio
+    async def test_search_passes_project_to_storage(self, vector_search, storage_adapter):
+        """project フィルタが Storage Adapter に渡されること"""
+        await vector_search.search("query", top_k=7, project="proj-a")
+
+        storage_adapter.vector_search.assert_awaited_once_with(
+            embedding=[0.1, 0.2, 0.3, 0.4, 0.5],
+            top_k=7,
+            project="proj-a",
+        )
+
+    @pytest.mark.asyncio
     async def test_search_returns_results(self, vector_search):
         """検索結果が返されること"""
         from uuid import UUID

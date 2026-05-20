@@ -7,36 +7,22 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    UV_SYSTEM_PYTHON=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Install system dependencies and tools needed for development
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
     curl \
     git \
+    gnupg \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for fast package management
-COPY --from=ghcr.io/astral-sh/uv:0.4.0 /uv /usr/local/bin/uv
-COPY --from=ghcr.io/astral-sh/uv:0.4.0 /uvx /usr/local/bin/uvx
+COPY --from=ghcr.io/astral-sh/uv@sha256:e590846f4776907b254ac0f44b5b380347af5d90d668138ca7938d1b0c2f98d3 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv@sha256:e590846f4776907b254ac0f44b5b380347af5d90d668138ca7938d1b0c2f98d3 /uvx /usr/local/bin/uvx
 
-# Install the project dependencies using uv
 WORKDIR /workspaces/chronos-graph
-
-# Copy dependency files first for better caching
-COPY pyproject.toml uv.lock ./
-
-# Codacy: Synchronize dependencies during build instead of runtime for predictability.
-# We use --frozen to ensure it matches the lockfile exactly.
-RUN uv sync --all-extras --frozen
-
-# Copy source code
-COPY src/ src/
-COPY tests/ tests/
-
-# Finalize the installation (ensure project is installed in the environment)
-RUN uv sync --all-extras --frozen
 
 # Set up the default user (VS Code will use this)
 RUN groupadd -g 1000 vscode && \

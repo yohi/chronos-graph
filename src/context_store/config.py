@@ -6,6 +6,8 @@ from urllib.parse import quote
 from pydantic import Field, SecretStr, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
+SUPABASE_VECTOR_DIM = 768
+
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
@@ -57,7 +59,7 @@ class Settings(BaseSettings):
         return init_settings, dotenv_settings, env_settings, file_secret_settings
 
     # --- Storage Backend ---
-    storage_backend: Literal["sqlite", "postgres", "prisma"] = "sqlite"
+    storage_backend: Literal["sqlite", "postgres", "supabase"] = "sqlite"
     graph_enabled: bool = False
     cache_backend: Literal["inmemory", "redis"] = "inmemory"
 
@@ -78,8 +80,15 @@ class Settings(BaseSettings):
     # asyncpg デフォルトは 256。
     postgres_statement_cache_size: int = Field(default=256, ge=0)
 
-    # --- Prisma Accelerate (storage_backend=prisma の場合) ---
-    prisma_database_url: SecretStr = SecretStr("")
+    # --- Supabase (storage_backend=supabase の場合) ---
+    supabase_url: str = Field(
+        default="",
+        description="Supabase Project URL (例: https://xxxxx.supabase.co)",
+    )
+    supabase_key: SecretStr = Field(
+        default=SecretStr(""),
+        description="Service Role Key または Anon Key",
+    )
 
     # --- Neo4j (graph_enabled=true の場合) ---
     neo4j_uri: str = "bolt://localhost:7687"
@@ -96,7 +105,7 @@ class Settings(BaseSettings):
     local_model_name: str = "cl-nagoya/ruri-v3-310m"
     litellm_api_base: str = "http://localhost:4000"
     litellm_model: str = "openai/text-embedding-3-small"
-    embedding_dimension: int = Field(default=1024, ge=1)
+    embedding_dimension: int = Field(default=768, ge=1)
     custom_api_endpoint: str = ""
     custom_api_model_name: str = "custom-model"
 
@@ -243,20 +252,30 @@ class Settings(BaseSettings):
                     "NEO4J_PASSWORD は storage_backend=postgres かつ "
                     "graph_enabled=true の場合に必須です。"
                 )
-        if self.storage_backend == "prisma":
-            url = self.prisma_database_url.get_secret_value().strip()
+        if self.storage_backend == "supabase":
+            url = self.supabase_url.strip()
             if not url:
-                raise ValueError("PRISMA_DATABASE_URL は storage_backend=prisma の場合に必須です。")
-            self.prisma_database_url = SecretStr(url)
-            if not (url.startswith("prisma://") or url.startswith("prismas://")):
-                raise ValueError(
-                    "PRISMA_DATABASE_URL は prisma:// または prismas:// で始まる "
-                    "Accelerate スキームでなければなりません。"
-                )
+                raise ValueError("SUPABASE_URL は storage_backend=supabase の場合に必須です。")
+            key = self.supabase_key.get_secret_value().strip()
+            if not key:
+                raise ValueError("SUPABASE_KEY は storage_backend=supabase の場合に必須です。")
+
+            self.supabase_url = url
+            self.supabase_key = SecretStr(key)
+
+            if not self.supabase_url.startswith("https://"):
+                raise ValueError("SUPABASE_URL は https:// で始まる必要があります。")
             if self.graph_enabled:
                 raise ValueError(
-                    "storage_backend=prisma は graph_enabled=true をサポートしません "
+                    "storage_backend=supabase は graph_enabled=true をサポートしません "
                     "(Neo4j Bolt は HTTPS にカプセル化できないため)。"
+                )
+            if self.embedding_dimension != SUPABASE_VECTOR_DIM:
+                raise ValueError(
+                    f"EMBEDDING_DIMENSION={self.embedding_dimension} は "
+                    f"storage_backend=supabase のスキーマ vector({SUPABASE_VECTOR_DIM}) "
+                    "と一致しません。次元数を変更する場合は "
+                    "supabase/migrations/ の SQL とこの定数を同時に更新してください。"
                 )
         return self
 
@@ -295,7 +314,7 @@ class Settings(BaseSettings):
             return "sqlite"
         if self.storage_backend == "postgres":
             return "neo4j"
-        return "disabled"
+        return "disabled"  # supabase
 
     @computed_field  # type: ignore[prop-decorator]
     @property

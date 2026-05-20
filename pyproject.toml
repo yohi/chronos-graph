@@ -27,9 +27,8 @@ storage-postgres = [
     "neo4j>=5.0.0",
     "redis>=5.0.0",
 ]
-storage-prisma = [
-    "prisma>=0.15.0",
-    "sqlparse>=0.5.0",
+storage-supabase = [
+    "supabase>=2.4.0",
 ]
 embedding-local = [
     "sentence-transformers>=3.0.0",
@@ -50,7 +49,7 @@ evaluator = [
     "anthropic>=0.40.0",
 ]
 all = [
-    "context-store-mcp[storage-postgres,storage-prisma,embedding-local,embedding-openai,embedding-litellm,dashboard,evaluator]",
+    "context-store-mcp[storage-postgres,storage-supabase,embedding-local,embedding-openai,embedding-litellm,dashboard,evaluator]",
 ]
 
 [project.scripts]
@@ -118,11 +117,19 @@ module = "context_store.config"
 disable_error_code = ["no-any-return", "no-untyped-def"]
 
 [[tool.mypy.overrides]]
-module = "asyncpg.*"
+module = "postgrest.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = "prisma.*"
+module = "context_store.storage.supabase"
+disable_error_code = [
+    "arg-type",
+    "index",
+    "union-attr",
+]
+warn_return_any = false
+[[tool.mypy.overrides]]
+module = "asyncpg.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

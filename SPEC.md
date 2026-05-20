@@ -711,6 +711,7 @@ Graceful Degradation:
 | Redis | キャッシュなしで直接 DB 検索 |
 | PostgreSQL | 全ツールがエラーを返す（マスター DB） |
 | SQLite | WAL TRUNCATE中などのロック競合時（`SQLITE_BUSY`等）、`StorageError(code="STORAGE_BUSY", recoverable=True)`を返しMCPクライアントにリトライを促す |
+| Supabase | 通信・接続エラーや `STORAGE_TIMEOUT`、500/502/503 (サーバー側エラー)、429 (Rate Limit) 等は Exponential Backoff リトライを前提とした Recoverable=True。一方、413 Payload Too Large、23505 (Unique Violation)、および 401/403 (認証・認可エラー) は Recoverable=False として直ちに fail-fast 停止 |
 
 ---
 
@@ -809,16 +810,6 @@ InMemory 実装はプレフィックス一致での安全なループ削除を�
 - `PostgresStorageAdapter` — asyncpg ベース
 - `Neo4jGraphAdapter` — neo4j-python-driver (async) ベース
 - `RedisCacheAdapter` — redis-py (async) ベース
-
-**Prisma Accelerate モード（HTTPS 接続、社内ネットワーク DPI 回避用）:**
-
-> **⚠️ セキュリティ・コンプライアンス警告**:
-> 企業内ネットワーク（Fortinet等のUTM/次世代ファイアウォール）環境下において、標準データベースポート（5432等）やバイナリプロトコルがDPIにより遮断される問題への対策として提供されています。通信をHTTPS (443) にカプセル化してプロキシサーバー経由で送信するため、VPNなしで通過可能ですが、本機能の利用にあたっては必ず組織のセキュリティ部門の事前承認を得て、社内ポリシーおよび関連法規を遵守してください。
-
-- `PrismaStorageAdapter` — Prisma Client Python (`query_raw`/`execute_raw` ベース)
-- **制約**: Graph 機能をサポートしない（Neo4j Bolt は HTTPS でカプセル化できないため）
-- **フェールセーフ**: 5MB / 10s 制約回避のため、`top_k` は最大 200 にクランプされ、一括取得は 250 件ごとにチャンク化。エラー時（P6004/P6009等）は半減リトライを自動実行。
-- **補足**: 開発環境では Prisma Client 生成のために Node.js と `prisma generate` の実行が必要です。
 
 **ライトウェイトモード（SQLite、ゼロコンフィグ）:**
 
@@ -943,6 +934,7 @@ SQLファイルベースの軽量なマイグレーションシステムを備�
 - **バージョン管理**: `schema_migrations` テーブルに適用済みのバージョン（SQLファイル名）を記録。
 - **ベースライン検知**: マイグレーション導入前の既存データベースを検知し、初期マイグレーションをスキップして現状を「適用済み」として記録する。
 - **原子性の保証**: スキーマ変更とバージョン記録を同一トランザクション内（SQLite/PostgreSQL）で実行し、不整合を防止。
+- **Supabase の例外**: `STORAGE_BACKEND=supabase` の場合、内蔵のランナーは使用せず、Supabase CLI を用いて `supabase/migrations/` 配下の SQL ファイルでスキーマがデプロイ・管理されます。
 
 ### 8.6 ストレージ選択ロジック
 
@@ -953,8 +945,10 @@ SQLファイルベースの軽量なマイグレーションシステムを備�
 |---|---|---|---|
 | `sqlite` (デフォルト) | SQLiteStorageAdapter | SQLiteGraphAdapter | InMemoryCacheAdapter |
 | `postgres` | PostgresStorageAdapter | Neo4jGraphAdapter* | RedisCacheAdapter* |
+| `supabase` | SupabaseStorageAdapter | (非対応)* | InMemoryCacheAdapter |
 
 \* `GRAPH_ENABLED=false` の場合は GraphAdapter を None に、Redis 未接続時は InMemoryCacheAdapter にフォールバック。
+\* `supabase` バックエンドは現在グラフ機能をサポートしない（Neo4j Bolt を HTTPS 経由でカプセル化できないため）。
 
 > **注意**: `sqlite` モードではグラフ機能は常に有効（`GRAPH_ENABLED` 設定は `postgres` モードのみに適用）。
 
@@ -1043,6 +1037,9 @@ context-store-mcp/
 ├── docker-compose.yml
 ├── .env.example
 ├── SPEC.md                        # 本ドキュメント
+│
+├── supabase/
+│   └── migrations/                # Supabase 管理の SQL マイグレーションファイル（supabase CLI を使用）
 │
 ├── src/
 │   ├── context_store/
@@ -1171,7 +1168,7 @@ context-store-mcp/
 
 ```bash
 # === Storage Backend ===
-STORAGE_BACKEND=sqlite              # sqlite | postgres
+STORAGE_BACKEND=sqlite              # sqlite | postgres | supabase
 GRAPH_ENABLED=false                 # true | false (Neo4j の有効化)
 CACHE_BACKEND=inmemory              # inmemory | redis
 SQLITE_DB_PATH=~/.context-store/memories.db  # sqlite の場合
@@ -1448,7 +1445,7 @@ Blocking モードで待機中の承認を解決するための REST エンド�
 |------|------|
 | SQLite バックエンド（Read-Only 対応含む） | `file:...?mode=ro` URI モード実装済み |
 | PostgreSQL + pgvector バックエンド | |
-| Prisma Accelerate バックエンド | HTTPS (443) 経由、フェールセーフ実装済み |
+| Supabase (PostgREST) バックエンド | HTTPS (443) 経由、Supabase Data API 経由で動作 |
 | Neo4j グラフアダプタ（READ_ACCESS 対応） | |
 | Ingestion Pipeline（全 Source Adapter） | ConversationAdapter / ManualAdapter / URLAdapter |
 | Retrieval Pipeline（ハイブリッド検索・RRF） | |

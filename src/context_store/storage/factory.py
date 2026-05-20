@@ -5,13 +5,15 @@ based on application Settings.
 
 Routing logic
 -------------
-- STORAGE_BACKEND=sqlite  → SQLiteStorageAdapter
+- STORAGE_BACKEND=sqlite   → SQLiteStorageAdapter
 - STORAGE_BACKEND=postgres → PostgresStorageAdapter
-- STORAGE_BACKEND=prisma   → PrismaStorageAdapter
+- STORAGE_BACKEND=prisma   → PrismaStorageAdapter (Phase 5 で削除予定)
+- STORAGE_BACKEND=supabase → SupabaseStorageAdapter
 
 - GRAPH_ENABLED=true + STORAGE_BACKEND=sqlite → SQLiteGraphAdapter
 - GRAPH_ENABLED=true + STORAGE_BACKEND=postgres → Neo4jGraphAdapter (requires NEO4J_PASSWORD)
 - GRAPH_ENABLED=true + STORAGE_BACKEND=prisma   → Not supported (raises ValueError)
+- GRAPH_ENABLED=true + STORAGE_BACKEND=supabase → Not supported (raises ValueError)
 - GRAPH_ENABLED=false → None
 
 - CACHE_BACKEND=inmemory → InMemoryCacheAdapter  (+ SQLiteCacheCoherenceChecker for sqlite)

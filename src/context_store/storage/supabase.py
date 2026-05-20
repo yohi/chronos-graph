@@ -336,10 +336,6 @@ class SupabaseStorageAdapter:
                 if not is_desc:
                     builder = builder.gte("created_at", ts)
             else:
-                if is_desc:
-                    builder = builder.lt("created_at", ts)
-                else:
-                    builder = builder.gt("created_at", ts)
                 builder = builder.gte("created_at", ts)
 
         if filters.archived_after is not None:
@@ -353,10 +349,6 @@ class SupabaseStorageAdapter:
                 if not is_desc:
                     builder = builder.gte("archived_at", ts)
             else:
-                if is_desc:
-                    builder = builder.lt("archived_at", ts)
-                else:
-                    builder = builder.gt("archived_at", ts)
                 builder = builder.gte("archived_at", ts)
 
         if filters.order_by:

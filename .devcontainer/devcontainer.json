@@ -10,12 +10,12 @@
   "customizations": {
     "vscode": {
       "settings": {
-        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.defaultInterpreterPath": "/home/vscode/.venv/bin/python",
         "python.linting.enabled": true,
         "python.linting.ruffEnabled": true,
-        "python.linting.ruffPath": "/usr/local/bin/ruff",
+        "python.linting.ruffPath": "/home/vscode/.venv/bin/ruff",
         "python.linting.mypyEnabled": true,
-        "python.linting.mypyPath": "/usr/local/bin/mypy",
+        "python.linting.mypyPath": "/home/vscode/.venv/bin/mypy",
         "python.formatting.provider": "ruff",
         "editor.formatOnSave": true,
         "editor.defaultFormatter": "charliermarsh.ruff",
@@ -45,7 +45,7 @@
           {
             "label": "Install Dependencies",
             "type": "shell",
-            "command": "uv sync --frozen --all-extras",
+            "command": "uv venv /home/vscode/.venv && uv sync --frozen --all-extras",
             "problemMatcher": [],
             "presentation": {
               "clear": true,

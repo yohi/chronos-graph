@@ -11,16 +11,7 @@ node --version
 
 echo "Installing dependencies..."
 uv venv "${UV_PROJECT_ENVIRONMENT}"
-uv pip install --python "${UV_PROJECT_ENVIRONMENT}/bin/python" \
-  -e ".[all]" \
-  asgi-lifespan \
-  mypy \
-  pre-commit \
-  pytest \
-  pytest-asyncio \
-  pytest-benchmark \
-  pytest-cov \
-  ruff
+uv sync --frozen --all-extras
 
 # Prisma Client Python の生成 (schema.prisma → ./prisma/ パッケージ生成)
 if [ -f ./prisma/schema.prisma ]; then

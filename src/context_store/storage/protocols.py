@@ -91,7 +91,12 @@ class StorageAdapter(Protocol):
     async def keyword_search(
         self, query: str, top_k: int, project: str | None = None
     ) -> list[ScoredMemory]:
-        """Full-text keyword search. Returns top_k results sorted by score."""
+        """Full-text keyword search. Returns top_k results sorted by score.
+
+        Note: query sanitization (e.g., escaping wildcard characters for
+        ILIKE-based backends) is the caller's responsibility, per Spec 5.5.
+        Adapters MUST NOT apply their own escaping.
+        """
         ...
 
     async def list_by_filter(self, filters: MemoryFilters) -> list[Memory]:

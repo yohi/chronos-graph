@@ -2109,7 +2109,7 @@ gh pr create --draft --base feat/supabase-adapter/phase-3-task-3.5-search \
 - [x] **Step 1: ブランチ作成**
 
 ```bash
-git checkout feat/supabase-adapter/phase-3-task-3.6-filter
+git checkout feat/supabase-adapter/phase-3-task-3.6-filter-list
 git checkout -b feat/supabase-adapter/phase-4-task-4.1-factory
 ```
 
@@ -2234,7 +2234,7 @@ git commit -m "feat(factory): Supabase backend 分岐を追加 (Prisma 分岐は
 
 ```bash
 git push -u origin HEAD
-gh pr create --draft --base master \
+gh pr create --draft --base feat/supabase-adapter/phase-3-task-3.6-filter-list \
   --title "feat(factory): wire SupabaseStorageAdapter" \
   --body "Phase 4 Task 4.1. factory._create_storage_adapter に supabase 分岐追加、グラフ非対応化、read_only NotImplementedError。Prisma 分岐は Phase 5 まで残置。"
 ```

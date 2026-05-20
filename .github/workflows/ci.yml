@@ -24,13 +24,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
-      - name: Setup Node.js (for Prisma CLI)
-        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
-        with:
-          node-version: '20'
 
-      - name: Generate Prisma Client
-        run: uv run prisma generate --schema=./prisma/schema.prisma
 
       - name: Run ruff check
         run: uv run ruff check src/ tests/

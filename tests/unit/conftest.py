@@ -1,6 +1,16 @@
+import pytest
 from typing import Any
 
 from context_store.config import Settings
+
+
+@pytest.fixture(autouse=True)
+def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """テスト実行前に設定関連の環境変数をクリアする。"""
+    monkeypatch.delenv("SIMILARITY_THRESHOLD", raising=False)
+    monkeypatch.delenv("EMBEDDING_DIMENSION", raising=False)
+    monkeypatch.delenv("DEDUP_THRESHOLD", raising=False)
+    monkeypatch.delenv("CONSOLIDATION_THRESHOLD", raising=False)
 
 
 def make_settings(**kwargs: Any) -> Settings:

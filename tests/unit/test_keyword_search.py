@@ -56,6 +56,17 @@ class TestKeywordSearch:
         assert call_args[1]["top_k"] == 10
 
     @pytest.mark.asyncio
+    async def test_search_passes_project_to_storage(self, keyword_search, storage_adapter):
+        """project フィルタが Storage Adapter に渡されること"""
+        await keyword_search.search("query", top_k=7, project="proj-a")
+
+        storage_adapter.keyword_search.assert_awaited_once_with(
+            query="query",
+            top_k=7,
+            project="proj-a",
+        )
+
+    @pytest.mark.asyncio
     async def test_search_returns_results(self, keyword_search):
         """検索結果が返されること"""
         results = await keyword_search.search("エラー", top_k=10)

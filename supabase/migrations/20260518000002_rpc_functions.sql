@@ -14,6 +14,7 @@ RETURNS TABLE (
     memory_type        varchar,
     source_type        varchar,
     source_metadata    jsonb,
+    embedding          vector(768),
     semantic_relevance float,
     importance_score   float,
     access_count       integer,
@@ -33,7 +34,7 @@ SET search_path = public
 AS $$
     SELECT
         m.id, m.content, m.memory_type, m.source_type, m.source_metadata,
-        m.semantic_relevance, m.importance_score, m.access_count,
+        m.embedding, m.semantic_relevance, m.importance_score, m.access_count,
         m.last_accessed_at, m.created_at, m.updated_at, m.archived_at,
         m.tags, m.project, m.content_hash,
         (1 - (m.embedding <=> query_embedding))::float AS score

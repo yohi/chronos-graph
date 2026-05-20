@@ -26,13 +26,19 @@ class VectorSearch:
         self.storage_adapter = storage_adapter
         self.default_top_k = default_top_k
 
-    async def search(self, query: str, top_k: int | None = None) -> list[ScoredMemory]:
+    async def search(
+        self,
+        query: str,
+        top_k: int | None = None,
+        project: str | None = None,
+    ) -> list[ScoredMemory]:
         """
         ベクトル検索を実行
 
         Args:
             query: クエリテキスト
             top_k: 返す結果の数(Noneの場合はデフォルト値)
+            project: プロジェクトフィルタ
 
         Returns:
             ScoredMemory のリスト
@@ -47,6 +53,7 @@ class VectorSearch:
         results = await self.storage_adapter.vector_search(
             embedding=embedding,
             top_k=top_k,
+            project=project,
         )
 
         return results

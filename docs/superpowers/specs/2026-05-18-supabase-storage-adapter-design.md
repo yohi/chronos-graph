@@ -24,7 +24,7 @@ Supabase Data API (PostgREST) を利用したストレージアダプタへ置�
 
 ### 2.1 対象
 - 新規ファイル: `src/context_store/storage/supabase.py` (`SupabaseStorageAdapter`)
-- 新規 SQL: `supabase/migrations/20260518000001_initial_schema.sql`、`supabase/migrations/20260518000002_rpc_functions.sql`
+- 新規 SQL: `supabase/migrations/20260518000001_initial_schema.sql`、`supabase/migrations/20260518000002_rpc_functions.sql`、`supabase/migrations/20260519000001_get_embedding_dimension.sql`
 - 変更: `pyproject.toml`、`src/context_store/config.py`、`src/context_store/storage/factory.py`
 - 削除: `src/context_store/storage/prisma.py`、`prisma/schema.prisma`、関連テスト
 
@@ -56,7 +56,9 @@ Supabase Data API (PostgREST) を利用したストレージアダプタへ置�
 │  PostgREST  (/rest/v1/memories, /rest/v1/rpc/*)            │
 │  PostgreSQL + pgvector + pg_trgm                           │
 │      - memories テーブル (vector(768))                       │
-│      - RPC: vector_search, increment_memory_access_count   │
+│      - RPC: vector_search, list_projects,                  │
+│             increment_memory_access_count,                 │
+│             get_embedding_dimension                        │
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -81,7 +83,8 @@ Supabase Data API (PostgREST) を利用したストレージアダプタへ置�
 supabase/
 └── migrations/
     ├── 20260518000001_initial_schema.sql
-    └── 20260518000002_rpc_functions.sql
+    ├── 20260518000002_rpc_functions.sql
+    └── 20260519000001_get_embedding_dimension.sql
 ```
 
 ### 4.2 `20260518000001_initial_schema.sql`
@@ -190,6 +193,8 @@ $$;
 -- list_projects: DISTINCT project をサーバサイドで取得。
 -- PostgREST 単独では DISTINCT を表現できないため RPC で提供する。
 -- 大規模データ (数万〜数十万件) でも全件転送せず一意な project のみ返す。
+-- archived_at では絞り込まない。全件 archived 済みの project も
+-- stats / audit / lifecycle review の対象として一覧に残す。
 -- ============================================================
 CREATE OR REPLACE FUNCTION list_projects()
 RETURNS TABLE (project text)
@@ -239,7 +244,36 @@ GRANT EXECUTE ON FUNCTION list_projects()                         TO service_rol
 GRANT EXECUTE ON FUNCTION increment_memory_access_count(uuid)    TO service_role;
 ```
 
-### 4.4 設計上の SQL ノート
+### 4.4 `20260519000001_get_embedding_dimension.sql`
+
+`get_embedding_dimension()` は `memories` テーブルに embedding 行がまだ存在しない初回起動時でも、schema 上の `vector(768)` 次元を fail-fast 検証に使えるようにする補助 RPC である。adapter はまず既存 embedding を probe し、見つからない場合にこの RPC を呼んで宣言済み次元を取得する。
+
+```sql
+CREATE OR REPLACE FUNCTION get_embedding_dimension()
+RETURNS integer
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = public
+AS $$
+    SELECT COALESCE(
+        (SELECT vector_dims(embedding) FROM memories WHERE embedding IS NOT NULL ORDER BY id LIMIT 1),
+        (SELECT a.atttypmod
+         FROM pg_catalog.pg_class c
+         JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
+         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+         WHERE c.relname = 'memories'
+           AND n.nspname = 'public'
+           AND a.attname = 'embedding'
+           AND a.atttypid = (SELECT oid FROM pg_catalog.pg_type WHERE typname = 'vector')
+         LIMIT 1)
+    );
+$$;
+
+GRANT EXECUTE ON FUNCTION get_embedding_dimension() TO service_role;
+```
+
+### 4.5 設計上の SQL ノート
 - `vector_search` は `LANGUAGE sql STABLE` で副作用なし宣言（プランナ最適化）
 - `SECURITY INVOKER` で RLS 適用時に呼出元権限で実行
 - `SET search_path = public` で関数経由のスキーマ汚染攻撃を防止 (Supabase 公式推奨)
@@ -297,8 +331,8 @@ class SupabaseStorageAdapter:
           4. オプション: get_vector_dimension() で DB 実次元を取得し
              settings.embedding_dimension と照合。不一致なら StorageError(
              code='INVALID_STATE', recoverable=False) で fail-fast。
-             ただしテーブル未投入時 (= 既存 embedding がない) は None が返るので
-             スキップ。
+             ただしテーブル未投入時 (= 既存 embedding がない) は
+             get_embedding_dimension RPC で schema の vector 次元を取得する。
         """
         ...
 
@@ -354,7 +388,7 @@ async def create(cls, settings: Settings) -> "SupabaseStorageAdapter":
 | `count_by_filter(filters)` | `count="exact", head=True` | `.select("*", count="exact", head=True)...` |
 | `list_projects()` | **RPC** `list_projects` (サーバサイド DISTINCT) | `client.rpc("list_projects", {}).execute()` |
 | `increment_memory_access_count(id)` | **RPC** | `client.rpc("increment_memory_access_count", ...)` |
-| `get_vector_dimension()` | LIMIT 1 で `embedding` 長算出 | `_parse_embedding` 利用 |
+| `get_vector_dimension()` | LIMIT 1 で `embedding` 長算出、空なら **RPC** `get_embedding_dimension` | `_parse_embedding` / `client.rpc("get_embedding_dimension", {})` |
 | `dispose()` | PostgREST httpx クローズ | `client.postgrest.aclose()` |
 
 ### 5.4 エラーマッピング
@@ -672,7 +706,7 @@ mock_client.rpc.return_value.execute = AsyncMock(
 - `test_get_memories_batch_skips_invalid_uuid` — 不正 UUID 含む入力 → 除外して `in_()` を呼ぶ
 - `test_delete_memory_returns_false_when_not_found` — `delete()` 戻りの `data=[]` → `False`
 - `test_list_by_filter_archived_logic` — `archived=None/True/False` の各ケースで WHERE 句相当の呼出が変わる
-- `test_list_projects_invokes_rpc` — `client.rpc("list_projects", {})` で呼ばれ、`data=[{"project":"a"},{"project":"b"}]` → `["a","b"]`。Python 側での set 化は不要 (RPC がサーバサイド DISTINCT)
+- `test_list_projects_invokes_rpc` — `client.rpc("list_projects", {})` で呼ばれ、`data=[{"project":"a"},{"project":"b"}]` → `["a","b"]`。Python 側での set 化は不要 (RPC がサーバサイド DISTINCT)。`list_projects()` は `archived_at` で絞り込まず、全件 archived 済みの project も返す
 
 ### 7.2 静的検証
 - `mypy --strict` を `src/context_store/storage/supabase.py` で実行

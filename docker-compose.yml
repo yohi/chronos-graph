@@ -9,8 +9,7 @@ services:
       - /workspaces/chronos-graph/.venv
     working_dir: /workspaces/chronos-graph
     environment:
-      - UV_FROZEN=1
-      - UV_SYSTEM_PYTHON=1
+      - UV_PROJECT_ENVIRONMENT=/home/vscode/.venv
     command: ["bash", "-c", "export PATH=/workspaces/chronos-graph/.venv/bin:$PATH && ruff check src/ tests/ scripts/ && ruff format --check src/ tests/ scripts/ && mypy src/ tests/ scripts/"]
     profiles:
       - lint

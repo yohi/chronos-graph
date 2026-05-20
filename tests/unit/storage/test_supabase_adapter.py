@@ -411,14 +411,17 @@ async def test_delete_memory_returns_false_when_not_found():
 
 
 @pytest.mark.asyncio
-async def test_list_projects_invokes_rpc():
+async def test_list_projects_returns_all_rpc_projects_including_archived_only():
     client = make_mock_client()
-    rows: list[dict[str, Any]] = [{"project": "p1"}, {"project": "p2"}]
+    rows: list[dict[str, Any]] = [
+        {"project": "active-project"},
+        {"project": "archived-only-project"},
+    ]
     client.rpc.return_value.execute = AsyncMock(return_value=make_mock_response(data=rows))
 
     adapter = SupabaseStorageAdapter(client)
     results = await adapter.list_projects()
-    assert results == ["p1", "p2"]
+    assert results == ["active-project", "archived-only-project"]
     client.rpc.assert_called_once_with("list_projects", {})
 
 

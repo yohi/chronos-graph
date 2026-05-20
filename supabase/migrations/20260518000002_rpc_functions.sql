@@ -59,7 +59,6 @@ AS $$
     SELECT DISTINCT m.project
     FROM memories m
     WHERE m.project IS NOT NULL AND m.project <> ''
-      AND m.archived_at IS NULL
     ORDER BY m.project;
 $$;
 

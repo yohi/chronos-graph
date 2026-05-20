@@ -18,20 +18,22 @@ def load_generate_config(script: Path) -> ModuleType:
     return module
 
 
-def test_generate_config_supports_prisma_uvx_backend(monkeypatch, capsys) -> None:
-    """Prisma backend emits uvx config with Prisma env and explicit Redis cache."""
+def test_generate_config_supports_supabase_uvx_backend(monkeypatch, capsys) -> None:
+    """Supabase backend emits uvx config with Supabase env and explicit Redis cache."""
     repo_root = Path(__file__).resolve().parents[2]
     script = repo_root / "scripts" / "generate_config.py"
-    prisma_url = "prisma://accelerate.prisma-data.net/?api_key=test"
+    supabase_url = "https://example.supabase.co"
+    supabase_key = "test-service-role-key"
 
-    monkeypatch.setenv("PRISMA_DATABASE_URL", prisma_url)
+    monkeypatch.setenv("SUPABASE_URL", supabase_url)
+    monkeypatch.setenv("SUPABASE_KEY", supabase_key)
     module = load_generate_config(script)
     monkeypatch.setattr(
         "sys.argv",
         [
             "generate_config.py",
             "--backend",
-            "prisma",
+            "supabase",
             "--method",
             "uvx",
             "--uv-from",
@@ -53,28 +55,31 @@ def test_generate_config_supports_prisma_uvx_backend(monkeypatch, capsys) -> Non
         "context-store",
     ]
     env = server["env"]
-    assert env["STORAGE_BACKEND"] == "prisma"
-    assert env["PRISMA_DATABASE_URL"] == prisma_url
+    assert env["STORAGE_BACKEND"] == "supabase"
+    assert env["SUPABASE_URL"] == supabase_url
+    assert env["SUPABASE_KEY"] == supabase_key
     assert env["GRAPH_ENABLED"] == "false"
     assert env["CACHE_BACKEND"] == "redis"
     assert env["REDIS_SSL"] == "true"
     assert env["REDIS_URL"].startswith("rediss://")
 
 
-def test_generate_config_supports_explicit_prisma_inmemory_cache(monkeypatch, capsys) -> None:
-    """Prisma backend allows InMemory cache only when explicitly selected."""
+def test_generate_config_supports_explicit_supabase_inmemory_cache(monkeypatch, capsys) -> None:
+    """Supabase backend allows InMemory cache only when explicitly selected."""
     repo_root = Path(__file__).resolve().parents[2]
     script = repo_root / "scripts" / "generate_config.py"
-    prisma_url = "prisma://accelerate.prisma-data.net/?api_key=test"
+    supabase_url = "https://example.supabase.co"
+    supabase_key = "test-service-role-key"
 
-    monkeypatch.setenv("PRISMA_DATABASE_URL", prisma_url)
+    monkeypatch.setenv("SUPABASE_URL", supabase_url)
+    monkeypatch.setenv("SUPABASE_KEY", supabase_key)
     module = load_generate_config(script)
     monkeypatch.setattr(
         "sys.argv",
         [
             "generate_config.py",
             "--backend",
-            "prisma",
+            "supabase",
             "--cache",
             "inmemory",
         ],
@@ -85,7 +90,7 @@ def test_generate_config_supports_explicit_prisma_inmemory_cache(monkeypatch, ca
     config = json.loads(capsys.readouterr().out)
     env = config["mcpServers"]["chronos-graph"]["env"]
 
-    assert env["STORAGE_BACKEND"] == "prisma"
+    assert env["STORAGE_BACKEND"] == "supabase"
     assert env["CACHE_BACKEND"] == "inmemory"
     assert "REDIS_URL" not in env
     assert "REDIS_SSL" not in env

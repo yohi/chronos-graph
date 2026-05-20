@@ -104,18 +104,17 @@ https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
     - **(B) リモートソース (`uvx`)**: **MCPクライアントの設定ディレクトリ** に `.env` を配置し、
       MCP起動設定も `uvx --from git+https://github.com/yohi/chronos-graph.git` 形式を使用する。
 2. **ストレージと機能の選択**:
-    - (A) ライトウェイト (SQLite) / (B) フルモード (PostgreSQL) /
-      (C) Prisma Accelerate / (D) クラウド (Supabase等)
+    - **(A) SQLite**: `STORAGE_BACKEND=sqlite` (ライトウェイト・ローカル)
+    - **(B) PostgreSQL**: `STORAGE_BACKEND=postgres` (フルモード・直接接続。ローカルまたは AWS/GCP/Supabase 等のマネージド DB)
+    - **(C) Supabase (Data API)**: `STORAGE_BACKEND=supabase` (HTTPS 経由。制限されたネットワーク環境等に最適)
     - グラフ機能（`GRAPH_ENABLED`）の有無。
-      Prisma Accelerate (`STORAGE_BACKEND=prisma`) は `GRAPH_ENABLED=true` をサポートしません。
+      Supabase Data API 構成 (`STORAGE_BACKEND=supabase`) は `GRAPH_ENABLED=true` をサポートしません。
     - キャッシュ方式（`CACHE_BACKEND`）: (A) Redis / (B) InMemory。
-      Prisma Accelerate やクラウド構成では Redis を優先し、InMemory はユーザーが明示的に選択した場合のみ使用してください。
+      マネージド DB やクラウド構成では Redis を優先し、InMemory はユーザーが明示的に選択した場合のみ使用してください。
 3. **詳細パラメータのヒアリング**:
     - Embeddingモデル名、各DBの接続URL、ユーザー、パスワード。
-    - Prisma Accelerate 構成では、ユーザーが `postgresql://...` / `postgres://...` を指定した場合、
-      それを拒否せず **Accelerate 生成元の direct database URL** として扱ってください。
-      その URL を Prisma Data Platform に登録し、発行された `prisma://...` / `prismas://...`
-      connection string に変換してから `PRISMA_DATABASE_URL` に設定します。
+    - `STORAGE_BACKEND=postgres` でマネージド DB (Supabase 等) を使用する場合は、Direct Connection URL をヒアリングしてください。
+    - `STORAGE_BACKEND=supabase` (Data API) 構成では、Supabase Project URL と Service Role Key (`SUPABASE_URL`, `SUPABASE_KEY`) をヒアリングしてください。
     - *注意:* APIキー、DBパスワード、接続URLなどの秘密情報は、
       原則としてチャットに貼り付けさせないでください。`.env.example` からテンプレートを作成し、
       ユーザーにローカルで手動編集してもらう方式を優先してください。
@@ -130,44 +129,17 @@ Phase 1 の回答に基づき、物理的な設定を行います。
     **ユーザーにディレクトリパスを確認した上で**、そこに `.env` を作成してください。
 - **テンプレート利用**:
   - `.env` は `.env.example` をコピーして作成し、必要な値のみ更新してください。
-- **クラウド最適化**: クラウド利用（Supabase等）の場合、以下の値を必ず `.env` に含めてください：
-  - `POSTGRES_SSL_NO_VERIFY=true`, `POSTGRES_STATEMENT_CACHE_SIZE=0`, `REDIS_SSL=true`
-- **Prisma Accelerate の設定**:
-  - Prisma Accelerate 構成を選択した場合、公式手順に従い Prisma Console で
-    Accelerate project を作成し、`prisma://...` / `prismas://...` connection string を発行してください。
-    Prisma CLI の `platform` 管理コマンドはバージョンや環境によって利用できないため、
-    Prisma Console を標準手順としてください。
-  - 実行前に、Prisma Data Platform へのログイン可否、発行済み Accelerate URL の有無、
-    Prisma Console で新規 project を作成するか、project 名、connection string 名、
-    Accelerate region、Static IP の要否、キャッシュ方式（Redis 推奨 / InMemory は明示選択時のみ）、
-    Redis を使う場合の `REDIS_URL` をユーザーに確認してください。
-  - Supabase などの direct PostgreSQL URL (`postgresql://...` / `postgres://...`) が提示された場合は、
-    `PRISMA_DATABASE_URL` に直接設定せず、Prisma Accelerate connection string を発行するための入力として扱ってください。
-    URL は原則としてチャットに貼らせず、ローカル `.env` や一時ファイルから読み込む方式を優先し、
-    取り扱い前にユーザー承認を得てください。
-  - Prisma Console で進める場合の基本フローは以下です：
-
-    1. Prisma Console にログインする。
-    2. **New project** を選択する。
-    3. project 名を入力する。
-    4. **Accelerate** を選択して開始する。
-    5. Supabase などの direct PostgreSQL URL を **Database connection string** に入力する。
-    6. DB に近い Accelerate region を選択する。
-    7. project を作成し、**Enable Accelerate** を実行する。
-    8. **Generate API key** で connection string を発行する。
-    9. 発行された `prisma://...` / `prismas://...` を `PRISMA_DATABASE_URL` に設定する。
-
-  - ユーザーが `postgresql://...` / `postgres://...` を入力した場合は、この direct database URL を
-    Prisma Console の **Database connection string** に入力し、Prisma Data Platform 側で Accelerate を有効化して
-    `prisma://...` / `prismas://...` connection string を発行してください。
-  - Prisma Console の **Generate API key** から発行された `prisma://...` /
-    `prismas://...` connection string を取得し、`PRISMA_DATABASE_URL` に設定してください。
-    direct PostgreSQL URL (`postgresql://...`) を `PRISMA_DATABASE_URL` に直接入れてはいけません。
+- **マネージド DB / クラウド向け最適化**:
+  マネージド DB (Supabase 等) やクラウド上の Redis を使用する場合、以下の値を `.env` に含めてください：
+  - PostgreSQL (Direct): `POSTGRES_SSL_NO_VERIFY=true`, `POSTGRES_STATEMENT_CACHE_SIZE=0` (pgBouncer/Supabase 用)
+  - Redis: `REDIS_SSL=true`
+- **Supabase (Data API) の設定**:
+  - `STORAGE_BACKEND=supabase` 構成を選択した場合、`SUPABASE_URL` と `SUPABASE_KEY` (Service Role Key推奨) を `.env` に設定してください。
 
 #### 🟨 Phase 3: 動作検証 (MANDATORY & BLOCKING STEP)
 
 環境が正しく構築されたか、ツールを用いて実証してください。
-**🚨 進行条件:** ダミーの環境変数や空の `.env` でテストを実行して「成功した」と報告するのは**厳禁**です。必ず実際の接続情報（Prisma / Redis等）を用いた検証結果を得てから Phase 4 に進んでください。
+**🚨 進行条件:** ダミーの環境変数や空の `.env` でテストを実行して「成功した」と報告するのは**厳禁**です。必ず実際の接続情報（Supabase / Redis等）を用いた検証結果を得てから Phase 4 に進んでください。
 選択した実行・配置モードと同じ方式で検証し、ローカルソース前提のコマンドを
 リモートソース (`uvx`) 選択時に混在させないでください。
 
@@ -176,8 +148,8 @@ Phase 1 の回答に基づき、物理的な設定を行います。
    - リモートソース (`uvx`): 生成される MCP 設定の `command` が `uvx`、
      `args` 配列に `"--from"` と、パッケージ指定子を含む URL (`"context-store-mcp[all] @ git+https://..."`) が
      個別に含まれていることを確認し、MCPクライアント側で起動確認する。
-   - Prisma Accelerate 構成を選択した場合は、起動ログまたは Adapter Factory の
-     初期化結果で `PrismaStorageAdapter` が選択されていることを確認する。
+   - Supabase 構成を選択した場合は、起動ログまたは Adapter Factory の
+     初期化結果で `SupabaseStorageAdapter` が選択されていることを確認する。
      `SQLiteStorageAdapter` / `PostgresStorageAdapter` が選択されていないこと、
      `GRAPH_ENABLED=false` で Graph Adapter が作成されないことも確認する。
 2. **ユニットテスト**:
@@ -194,18 +166,18 @@ Phase 1 の回答に基づき、物理的な設定を行います。
 1. **設定生成**: Phase 1 で選択した実行方式に合わせて生成し、生成されたJSONを提示。
    - ローカルソース (`uv run`):
      `uv run python scripts/generate_config.py --method uv` を実行。
-     PostgreSQL 構成では `--backend postgres` を追加する。Prisma Accelerate 構成では、
-     `--backend prisma` を追加する。キャッシュ方式は、Redis 選択時は `--cache redis`、
+     PostgreSQL 構成では `--backend postgres` を追加する。Supabase 構成では、
+     `--backend supabase` を追加する。キャッシュ方式は、Redis 選択時は `--cache redis`、
      InMemory を明示選択した場合のみ `--cache inmemory` を追加する。
    - リモートソース (`uvx`):
      `uv run python scripts/generate_config.py --method uvx --uv-from git+https://github.com/yohi/chronos-graph.git`
      を実行。PostgreSQL 構成では `--backend postgres` を追加する。
-     Prisma Accelerate 構成では `--backend prisma` を追加する。キャッシュ方式は、
+     Supabase 構成では `--backend supabase` を追加する。キャッシュ方式は、
      Redis 選択時は `--cache redis`、InMemory を明示選択した場合のみ `--cache inmemory` を追加する。
      リポジトリをクローンしていない場合は、Quick Start の `uvx` 設定例を基に、
      `command: "uvx"` と `args: ["--from", "context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git", "context-store"]`
-     を含む設定を提示する。Prisma Accelerate 構成では、生成 JSON の `env` に
-     `STORAGE_BACKEND=prisma`、`PRISMA_DATABASE_URL=prisma://...` または `prismas://...`、
+     を含む設定を提示する。Supabase 構成では、生成 JSON の `env` に
+     `STORAGE_BACKEND=supabase`、`SUPABASE_URL=https://...`、`SUPABASE_KEY=...`、
      `GRAPH_ENABLED=false`、`CACHE_BACKEND=redis` またはユーザーが明示選択した
      `CACHE_BACKEND=inmemory` が含まれていることを確認する。Redis を選択した場合は
      `REDIS_URL` と `REDIS_SSL=true` も確認する。

@@ -6,7 +6,7 @@ Claude Desktop / Cursor / その他 MCP クライアント用の設定 JSON を�
 Usage:
     python scripts/generate_config.py                    # SQLite (デフォルト)
     python scripts/generate_config.py --backend postgres # PostgreSQL モード
-    python scripts/generate_config.py --backend prisma   # Prisma Accelerate モード
+    python scripts/generate_config.py --backend supabase   # Supabase モード
     python scripts/generate_config.py --output claude    # Claude Desktop 形式
     python scripts/generate_config.py --method uv       # uv モード
 
@@ -246,7 +246,7 @@ def generate_postgres_config(
     }
 
 
-def generate_prisma_config(
+def generate_supabase_config(
     python_path: str,
     embedding: str,
     cache: str,
@@ -254,13 +254,15 @@ def generate_prisma_config(
     method: str = "python",
     uv_from: str | None = None,
 ) -> dict[str, Any]:
-    """Prisma Accelerate モードの設定を生成する。"""
+    """Supabase モードの設定を生成する。"""
 
-    prisma_url = get_secret("prisma_database_url", "<your-prisma-accelerate-url>")
+    supabase_url = get_secret("supabase_url", "<your-supabase-project-url>")
+    supabase_key = get_secret("supabase_key", "<your-supabase-service-role-key>")
 
     env = {
-        "STORAGE_BACKEND": "prisma",
-        "PRISMA_DATABASE_URL": prisma_url,
+        "STORAGE_BACKEND": "supabase",
+        "SUPABASE_URL": supabase_url,
+        "SUPABASE_KEY": supabase_key,
         "GRAPH_ENABLED": "false",
         "CACHE_BACKEND": cache,
         "DECAY_HALF_LIFE_DAYS": str(getattr(settings, "decay_half_life_days", "30")),
@@ -330,7 +332,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="ChronosGraph MCP client config generator")
     parser.add_argument(
         "--backend",
-        choices=["sqlite", "postgres", "prisma"],
+        choices=["sqlite", "postgres", "supabase"],
         default="sqlite",
         help="Storage backend",
     )
@@ -338,7 +340,7 @@ def main() -> None:
         "--cache",
         choices=["inmemory", "redis"],
         default=None,
-        help="Cache backend (postgres: inmemory, or redis if --ssl is set; prisma: redis)",
+        help="Cache backend (postgres: inmemory, or redis if --ssl is set; supabase: redis)",
     )
     parser.add_argument(
         "--embedding",
@@ -386,7 +388,7 @@ def main() -> None:
         )
     else:
         cache_backend = args.cache or "redis"
-        config = generate_prisma_config(
+        config = generate_supabase_config(
             python_path,
             args.embedding,
             cache_backend,

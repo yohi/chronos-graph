@@ -11,8 +11,8 @@ import httpx
 import pytest
 
 from context_store.config import Settings
-from context_store.models.memory import Memory, MemoryType, SourceType
-from context_store.storage.protocols import StorageError
+from context_store.models.memory import Memory, MemoryType, ScoredMemory, SourceType
+from context_store.storage.protocols import MemoryFilters, StorageError
 from context_store.storage.supabase import SupabaseStorageAdapter
 
 
@@ -436,8 +436,6 @@ async def test_increment_memory_access_count_invokes_rpc():
 @pytest.mark.asyncio
 async def test_vector_search_calls_rpc():
     client = make_mock_client()
-    from datetime import datetime, timezone
-
     now = datetime.now(timezone.utc)
     rows: list[dict[str, Any]] = [
         {
@@ -465,8 +463,6 @@ async def test_vector_search_calls_rpc():
     vec = [0.1] * 768
     results = await adapter.vector_search(vec, top_k=5, project="p1")
     assert len(results) == 1
-    from context_store.models.memory import ScoredMemory
-
     assert isinstance(results[0], ScoredMemory)
     assert results[0].score == 0.95
 
@@ -499,8 +495,6 @@ async def test_vector_search_returns_empty_on_empty_embedding():
 @pytest.mark.asyncio
 async def test_keyword_search_uses_ilike():
     client = make_mock_client()
-    from datetime import datetime, timezone
-
     now = datetime.now(timezone.utc)
     rows: list[dict[str, Any]] = [
         {
@@ -538,3 +532,109 @@ async def test_keyword_search_returns_empty_on_blank_query():
     adapter = SupabaseStorageAdapter(client)
     assert await adapter.keyword_search("   ", top_k=5) == []
     client.table.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_list_by_filter_applies_conditions():
+    client = make_mock_client()
+    rows = [
+        {
+            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "content": "hello",
+            "memory_type": "semantic",
+            "source_type": "manual",
+            "source_metadata": {},
+            "embedding": None,
+            "semantic_relevance": 0.5,
+            "importance_score": 0.5,
+            "access_count": 0,
+            "last_accessed_at": "2025-01-01T00:00:00Z",
+            "created_at": "2025-01-01T00:00:00Z",
+            "updated_at": "2025-01-01T00:00:00Z",
+            "archived_at": None,
+            "tags": ["t1"],
+            "project": "p1",
+        },
+    ]
+    # mock chain logic will just return rows if execute is called
+    chain = MagicMock()
+    chain.execute = AsyncMock(return_value=make_mock_response(data=rows))
+
+    # Allow chain to return itself on any method call
+    for method in ["select", "eq", "is_", "contains", "limit", "order", "offset", "not_"]:
+        getattr(chain, method).return_value = chain
+
+    # Issue 1 Fix: setting return_value for not_.is_ to maintain the chain
+    chain.not_.is_.return_value = chain
+
+    client.table.return_value.select.return_value = chain
+
+    adapter = SupabaseStorageAdapter(client)
+    filters = MemoryFilters(
+        project="p1",
+        memory_type="semantic",
+        archived=None,  # Use default to trigger .is_("archived_at", "null")
+        tags=["t1"],
+        limit=10,
+    )
+    results = await adapter.list_by_filter(filters)
+    assert len(results) == 1
+    assert results[0].project == "p1"
+
+    # Issue 2 Verification
+    chain.eq.assert_any_call("project", "p1")
+    chain.eq.assert_any_call("memory_type", "semantic")
+    chain.is_.assert_called_once_with("archived_at", "null")
+    chain.contains.assert_called_once_with("tags", ["t1"])
+    chain.limit.assert_called_once_with(10)
+    chain.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_count_by_filter_returns_exact_count():
+    client = make_mock_client()
+    chain = MagicMock()
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[], count=42))
+
+    for method in ["select", "eq", "is_", "contains", "limit", "not_"]:
+        getattr(chain, method).return_value = chain
+
+    # Issue 1 Fix: setting return_value for not_.is_ to maintain the chain
+    chain.not_.is_.return_value = chain
+
+    client.table.return_value.select.return_value = chain
+
+    adapter = SupabaseStorageAdapter(client)
+    # Using archived=None to verify .is_("archived_at", "null")
+    filters = MemoryFilters(project="p1", archived=None)
+    count = await adapter.count_by_filter(filters)
+    assert count == 42
+
+    # Issue 2 Verification
+    client.table.return_value.select.assert_called_once_with("*", count="exact", head=True)
+    chain.eq.assert_called_once_with("project", "p1")
+    chain.is_.assert_called_once_with("archived_at", "null")
+    chain.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_list_by_filter_archived_true_uses_not_is():
+    client = make_mock_client()
+    chain = MagicMock()
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[]))
+
+    for method in ["select", "eq", "is_", "contains", "limit", "not_"]:
+        getattr(chain, method).return_value = chain
+
+    # This is the fix being tested
+    chain.not_.is_.return_value = chain
+
+    client.table.return_value.select.return_value = chain
+
+    adapter = SupabaseStorageAdapter(client)
+    filters = MemoryFilters(archived=True)
+    await adapter.list_by_filter(filters)
+
+    # Verification of Issue 1 fix in action
+    chain.not_.is_.assert_called_once_with("archived_at", "null")
+    chain.execute.assert_awaited_once()

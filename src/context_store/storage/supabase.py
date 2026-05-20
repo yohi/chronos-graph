@@ -164,6 +164,7 @@ class SupabaseStorageAdapter:
             "embedding": _embedding_to_pg(memory.embedding or []),
             "semantic_relevance": memory.semantic_relevance,
             "importance_score": memory.importance_score,
+            "last_accessed_at": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
             "tags": list(memory.tags or []),
             "project": memory.project,
             "content_hash": _content_hash(memory.content),
@@ -318,38 +319,44 @@ class SupabaseStorageAdapter:
         builder = self._client.table("memories").select("*")
         builder = _apply_common_filters(builder, filters)
 
-        if filters.created_after is not None and filters.id_after is not None:
-            if not _is_valid_uuid(filters.id_after):
-                return []
+        is_desc = True
+        if filters.order_by:
+            _, _, direction = filters.order_by.partition(" ")
+            is_desc = direction.split(",")[0].strip().upper() == "DESC"
+        op = "lt" if is_desc else "gt"
 
-            # ソート順に基づいて比較演算子を選択
-            is_desc = True
-            if filters.order_by:
-                _, _, direction = filters.order_by.partition(" ")
-                is_desc = direction.upper() == "DESC"
-
-            op = "lt" if is_desc else "gt"
+        if filters.created_after is not None:
             ts = _format_pg_datetime(filters.created_after)
-            builder = builder.or_(
-                f"created_at.{op}.{ts},and(created_at.eq.{ts},id.{op}.{filters.id_after})"
-            )
-        elif filters.created_after is not None:
-            is_desc = True
-            if filters.order_by:
-                _, _, direction = filters.order_by.partition(" ")
-                is_desc = direction.upper() == "DESC"
-
-            ts = _format_pg_datetime(filters.created_after)
-            if is_desc:
-                builder = builder.lt("created_at", ts)
+            if filters.id_after is not None:
+                if not _is_valid_uuid(filters.id_after):
+                    return []
+                builder = builder.or_(
+                    f"created_at.{op}.{ts},and(created_at.eq.{ts},id.{op}.{filters.id_after})"
+                )
+                if not is_desc:
+                    builder = builder.gte("created_at", ts)
             else:
-                builder = builder.gt("created_at", ts)
+                builder = builder.gte("created_at", ts)
+
+        if filters.archived_after is not None:
+            ts = _format_pg_datetime(filters.archived_after)
+            if filters.id_after is not None:
+                if not _is_valid_uuid(filters.id_after):
+                    return []
+                builder = builder.or_(
+                    f"archived_at.{op}.{ts},and(archived_at.eq.{ts},id.{op}.{filters.id_after})"
+                )
+                if not is_desc:
+                    builder = builder.gte("archived_at", ts)
+            else:
+                builder = builder.gte("archived_at", ts)
 
         if filters.order_by:
             column, _, direction = filters.order_by.partition(" ")
             if column in ALLOWED_SORT_COLUMNS:
-                desc = direction.upper() == "DESC"
-                builder = builder.order(column, desc=desc)
+                dir_str = "desc" if is_desc else "asc"
+                order_str = f"{column}.{dir_str},id.{dir_str}"
+                builder = builder.order(order_str)
         if filters.limit is not None:
             builder = builder.limit(filters.limit)
         if filters.offset is not None:
@@ -364,6 +371,10 @@ class SupabaseStorageAdapter:
     async def count_by_filter(self, filters: MemoryFilters) -> int:
         builder = self._client.table("memories").select("*", count="exact", head=True)
         builder = _apply_common_filters(builder, filters)
+        if filters.created_after is not None:
+            builder = builder.gte("created_at", _format_pg_datetime(filters.created_after))
+        if filters.archived_after is not None:
+            builder = builder.gte("archived_at", _format_pg_datetime(filters.archived_after))
         try:
             response = await builder.execute()
         except Exception as exc:
@@ -417,8 +428,6 @@ def _apply_common_filters(builder: Any, filters: MemoryFilters) -> Any:
     elif effective_archived is True:
         builder = builder.not_.is_("archived_at", "null")
 
-    if filters.archived_after is not None:
-        builder = builder.gte("archived_at", _format_pg_datetime(filters.archived_after))
     return builder
 
 

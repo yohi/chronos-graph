@@ -184,6 +184,25 @@ def _sample_memory(content: str = "hello world", embedding=None) -> Memory:
 
 
 @pytest.mark.asyncio
+async def test_save_memory_includes_last_accessed_at():
+    client = make_mock_client()
+    inserted_id = "550e8400-e29b-41d4-a716-446655440000"
+    client.table.return_value.insert.return_value.execute = AsyncMock(
+        return_value=make_mock_response(data=[{"id": inserted_id}])
+    )
+
+    adapter = SupabaseStorageAdapter(client)
+    mem = _sample_memory("hello world")
+    result = await adapter.save_memory(mem)
+
+    assert result == inserted_id
+    insert_args = client.table.return_value.insert.call_args[0][0]
+    assert "last_accessed_at" in insert_args
+    assert isinstance(insert_args["last_accessed_at"], str)
+    assert insert_args["last_accessed_at"].endswith("+00:00")
+
+
+@pytest.mark.asyncio
 async def test_save_memory_inserts_with_content_hash():
     client = make_mock_client()
     inserted_id = "550e8400-e29b-41d4-a716-446655440000"
@@ -656,3 +675,36 @@ async def test_list_by_filter_archived_true_uses_not_is():
     # Verify that not_.is_ was invoked to filter archived items
     chain.not_.is_.assert_called_once_with("archived_at", "null")
     chain.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_list_by_filter_archived_after_cursor_uses_composite_or():
+    """archived_after + id_after with archived_at ASC should emit a composite or_ cursor."""
+    client = make_mock_client()
+    chain = MagicMock()
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[]))
+
+    for method in ["select", "eq", "is_", "limit", "not_", "or_", "order", "gte", "lt", "gt"]:
+        getattr(chain, method).return_value = chain
+
+    chain.not_.is_.return_value = chain
+    client.table.return_value.select.return_value = chain
+
+    adapter = SupabaseStorageAdapter(client)
+    filters = MemoryFilters(
+        archived=True,
+        archived_after=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        id_after="550e8400-e29b-41d4-a716-446655440000",
+        order_by="archived_at ASC, id ASC",
+        limit=10,
+    )
+    await adapter.list_by_filter(filters)
+
+    # The composite cursor or_ should have been called once
+    chain.or_.assert_called_once()
+    or_arg = chain.or_.call_args[0][0]
+    assert (
+        "archived_at.gt.2025-01-01T00:00:00" in or_arg
+        or "archived_at.gt.2025-01-01T00:00:00+00:00" in or_arg
+    )
+    assert "id.gt.550e8400-e29b-41d4-a716-446655440000" in or_arg

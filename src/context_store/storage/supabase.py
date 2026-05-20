@@ -156,6 +156,8 @@ class SupabaseStorageAdapter:
         return StorageError(message, code="STORAGE_ERROR", recoverable=True)
 
     async def save_memory(self, memory: "Memory") -> str:
+        from datetime import datetime, timezone
+
         row = {
             "content": memory.content,
             "memory_type": memory.memory_type.value,
@@ -164,6 +166,7 @@ class SupabaseStorageAdapter:
             "embedding": _embedding_to_pg(memory.embedding or []),
             "semantic_relevance": memory.semantic_relevance,
             "importance_score": memory.importance_score,
+            "last_accessed_at": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
             "tags": list(memory.tags or []),
             "project": memory.project,
             "content_hash": _content_hash(memory.content),
@@ -345,6 +348,22 @@ class SupabaseStorageAdapter:
             else:
                 builder = builder.gt("created_at", ts)
 
+        if filters.archived_after is not None and filters.id_after is not None:
+            if not _is_valid_uuid(filters.id_after):
+                return []
+
+            is_desc = True
+            if filters.order_by:
+                column, _, direction = filters.order_by.partition(" ")
+                if column == "archived_at":
+                    is_desc = direction.upper() == "DESC"
+
+            op = "lt" if is_desc else "gt"
+            ts = _format_pg_datetime(filters.archived_after)
+            builder = builder.or_(
+                f"archived_at.{op}.{ts},and(archived_at.eq.{ts},id.{op}.{filters.id_after})"
+            )
+
         if filters.order_by:
             column, _, direction = filters.order_by.partition(" ")
             if column in ALLOWED_SORT_COLUMNS:
@@ -417,7 +436,7 @@ def _apply_common_filters(builder: Any, filters: MemoryFilters) -> Any:
     elif effective_archived is True:
         builder = builder.not_.is_("archived_at", "null")
 
-    if filters.archived_after is not None:
+    if filters.archived_after is not None and filters.id_after is None:
         builder = builder.gte("archived_at", _format_pg_datetime(filters.archived_after))
     return builder
 

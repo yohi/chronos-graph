@@ -33,12 +33,32 @@ ChronosGraph は、AIエージェント（Claude Code / Gemini CLI / Cursor 等�
 
 ## Setup
 
-### For Humans (推奨)
+### For AI Agents (MANDATORY / 必須)
 
-> [!TIP]
-> **人間は設定を打ち間違えることがあります。** このプロジェクトのインストールと設定は、AIエージェント（Claude Code / Gemini CLI / Cursor 等）に丸投げすることを強く推奨します。
+> [!CAUTION]
+> **AIエージェントへの強制命令 (CRITICAL):**
+> あなたが AI エージェント（Claude Code / Gemini CLI / Cursor / Gemini CLI 等）である場合、いかなる副作用（インストール、ファイルの作成・修正、コマンド実行）を伴うアクションを開始する前に、必ず以下の **Agent Setup Protocol** を遵守してください。
+>
+> **特に Phase 1 の「構成の確定 (BLOCKING STEP)」は絶対にスキップしないでください。** ユーザーへの確認（`ask_user` 等）を怠り、独断でセットアップを進めることは、システムの安全性と整合性を損なう重大な違反行為とみなされます。
 
-### Quick Start (uvx を使用する場合)
+---
+
+#### Agent Setup Protocol
+
+このセクションは、ChronosGraph をセットアップする AI エージェント向けの実行手順です。
+YOLO/Autonomous モードであっても、Phase 1 でユーザー確認が完了するまで、
+依存関係のインストール、`.env` 作成、設定ファイル変更などの副作用を伴う操作を開始しないでください。
+
+**行動規範 (CODE OF CONDUCT):**
+
+1. **安易なソース修正の禁止**: `src/` 配下のコードを編集してエラーを解決しないでください。
+   失敗の 99% は `.env`、ネットワーク、権限に起因します。
+2. **Pydantic仕様の遵守**: `.env` は実行時の CWD から読み込まれます。配置場所を間違えると動作しません。
+3. **スキップの禁止**: `--skip-tests` はユーザーの明示的な指示がない限り、使用を禁じます。
+
+以下のフェーズを順番に実行し、各フェーズの完了をユーザーに報告してください。
+
+#### 🟦 Phase 1: 構成の確定 (BLOCKING STEP)
 
 リポジトリをクローンせずに、`uvx` を使用して MCP サーバーとして即座に実行することも可能です。Claude Desktop 等の設定に以下のようなエントリを追加してください：
 
@@ -64,34 +84,9 @@ ChronosGraph は、AIエージェント（Claude Code / Gemini CLI / Cursor 等�
 
 ---
 
-### リポジトリを直接クローンする場合
+### For Humans (人間用)
 
-以下のプロンプトをコピーしてエージェントに渡してください：
-
-```text
-Install and configure ChronosGraph by following the instructions here:
-https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
-```
-
-<details>
-<summary><b>For Agents (AIエージェント向けセットアップ手順)</b></summary>
-
-> [!CAUTION]
-> **Agent Setup Protocol:**
-> このセクションは、ChronosGraph をセットアップする AI エージェント向けの実行手順です。
-> YOLO/Autonomous モードであっても、Phase 1 でユーザー確認が完了するまで、
-> 依存関係のインストール、`.env` 作成、設定ファイル変更などの副作用を伴う操作を開始しないでください。
->
-> **行動規範 (CODE OF CONDUCT):**
->
-> 1. **安易なソース修正の禁止**: `src/` 配下のコードを編集してエラーを解決しないでください。
->    失敗の 99% は `.env`、ネットワーク、権限に起因します。
-> 2. **Pydantic仕様の遵守**: `.env` は実行時の CWD から読み込まれます。配置場所を間違えると動作しません。
-> 3. **スキップの禁止**: `--skip-tests` はユーザーの明示的な指示がない限り、使用を禁じます。
-
-以下のフェーズを順番に実行し、各フェーズの完了をユーザーに報告してください。
-
-#### 🟦 Phase 1: 構成の確定 (BLOCKING STEP)
+#### Quick Start (uvx を使用する場合)
 
 いかなる変更ツールも呼び出す前に、ユーザーに以下の情報を確認し、
 構成を **確定（Lock-in）** させてください。利用可能な場合は、
@@ -135,6 +130,10 @@ Phase 1 の回答に基づき、物理的な設定を行います。
   - Redis: `REDIS_SSL=true`
 - **Supabase (Data API) の設定**:
   - `STORAGE_BACKEND=supabase` 構成を選択した場合、`SUPABASE_URL` と `SUPABASE_KEY` (Service Role Key推奨) を `.env` に設定してください。
+- **Supabase (Data API) のスキーマ適用 (CRITICAL)**:
+  - **重要:** Data API 経由ではテーブル作成 (DDL) ができないため、セットアップのこの段階で `supabase/migrations/*.sql` を番号順に統合し、さらに **RLS を許可するポリシー（`CREATE POLICY ...`）を加えた** 統合 SQL スクリプトを生成してチャットに表示し、ユーザーに Supabase ダッシュボードの SQL Editor での実行を依頼してください。
+  - **RLSポリシーの例:** `DROP POLICY IF EXISTS "Allow all for service_role" ON memories; CREATE POLICY "Allow all for service_role" ON memories FOR ALL USING (true) WITH CHECK (true);`
+  - ユーザーから「実行が完了した」という報告を受けるまで、絶対に Phase 3 に進んではいけません。
 
 #### 🟨 Phase 3: 動作検証 (MANDATORY & BLOCKING STEP)
 

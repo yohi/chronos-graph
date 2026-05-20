@@ -156,8 +156,6 @@ class SupabaseStorageAdapter:
         return StorageError(message, code="STORAGE_ERROR", recoverable=True)
 
     async def save_memory(self, memory: "Memory") -> str:
-        from datetime import datetime, timezone
-
         row = {
             "content": memory.content,
             "memory_type": memory.memory_type.value,
@@ -329,7 +327,7 @@ class SupabaseStorageAdapter:
             is_desc = True
             if filters.order_by:
                 _, _, direction = filters.order_by.partition(" ")
-                is_desc = direction.upper() == "DESC"
+                is_desc = direction.split(",")[0].strip().upper() == "DESC"
 
             op = "lt" if is_desc else "gt"
             ts = _format_pg_datetime(filters.created_after)
@@ -340,7 +338,7 @@ class SupabaseStorageAdapter:
             is_desc = True
             if filters.order_by:
                 _, _, direction = filters.order_by.partition(" ")
-                is_desc = direction.upper() == "DESC"
+                is_desc = direction.split(",")[0].strip().upper() == "DESC"
 
             ts = _format_pg_datetime(filters.created_after)
             if is_desc:
@@ -356,7 +354,7 @@ class SupabaseStorageAdapter:
             if filters.order_by:
                 column, _, direction = filters.order_by.partition(" ")
                 if column == "archived_at":
-                    is_desc = direction.upper() == "DESC"
+                    is_desc = direction.split(",")[0].strip().upper() == "DESC"
 
             op = "lt" if is_desc else "gt"
             ts = _format_pg_datetime(filters.archived_after)
@@ -367,7 +365,7 @@ class SupabaseStorageAdapter:
         if filters.order_by:
             column, _, direction = filters.order_by.partition(" ")
             if column in ALLOWED_SORT_COLUMNS:
-                desc = direction.upper() == "DESC"
+                desc = direction.split(",")[0].strip().upper() == "DESC"
                 builder = builder.order(column, desc=desc)
         if filters.limit is not None:
             builder = builder.limit(filters.limit)
@@ -436,7 +434,9 @@ def _apply_common_filters(builder: Any, filters: MemoryFilters) -> Any:
     elif effective_archived is True:
         builder = builder.not_.is_("archived_at", "null")
 
-    if filters.archived_after is not None and filters.id_after is None:
+    if filters.created_after is not None:
+        builder = builder.gte("created_at", _format_pg_datetime(filters.created_after))
+    if filters.archived_after is not None:
         builder = builder.gte("archived_at", _format_pg_datetime(filters.archived_after))
     return builder
 

@@ -26,7 +26,7 @@ ChronosGraph は、AIエージェント（Claude Code / Gemini CLI / Cursor 等�
 - **時間的減衰** — 指数関数的減衰スコアで古い記憶を自動アーカイブ
 - **重複排除** — Append-only 置換 + SUPERSEDES グラフエッジで変遷を追跡
 - **ライトウェイトモード** — SQLite + sqlite-vec でゼロ設定で起動
-- **スケーラブル** — PostgreSQL + Neo4j + Redis への切り替え対応、Supabase Data API による HTTPS 経由のアクセス（社内 DPI 回避等 ※詳細は [SPEC.md](SPEC.md) を参照）
+- **スケーラブル** — PostgreSQL + Neo4j + Redis への切り替え対応、Supabase Data API による HTTPS 経由のアクセス（クラウドストレージ利用や社内 DPI 回避等。セキュリティ・コンプライアンス上の注意点は [SPEC.md](SPEC.md) を参照）
 - **RL 拡張ポイント** — ActionLogger / RewardSignal / PolicyHook インターフェース
 - **Dashboard Web UI** — Cytoscape.js グラフ可視化・リアルタイムログストリーミング・severity フィルター（React + FastAPI）
 - **MCP Gateway** — ゼロ・スタンディング・権限 (ZSP) と意図に基づくアクセス制御 (IBAC) を提供する専用ゲートウェイを搭載

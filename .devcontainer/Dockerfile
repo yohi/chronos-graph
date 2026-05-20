@@ -29,8 +29,8 @@ RUN mkdir -p /etc/apt/keyrings \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for fast package management
-COPY --from=ghcr.io/astral-sh/uv:0.11.15 /uv /usr/local/bin/uv
-COPY --from=ghcr.io/astral-sh/uv:0.11.15 /uvx /usr/local/bin/uvx
+COPY --from=ghcr.io/astral-sh/uv@sha256:e590846f4776907b254ac0f44b5b380347af5d90d668138ca7938d1b0c2f98d3 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv@sha256:e590846f4776907b254ac0f44b5b380347af5d90d668138ca7938d1b0c2f98d3 /uvx /usr/local/bin/uvx
 
 WORKDIR /workspaces/chronos-graph
 

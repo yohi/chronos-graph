@@ -943,8 +943,10 @@ SQLファイルベースの軽量なマイグレーションシステムを備�
 |---|---|---|---|
 | `sqlite` (デフォルト) | SQLiteStorageAdapter | SQLiteGraphAdapter | InMemoryCacheAdapter |
 | `postgres` | PostgresStorageAdapter | Neo4jGraphAdapter* | RedisCacheAdapter* |
+| `supabase` | SupabaseStorageAdapter | (非対応)* | InMemoryCacheAdapter |
 
 \* `GRAPH_ENABLED=false` の場合は GraphAdapter を None に、Redis 未接続時は InMemoryCacheAdapter にフォールバック。
+\* `supabase` バックエンドは現在グラフ機能をサポートしない（Neo4j Bolt を HTTPS 経由でカプセル化できないため）。
 
 > **注意**: `sqlite` モードではグラフ機能は常に有効（`GRAPH_ENABLED` 設定は `postgres` モードのみに適用）。
 
@@ -1493,3 +1495,4 @@ Blocking モードで待機中の承認を解決するための REST エンド�
 - AIエージェントの長期記憶と強化学習プラグイン開発 — コグニティブアーキテクチャ / 複合スコアリング / RL
 - [LayerX ccgate (Zenn)](https://zenn.dev/layerx/articles/20260428-ccgate) — Server-defined Prompts / Permission Hook 概念の基礎
 - [tak848/ccgate (GitHub)](https://github.com/tak848/ccgate) — ccgate 参照実装
+

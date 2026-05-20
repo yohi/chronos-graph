@@ -139,6 +139,28 @@ def test_embedding_provider_validation(default_settings):
             },
             "CUSTOM_API_ENDPOINT",
         ),
+        ({"storage_backend": "supabase", "supabase_url": ""}, "SUPABASE_URL"),
+        (
+            {"storage_backend": "supabase", "supabase_url": "https://url", "supabase_key": ""},
+            "SUPABASE_KEY",
+        ),
+        (
+            {
+                "storage_backend": "supabase",
+                "supabase_url": "http://insecure",
+                "supabase_key": "key",
+            },
+            "https://",
+        ),
+        (
+            {
+                "storage_backend": "supabase",
+                "graph_enabled": True,
+                "supabase_url": "https://url",
+                "supabase_key": "key",
+            },
+            "graph_enabled=true をサポートしません",
+        ),
     ],
 )
 def test_required_settings_validation(default_settings, kwargs_overrides, expected_error_match):

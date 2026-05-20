@@ -261,6 +261,50 @@ class TestPostgresBackend:
 
 
 # ---------------------------------------------------------------------------
+# Tests: Supabase backend (mocked)
+# ---------------------------------------------------------------------------
+
+
+class TestSupabaseBackend:
+    @pytest.mark.asyncio
+    async def test_supabase_returns_supabase_adapter(self) -> None:
+        """STORAGE_BACKEND=supabase → SupabaseStorageAdapter が返される."""
+        settings = make_settings(
+            storage_backend="supabase",
+            supabase_url="https://example.supabase.co",
+            supabase_key="secret",
+            graph_enabled=False,
+        )
+
+        from context_store.storage.supabase import SupabaseStorageAdapter
+
+        mock_adapter = AsyncMock(spec=SupabaseStorageAdapter)
+        mock_adapter.dispose = AsyncMock()
+
+        with patch(
+            "context_store.storage.supabase.SupabaseStorageAdapter.create",
+            new=AsyncMock(return_value=mock_adapter),
+        ):
+            storage, graph_adp, cache_adp = await create_storage(settings)
+            try:
+                assert storage is mock_adapter
+                assert graph_adp is None
+            finally:
+                await dispose_adapters(storage, graph_adp, cache_adp)
+
+    @pytest.mark.asyncio
+    async def test_supabase_graph_enabled_raises_error(self) -> None:
+        """STORAGE_BACKEND=supabase で graph_enabled=True の場合は ValueError を投げる."""
+        # Settings のバリデータでも弾かれるが、factory 側の安全装置も検証
+        settings = MagicMock()
+        settings.storage_backend = "supabase"
+        settings.graph_enabled = True
+
+        with pytest.raises(ValueError, match="not supported for storage_backend=supabase"):
+            await _create_graph_adapter(settings)
+
+
+# ---------------------------------------------------------------------------
 # Tests: Return type contract
 # ---------------------------------------------------------------------------
 

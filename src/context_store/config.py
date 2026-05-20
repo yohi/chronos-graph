@@ -56,7 +56,7 @@ class Settings(BaseSettings):
         return init_settings, dotenv_settings, env_settings, file_secret_settings
 
     # --- Storage Backend ---
-    storage_backend: Literal["sqlite", "postgres", "prisma", "supabase"] = "sqlite"
+    storage_backend: Literal["sqlite", "postgres", "supabase"] = "sqlite"
     graph_enabled: bool = False
     cache_backend: Literal["inmemory", "redis"] = "inmemory"
 
@@ -76,9 +76,6 @@ class Settings(BaseSettings):
     # プロキシを利用する場合は 0 に設定してください（Supabase 等）。
     # asyncpg デフォルトは 256。
     postgres_statement_cache_size: int = Field(default=256, ge=0)
-
-    # --- Prisma Accelerate (storage_backend=prisma の場合) ---
-    prisma_database_url: SecretStr = SecretStr("")
 
     # --- Supabase (storage_backend=supabase の場合) ---
     supabase_url: str = Field(
@@ -251,21 +248,6 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "NEO4J_PASSWORD は storage_backend=postgres かつ "
                     "graph_enabled=true の場合に必須です。"
-                )
-        if self.storage_backend == "prisma":
-            url = self.prisma_database_url.get_secret_value().strip()
-            if not url:
-                raise ValueError("PRISMA_DATABASE_URL は storage_backend=prisma の場合に必須です。")
-            self.prisma_database_url = SecretStr(url)
-            if not (url.startswith("prisma://") or url.startswith("prismas://")):
-                raise ValueError(
-                    "PRISMA_DATABASE_URL は prisma:// または prismas:// で始まる "
-                    "Accelerate スキームでなければなりません。"
-                )
-            if self.graph_enabled:
-                raise ValueError(
-                    "storage_backend=prisma は graph_enabled=true をサポートしません "
-                    "(Neo4j Bolt は HTTPS にカプセル化できないため)。"
                 )
         if self.storage_backend == "supabase":
             url = self.supabase_url.strip()

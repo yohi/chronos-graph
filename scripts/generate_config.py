@@ -80,14 +80,7 @@ def get_embedding_envs(provider: str) -> dict[str, str]:
     """プロバイダーに応じた埋め込み設定の環境変数を返す。"""
     envs = {"EMBEDDING_PROVIDER": provider}
     if provider == "openai":
-        api_key = "<your-openai-api-key>"
-        if hasattr(settings, "openai_api_key"):
-            raw = settings.openai_api_key
-            if raw is not None:
-                val = raw.get_secret_value()
-                if val:
-                    api_key = val
-        envs["OPENAI_API_KEY"] = api_key
+        envs["OPENAI_API_KEY"] = get_secret("openai_api_key", "<your-openai-api-key>")
     elif provider == "local-model":
         envs["LOCAL_MODEL_NAME"] = getattr(settings, "local_model_name", "cl-nagoya/ruri-v3-310m")
         envs["EMBEDDING_DIMENSION"] = str(getattr(settings, "embedding_dimension", "1024"))
@@ -100,6 +93,30 @@ def get_embedding_envs(provider: str) -> dict[str, str]:
         )
         envs["CUSTOM_API_MODEL_NAME"] = getattr(settings, "custom_api_model_name", "custom-model")
     return envs
+
+
+def _resolve_redis_config(ssl: bool) -> tuple[str, bool]:
+    """Redis の接続 URL と SSL 設定を解決する。"""
+    default_redis = getattr(settings, "DEFAULT_REDIS_URL", "redis://localhost:6379")
+    redis_url = getattr(settings, "redis_url", default_redis)
+
+    # ユーザーが明示的に環境変数や引数で指定していない、
+    # かつデフォルト値のままの場合はクラウド用プレースホルダを提示する
+    if redis_url == default_redis and not os.environ.get("REDIS_URL"):
+        redis_url = "rediss://default:your-password@your-instance.upstash.io:6379"
+
+    # SSL設定の優先順位:
+    # 1. settings.redis_ssl (デフォルト値 False 以外なら明示的な指定とみなす)
+    # 2. SSL引数
+    # 3. URLスキーム
+    redis_ssl_val = getattr(settings, "redis_ssl", False)
+    if redis_ssl_val:  # 明示的に True の場合のみ優先
+        redis_ssl = True
+    else:
+        # デフォルトの False の場合は、引数や URL スキームから判断する
+        redis_ssl = ssl or redis_url.startswith("rediss://")
+
+    return redis_url, redis_ssl
 
 
 def build_start_command(
@@ -191,23 +208,8 @@ def generate_postgres_config(
 ) -> dict[str, Any]:
     """PostgreSQL + Neo4j + Redis フルモードの設定を生成する。"""
 
-    default_redis = getattr(settings, "DEFAULT_REDIS_URL", "redis://localhost:6379")
-    redis_url = getattr(settings, "redis_url", default_redis)
-    # ユーザーが明示的に環境変数や引数で指定していない、
-    # かつデフォルト値のままの場合はクラウド用プレースホルダを提示する
-    if redis_url == default_redis and not os.environ.get("REDIS_URL"):
-        redis_url = "rediss://default:your-password@your-instance.upstash.io:6379"
-
-    # SSL設定の優先順位:
-    # 1. settings.redis_ssl (デフォルト値 False 以外なら明示的な指定とみなす)
-    # 2. SSL引数
-    # 3. URLスキーム
-    redis_ssl_val = getattr(settings, "redis_ssl", False)
-    if redis_ssl_val:  # 明示的に True の場合のみ優先
-        redis_ssl = True
-    else:
-        # デフォルトの False の場合は、引数や URL スキームから判断する
-        redis_ssl = ssl or redis_url.startswith("rediss://")
+    # Redis 設定の解決
+    redis_url, redis_ssl = _resolve_redis_config(ssl)
 
     env = {
         "STORAGE_BACKEND": "postgres",
@@ -270,23 +272,8 @@ def generate_supabase_config(
         "DEDUP_THRESHOLD": f"{getattr(settings, 'dedup_threshold', 0.90):.2f}",
     }
     if cache == "redis":
-        default_redis = getattr(settings, "DEFAULT_REDIS_URL", "redis://localhost:6379")
-        redis_url = getattr(settings, "redis_url", default_redis)
-        # ユーザーが明示的に環境変数や引数で指定していない、
-        # かつデフォルト値のままの場合はクラウド用プレースホルダを提示する
-        if redis_url == default_redis and not os.environ.get("REDIS_URL"):
-            redis_url = "rediss://default:your-password@your-instance.upstash.io:6379"
-
-        # SSL設定の優先順位:
-        # 1. settings.redis_ssl (デフォルト値 False 以外なら明示的な指定とみなす)
-        # 2. SSL引数
-        # 3. URLスキーム
-        redis_ssl_val = getattr(settings, "redis_ssl", False)
-        if redis_ssl_val:  # 明示的に True の場合のみ優先
-            redis_ssl = True
-        else:
-            # デフォルトの False の場合は、引数や URL スキームから判断する
-            redis_ssl = ssl or redis_url.startswith("rediss://")
+        # Redis 設定の解決
+        redis_url, redis_ssl = _resolve_redis_config(ssl)
 
         env.update(
             {

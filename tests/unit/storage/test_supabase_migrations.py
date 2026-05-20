@@ -12,5 +12,5 @@ def test_vector_search_rpc_returns_embedding_column() -> None:
     returns_table = match.group("columns")
     function_body = sql.split("AS $$", 1)[1].split("$$;", 1)[0]
 
-    assert "embedding          vector" in returns_table
+    assert re.search(r"\bembedding\s+vector\b", returns_table) is not None
     assert "m.embedding" in function_body

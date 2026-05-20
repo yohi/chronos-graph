@@ -91,3 +91,79 @@ async def test_search_filters_fused_results_by_project() -> None:
 
     assert result["total_count"] == 1
     assert [item["memory_id"] for item in result["results"]] == [str(proj_a_memory.id)]
+
+
+@pytest.mark.asyncio
+async def test_search_filters_graph_results_by_project() -> None:
+    """graph_weight > 0 のときも project フィルタで他プロジェクトの graph 結果が除外される"""
+    proj_a_memory = Memory(
+        id=UUID("00000000-0000-0000-0000-000000000001"),
+        content="project a memory",
+        memory_type=MemoryType.SEMANTIC,
+        source_type=SourceType.MANUAL,
+        project="proj-a",
+    )
+    proj_a_graph_memory = Memory(
+        id=UUID("00000000-0000-0000-0000-000000000003"),
+        content="graph connected to project a",
+        memory_type=MemoryType.SEMANTIC,
+        source_type=SourceType.MANUAL,
+        project="proj-a",
+    )
+    proj_b_graph_memory = Memory(
+        id=UUID("00000000-0000-0000-0000-000000000004"),
+        content="graph connected to project b",
+        memory_type=MemoryType.SEMANTIC,
+        source_type=SourceType.MANUAL,
+        project="proj-b",
+    )
+
+    vector_search = MagicMock()
+    vector_search.search = AsyncMock(
+        return_value=[
+            ScoredMemory(memory=proj_a_memory, score=0.99, source=MemorySource.VECTOR),
+        ]
+    )
+    keyword_search = MagicMock()
+    keyword_search.search = AsyncMock(return_value=[])
+
+    async def mock_traverse(*, seed_ids, edge_types, depth):
+        return MagicMock(
+            nodes=[
+                {"id": str(proj_a_graph_memory.id), "score": 0.85},
+                {"id": str(proj_b_graph_memory.id), "score": 0.84},
+            ]
+        )
+
+    graph_traversal = MagicMock()
+    graph_traversal.traverse = AsyncMock(side_effect=mock_traverse)
+
+    storage_adapter = MagicMock()
+    storage_adapter.get_memories_batch = AsyncMock(
+        return_value=[proj_a_graph_memory, proj_b_graph_memory]
+    )
+
+    post_processor = MagicMock()
+    post_processor.process = AsyncMock(side_effect=lambda results, **_: results)
+
+    pipeline = RetrievalPipeline(
+        query_analyzer=MagicMock(),
+        vector_search=vector_search,
+        keyword_search=keyword_search,
+        graph_traversal=graph_traversal,
+        result_fusion=ResultFusion(),
+        post_processor=post_processor,
+        storage_adapter=storage_adapter,
+    )
+
+    result = await pipeline.search(
+        "query",
+        project="proj-a",
+        top_k=10,
+        strategy=SearchStrategy(vector_weight=0.5, keyword_weight=0.0, graph_weight=0.5),
+    )
+
+    assert result["total_count"] == 2
+    result_ids = {item["memory_id"] for item in result["results"]}
+    assert result_ids == {str(proj_a_memory.id), str(proj_a_graph_memory.id)}
+    assert str(proj_b_graph_memory.id) not in result_ids

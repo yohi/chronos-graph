@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS memories (
     importance_score   FLOAT        NOT NULL DEFAULT 0.5
                        CHECK (importance_score >= 0 AND importance_score <= 1),
     access_count       INT          NOT NULL DEFAULT 0 CHECK (access_count >= 0),
-    last_accessed_at   TIMESTAMPTZ  DEFAULT NOW(),
+    last_accessed_at   TIMESTAMPTZ  DEFAULT NULL,
     created_at         TIMESTAMPTZ  DEFAULT NOW(),
     updated_at         TIMESTAMPTZ  DEFAULT NOW(),
     archived_at        TIMESTAMPTZ,
@@ -44,3 +44,6 @@ CREATE INDEX IF NOT EXISTS idx_memories_embedding_hnsw
 -- Full-text search (pg_trgm)
 CREATE INDEX IF NOT EXISTS idx_memories_content_fts
     ON memories USING gin (content gin_trgm_ops);
+
+-- RLS の有効化
+ALTER TABLE memories ENABLE ROW LEVEL SECURITY;

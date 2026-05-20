@@ -14,7 +14,6 @@ RETURNS TABLE (
     memory_type        varchar,
     source_type        varchar,
     source_metadata    jsonb,
-    embedding          vector(768),
     semantic_relevance float,
     importance_score   float,
     access_count       integer,
@@ -34,7 +33,7 @@ SET search_path = public
 AS $$
     SELECT
         m.id, m.content, m.memory_type, m.source_type, m.source_metadata,
-        m.embedding, m.semantic_relevance, m.importance_score, m.access_count,
+        m.semantic_relevance, m.importance_score, m.access_count,
         m.last_accessed_at, m.created_at, m.updated_at, m.archived_at,
         m.tags, m.project, m.content_hash,
         (1 - (m.embedding <=> query_embedding))::float AS score
@@ -43,7 +42,7 @@ AS $$
       AND m.embedding IS NOT NULL
       AND (p_project IS NULL OR m.project = p_project)
     ORDER BY m.embedding <=> query_embedding
-    LIMIT match_count;
+    LIMIT COALESCE(GREATEST(match_count, 0), 0);
 $$;
 
 -- ============================================================
@@ -58,7 +57,9 @@ SET search_path = public
 AS $$
     SELECT DISTINCT m.project
     FROM memories m
-    WHERE m.project IS NOT NULL AND m.project <> '';
+    WHERE m.project IS NOT NULL AND m.project <> ''
+      AND m.archived_at IS NULL
+    ORDER BY m.project;
 $$;
 
 -- ============================================================

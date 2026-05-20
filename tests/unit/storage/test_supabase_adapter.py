@@ -564,7 +564,7 @@ async def test_list_by_filter_applies_conditions():
     for method in ["select", "eq", "is_", "contains", "limit", "order", "offset", "not_"]:
         getattr(chain, method).return_value = chain
 
-    # Issue 1 Fix: setting return_value for not_.is_ to maintain the chain
+    # Set return_value for not_.is_ to maintain the mock query chain
     chain.not_.is_.return_value = chain
 
     client.table.return_value.select.return_value = chain
@@ -581,7 +581,7 @@ async def test_list_by_filter_applies_conditions():
     assert len(results) == 1
     assert results[0].project == "p1"
 
-    # Issue 2 Verification
+    # Verify that query filters are correctly built and executed
     chain.eq.assert_any_call("project", "p1")
     chain.eq.assert_any_call("memory_type", "semantic")
     chain.is_.assert_called_once_with("archived_at", "null")
@@ -599,7 +599,7 @@ async def test_count_by_filter_returns_exact_count():
     for method in ["select", "eq", "is_", "contains", "limit", "not_"]:
         getattr(chain, method).return_value = chain
 
-    # Issue 1 Fix: setting return_value for not_.is_ to maintain the chain
+    # Set return_value for not_.is_ to maintain the mock query chain
     chain.not_.is_.return_value = chain
 
     client.table.return_value.select.return_value = chain
@@ -610,7 +610,7 @@ async def test_count_by_filter_returns_exact_count():
     count = await adapter.count_by_filter(filters)
     assert count == 42
 
-    # Issue 2 Verification
+    # Verify count parameters are correctly passed to select
     client.table.return_value.select.assert_called_once_with("*", count="exact", head=True)
     chain.eq.assert_called_once_with("project", "p1")
     chain.is_.assert_called_once_with("archived_at", "null")
@@ -626,7 +626,7 @@ async def test_list_by_filter_archived_true_uses_not_is():
     for method in ["select", "eq", "is_", "contains", "limit", "not_"]:
         getattr(chain, method).return_value = chain
 
-    # This is the fix being tested
+    # Set return_value for not_.is_ to maintain the mock query chain
     chain.not_.is_.return_value = chain
 
     client.table.return_value.select.return_value = chain
@@ -635,6 +635,6 @@ async def test_list_by_filter_archived_true_uses_not_is():
     filters = MemoryFilters(archived=True)
     await adapter.list_by_filter(filters)
 
-    # Verification of Issue 1 fix in action
+    # Verify that not_.is_ was invoked to filter archived items
     chain.not_.is_.assert_called_once_with("archived_at", "null")
     chain.execute.assert_awaited_once()

@@ -711,7 +711,7 @@ Graceful Degradation:
 | Redis | キャッシュなしで直接 DB 検索 |
 | PostgreSQL | 全ツールがエラーを返す（マスター DB） |
 | SQLite | WAL TRUNCATE中などのロック競合時（`SQLITE_BUSY`等）、`StorageError(code="STORAGE_BUSY", recoverable=True)`を返しMCPクライアントにリトライを促す |
-| Supabase | 通信タイムアウトは `STORAGE_TIMEOUT` (Recoverable)。413 Payload Too Large や 23505 (Unique Violation) 等は Recoverable=False として fail-fast 停止 |
+| Supabase | 通信・接続エラーや `STORAGE_TIMEOUT`、500/502/503 (サーバー側エラー)、429 (Rate Limit) 等は Exponential Backoff リトライを前提とした Recoverable=True。一方、413 Payload Too Large、23505 (Unique Violation)、および 401/403 (認証・認可エラー) は Recoverable=False として直ちに fail-fast 停止 |
 
 ---
 
@@ -1036,6 +1036,9 @@ context-store-mcp/
 ├── docker-compose.yml
 ├── .env.example
 ├── SPEC.md                        # 本ドキュメント
+│
+├── supabase/
+│   └── migrations/                # Supabase 管理の SQL マイグレーションファイル（supabase CLI を使用）
 │
 ├── src/
 │   ├── context_store/

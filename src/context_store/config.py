@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal, assert_never
+from typing import Any, ClassVar, Literal, assert_never
 from urllib.parse import quote
 
 from pydantic import Field, SecretStr, computed_field, field_validator, model_validator
@@ -17,6 +17,9 @@ class Settings(BaseSettings):
         env_file=".env",
         extra="ignore",
     )
+
+    # --- Constants ---
+    DEFAULT_REDIS_URL: ClassVar[str] = "redis://localhost:6379"
 
     @classmethod
     def settings_customise_sources(
@@ -93,7 +96,7 @@ class Settings(BaseSettings):
     neo4j_password: SecretStr = SecretStr("")
 
     # --- Redis (cache_backend=redis の場合) ---
-    redis_url: str = "redis://localhost:6379"
+    redis_url: str = DEFAULT_REDIS_URL
     redis_ssl: bool = False
 
     # --- Embedding ---

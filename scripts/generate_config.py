@@ -6,6 +6,7 @@ Claude Desktop / Cursor / その他 MCP クライアント用の設定 JSON を�
 Usage:
     python scripts/generate_config.py                    # SQLite (デフォルト)
     python scripts/generate_config.py --backend postgres # PostgreSQL モード
+    python scripts/generate_config.py --backend supabase   # Supabase モード
     python scripts/generate_config.py --output claude    # Claude Desktop 形式
     python scripts/generate_config.py --method uv       # uv モード
 
@@ -35,6 +36,8 @@ try:
 except ImportError:
     # インポート失敗時のフォールバック(スタンドアロン実行用)
     class SettingsFallback:
+        DEFAULT_REDIS_URL = "redis://localhost:6379"
+
         @property
         def model_fields(self) -> dict[str, Any]:
             """イミュータブルな定義を返すプロパティ。"""
@@ -77,14 +80,7 @@ def get_embedding_envs(provider: str) -> dict[str, str]:
     """プロバイダーに応じた埋め込み設定の環境変数を返す。"""
     envs = {"EMBEDDING_PROVIDER": provider}
     if provider == "openai":
-        api_key = "<your-openai-api-key>"
-        if hasattr(settings, "openai_api_key"):
-            raw = settings.openai_api_key
-            if raw is not None:
-                val = raw.get_secret_value()
-                if val:
-                    api_key = val
-        envs["OPENAI_API_KEY"] = api_key
+        envs["OPENAI_API_KEY"] = get_secret("openai_api_key", "<your-openai-api-key>")
     elif provider == "local-model":
         envs["LOCAL_MODEL_NAME"] = getattr(settings, "local_model_name", "cl-nagoya/ruri-v3-310m")
         envs["EMBEDDING_DIMENSION"] = str(getattr(settings, "embedding_dimension", "1024"))
@@ -97,6 +93,30 @@ def get_embedding_envs(provider: str) -> dict[str, str]:
         )
         envs["CUSTOM_API_MODEL_NAME"] = getattr(settings, "custom_api_model_name", "custom-model")
     return envs
+
+
+def _resolve_redis_config(ssl: bool) -> tuple[str, bool]:
+    """Redis の接続 URL と SSL 設定を解決する。"""
+    default_redis = getattr(settings, "DEFAULT_REDIS_URL", "redis://localhost:6379")
+    redis_url = getattr(settings, "redis_url", default_redis)
+
+    # ユーザーが明示的に環境変数や引数で指定していない、
+    # かつデフォルト値のままの場合はクラウド用プレースホルダを提示する
+    if redis_url == default_redis and not os.environ.get("REDIS_URL"):
+        redis_url = "rediss://default:your-password@your-instance.upstash.io:6379"
+
+    # SSL設定の優先順位:
+    # 1. settings.redis_ssl (デフォルト値 False 以外なら明示的な指定とみなす)
+    # 2. SSL引数
+    # 3. URLスキーム
+    redis_ssl_val = getattr(settings, "redis_ssl", False)
+    if redis_ssl_val:  # 明示的に True の場合のみ優先
+        redis_ssl = True
+    else:
+        # デフォルトの False の場合は、引数や URL スキームから判断する
+        redis_ssl = ssl or redis_url.startswith("rediss://")
+
+    return redis_url, redis_ssl
 
 
 def build_start_command(
@@ -130,6 +150,20 @@ def build_start_command(
         command = python_path
         args = ["-m", "context_store"]
     return command, args
+
+
+def get_secret(name: str, default: str) -> str:
+    """Settings から秘密情報を安全に取得する。"""
+    if hasattr(settings, name):
+        raw = getattr(settings, name)
+        if raw is not None:
+            if hasattr(raw, "get_secret_value"):
+                val = raw.get_secret_value()
+                if isinstance(val, str) and val:
+                    return val
+            elif isinstance(raw, str) and raw:
+                return raw
+    return default
 
 
 def generate_sqlite_config(
@@ -174,18 +208,8 @@ def generate_postgres_config(
 ) -> dict[str, Any]:
     """PostgreSQL + Neo4j + Redis フルモードの設定を生成する。"""
 
-    # helper for secret strings
-    def get_secret(name: str, default: str) -> str:
-        if hasattr(settings, name):
-            raw = getattr(settings, name)
-            if raw is not None:
-                if hasattr(raw, "get_secret_value"):
-                    val = raw.get_secret_value()
-                    if isinstance(val, str) and val:
-                        return val
-                elif isinstance(raw, str) and raw:
-                    return raw
-        return default
+    # Redis 設定の解決
+    redis_url, redis_ssl = _resolve_redis_config(ssl)
 
     env = {
         "STORAGE_BACKEND": "postgres",
@@ -200,10 +224,8 @@ def generate_postgres_config(
         "NEO4J_USER": getattr(settings, "neo4j_user", "neo4j"),
         "NEO4J_PASSWORD": get_secret("neo4j_password", "<your-neo4j-password>"),
         "CACHE_BACKEND": cache,
-        "REDIS_URL": getattr(
-            settings, "redis_url", "rediss://default:your-password@your-instance.upstash.io:6379"
-        ),
-        "REDIS_SSL": "true" if ssl or getattr(settings, "redis_ssl", False) else "false",
+        "REDIS_URL": redis_url,
+        "REDIS_SSL": "true" if redis_ssl else "false",
         "DECAY_HALF_LIFE_DAYS": str(getattr(settings, "decay_half_life_days", "30")),
         "SIMILARITY_THRESHOLD": f"{getattr(settings, 'similarity_threshold', 0.70):.2f}",
         "DEDUP_THRESHOLD": f"{getattr(settings, 'dedup_threshold', 0.90):.2f}",
@@ -211,6 +233,54 @@ def generate_postgres_config(
     # Cache configuration:
     # - Single instance / Local: CACHE_BACKEND=inmemory
     # - Multi-instance / Cloud: CACHE_BACKEND=redis (e.g., Upstash)
+    env.update(get_embedding_envs(embedding))
+
+    command, args = build_start_command(method, uv_from, python_path)
+
+    return {
+        "mcpServers": {
+            "chronos-graph": {
+                "command": command,
+                "args": args,
+                "env": env,
+            }
+        }
+    }
+
+
+def generate_supabase_config(
+    python_path: str,
+    embedding: str,
+    cache: str,
+    ssl: bool,
+    method: str = "python",
+    uv_from: str | None = None,
+) -> dict[str, Any]:
+    """Supabase モードの設定を生成する。"""
+
+    supabase_url = get_secret("supabase_url", "<your-supabase-project-url>")
+    supabase_key = get_secret("supabase_key", "<your-supabase-service-role-key>")
+
+    env = {
+        "STORAGE_BACKEND": "supabase",
+        "SUPABASE_URL": supabase_url,
+        "SUPABASE_KEY": supabase_key,
+        "GRAPH_ENABLED": "false",
+        "CACHE_BACKEND": cache,
+        "DECAY_HALF_LIFE_DAYS": str(getattr(settings, "decay_half_life_days", "30")),
+        "SIMILARITY_THRESHOLD": f"{getattr(settings, 'similarity_threshold', 0.70):.2f}",
+        "DEDUP_THRESHOLD": f"{getattr(settings, 'dedup_threshold', 0.90):.2f}",
+    }
+    if cache == "redis":
+        # Redis 設定の解決
+        redis_url, redis_ssl = _resolve_redis_config(ssl)
+
+        env.update(
+            {
+                "REDIS_URL": redis_url,
+                "REDIS_SSL": "true" if redis_ssl else "false",
+            }
+        )
     env.update(get_embedding_envs(embedding))
 
     command, args = build_start_command(method, uv_from, python_path)
@@ -235,7 +305,11 @@ def generate_cursor_config(base_config: dict[str, Any]) -> dict[str, Any]:
 def main() -> None:
     """メインエントリポイント。"""
     # Settings インスタンスから埋め込みプロバイダーの選択肢を取得
-    provider_field = settings.model_fields["embedding_provider"]
+    class_model_fields = getattr(type(settings), "model_fields", None)
+    model_fields = (
+        class_model_fields if isinstance(class_model_fields, dict) else settings.model_fields
+    )
+    provider_field = model_fields["embedding_provider"]
     embedding_choices = list(get_args(provider_field.annotation))
     if not embedding_choices:
         # get_args が解決できない場合の明示的なフォールバック
@@ -244,13 +318,16 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="ChronosGraph MCP client config generator")
     parser.add_argument(
-        "--backend", choices=["sqlite", "postgres"], default="sqlite", help="Storage backend"
+        "--backend",
+        choices=["sqlite", "postgres", "supabase"],
+        default="sqlite",
+        help="Storage backend",
     )
     parser.add_argument(
         "--cache",
         choices=["inmemory", "redis"],
         default=None,
-        help="Cache backend (default: inmemory, or redis if --ssl is set)",
+        help="Cache backend (postgres: inmemory, or redis if --ssl is set; supabase: redis)",
     )
     parser.add_argument(
         "--embedding",
@@ -280,7 +357,7 @@ def main() -> None:
         config = generate_sqlite_config(
             python_path, args.embedding, args.graph, args.method, args.uv_from
         )
-    else:
+    elif args.backend == "postgres":
         # ユーザーが指定していない場合のみ、デフォルト値を決定する
         # --ssl があれば redis、なければ inmemory をデフォルトにする
         cache_backend = args.cache
@@ -293,6 +370,16 @@ def main() -> None:
             args.graph,
             args.ssl,
             cache_backend,
+            args.method,
+            args.uv_from,
+        )
+    else:
+        cache_backend = args.cache or "redis"
+        config = generate_supabase_config(
+            python_path,
+            args.embedding,
+            cache_backend,
+            args.ssl,
             args.method,
             args.uv_from,
         )

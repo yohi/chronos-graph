@@ -711,6 +711,7 @@ Graceful Degradation:
 | Redis | キャッシュなしで直接 DB 検索 |
 | PostgreSQL | 全ツールがエラーを返す（マスター DB） |
 | SQLite | WAL TRUNCATE中などのロック競合時（`SQLITE_BUSY`等）、`StorageError(code="STORAGE_BUSY", recoverable=True)`を返しMCPクライアントにリトライを促す |
+| Supabase | 通信タイムアウトは `STORAGE_TIMEOUT` (Recoverable)。413 Payload Too Large や 23505 (Unique Violation) 等は Recoverable=False として fail-fast 停止 |
 
 ---
 
@@ -1493,6 +1494,10 @@ Blocking モードで待機中の承認を解決するための REST エンド�
 - [MCP 仕様](https://modelcontextprotocol.io/) — Model Context Protocol
 - [CrewAI Memory](https://docs.crewai.com/en/concepts/memory) — 複合スコアリングの参照実装
 - AIエージェントの長期記憶と強化学習プラグイン開発 — コグニティブアーキテクチャ / 複合スコアリング / RL
+- [LayerX ccgate (Zenn)](https://zenn.dev/layerx/articles/20260428-ccgate) — Server-defined Prompts / Permission Hook 概念の基礎
+- [tak848/ccgate (GitHub)](https://github.com/tak848/ccgate) — ccgate 参照実装
+
+��トの長期記憶と強化学習プラグイン開発 — コグニティブアーキテクチャ / 複合スコアリング / RL
 - [LayerX ccgate (Zenn)](https://zenn.dev/layerx/articles/20260428-ccgate) — Server-defined Prompts / Permission Hook 概念の基礎
 - [tak848/ccgate (GitHub)](https://github.com/tak848/ccgate) — ccgate 参照実装
 

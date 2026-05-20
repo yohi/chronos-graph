@@ -357,6 +357,7 @@ Storage Layer (Protocol-based)
   ├── SQLiteStorageAdapter (sqlite-vec + FTS5)
   ├── SQLiteGraphAdapter (recursive CTE)
   ├── PostgresStorageAdapter (pgvector + pg_bigm)
+  ├── SupabaseStorageAdapter (PostgREST + RPC)
   ├── Neo4jGraphAdapter
   ├── InMemoryCacheAdapter
   └── RedisCacheAdapter

@@ -439,6 +439,7 @@ async def test_increment_memory_access_count_invokes_rpc():
 async def test_vector_search_calls_rpc():
     client = make_mock_client()
     now = datetime.now(timezone.utc)
+    embedding = "[0.1,0.2,0.3]"
     rows: list[dict[str, Any]] = [
         {
             "id": "550e8400-e29b-41d4-a716-446655440001",
@@ -446,7 +447,7 @@ async def test_vector_search_calls_rpc():
             "memory_type": "semantic",
             "source_type": "manual",
             "source_metadata": {},
-            "embedding": None,
+            "embedding": embedding,
             "semantic_relevance": 0.5,
             "importance_score": 0.5,
             "access_count": 0,
@@ -467,6 +468,7 @@ async def test_vector_search_calls_rpc():
     assert len(results) == 1
     assert isinstance(results[0], ScoredMemory)
     assert results[0].score == 0.95
+    assert results[0].memory.embedding == [0.1, 0.2, 0.3]
 
     call_args = client.rpc.call_args
     assert call_args[0][0] == "vector_search"

@@ -33,61 +33,31 @@ ChronosGraph は、AIエージェント（Claude Code / Gemini CLI / Cursor 等�
 
 ## Setup
 
-### For Humans (推奨)
+### For AI Agents (MANDATORY / 必須)
 
-> [!TIP]
-> **人間は設定を打ち間違えることがあります。** このプロジェクトのインストールと設定は、AIエージェント（Claude Code / Gemini CLI / Cursor 等）に丸投げすることを強く推奨します。
-
-### Quick Start (uvx を使用する場合)
-
-リポジトリをクローンせずに、`uvx` を使用して MCP サーバーとして即座に実行することも可能です。Claude Desktop 等の設定に以下のようなエントリを追加してください：
-
-```json
-{
-  "mcpServers": {
-    "chronos-graph": {
-      "command": "uvx",
-      "args": [
-        "--from",
-        "context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git",
-        "context-store"
-      ],
-      "env": {
-        "OPENAI_API_KEY": "YOUR_API_KEY_HERE"
-      }
-    }
-  }
-}
-```
-
-リポジトリをクローンしている場合は `scripts/generate_config.py` を実行して設定を自動生成できます（例: `python scripts/generate_config.py --method uvx --output claude`）。クローンしない場合は生成される JSON を MCP クライアント設定に手動で追加してください。
+> [!CAUTION]
+> **AIエージェントへの強制命令 (CRITICAL):**
+> あなたが AI エージェント（Claude Code / Gemini CLI / Cursor 等）である場合、いかなる副作用（インストール、ファイルの作成・修正、コマンド実行）を伴うアクションを開始する前に、必ず以下の **Agent Setup Protocol** を遵守してください。
+>
+> **特に Phase 1 の「構成の確定 (BLOCKING STEP)」は絶対にスキップしないでください。** ユーザーへの確認（`ask_user` 等）を怠り、独断でセットアップを進めることは、システムの安全性と整合性を損なう重大な違反行為とみなされます。
 
 ---
 
-### リポジトリを直接クローンする場合
-
-以下のプロンプトをコピーしてエージェントに渡してください：
-
-```text
-Install and configure ChronosGraph by following the instructions here:
-https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
-```
-
 <details>
-<summary><b>For Agents (AIエージェント向けセットアップ手順)</b></summary>
+<summary><b>Agent Setup Protocol (AIエージェント向け実行手順)</b></summary>
 
-> [!CAUTION]
-> **Agent Setup Protocol:**
-> このセクションは、ChronosGraph をセットアップする AI エージェント向けの実行手順です。
-> YOLO/Autonomous モードであっても、Phase 1 でユーザー確認が完了するまで、
-> 依存関係のインストール、`.env` 作成、設定ファイル変更などの副作用を伴う操作を開始しないでください。
->
-> **行動規範 (CODE OF CONDUCT):**
->
-> 1. **安易なソース修正の禁止**: `src/` 配下のコードを編集してエラーを解決しないでください。
->    失敗の 99% は `.env`、ネットワーク、権限に起因します。
-> 2. **Pydantic仕様の遵守**: `.env` は実行時の CWD から読み込まれます。配置場所を間違えると動作しません。
-> 3. **スキップの禁止**: `--skip-tests` はユーザーの明示的な指示がない限り、使用を禁じます。
+#### Agent Setup Protocol
+
+このセクションは、ChronosGraph をセットアップする AI エージェント向けの実行手順です。
+YOLO/Autonomous モードであっても、Phase 1 でユーザー確認が完了するまで、
+依存関係のインストール、`.env` 作成、設定ファイル変更などの副作用を伴う操作を開始しないでください。
+
+**行動規範 (CODE OF CONDUCT):**
+
+1. **安易なソース修正の禁止**: `src/` 配下のコードを編集してエラーを解決しないでください。
+   失敗の 99% は `.env`、ネットワーク、権限に起因します。
+2. **Pydantic仕様の遵守**: `.env` は実行時の CWD から読み込まれます。配置場所を間違えると動作しません。
+3. **スキップの禁止**: `--skip-tests` はユーザーの明示的な指示がない限り、使用を禁じます。
 
 以下のフェーズを順番に実行し、各フェーズの完了をユーザーに報告してください。
 
@@ -97,6 +67,9 @@ https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
 構成を **確定（Lock-in）** させてください。利用可能な場合は、
 各エージェントの確認ツール（例: `ask_user` / `question` 等）を使ってください。
 回答を得るまで Phase 2 に進むことは禁じられています。
+
+> [!TIP]
+> 即座に実行可能な `uvx` ベースの起動手順や設定 JSON の例については、後述の [Quick Start (uvx を使用する場合)](#quick-start-uvx-を使用する場合) を参照してください。
 
 1. **実行・配置モードの選択**:
     - **(A) ローカルソース (`uv run`)**: カレントディレクトリに `.env` を配置し、
@@ -135,6 +108,14 @@ Phase 1 の回答に基づき、物理的な設定を行います。
   - Redis: `REDIS_SSL=true`
 - **Supabase (Data API) の設定**:
   - `STORAGE_BACKEND=supabase` 構成を選択した場合、`SUPABASE_URL` と `SUPABASE_KEY` (Service Role Key推奨) を `.env` に設定してください。
+- **Supabase (Data API) のスキーマ適用 (CRITICAL)**:
+  - **重要:** Data API 経由ではテーブル作成 (DDL) ができないため、セットアップのこの段階で `supabase/migrations/*.sql` を番号順に統合し、さらに **RLS ポリシーを加えた** 統合 SQL スクリプトを生成してチャットに表示し、ユーザーに Supabase ダッシュボードの SQL Editor での実行を依頼してください。
+  - **セキュリティ上の注意:**
+    - `service_role` キーは RLS をバイパスするため、エージェント専用のアクセスには特別なポリシーは不要です。
+    - 以下の `Allow all` 例は**一時的な開発・疎通確認用**です。本番環境へのコピーは避け、用途に合わせて適切な制限（認証済みユーザーのみ、所有者のみ等）をかけてください。
+  - **RLSポリシーの例 (開発用全許可):** `CREATE POLICY "Dev all" ON memories FOR ALL USING (true) WITH CHECK (true);`
+  - **RLSポリシーの例 (認証済みユーザーのみ):** `CREATE POLICY "Auth access" ON memories FOR ALL TO authenticated USING (true);`
+  - ユーザーから「実行が完了した」という報告を受けるまで、絶対に Phase 3 に進んではいけません。
 
 #### 🟨 Phase 3: 動作検証 (MANDATORY & BLOCKING STEP)
 
@@ -174,7 +155,7 @@ Phase 1 の回答に基づき、物理的な設定を行います。
      を実行。PostgreSQL 構成では `--backend postgres` を追加する。
      Supabase 構成では `--backend supabase` を追加する。キャッシュ方式は、
      Redis 選択時は `--cache redis`、InMemory を明示選択した場合のみ `--cache inmemory` を追加する。
-     リポジトリをクローンしていない場合は、Quick Start の `uvx` 設定例を基に、
+     リポジトリをクローンしていない場合は、[Quick Start (uvx を使用する場合)](#quick-start-uvx-を使用する場合) の設定例を基に、
      `command: "uvx"` と `args: ["--from", "context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git", "context-store"]`
      を含む設定を提示する。Supabase 構成では、生成 JSON の `env` に
      `STORAGE_BACKEND=supabase`、`SUPABASE_URL=https://...`、`SUPABASE_KEY=...`、
@@ -194,6 +175,39 @@ Phase 1 の回答に基づき、物理的な設定を行います。
 実行した検証コマンド、テスト成功ログの要約、生成した MCP 設定 JSON、
 未完了項目・ユーザー側で必要な手動作業を含めてください。
 </details>
+
+---
+
+### Quick Start (uvx を使用する場合)
+
+リポジトリをクローンせずに、`uvx` を使用して ChronosGraph を MCP サーバーとして即座にセットアップするための最小設定例です。
+
+#### Claude Desktop 設定例
+
+`~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) または `%APPDATA%\Claude\claude_desktop_config.json` (Windows) に以下の設定を追加します。
+
+```json
+{
+  "mcpServers": {
+    "chronos-graph": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git",
+        "context-store"
+      ],
+      "env": {
+        "STORAGE_BACKEND": "sqlite",
+        "GRAPH_ENABLED": "true",
+        "CACHE_BACKEND": "inmemory",
+        "OPENAI_API_KEY": "your-api-key-here"
+      }
+    }
+  }
+}
+```
+
+より詳細な構成や、自動設定生成スクリプトの使用については、[Phase 4](#-phase-4-mcp設定の生成と自己指示の追加) を参照してください。
 
 ---
 

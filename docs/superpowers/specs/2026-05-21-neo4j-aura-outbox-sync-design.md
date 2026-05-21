@@ -58,7 +58,7 @@ Graph Layer (Neo4j) を分離しているが、現在の `sync` モードでは 
 
 #### Write (async_outbox モード)
 
-```
+```text
 IngestionPipeline
   ├─ Chunker → Classifier → Embedding → Deduplicator
   ├─ GraphLinker → Storage 側グラフテーブル (memory_nodes / memory_edges) のみ
@@ -75,7 +75,7 @@ IngestionPipeline
 
 #### Read (両モード共通)
 
-```
+```text
 RetrievalPipeline.search()
   ├─ VectorSearch (Storage)          → results_v
   ├─ KeywordSearch (Storage)         → results_k
@@ -341,7 +341,7 @@ def _validate_graph_sync_mode(self) -> Self:
 
 ### 6.1 新規モジュール
 
-```
+```text
 src/context_store/sync/
 ├── __init__.py
 ├── outbox_writer.py       # OutboxWriter Protocol + PostgresOutboxWriter / SqliteOutboxWriter
@@ -423,7 +423,7 @@ else:
 
 ### 7.1 ライフサイクル
 
-```
+```text
 Orchestrator.start()
   └─ if graph_sync_mode == "async_outbox":
        task_registry.register(outbox_worker.run())
@@ -633,7 +633,7 @@ async def get_memories_batch(self, memory_ids: list[str]) -> list[Memory]:
 
 ファイル: `scripts/sync_storage_to_neo4j.py`
 
-```
+```text
 usage: sync_storage_to_neo4j.py [--full | --catchup] [--chunk-size N] [--dry-run]
 ```
 
@@ -669,7 +669,7 @@ Storage 側の VectorSearch / KeywordSearch から即座に発見される。
 
 `async_outbox` モード時にグラフ検索結果が 0 件の場合、INFO ログを出力:
 
-```
+```text
 Graph traversal returned empty results; outbox sync lag may be a factor.
 Falling back to vector+keyword fusion.
 ```
@@ -678,7 +678,7 @@ Falling back to vector+keyword fusion.
 
 ### 12.1 テスト階層
 
-```
+```text
 tests/
 ├── unit/
 │   ├── sync/

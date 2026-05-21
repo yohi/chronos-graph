@@ -109,12 +109,13 @@ VectorSearch / KeywordSearch で補完される。
 | `payload` | JSONB DEFAULT '{}' | TEXT DEFAULT '{}' | DELETE_MEMORY 時のメタデータ等 |
 | `status` | VARCHAR(20) DEFAULT 'PENDING' | TEXT DEFAULT 'PENDING' | PENDING / PROCESSING / FAILED |
 | `retry_count` | INT DEFAULT 0 | INTEGER DEFAULT 0 | リトライ回数 |
+| `next_retry_at` | TIMESTAMPTZ DEFAULT NOW() | TEXT (ISO8601, DEFAULT now) | 次回リトライ可能時刻。Backoff を DB レベルで永続化 |
 | `error_message` | TEXT NULL | TEXT NULL | 最後のエラー詳細 |
 | `created_at` | TIMESTAMPTZ DEFAULT NOW() | TEXT (ISO8601) | イベント作成時刻 |
 | `updated_at` | TIMESTAMPTZ DEFAULT NOW() | TEXT (ISO8601) | 最終更新時刻 |
 
 **インデックス:**
-- `(status, created_at ASC)` — ワーカーの PENDING フェッチ用
+- `(status, next_retry_at ASC)` — ワーカーの PENDING フェッチ用 (Backoff 対応)
 - `(memory_id)` — 重複イベント検出用
 
 ### 3.2 イベント粒度: 粗粒度モデル
@@ -149,12 +150,13 @@ CREATE TABLE graph_sync_outbox (
     status        VARCHAR(20)  NOT NULL DEFAULT 'PENDING'
                                CHECK (status IN ('PENDING', 'PROCESSING', 'FAILED')),
     retry_count   INT          NOT NULL DEFAULT 0,
+    next_retry_at TIMESTAMPTZ  DEFAULT NOW(),
     error_message TEXT,
     created_at    TIMESTAMPTZ  DEFAULT NOW(),
     updated_at    TIMESTAMPTZ  DEFAULT NOW()
 );
 
-CREATE INDEX idx_outbox_status_created ON graph_sync_outbox (status, created_at ASC);
+CREATE INDEX idx_outbox_status_retry ON graph_sync_outbox (status, next_retry_at ASC);
 CREATE INDEX idx_outbox_memory_id ON graph_sync_outbox (memory_id);
 ```
 
@@ -171,12 +173,13 @@ CREATE TABLE graph_sync_outbox (
     status        TEXT NOT NULL DEFAULT 'PENDING'
                        CHECK (status IN ('PENDING', 'PROCESSING', 'FAILED')),
     retry_count   INTEGER NOT NULL DEFAULT 0,
+    next_retry_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     error_message TEXT,
     created_at    TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at    TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
-CREATE INDEX idx_outbox_status_created ON graph_sync_outbox (status, created_at);
+CREATE INDEX idx_outbox_status_retry ON graph_sync_outbox (status, next_retry_at);
 CREATE INDEX idx_outbox_memory_id ON graph_sync_outbox (memory_id);
 ```
 
@@ -219,6 +222,18 @@ BEGIN
         p_embedding, p_semantic_relevance, p_importance_score,
         p_tags, p_project, p_content_hash
     )
+    ON CONFLICT (id) DO UPDATE SET
+        content            = EXCLUDED.content,
+        memory_type        = EXCLUDED.memory_type,
+        source_type        = EXCLUDED.source_type,
+        source_metadata    = EXCLUDED.source_metadata,
+        embedding          = EXCLUDED.embedding,
+        semantic_relevance = EXCLUDED.semantic_relevance,
+        importance_score   = EXCLUDED.importance_score,
+        tags               = EXCLUDED.tags,
+        project            = EXCLUDED.project,
+        content_hash       = EXCLUDED.content_hash,
+        updated_at         = NOW()
     RETURNING id INTO v_memory_id;
 
     INSERT INTO graph_sync_outbox (event_type, memory_id)
@@ -451,8 +466,60 @@ async def run(self) -> None:
 - 計算: `min(base_seconds * 2^retry_count, max_seconds)`
 - デフォルト: base=1s, max=60s
 - リトライ上限: 10回。超過で `FAILED` ステータスに遷移 (Dead Letter)
+- **DB レベルでの永続化**: 失敗時に `next_retry_at = NOW() + backoff_interval` を書き込み、
+  `fetch_pending` が `WHERE next_retry_at <= NOW()` でフィルタする。これにより
+  Worker のクラッシュ・再起動・水平スケール時にも Backoff 状態が保持される。
+  Worker プロセス内のインメモリ待機 (`asyncio.wait_for`) は不要となり、
+  ポーリングループは単純に次のサイクルで再チェックするだけでよい
 
-### 7.5 Head-of-Line Blocking 防止
+### 7.5 PROCESSING スタックのリカバリ
+
+Worker がステータスを `PROCESSING` に更新した後、Neo4j 同期完了前にクラッシュすると
+レコードが `PROCESSING` のまま永久にスタックする。これを防ぐため以下のリカバリ機構を導入する。
+
+**起動時リカバリ**: Worker 起動時（ポーリングループ開始前）に
+`self._reader.reset_stuck_processing(threshold_seconds=300)` を呼び出す。
+`updated_at` が閾値（デフォルト 300 秒）を超えた `PROCESSING` レコードを検出し、
+`retry_count` をインクリメントして `PENDING` にリセットする。
+`retry_count >= max_retries` の場合は `FAILED` に遷移させる。
+
+```python
+async def run(self) -> None:
+    # 起動時: 前回クラッシュで放置された PROCESSING レコードをリカバリ
+    recovered = await self._reader.reset_stuck_processing(
+        threshold_seconds=300,
+        max_retries=self._settings.outbox_max_retries,
+    )
+    if recovered:
+        logger.info(
+            "OutboxWorker: recovered stuck PROCESSING events",
+            extra={"count": recovered},
+        )
+    # メインポーリングループ開始
+    while not self._stop_event.is_set():
+        ...
+```
+
+**OutboxReader への追加メソッド**:
+
+```python
+async def reset_stuck_processing(
+    self, threshold_seconds: int = 300, max_retries: int = 10,
+) -> int:
+    """updated_at が閾値を超えた PROCESSING レコードをリカバリ。
+    retry_count < max_retries → PENDING にリセット (retry_count++)
+    retry_count >= max_retries → FAILED に遷移
+    リカバリした件数を返す。"""
+```
+
+**スキーマへの影響**: 新規カラム不要。既存の `updated_at` を `mark_processing` 時に
+`NOW()` に設定するため、これをスタック判定の基準として使用する。
+
+**`fetch_all_actionable` の対象拡張**: リカバリスクリプト (`--catchup`) の
+`fetch_all_actionable` は `PENDING` + `FAILED` に加えて `PROCESSING` も取得対象とする。
+これにより、Worker クラッシュ後にスクリプトで手動リカバリも可能。
+
+### 7.6 Head-of-Line Blocking 防止
 
 `FAILED` イベントは自動スキップされ、後続イベントの処理を妨げない。
 PostgreSQL では `FOR UPDATE SKIP LOCKED` により複数ワーカーの水平スケールにも対応。
@@ -465,7 +532,7 @@ class OutboxReader(Protocol):
     async def mark_processing(self, event_ids: list[str]) -> None: ...
     async def delete_completed(self, event_ids: list[str]) -> None: ...
     async def mark_failed(self, event_id: str, error_message: str) -> None: ...
-    async def reset_to_pending(self, event_id: str, retry_count: int, error_message: str) -> None: ...
+    async def reset_to_pending(self, event_id: str, retry_count: int, next_retry_at: datetime, error_message: str) -> None: ...
     async def fetch_all_actionable(self) -> list[OutboxEvent]: ...
 ```
 
@@ -477,7 +544,8 @@ SET status = 'PROCESSING', updated_at = NOW()
 WHERE id IN (
     SELECT id FROM graph_sync_outbox
     WHERE status = 'PENDING'
-    ORDER BY created_at ASC
+      AND next_retry_at <= NOW()
+    ORDER BY next_retry_at ASC
     LIMIT $1
     FOR UPDATE SKIP LOCKED
 )
@@ -572,7 +640,7 @@ usage: sync_storage_to_neo4j.py [--full | --catchup] [--chunk-size N] [--dry-run
 | モード | 動作 |
 | --- | --- |
 | `--full` | Neo4j を完全パージし、Storage 全体から再構築 |
-| `--catchup` | Outbox の PENDING + FAILED イベントを再処理 |
+| `--catchup` | Outbox の PENDING + PROCESSING + FAILED イベントを再処理 |
 | `--dry-run` | 実際の書き込みを行わず対象件数のみ出力 |
 | `--chunk-size` | バッチサイズ (デフォルト 1000) |
 
@@ -639,6 +707,8 @@ tests/
 | `test_worker_exponential_backoff` | base * 2^retry、max 超えない |
 | `test_worker_graceful_shutdown` | stop() → バッチ完了後ループ終了 |
 | `test_worker_orphaned_sync_event` | 削除済みメモリ → イベント削除して続行 |
+| `test_worker_recovers_stuck_processing_on_startup` | 起動時に stale PROCESSING → PENDING リセット |
+| `test_worker_fails_stuck_processing_at_max_retries` | stale PROCESSING + retry >= 10 → FAILED |
 
 **Config バリデーション:**
 

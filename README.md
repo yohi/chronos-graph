@@ -37,13 +37,14 @@ ChronosGraph は、AIエージェント（Claude Code / Gemini CLI / Cursor 等�
 
 > [!CAUTION]
 > **AIエージェントへの強制命令 (CRITICAL):**
-> あなたが AI エージェント（Claude Code / Gemini CLI / Cursor / Gemini CLI 等）である場合、いかなる副作用（インストール、ファイルの作成・修正、コマンド実行）を伴うアクションを開始する前に、必ず以下の **Agent Setup Protocol** を遵守してください。
+> あなたが AI エージェント（Claude Code / Gemini CLI / Cursor 等）である場合、いかなる副作用（インストール、ファイルの作成・修正、コマンド実行）を伴うアクションを開始する前に、必ず以下の **Agent Setup Protocol** を遵守してください。
 >
 > **特に Phase 1 の「構成の確定 (BLOCKING STEP)」は絶対にスキップしないでください。** ユーザーへの確認（`ask_user` 等）を怠り、独断でセットアップを進めることは、システムの安全性と整合性を損なう重大な違反行為とみなされます。
 
 ---
 
 <details>
+<summary><b>Agent Setup Protocol (AIエージェント向け実行手順)</b></summary>
 
 #### Agent Setup Protocol
 

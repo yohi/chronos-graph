@@ -574,7 +574,7 @@ async def test_keyword_search_returns_empty_on_blank_query():
 @pytest.mark.asyncio
 async def test_list_by_filter_applies_conditions():
     client = make_mock_client()
-    rows = [
+    rows: list[dict[str, Any]] = [
         {
             "id": "550e8400-e29b-41d4-a716-446655440000",
             "content": "hello",

@@ -43,6 +43,8 @@ ChronosGraph は、AIエージェント（Claude Code / Gemini CLI / Cursor 等�
 
 ---
 
+<details>
+
 #### Agent Setup Protocol
 
 このセクションは、ChronosGraph をセットアップする AI エージェント向けの実行手順です。
@@ -152,7 +154,7 @@ Phase 1 の回答に基づき、物理的な設定を行います。
      を実行。PostgreSQL 構成では `--backend postgres` を追加する。
      Supabase 構成では `--backend supabase` を追加する。キャッシュ方式は、
      Redis 選択時は `--cache redis`、InMemory を明示選択した場合のみ `--cache inmemory` を追加する。
-     リポジトリをクローンしていない場合は、Quick Start の `uvx` 設定例を基に、
+     リポジトリをクローンしていない場合は、[Quick Start (uvx を使用する場合)](#quick-start-uvx-を使用する場合) の設定例を基に、
      `command: "uvx"` と `args: ["--from", "context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git", "context-store"]`
      を含む設定を提示する。Supabase 構成では、生成 JSON の `env` に
      `STORAGE_BACKEND=supabase`、`SUPABASE_URL=https://...`、`SUPABASE_KEY=...`、
@@ -172,6 +174,39 @@ Phase 1 の回答に基づき、物理的な設定を行います。
 実行した検証コマンド、テスト成功ログの要約、生成した MCP 設定 JSON、
 未完了項目・ユーザー側で必要な手動作業を含めてください。
 </details>
+
+---
+
+### Quick Start (uvx を使用する場合)
+
+リポジトリをクローンせずに、`uvx` を使用して ChronosGraph を MCP サーバーとして即座にセットアップするための最小設定例です。
+
+#### Claude Desktop 設定例
+
+`~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) または `%APPDATA%\Claude\claude_desktop_config.json` (Windows) に以下の設定を追加します。
+
+```json
+{
+  "mcpServers": {
+    "chronos-graph": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git",
+        "context-store"
+      ],
+      "env": {
+        "STORAGE_BACKEND": "sqlite",
+        "GRAPH_ENABLED": "true",
+        "CACHE_BACKEND": "inmemory",
+        "OPENAI_API_KEY": "your-api-key-here"
+      }
+    }
+  }
+}
+```
+
+より詳細な構成や、自動設定生成スクリプトの使用については、[Phase 4](#-phase-4-mcp設定の生成と自己指示の追加) を参照してください。
 
 ---
 

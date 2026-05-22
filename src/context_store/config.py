@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any, ClassVar, Literal, assert_never
 from urllib.parse import quote
 
@@ -14,7 +15,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="",
-        env_file=".env",
+        env_file=".env" if os.environ.get("ENV_FILE") != "/dev/null" else None,
         extra="ignore",
     )
 

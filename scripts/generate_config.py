@@ -31,32 +31,33 @@ from typing import Any, Literal, get_args
 # src を sys.path に追加して context_store をインポート可能にする
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-try:
-    from context_store.config import Settings as RealSettings
-except ImportError:
-    # インポート失敗時のフォールバック(スタンドアロン実行用)
-    class SettingsFallback:
-        DEFAULT_REDIS_URL = "redis://localhost:6379"
 
-        @property
-        def model_fields(self) -> dict[str, Any]:
-            """イミュータブルな定義を返すプロパティ。"""
-            return {
-                "embedding_provider": type(
-                    "obj",
-                    (),
-                    {
-                        "annotation": Literal["openai", "local-model", "litellm", "custom-api"],
-                        "default": "local-model",
-                    },
-                )
-            }
+def get_settings() -> Any:
+    """Settings インスタンスを遅延ロードして返す。"""
+    try:
+        from context_store.config import Settings as RealSettings
 
-    # インスタンス化して使用
-    settings: Any = SettingsFallback()
-else:
-    # Pydantic Settings はインスタンス化しても model_fields にアクセス可能
-    settings = RealSettings()
+        return RealSettings()
+    except ImportError:
+        # インポート失敗時のフォールバック(スタンドアロン実行用)
+        class SettingsFallback:
+            DEFAULT_REDIS_URL = "redis://localhost:6379"
+
+            @property
+            def model_fields(self) -> dict[str, Any]:
+                """イミュータブルな定義を返すプロパティ。"""
+                return {
+                    "embedding_provider": type(
+                        "obj",
+                        (),
+                        {
+                            "annotation": Literal["openai", "local-model", "litellm", "custom-api"],
+                            "default": "local-model",
+                        },
+                    )
+                }
+
+        return SettingsFallback()
 
 
 def str_to_bool(value: str) -> bool:
@@ -78,12 +79,13 @@ def find_python() -> str:
 
 def get_embedding_envs(provider: str) -> dict[str, str]:
     """プロバイダーに応じた埋め込み設定の環境変数を返す。"""
+    settings = get_settings()
     envs = {"EMBEDDING_PROVIDER": provider}
     if provider == "openai":
-        envs["OPENAI_API_KEY"] = get_secret("openai_api_key", "<your-openai-api-key>")
+        envs["OPENAI_API_KEY"] = get_secret(settings, "openai_api_key", "<your-openai-api-key>")
     elif provider == "local-model":
         envs["LOCAL_MODEL_NAME"] = getattr(settings, "local_model_name", "cl-nagoya/ruri-v3-310m")
-        envs["EMBEDDING_DIMENSION"] = str(getattr(settings, "embedding_dimension", "1024"))
+        envs["EMBEDDING_DIMENSION"] = str(getattr(settings, "embedding_dimension", "768"))
     elif provider == "litellm":
         envs["LITELLM_API_BASE"] = getattr(settings, "litellm_api_base", "http://localhost:4000")
         envs["LITELLM_MODEL"] = getattr(settings, "litellm_model", "openai/text-embedding-3-small")
@@ -97,6 +99,7 @@ def get_embedding_envs(provider: str) -> dict[str, str]:
 
 def _resolve_redis_config(ssl: bool) -> tuple[str, bool]:
     """Redis の接続 URL と SSL 設定を解決する。"""
+    settings = get_settings()
     default_redis = getattr(settings, "DEFAULT_REDIS_URL", "redis://localhost:6379")
     redis_url = getattr(settings, "redis_url", default_redis)
 
@@ -152,7 +155,7 @@ def build_start_command(
     return command, args
 
 
-def get_secret(name: str, default: str) -> str:
+def get_secret(settings: Any, name: str, default: str) -> str:
     """Settings から秘密情報を安全に取得する。"""
     if hasattr(settings, name):
         raw = getattr(settings, name)
@@ -174,6 +177,7 @@ def generate_sqlite_config(
     uv_from: str | None = None,
 ) -> dict[str, Any]:
     """SQLite ライトウェイトモードの設定を生成する。"""
+    settings = get_settings()
     env = {
         "STORAGE_BACKEND": "sqlite",
         "SQLITE_DB_PATH": getattr(settings, "sqlite_db_path", "~/.context-store/memories.db"),
@@ -207,7 +211,7 @@ def generate_postgres_config(
     uv_from: str | None = None,
 ) -> dict[str, Any]:
     """PostgreSQL + Neo4j + Redis フルモードの設定を生成する。"""
-
+    settings = get_settings()
     # Redis 設定の解決
     redis_url, redis_ssl = _resolve_redis_config(ssl)
 
@@ -217,12 +221,12 @@ def generate_postgres_config(
         "POSTGRES_PORT": str(getattr(settings, "postgres_port", "5432")),
         "POSTGRES_DB": getattr(settings, "postgres_db", "postgres"),
         "POSTGRES_USER": getattr(settings, "postgres_user", "postgres"),
-        "POSTGRES_PASSWORD": get_secret("postgres_password", "<your-postgres-password>"),
+        "POSTGRES_PASSWORD": get_secret(settings, "postgres_password", "<your-postgres-password>"),
         "POSTGRES_SSL": "true" if ssl else "false",
         "GRAPH_ENABLED": "true" if graph else "false",
         "NEO4J_URI": getattr(settings, "neo4j_uri", "neo4j+s://your-instance.databases.neo4j.io"),
         "NEO4J_USER": getattr(settings, "neo4j_user", "neo4j"),
-        "NEO4J_PASSWORD": get_secret("neo4j_password", "<your-neo4j-password>"),
+        "NEO4J_PASSWORD": get_secret(settings, "neo4j_password", "<your-neo4j-password>"),
         "CACHE_BACKEND": cache,
         "REDIS_URL": redis_url,
         "REDIS_SSL": "true" if redis_ssl else "false",
@@ -257,9 +261,9 @@ def generate_supabase_config(
     uv_from: str | None = None,
 ) -> dict[str, Any]:
     """Supabase モードの設定を生成する。"""
-
-    supabase_url = get_secret("supabase_url", "<your-supabase-project-url>")
-    supabase_key = get_secret("supabase_key", "<your-supabase-service-role-key>")
+    settings = get_settings()
+    supabase_url = get_secret(settings, "supabase_url", "<your-supabase-project-url>")
+    supabase_key = get_secret(settings, "supabase_key", "<your-supabase-service-role-key>")
 
     env = {
         "STORAGE_BACKEND": "supabase",
@@ -304,6 +308,7 @@ def generate_cursor_config(base_config: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> None:
     """メインエントリポイント。"""
+    settings = get_settings()
     # Settings インスタンスから埋め込みプロバイダーの選択肢を取得
     class_model_fields = getattr(type(settings), "model_fields", None)
     model_fields = (

@@ -13,6 +13,7 @@ class TestCreateEmbeddingProvider:
 
     def _make_settings(self, **overrides) -> Settings:
         base = {
+            "storage_backend": "sqlite",
             "postgres_password": "test",
             "neo4j_password": "test",
         }

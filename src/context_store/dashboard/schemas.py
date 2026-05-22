@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 
@@ -101,6 +101,12 @@ class MemorySearchRequest(DashboardBaseModel):
     min_importance: float | None = None
     limit: int = 100
     offset: int = 0
+
+
+class SemanticSearchRequest(DashboardBaseModel):
+    query: str = Field(..., min_length=1)
+    project: str | None = None
+    top_k: int = Field(default=5, ge=1, le=50)
 
 
 class GraphTraverseRequest(DashboardBaseModel):

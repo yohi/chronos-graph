@@ -1,9 +1,31 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import patch
+
 import pytest
 
-from mcp_gateway.policy.llm_evaluator import ResponseParseError, _parse_decision
-from mcp_gateway.policy.models_evaluator import Decision
+from mcp_gateway.policy.llm_evaluator import (
+    SYSTEM_PROMPT,
+    LlmEvaluator,
+    ResponseParseError,
+    _build_user_prompt,
+    _parse_decision,
+)
+from mcp_gateway.policy.models_evaluator import Decision, MemoryItem, ToolCallInput
+
+
+class _FakeMessages:
+    def __init__(self, response: SimpleNamespace) -> None:
+        self._response: SimpleNamespace = response
+
+    def create(self, **_kwargs: object) -> SimpleNamespace:
+        return self._response
+
+
+class _FakeClient:
+    def __init__(self, response: SimpleNamespace) -> None:
+        self.messages: _FakeMessages = _FakeMessages(response)
 
 
 @pytest.mark.parametrize(
@@ -55,3 +77,79 @@ def test_parse_truncates_long_ask_message() -> None:
 def test_parse_rejects_invalid(text: str) -> None:
     with pytest.raises(ResponseParseError):
         _ = _parse_decision(text)
+
+
+def test_from_env_returns_none_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert LlmEvaluator.from_env() is None
+
+
+def test_from_env_returns_none_when_anthropic_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    with patch("importlib.import_module", side_effect=ImportError("not installed")):
+        assert LlmEvaluator.from_env() is None
+
+
+def test_build_user_prompt_redacts_sensitive_keys() -> None:
+    input_ = ToolCallInput(
+        tool_name="bash",
+        tool_input={"command": "echo hi", "password": "hunter2"},
+        context={"cwd": "/workspace", "agent_id": "claude-code"},
+    )
+    rules = "- bash: no rm -rf /\n"
+    memories = [MemoryItem(content="prefer dry-run", memory_type="semantic", importance=0.8)]
+
+    out = _build_user_prompt(input_=input_, rules=rules, memories=memories, intent_name="default")
+
+    assert "<tool_intent>" in out
+    assert "<rules" in out
+    assert "<memory" in out
+    assert "<REDACTED>" in out
+    assert "hunter2" not in out
+    assert "prefer dry-run" in out
+
+
+def test_build_user_prompt_handles_empty_memories() -> None:
+    input_ = ToolCallInput(tool_name="bash", tool_input={"command": "ls"})
+    out = _build_user_prompt(input_=input_, rules="-", memories=[], intent_name="default")
+    assert "<memory" in out
+    assert "</memory>" in out
+
+
+@pytest.mark.asyncio
+async def test_judge_returns_allow_on_valid_response() -> None:
+    evaluator = LlmEvaluator(api_key="x", model="claude-haiku-4-5-20251001")
+    fake_response = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text='{"decision":"allow"}')]
+    )
+    fake_client = _FakeClient(fake_response)
+
+    with patch.object(evaluator, "_get_client", return_value=fake_client):
+        out = await evaluator.judge(
+            input_=ToolCallInput(tool_name="bash", tool_input={"command": "ls"}),
+            rules="-",
+            memories=[],
+        )
+
+    assert out == Decision(decision="allow")
+
+
+@pytest.mark.asyncio
+async def test_judge_raises_on_non_text_response() -> None:
+    evaluator = LlmEvaluator(api_key="x")
+    fake_response = SimpleNamespace(content=[])
+    fake_client = _FakeClient(fake_response)
+
+    with patch.object(evaluator, "_get_client", return_value=fake_client):
+        with pytest.raises(ResponseParseError):
+            _ = await evaluator.judge(
+                input_=ToolCallInput(tool_name="bash", tool_input={}),
+                rules="",
+                memories=[],
+            )
+
+
+def test_system_prompt_contains_role_and_output_format() -> None:
+    assert "<role>" in SYSTEM_PROMPT
+    assert "<output_format>" in SYSTEM_PROMPT
+    assert "allow" in SYSTEM_PROMPT and "deny" in SYSTEM_PROMPT and "ask" in SYSTEM_PROMPT

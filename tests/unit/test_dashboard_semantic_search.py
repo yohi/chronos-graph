@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -11,6 +12,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from context_store.dashboard.api_server import create_app
+from context_store.dashboard.schemas import SemanticSearchRequest
+from context_store.dashboard.services import DashboardService
 from context_store.dashboard.schemas import SemanticSearchRequest
 from context_store.dashboard.services import DashboardService
 
@@ -70,13 +73,22 @@ def test_semantic_search_request_defaults() -> None:
     assert req.top_k == 5
 
 
-def test_semantic_search_request_top_k_validation() -> None:
+@pytest.mark.parametrize(
+    "field,invalid_value",
+    [
+        ("top_k", 0),
+        ("top_k", 51),
+        ("query", ""),
+    ],
+)
+def test_semantic_search_request_validation(field: str, invalid_value: Any) -> None:
+    kwargs: dict[str, Any] = {"query": "x"}
+    kwargs[field] = invalid_value
     with pytest.raises(ValueError):
-        SemanticSearchRequest(query="x", top_k=0)
+        SemanticSearchRequest(**kwargs)
 
 
-@pytest.fixture
-def app_with_pipeline() -> tuple[FastAPI, MagicMock]:
+def test_semantic_search_endpoint_returns_memories() -> None:
     fake_memory = SimpleNamespace(
         id="m-1",
         content="hello",
@@ -91,13 +103,7 @@ def app_with_pipeline() -> tuple[FastAPI, MagicMock]:
 
     service = DashboardService(storage=MagicMock(), graph=None, retrieval_pipeline=pipeline)
     app = create_app(service_override=service)
-    return app, pipeline
 
-
-def test_semantic_search_endpoint_returns_memories(
-    app_with_pipeline: tuple[FastAPI, MagicMock],
-) -> None:
-    app, pipeline = app_with_pipeline
     with TestClient(app, base_url="http://localhost") as client:
         response = client.post(
             "/api/memories/semantic-search",

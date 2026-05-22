@@ -51,7 +51,7 @@ class RetrievalPipeline:
     """検索パイプライン統合"""
 
     @classmethod
-    async def create_for_dashboard(
+    def create_for_dashboard(
         cls,
         *,
         storage: StorageAdapter,

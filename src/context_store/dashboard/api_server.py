@@ -47,7 +47,30 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.storage = storage
         app.state.graph = graph
         app.state.cache = cache
-        app.state.service = DashboardService(storage=storage, graph=graph)
+        retrieval_pipeline = None
+        try:
+            from context_store.retrieval.pipeline import RetrievalPipeline
+
+            retrieval_pipeline = RetrievalPipeline.create_for_dashboard(
+                storage=storage,
+                graph=graph,
+                settings=settings,
+            )
+        except Exception as exc:
+            if not isinstance(exc, (ValueError, RuntimeError, ImportError, OSError)):
+                raise
+            logger.warning(
+                "RetrievalPipeline could not be initialized for dashboard "
+                "(semantic-search endpoint will return 503): %s",
+                exc,
+                exc_info=True,
+            )
+
+        app.state.service = DashboardService(
+            storage=storage,
+            graph=graph,
+            retrieval_pipeline=retrieval_pipeline,
+        )
 
         from context_store.dashboard.log_collector import get_log_handler
         from context_store.dashboard.websocket_manager import get_ws_manager

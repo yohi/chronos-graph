@@ -8,7 +8,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi.testclient import TestClient
 
+from context_store.dashboard.api_server import create_app
 from context_store.dashboard.schemas import SemanticSearchRequest
 from context_store.dashboard.services import DashboardService
 
@@ -81,3 +83,39 @@ def test_semantic_search_request_validation(field: str, invalid_value: Any) -> N
     kwargs[field] = invalid_value
     with pytest.raises(ValueError):
         SemanticSearchRequest(**kwargs)
+
+
+def test_semantic_search_endpoint_returns_memories() -> None:
+    fake_memory = SimpleNamespace(
+        id="m-1",
+        content="hello",
+        memory_type="semantic",
+        importance_score=0.8,
+        project="demo",
+        access_count=3,
+        created_at=datetime(2026, 5, 11),
+    )
+    pipeline = MagicMock()
+    pipeline.search = AsyncMock(return_value=SimpleNamespace(memories=[fake_memory]))
+
+    service = DashboardService(storage=MagicMock(), graph=None, retrieval_pipeline=pipeline)
+    app = create_app(service_override=service)
+
+    with TestClient(app, base_url="http://localhost") as client:
+        response = client.post(
+            "/api/memories/semantic-search",
+            json={"query": "tool:bash command=ls", "project": "demo", "top_k": 3},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["content"] == "hello"
+    pipeline.search.assert_awaited_once()
+
+
+def test_semantic_search_endpoint_returns_503_when_pipeline_missing() -> None:
+    service = DashboardService(storage=MagicMock(), graph=None)
+    app = create_app(service_override=service)
+    with TestClient(app, base_url="http://localhost") as client:
+        response = client.post("/api/memories/semantic-search", json={"query": "x"})
+    assert response.status_code == 503

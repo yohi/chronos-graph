@@ -42,7 +42,7 @@
 | Phase | パス | 種別 | 責務 |
 |-------|------|------|------|
 | 0 | `.github/workflows/ci.yml` | 修正 | master トリガー追加・`ubuntu-slim` ランナー指定 |
-| 0 | `.devcontainer/setup.sh` | 修正 | `~/.bashrc` に `export DEVCONTAINER=1` を追記 |
+| 0 | `.devcontainer/docker-compose.yml` | 修正 | `DEVCONTAINER=1` をコンテナ環境変数として設定 |
 | 1 | `src/mcp_gateway/policy/models_evaluator.py` | 新規 | `ToolCallInput`, `Decision`, `MemoryItem`, masking ユーティリティ |
 | 1 | `tests/unit/test_mcp_gateway_evaluator_models.py` | 新規 | models / マスキング 単体テスト |
 | 1 | `pyproject.toml` | 修正 | `[project.optional-dependencies].evaluator` 追加・ruff `T20` グローバル有効化 |
@@ -181,14 +181,14 @@ EOF
 )"
 ```
 
-### Task 0-2: Devcontainer setup.sh に DEVCONTAINER=1 export を追記
+### Task 0-2: Devcontainer に DEVCONTAINER=1 環境変数を設定
 
 **派生元:** `feature/phase0_evaluator_env__base` (独立タスク・CI 修正とは無関係)
 
 **ブランチ:** `feature/phase0-task2_devcontainer_env`
 
 **Files:**
-- Modify: `.devcontainer/setup.sh`
+- Modify: `.devcontainer/docker-compose.yml`
 
 - [x] **Step 1: ブランチ作成**
 
@@ -199,59 +199,51 @@ git pull --ff-only origin feature/phase0_evaluator_env__base
 git checkout -b feature/phase0-task2_devcontainer_env
 ```
 
-- [x] **Step 2: setup.sh を編集して `~/.bashrc` 追記を idempotent に行う**
+- [x] **Step 2: docker-compose.yml を編集して `DEVCONTAINER=1` をコンテナ環境変数に設定する**
 
-`.devcontainer/setup.sh` の末尾に以下を追加 (置き換えではなく追加):
+`.devcontainer/docker-compose.yml` の `app.environment` に以下を追加:
 
-```bash
-
-# Phase 6 の scripts/check_evaluator.sh が DEVCONTAINER=1 を要求するため、
-# devcontainer 経由で起動した bash で確実に export されるよう ~/.bashrc に追記する。
-if ! grep -qxF 'export DEVCONTAINER=1' "${HOME}/.bashrc" 2>/dev/null; then
-    echo 'export DEVCONTAINER=1' >> "${HOME}/.bashrc"
-fi
+```yaml
+environment:
+  - UV_PROJECT_ENVIRONMENT=/home/vscode/.venv
+  - DEVCONTAINER=1
 ```
 
-- [ ] **Step 3: setup.sh を直接実行して export が追記されることを Devcontainer 内で確認**
+- [x] **Step 3: Devcontainer 内で環境変数が設定されることを確認**
 
 Run (Devcontainer 内):
 
 ```bash
-# 1 回目: 追記される
-bash .devcontainer/setup.sh
-grep -c '^export DEVCONTAINER=1$' "${HOME}/.bashrc"
-# 2 回目: idempotent (重複しない)
-bash .devcontainer/setup.sh
-grep -c '^export DEVCONTAINER=1$' "${HOME}/.bashrc"
-```
-
-Expected: 両方とも `1`
-
-- [ ] **Step 4: 新規 bash で DEVCONTAINER=1 が export されることを確認**
-
-Run (Devcontainer 内):
-
-```bash
-bash -lc 'echo DEVCONTAINER=$DEVCONTAINER'
+echo "DEVCONTAINER=${DEVCONTAINER}"
 ```
 
 Expected: `DEVCONTAINER=1`
 
-- [ ] **Step 5: shellcheck で setup.sh を検証**
+- [x] **Step 4: 非対話 bash でも DEVCONTAINER=1 が引き継がれることを確認**
 
 Run (Devcontainer 内):
 
 ```bash
-shellcheck .devcontainer/setup.sh || uv run python -m shellcheck .devcontainer/setup.sh || true
+bash -c 'echo DEVCONTAINER=$DEVCONTAINER'
 ```
 
-Expected: shellcheck が未導入なら警告のみ。導入されている場合は exit code 0。
+Expected: `DEVCONTAINER=1`
+
+- [x] **Step 5: docker compose 設定を検証**
+
+Run (Devcontainer 内):
+
+```bash
+docker compose -f .devcontainer/docker-compose.yml config >/dev/null
+```
+
+Expected: exit code 0。
 
 - [x] **Step 6: コミット**
 
 ```bash
-git add .devcontainer/setup.sh
-git commit -m "chore(devcontainer): export DEVCONTAINER=1 in ~/.bashrc for evaluator scripts"
+git add .devcontainer/docker-compose.yml
+git commit -m "chore(devcontainer): set DEVCONTAINER environment variable"
 git push -u origin feature/phase0-task2_devcontainer_env
 ```
 
@@ -261,29 +253,29 @@ git push -u origin feature/phase0-task2_devcontainer_env
 gh pr create --draft \
   --base feature/phase0_evaluator_env__base \
   --head feature/phase0-task2_devcontainer_env \
-  --title "chore(devcontainer): DEVCONTAINER=1 を ~/.bashrc に追記" \
+  --title "chore(devcontainer): DEVCONTAINER=1 をコンテナ環境変数に設定" \
   --body "$(cat <<'EOF'
 ## Summary
-- `.devcontainer/setup.sh` 末尾に `export DEVCONTAINER=1` を `~/.bashrc` に idempotent 追記するブロックを追加。
-- Phase 6 の `scripts/check_evaluator.sh` が Devcontainer 検知に使用する変数の自動 export を担保 (設計書 §6.4)。
+- `.devcontainer/docker-compose.yml` の `app.environment` に `DEVCONTAINER=1` を追加。
+- Phase 6 の `scripts/check_evaluator.sh` が Devcontainer 検知に使用する変数を、非対話シェルにも継承されるコンテナ環境変数として設定 (設計書 §6.4)。
 
 ## Test plan
-- [x] Devcontainer 内で setup.sh 2 回実行しても `~/.bashrc` 内に export が 1 行のみ
-- [x] 新規 bash で `$DEVCONTAINER` が `1`
+- [x] `docker compose -f .devcontainer/docker-compose.yml config >/dev/null`
+- [x] Devcontainer 内の非対話 bash で `$DEVCONTAINER` が `1`
 EOF
 )"
 ```
 
 ### Phase 0 完了処理
 
-- [ ] **Step 1: Phase Base への Task PR をすべてマージ (squash 推奨)**
+- [x] **Step 1: Phase Base への Task PR をすべてマージ (squash 推奨)**
 
 ```bash
 gh pr merge --squash feature/phase0-task1_ci_workflow
 gh pr merge --squash feature/phase0-task2_devcontainer_env
 ```
 
-- [ ] **Step 2: Phase Base を最新に同期し master 向け Draft PR を作成**
+- [x] **Step 2: Phase Base を最新に同期し master 向け Draft PR を作成**
 
 ```bash
 git fetch origin
@@ -296,11 +288,11 @@ gh pr create --draft \
   --body "$(cat <<'EOF'
 ## Summary
 - CI を master トリガー + ubuntu-slim 化
-- Devcontainer 内で DEVCONTAINER=1 を自動 export
+- Devcontainer 内で DEVCONTAINER=1 をコンテナ環境変数として設定
 
 ## Test plan
 - [x] CI YAML が parse 可能
-- [x] Devcontainer 内で `bash -lc 'echo $DEVCONTAINER'` が `1` を返す
+- [x] Devcontainer 内で `bash -c 'echo $DEVCONTAINER'` が `1` を返す
 EOF
 )"
 ```
@@ -705,14 +697,14 @@ EOF
 
 ### Phase 1 完了処理
 
-- [ ] **Step 1: Task PR を Phase Base にマージ**
+- [x] **Step 1: Task PR を Phase Base にマージ**
 
 ```bash
 gh pr merge --squash feature/phase1-task1_evaluator_models
 gh pr merge --squash feature/phase1-task2_pyproject_extras
 ```
 
-- [ ] **Step 2: Phase Base 向け master Draft PR**
+- [x] **Step 2: Phase Base 向け master Draft PR**
 
 ```bash
 git fetch origin
@@ -3587,7 +3579,7 @@ $ bash scripts/check_evaluator.sh
 
 devcontainer CLI 利用時は以下のいずれか:
 
-- `.devcontainer/setup.sh` が自動 export する `DEVCONTAINER=1` を利用
+- `.devcontainer/docker-compose.yml` が設定する `DEVCONTAINER=1` を利用
 - もしくは手動で `export DEVCONTAINER=1`
 ```
 

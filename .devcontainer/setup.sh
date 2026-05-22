@@ -1,7 +1,8 @@
 #!/bin/bash
 set -e
 
-cd /workspaces/chronos-graph
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${SCRIPT_DIR}/.."
 export UV_PROJECT_ENVIRONMENT=/home/vscode/.venv
 export PATH="${UV_PROJECT_ENVIRONMENT}/bin:${PATH}"
 

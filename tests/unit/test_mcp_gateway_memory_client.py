@@ -1,0 +1,126 @@
+from __future__ import annotations
+
+import json
+from typing import cast
+from unittest.mock import patch
+
+import httpx
+import pytest
+
+from mcp_gateway.policy.memory_client import MemoryClient, MemoryFetchError
+from mcp_gateway.policy.models_evaluator import MemoryItem
+
+
+@pytest.mark.asyncio
+async def test_retrieve_returns_memory_items() -> None:
+    client = MemoryClient(dashboard_url="http://dashboard.local:9000", top_k=3)
+    payload = [
+        {
+            "id": "1",
+            "content": "x",
+            "memoryType": "semantic",
+            "importance": 0.7,
+            "project": "demo",
+            "accessCount": 2,
+            "createdAt": None,
+        }
+    ]
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/api/memories/semantic-search"
+        body = cast(object, json.loads(request.content))
+        assert body == {"query": "tool:bash command=ls", "project": "demo", "top_k": 3}
+        assert request.headers["content-type"] == "application/json"
+        return httpx.Response(200, json=payload)
+
+    transport = httpx.MockTransport(handler)
+    with patch.object(MemoryClient, "_build_transport", return_value=transport):
+        out = await client.retrieve(query="tool:bash command=ls", project="demo")
+
+    assert out == [MemoryItem(content="x", memory_type="semantic", importance=0.7)]
+
+
+@pytest.mark.asyncio
+async def test_retrieve_sends_authorization_header_when_api_key_configured() -> None:
+    client = MemoryClient(dashboard_url="http://dashboard.local:9000", _api_key="secret-token")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer secret-token"
+        return httpx.Response(200, json=[])
+
+    transport = httpx.MockTransport(handler)
+    with patch.object(MemoryClient, "_build_transport", return_value=transport):
+        out = await client.retrieve(query="x")
+
+    assert out == []
+
+
+@pytest.mark.asyncio
+async def test_retrieve_raises_memory_fetch_error_on_http_error() -> None:
+    client = MemoryClient(dashboard_url="http://dashboard.local:9000")
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="pipeline missing")
+
+    transport = httpx.MockTransport(handler)
+    with patch.object(MemoryClient, "_build_transport", return_value=transport):
+        with pytest.raises(MemoryFetchError):
+            _ = await client.retrieve(query="x")
+
+
+@pytest.mark.asyncio
+async def test_retrieve_raises_memory_fetch_error_on_timeout() -> None:
+    client = MemoryClient(dashboard_url="http://dashboard.local:9000", timeout_seconds=0.001)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.TimeoutException("boom", request=request)
+
+    transport = httpx.MockTransport(handler)
+    with patch.object(MemoryClient, "_build_transport", return_value=transport):
+        with pytest.raises(MemoryFetchError):
+            _ = await client.retrieve(query="x")
+
+
+@pytest.mark.asyncio
+async def test_retrieve_raises_memory_fetch_error_on_invalid_json() -> None:
+    client = MemoryClient(dashboard_url="http://dashboard.local:9000")
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="not-json")
+
+    transport = httpx.MockTransport(handler)
+    with patch.object(MemoryClient, "_build_transport", return_value=transport):
+        with pytest.raises(MemoryFetchError):
+            _ = await client.retrieve(query="x")
+
+
+@pytest.mark.asyncio
+async def test_retrieve_raises_memory_fetch_error_on_non_list_response() -> None:
+    client = MemoryClient(dashboard_url="http://dashboard.local:9000")
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"content": "x"})
+
+    transport = httpx.MockTransport(handler)
+    with patch.object(MemoryClient, "_build_transport", return_value=transport):
+        with pytest.raises(MemoryFetchError):
+            _ = await client.retrieve(query="x")
+
+
+def test_from_env_returns_none_when_url_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CHRONOS_DASHBOARD_URL", raising=False)
+    assert MemoryClient.from_env() is None
+
+
+def test_from_env_picks_up_url_and_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CHRONOS_DASHBOARD_URL", "http://x:9000/")
+    c = MemoryClient.from_env()
+    assert c is not None
+    assert c.dashboard_url == "http://x:9000"
+
+
+def test_repr_does_not_include_api_key() -> None:
+    assert "secret-token" not in repr(
+        MemoryClient(dashboard_url="http://x", _api_key="secret-token")
+    )

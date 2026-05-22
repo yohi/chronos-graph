@@ -1700,6 +1700,10 @@ PR URL を記録。
 
 # Phase 3: Storage Adapter 統合
 
+> **構成:** Task 3.1 (Postgres) / 3.2 (SQLite) / 3.3 (Supabase) の 3 タスク。欠番なし。
+> 各 Storage Backend ごとに OutboxWriter / RPC を統合する。3.1 と 3.2 は別ファイルを
+> 触るため並列実行可能、3.3 は Supabase RPC 依存のため Task 1.3 のマージ後に開始する。
+
 ## Task 3.1: PostgresStorageAdapter への OutboxWriter 統合
 
 - **派生元ブランチ:** `feat/outbox-writer`
@@ -2114,10 +2118,17 @@ Expected: PASS
 - **実行モード:** 直列必須（Wait for Task 1.2 Draft PR、Supabase RPC を呼ぶため Task 1.3 もマージ済みであることが望ましいが Python 側はモック可）
 - **前提条件:** Task 1.2 の Draft PR URL が存在。`SupabaseOutboxReader` の実環境動作には Task 1.3 で導入する RPC (`fetch_pending_outbox` / `reset_stuck_processing_outbox`) が必要 — Phase 5 の結線時にマージ済みであることを確認する
 - **作成ブランチ:** `feat/outbox-reader`
+- **本 Task で実装する成果物（Storage バックエンドごと）:**
+  - `OutboxReader` Protocol（共通インタフェース）
+  - `SqliteOutboxReader`（aiosqlite ベース）
+  - `PostgresOutboxReader`（asyncpg + `FOR UPDATE SKIP LOCKED`）
+  - `SupabaseOutboxReader`（supabase-py + RPC `fetch_pending_outbox` / `reset_stuck_processing_outbox`）
+
+  → Phase 5 の `factory.py` から `from context_store.sync.outbox_reader import SupabaseOutboxReader` で import される前提なので、本 Task で必ず3実装すべて含めること。
 
 **Files:**
-- Create: `src/context_store/sync/outbox_reader.py`
-- Create: `tests/unit/sync/test_outbox_reader.py`
+- Create: `src/context_store/sync/outbox_reader.py`（上記4成果物を1ファイルに集約）
+- Create: `tests/unit/sync/test_outbox_reader.py`（SQLite 実装の通常テスト + Supabase 実装の RPC スモークテスト）
 
 - [ ] **Step 1: ブランチ作成と派生元検証**
 
@@ -3343,7 +3354,9 @@ async def create_storage_with_outbox(
     elif settings.storage_backend == "supabase":
         storage._outbox_enabled = True  # type: ignore[attr-defined]
         # Supabase は asyncpg を直接使えないため、Task 1.3 で定義した RPC を
-        # 呼び出す SupabaseOutboxReader を使用する。
+        # 呼び出す SupabaseOutboxReader を使用する（Python 実装は Task 4.1
+        # の `outbox_reader.py` 内で SqliteOutboxReader / PostgresOutboxReader
+        # と並んで提供される）。
         from context_store.sync.outbox_reader import SupabaseOutboxReader
         reader = SupabaseOutboxReader(client=storage._client)  # type: ignore[attr-defined]
     else:
@@ -3585,10 +3598,27 @@ Usage:
     python -m scripts.sync_storage_to_neo4j --full [--yes]
     python -m scripts.sync_storage_to_neo4j --full --dry-run --chunk-size 500
 
-WARNING:
-    --full モードは Neo4j の全ノードを一度 DETACH DELETE してから再構築するため、
-    実行中はグラフ traversal クエリが空結果を返す。設計仕様書 §10.1.1 の通り、
-    メンテナンス窓口内でのみ使用すること (非対話実行時は --yes を明示)。
+WARNING — `--full` モードのダウンタイム:
+    --full は Neo4j の全 :Memory ノードを `MATCH (m:Memory) DETACH DELETE m`
+    で削除してから再構築するため、実行中はグラフ traversal クエリが空結果を返す。
+    設計仕様書 §10.1.1 (`docs/superpowers/specs/2026-05-21-neo4j-aura-outbox-sync-design.md`)
+    に記載の通り、以下を必ず守ること:
+
+      - 想定ユースケース: スキーマ非互換変更後の再構築 / 災害復旧時のみ。
+        通常運用での実行は禁止
+      - メンテナンス窓口内で、アプリケーション側がグラフ検索の空結果を許容する
+        スケジュールで実行
+      - 実行前に必ず --dry-run で対象件数を確認
+      - 非対話バッチ実行時は --yes を明示（既定では TTY 経由の対話承認必須）
+
+設計判断（パージなし MERGE での実装は採用しない）:
+    レビュー時に「MERGE ベースのパージなし全同期」が代替案として提案されたが、
+    本リリースでは採用しない。理由: パージなし全同期は Storage に存在せず Neo4j
+    にのみ残る孤児ノードを検知できず、`--full` の本来用途である「整合性を完全に
+    リセットする」目的を満たせないため。ダウンタイムレスな差分再同期が必要な
+    ケースに対しては、設計仕様書 §10.1.1 で言及している将来の `--reconcile`
+    モード（Storage 全 ID と Neo4j 全 ID の集合差分を取り、不足ノードを MERGE /
+    孤児ノードのみ DETACH DELETE する非破壊同期）として別タスクで対応する方針。
 """
 
 from __future__ import annotations
@@ -3647,6 +3677,14 @@ async def _run_full(chunk_size: int, dry_run: bool) -> int:
 
 
 async def _run_catchup(dry_run: bool) -> int:
+    """Outbox の actionable イベント (PENDING/PROCESSING/FAILED) を 1 度だけ処理する。
+
+    Worker の内部実装には依存せず、公開 API である `OutboxWorker.run_catchup()`
+    のみを呼び出す。`_reader` や `_process_batch` といった private メンバーへの
+    アクセスは Task 4.2 で禁止された設計方針 — リカバリスクリプトは
+    Worker のパブリック契約（`run`/`stop`/`process_pending_once`/`run_catchup`）
+    のみを使うこと。
+    """
     settings = Settings()
     from context_store.storage.factory import create_storage_with_outbox
     storage, graph, cache, worker = await create_storage_with_outbox(settings)

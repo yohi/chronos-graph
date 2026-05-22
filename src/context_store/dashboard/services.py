@@ -169,7 +169,7 @@ class DashboardService:
             return list(memories)
 
         if not hasattr(response, "get"):
-            return []
+            raise RuntimeError("Invalid retrieval response format")
 
         memory_ids = self._extract_memory_ids(response)
         if not memory_ids:

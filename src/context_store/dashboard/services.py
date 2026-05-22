@@ -171,8 +171,7 @@ class DashboardService:
         if not memory_ids:
             return []
         memory_by_id = {
-            str(memory.id): memory
-            for memory in await self._storage.get_memories_batch(memory_ids)
+            str(memory.id): memory for memory in await self._storage.get_memories_batch(memory_ids)
         }
         return [memory_by_id[memory_id] for memory_id in memory_ids if memory_id in memory_by_id]
 

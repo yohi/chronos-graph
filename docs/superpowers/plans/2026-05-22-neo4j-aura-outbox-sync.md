@@ -114,8 +114,8 @@ master
     │ -- Phase 1 完了 --
     │
     ├── feat/outbox-writer (Task 2.1)  ←── Task 1.2 Draft PR 必須
-    │   ├── feat/outbox-postgres-integration (Task 3.2) 並列可能 (Task 3.3と)
-    │   └── feat/outbox-sqlite-integration (Task 3.3)
+    │   ├── feat/outbox-postgres-integration (Task 3.1) 並列可能 (Task 3.2と)
+    │   └── feat/outbox-sqlite-integration (Task 3.2)
     │
     ├── feat/outbox-graph-sync (Task 2.3) ←── Task 2.2 Draft PR 必須
     │   └── feat/outbox-worker-loop (Task 4.2) ←── Task 4.1 Draft PR も必須
@@ -126,7 +126,7 @@ master
     │
     ├── feat/outbox-reader (Task 4.1)  ←── Task 1.2 Draft PR 必須
     │
-    ├── feat/outbox-supabase-integration (Task 3.4) ←── Task 1.3 Draft PR 必須
+    ├── feat/outbox-supabase-integration (Task 3.3) ←── Task 1.3 Draft PR 必須
     │
     └── feat/outbox-recovery-script (Task 6.1) ←── Task 2.3 Draft PR 必須
 ```
@@ -144,9 +144,9 @@ master
 | 2.1 | feat/outbox-writer |  |  |
 | 2.2 | feat/outbox-neo4j-execute-write |  |  |
 | 2.3 | feat/outbox-graph-sync |  |  |
-| 3.2 | feat/outbox-postgres-integration |  |  |
-| 3.3 | feat/outbox-sqlite-integration |  |  |
-| 3.4 | feat/outbox-supabase-integration |  |  |
+| 3.1 | feat/outbox-postgres-integration |  |  |
+| 3.2 | feat/outbox-sqlite-integration |  |  |
+| 3.3 | feat/outbox-supabase-integration |  |  |
 | 4.1 | feat/outbox-reader |  |  |
 | 4.2 | feat/outbox-worker-loop |  |  |
 | 5.1 | feat/outbox-factory |  |  |
@@ -867,6 +867,81 @@ GRANT EXECUTE ON FUNCTION upsert_memory_with_outbox(
     TEXT[], TEXT, TEXT, VARCHAR
 ) TO service_role;
 GRANT EXECUTE ON FUNCTION delete_memory_with_outbox(UUID) TO service_role;
+
+-- =====================================================================
+-- RPC: Worker 側で使用する状態遷移系（Supabase は asyncpg を使えないため）
+-- =====================================================================
+
+CREATE OR REPLACE FUNCTION fetch_pending_outbox(p_limit INT)
+RETURNS TABLE (
+    id            UUID,
+    event_type    VARCHAR(20),
+    memory_id     UUID,
+    payload       JSONB,
+    status        VARCHAR(20),
+    retry_count   INT,
+    next_retry_at TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ,
+    updated_at    TIMESTAMPTZ,
+    error_message TEXT
+)
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public
+AS $$
+BEGIN
+    RETURN QUERY
+    UPDATE graph_sync_outbox o
+    SET status = 'PROCESSING', updated_at = NOW()
+    WHERE o.id IN (
+        SELECT inner_o.id FROM graph_sync_outbox inner_o
+        WHERE inner_o.status = 'PENDING'
+          AND inner_o.next_retry_at <= NOW()
+        ORDER BY inner_o.next_retry_at ASC
+        LIMIT p_limit
+        FOR UPDATE SKIP LOCKED
+    )
+    RETURNING o.id, o.event_type, o.memory_id, o.payload, o.status,
+              o.retry_count, o.next_retry_at, o.created_at, o.updated_at, o.error_message;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION reset_stuck_processing_outbox(
+    p_threshold_seconds INT,
+    p_max_retries INT
+)
+RETURNS INT
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public
+AS $$
+DECLARE
+    failed_count INT;
+    pending_count INT;
+BEGIN
+    UPDATE graph_sync_outbox
+    SET status = 'FAILED',
+        error_message = 'Recovered from stuck PROCESSING (max retries)',
+        updated_at = NOW()
+    WHERE status = 'PROCESSING'
+      AND updated_at < NOW() - (p_threshold_seconds || ' seconds')::interval
+      AND retry_count + 1 > p_max_retries;
+    GET DIAGNOSTICS failed_count = ROW_COUNT;
+
+    UPDATE graph_sync_outbox
+    SET status = 'PENDING',
+        retry_count = retry_count + 1,
+        updated_at = NOW()
+    WHERE status = 'PROCESSING'
+      AND updated_at < NOW() - (p_threshold_seconds || ' seconds')::interval;
+    GET DIAGNOSTICS pending_count = ROW_COUNT;
+
+    RETURN failed_count + pending_count;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION fetch_pending_outbox(INT) TO service_role;
+GRANT EXECUTE ON FUNCTION reset_stuck_processing_outbox(INT, INT) TO service_role;
 ```
 
 - [ ] **Step 3: SQL 構文チェック**
@@ -900,11 +975,16 @@ git push -u origin feat/outbox-supabase-migrations
 gh pr create --draft --base feat/outbox-base --title "feat(supabase): graph_sync_outbox マイグレーション + RPC" --body "$(cat <<'EOF'
 ## Summary
 - Supabase `graph_sync_outbox` テーブル追加。
-- RPC: `upsert_memory_with_outbox` と `delete_memory_with_outbox` を `SECURITY INVOKER` + `search_path = public` で定義。
-- `service_role` に EXECUTE 権限を付与。
+- RPC (書き込み側):
+  - `upsert_memory_with_outbox`
+  - `delete_memory_with_outbox`
+- RPC (Worker 側):
+  - `fetch_pending_outbox(p_limit)` — UPDATE + RETURNING を 1 TX
+  - `reset_stuck_processing_outbox(p_threshold_seconds, p_max_retries)` — 2 段階 UPDATE を 1 TX
+- すべて `SECURITY INVOKER` + `search_path = public` で定義し、`service_role` に EXECUTE 権限を付与。
 
 ## Test plan
-- [ ] 構文チェック PASS（実適用は Task 3.4 で行う）
+- [ ] 構文チェック PASS（実適用は Task 3.3 / Task 4.1 で行う）
 EOF
 )"
 ```
@@ -1620,7 +1700,7 @@ PR URL を記録。
 
 # Phase 3: Storage Adapter 統合
 
-## Task 3.2: PostgresStorageAdapter への OutboxWriter 統合
+## Task 3.1: PostgresStorageAdapter への OutboxWriter 統合
 
 - **派生元ブランチ:** `feat/outbox-writer`
 - **実行モード:** 直列必須（Wait for Task 2.1 Draft PR）
@@ -1799,10 +1879,10 @@ PR URL を記録。
 
 ---
 
-## Task 3.3: SQLiteStorageAdapter への OutboxWriter 統合
+## Task 3.2: SQLiteStorageAdapter への OutboxWriter 統合
 
 - **派生元ブランチ:** `feat/outbox-writer`
-- **実行モード:** 並列可能（Task 3.2 と独立ファイル）
+- **実行モード:** 並列可能（Task 3.1 と独立ファイル）
 - **前提条件:** Task 2.1 の Draft PR URL が存在
 - **作成ブランチ:** `feat/outbox-sqlite-integration`
 
@@ -1901,7 +1981,7 @@ Expected: PASS
 
 ---
 
-## Task 3.4: SupabaseStorageAdapter RPC 切替
+## Task 3.3: SupabaseStorageAdapter RPC 切替
 
 - **派生元ブランチ:** `feat/outbox-supabase-migrations`
 - **実行モード:** 直列必須（Wait for Task 1.3 Draft PR）
@@ -2031,8 +2111,8 @@ Expected: PASS
 ## Task 4.1: OutboxReader Protocol + 各バックエンド実装
 
 - **派生元ブランチ:** `feat/outbox-storage-migrations`
-- **実行モード:** 直列必須（Wait for Task 1.2 Draft PR）
-- **前提条件:** Task 1.2 の Draft PR URL が存在
+- **実行モード:** 直列必須（Wait for Task 1.2 Draft PR、Supabase RPC を呼ぶため Task 1.3 もマージ済みであることが望ましいが Python 側はモック可）
+- **前提条件:** Task 1.2 の Draft PR URL が存在。`SupabaseOutboxReader` の実環境動作には Task 1.3 で導入する RPC (`fetch_pending_outbox` / `reset_stuck_processing_outbox`) が必要 — Phase 5 の結線時にマージ済みであることを確認する
 - **作成ブランチ:** `feat/outbox-reader`
 
 **Files:**
@@ -2205,7 +2285,7 @@ from typing import Any, Protocol
 
 import aiosqlite
 
-from context_store.sync.models import OutboxEvent
+from context_store.sync.models import EventStatus, OutboxEvent
 
 
 class OutboxReader(Protocol):
@@ -2254,7 +2334,8 @@ class SqliteOutboxReader:
             except Exception:
                 await conn.rollback()
                 raise
-        return [_row_to_event(r) for r in rows]
+        # fetch_pending 直後はすべて PROCESSING に遷移済み
+        return [_row_to_event(r, status="PROCESSING") for r in rows]
 
     async def delete_completed(self, event_ids: list[str]) -> None:
         if not event_ids:
@@ -2293,13 +2374,13 @@ class SqliteOutboxReader:
         async with aiosqlite.connect(self._db_path) as conn:
             conn.row_factory = aiosqlite.Row
             async with conn.execute(
-                "SELECT id, event_type, memory_id, payload, retry_count, "
+                "SELECT id, event_type, memory_id, payload, status, retry_count, "
                 "next_retry_at, created_at, updated_at, error_message "
                 "FROM graph_sync_outbox "
                 "WHERE status IN ('PENDING', 'PROCESSING', 'FAILED')"
             ) as cur:
                 rows = await cur.fetchall()
-        return [_row_to_event(r) for r in rows]
+        return [_row_to_event(r, status=r["status"]) for r in rows]
 
     async def reset_stuck_processing(
         self, threshold_seconds: int = 300, max_retries: int = 10
@@ -2340,13 +2421,18 @@ class SqliteOutboxReader:
                 raise
 
 
-def _row_to_event(row: Any) -> OutboxEvent:
+def _row_to_event(row: Any, *, status: EventStatus) -> OutboxEvent:
+    """SQLite Row → OutboxEvent。status は呼び出し側のコンテキストで決定する。
+
+    - `fetch_pending`: UPDATE 直後なので明示的に "PROCESSING" を渡す
+    - `fetch_all_actionable`: 行の status カラムをそのまま渡す
+    """
     return OutboxEvent(
         id=row["id"],
         event_type=row["event_type"],
         memory_id=row["memory_id"],
         payload=json.loads(row["payload"]) if row["payload"] else {},
-        status="PROCESSING",  # fetch_pending 後の状態
+        status=status,
         retry_count=row["retry_count"],
         next_retry_at=_parse_dt(row["next_retry_at"]),
         error_message=row["error_message"],
@@ -2435,15 +2521,15 @@ class PostgresOutboxReader:
     async def fetch_all_actionable(self) -> list[OutboxEvent]:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT id, event_type, memory_id::text AS memory_id, payload, retry_count, "
-                "next_retry_at, created_at, updated_at, error_message "
+                "SELECT id, event_type, memory_id::text AS memory_id, payload, status, "
+                "retry_count, next_retry_at, created_at, updated_at, error_message "
                 "FROM graph_sync_outbox WHERE status IN ('PENDING','PROCESSING','FAILED')"
             )
         return [
             OutboxEvent(
                 id=str(r["id"]), event_type=r["event_type"], memory_id=r["memory_id"],
                 payload=dict(r["payload"]) if r["payload"] else {},
-                status=r["status"] if "status" in r else "PENDING",
+                status=r["status"],
                 retry_count=r["retry_count"], next_retry_at=r["next_retry_at"],
                 error_message=r["error_message"], created_at=r["created_at"],
                 updated_at=r["updated_at"],
@@ -2479,9 +2565,161 @@ class PostgresOutboxReader:
             parts = tag.split()
             return int(parts[-1]) if parts and parts[-1].isdigit() else 0
         return _count(failed) + _count(pending)
+
+
+# --- SupabaseOutboxReader ---
+# Supabase は asyncpg を直接使えないため、状態遷移を伴う操作は RPC
+# (Task 1.3 で定義した fetch_pending_outbox / reset_stuck_processing_outbox)
+# を呼び、それ以外は supabase-py の table API で実装する。
+class SupabaseOutboxReader:
+    """Supabase バックエンド向け OutboxReader 実装。"""
+
+    def __init__(self, *, client: Any) -> None:
+        self._client = client
+
+    async def fetch_pending(self, limit: int) -> list[OutboxEvent]:
+        result = await self._client.rpc(
+            "fetch_pending_outbox", {"p_limit": limit}
+        ).execute()
+        rows = result.data or []
+        return [_supabase_row_to_event(r) for r in rows]
+
+    async def delete_completed(self, event_ids: list[str]) -> None:
+        if not event_ids:
+            return
+        await (
+            self._client.table("graph_sync_outbox")
+            .delete()
+            .in_("id", event_ids)
+            .execute()
+        )
+
+    async def mark_failed(self, event_id: str, error_message: str) -> None:
+        await (
+            self._client.table("graph_sync_outbox")
+            .update({"status": "FAILED", "error_message": error_message})
+            .eq("id", event_id)
+            .execute()
+        )
+
+    async def reset_to_pending(
+        self, event_id: str, retry_count: int,
+        next_retry_at: datetime, error_message: str,
+    ) -> None:
+        await (
+            self._client.table("graph_sync_outbox")
+            .update(
+                {
+                    "status": "PENDING",
+                    "retry_count": retry_count,
+                    "next_retry_at": next_retry_at.isoformat(),
+                    "error_message": error_message,
+                }
+            )
+            .eq("id", event_id)
+            .execute()
+        )
+
+    async def fetch_all_actionable(self) -> list[OutboxEvent]:
+        result = await (
+            self._client.table("graph_sync_outbox")
+            .select(
+                "id,event_type,memory_id,payload,status,retry_count,"
+                "next_retry_at,created_at,updated_at,error_message"
+            )
+            .in_("status", ["PENDING", "PROCESSING", "FAILED"])
+            .execute()
+        )
+        rows = result.data or []
+        return [_supabase_row_to_event(r) for r in rows]
+
+    async def reset_stuck_processing(
+        self, threshold_seconds: int = 300, max_retries: int = 10
+    ) -> int:
+        result = await self._client.rpc(
+            "reset_stuck_processing_outbox",
+            {
+                "p_threshold_seconds": threshold_seconds,
+                "p_max_retries": max_retries,
+            },
+        ).execute()
+        return int(result.data) if result.data is not None else 0
+
+
+def _supabase_row_to_event(row: dict[str, Any]) -> OutboxEvent:
+    """Supabase REST レスポンス (dict) → OutboxEvent。"""
+    payload_raw = row.get("payload") or {}
+    return OutboxEvent(
+        id=row["id"],
+        event_type=row["event_type"],
+        memory_id=row["memory_id"],
+        payload=payload_raw if isinstance(payload_raw, dict) else json.loads(payload_raw),
+        status=row["status"],
+        retry_count=row["retry_count"],
+        next_retry_at=_parse_dt(row.get("next_retry_at")),
+        error_message=row.get("error_message"),
+        created_at=_parse_dt(row.get("created_at")),
+        updated_at=_parse_dt(row.get("updated_at")),
+    )
 ```
 
-- [ ] **Step 5: テスト実行 (GREEN)**
+- [ ] **Step 5: SupabaseOutboxReader のスモークテストを追加**
+
+`tests/unit/sync/test_outbox_reader.py` の末尾に追加:
+
+```python
+@pytest.mark.asyncio
+async def test_supabase_reader_fetch_pending_calls_rpc() -> None:
+    from unittest.mock import AsyncMock, MagicMock
+    from context_store.sync.outbox_reader import SupabaseOutboxReader
+
+    fake_rpc = MagicMock()
+    fake_rpc.execute = AsyncMock(return_value=MagicMock(data=[
+        {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "event_type": "SYNC_MEMORY",
+            "memory_id": "22222222-2222-2222-2222-222222222222",
+            "payload": {},
+            "status": "PROCESSING",
+            "retry_count": 0,
+            "next_retry_at": "2026-01-01T00:00:00+00:00",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "error_message": None,
+        }
+    ]))
+    client = MagicMock()
+    client.rpc = MagicMock(return_value=fake_rpc)
+
+    reader = SupabaseOutboxReader(client=client)
+    events = await reader.fetch_pending(limit=10)
+
+    client.rpc.assert_called_with("fetch_pending_outbox", {"p_limit": 10})
+    assert len(events) == 1
+    assert events[0].status == "PROCESSING"
+
+
+@pytest.mark.asyncio
+async def test_supabase_reader_reset_stuck_processing_calls_rpc() -> None:
+    from unittest.mock import AsyncMock, MagicMock
+    from context_store.sync.outbox_reader import SupabaseOutboxReader
+
+    fake_rpc = MagicMock()
+    fake_rpc.execute = AsyncMock(return_value=MagicMock(data=2))
+    client = MagicMock()
+    client.rpc = MagicMock(return_value=fake_rpc)
+
+    reader = SupabaseOutboxReader(client=client)
+    n = await reader.reset_stuck_processing(threshold_seconds=60, max_retries=10)
+
+    client.rpc.assert_called_with(
+        "reset_stuck_processing_outbox",
+        {"p_threshold_seconds": 60, "p_max_retries": 10},
+    )
+    assert n == 2
+```
+
+- [ ] **Step 6: テスト実行 (GREEN)**
 
 ```bash
 uv run pytest tests/unit/sync/test_outbox_reader.py -v
@@ -2490,7 +2728,11 @@ uv run mypy src/context_store/sync/outbox_reader.py
 
 Expected: PASS
 
-- [ ] **Step 6-7: コミット + Draft PR (派生元: `feat/outbox-storage-migrations`)**
+- [ ] **Step 7: コミット + Draft PR (派生元: `feat/outbox-storage-migrations`)**
+
+注: Supabase 環境で実際に動かすには Task 1.3 でマージされる `fetch_pending_outbox`
+/ `reset_stuck_processing_outbox` RPC が必要。本 Task では Python 側のみを実装し、
+両者は Phase 5 の Factory タスクで結線される。
 
 ---
 
@@ -2703,6 +2945,82 @@ async def test_worker_handles_orphaned_sync_event() -> None:
     await task
 
     reader.delete_completed.assert_awaited_with(["e1"])
+
+
+@pytest.mark.asyncio
+async def test_worker_run_catchup_processes_all_actionable() -> None:
+    """run_catchup は fetch_all_actionable + _process_batch を 1 回実行する。"""
+    from context_store.sync.outbox_worker import OutboxWorker
+
+    reader = MagicMock()
+    reader.fetch_all_actionable = AsyncMock(return_value=[_evt(), _evt()])
+    reader.delete_completed = AsyncMock()
+
+    storage = MagicMock()
+    storage.get_memories_batch = AsyncMock(return_value=[MagicMock(id="m1")])
+    graph_sync = MagicMock()
+    graph_sync.bulk_merge_memories = AsyncMock(return_value=1)
+
+    settings = MagicMock(
+        outbox_poll_interval_seconds=0.01, outbox_batch_size=10,
+        outbox_max_retries=5, outbox_backoff_base_seconds=1.0,
+        outbox_backoff_max_seconds=10.0,
+    )
+    worker = OutboxWorker(
+        reader=reader, storage_adapter=storage,
+        graph_sync=graph_sync, settings=settings,
+    )
+    n = await worker.run_catchup()
+    assert n == 2
+    reader.fetch_all_actionable.assert_awaited_once()
+    graph_sync.bulk_merge_memories.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_worker_run_catchup_dry_run_skips_processing() -> None:
+    from context_store.sync.outbox_worker import OutboxWorker
+
+    reader = MagicMock()
+    reader.fetch_all_actionable = AsyncMock(return_value=[_evt()])
+
+    settings = MagicMock(
+        outbox_poll_interval_seconds=0.01, outbox_batch_size=10,
+        outbox_max_retries=5, outbox_backoff_base_seconds=1.0,
+        outbox_backoff_max_seconds=10.0,
+    )
+    worker = OutboxWorker(
+        reader=reader, storage_adapter=MagicMock(),
+        graph_sync=MagicMock(), settings=settings,
+    )
+    n = await worker.run_catchup(dry_run=True)
+    assert n == 1
+    # dry_run なので _process_batch は呼ばれない → storage / graph も叩かれない
+
+
+@pytest.mark.asyncio
+async def test_worker_process_pending_once_returns_event_count() -> None:
+    from context_store.sync.outbox_worker import OutboxWorker
+
+    reader = MagicMock()
+    reader.fetch_pending = AsyncMock(return_value=[_evt()])
+    reader.delete_completed = AsyncMock()
+
+    storage = MagicMock()
+    storage.get_memories_batch = AsyncMock(return_value=[MagicMock(id="m1")])
+    graph_sync = MagicMock()
+    graph_sync.bulk_merge_memories = AsyncMock(return_value=1)
+
+    settings = MagicMock(
+        outbox_poll_interval_seconds=0.01, outbox_batch_size=10,
+        outbox_max_retries=5, outbox_backoff_base_seconds=1.0,
+        outbox_backoff_max_seconds=10.0,
+    )
+    worker = OutboxWorker(
+        reader=reader, storage_adapter=storage,
+        graph_sync=graph_sync, settings=settings,
+    )
+    n = await worker.process_pending_once()
+    assert n == 1
 ```
 
 - [ ] **Step 3: テスト実行 (RED)**
@@ -2791,6 +3109,37 @@ class OutboxWorker:
     async def stop(self) -> None:
         self._stop_event.set()
 
+    async def process_pending_once(self) -> int:
+        """1 サイクル分の PENDING を取得して処理する。
+
+        Worker メインループの 1 イテレーション相当。リカバリスクリプトや
+        テストから「ループを 1 回だけ回したい」場合に使う公開 API。
+        戻り値: 処理した（完了 or リトライ予約された）イベント件数。
+        """
+        events = await self._reader.fetch_pending(
+            limit=self._settings.outbox_batch_size
+        )
+        if not events:
+            return 0
+        await self._process_batch(events)
+        return len(events)
+
+    async def run_catchup(self, *, dry_run: bool = False) -> int:
+        """`scripts/sync_storage_to_neo4j.py --catchup` のための公開エントリ。
+
+        Outbox の actionable (PENDING / PROCESSING / FAILED) を 1 度だけ
+        全件処理する。dry_run=True の場合は対象件数のみ返す。
+        """
+        events = await self._reader.fetch_all_actionable()
+        if dry_run:
+            logger.info(
+                "Catchup dry run: would process %d events", len(events)
+            )
+            return len(events)
+        if events:
+            await self._process_batch(events)
+        return len(events)
+
     async def _process_batch(self, events: list[OutboxEvent]) -> None:
         sync_events = [e for e in events if e.event_type == "SYNC_MEMORY"]
         del_events = [e for e in events if e.event_type == "DELETE_MEMORY"]
@@ -2870,7 +3219,7 @@ Expected: PASS
 
 - **派生元ブランチ:** `feat/outbox-worker-loop`
 - **実行モード:** 直列必須
-- **前提条件:** Task 4.2 の Draft PR URL が存在 / Task 3.2 / 3.3 / 3.4 のマージ確認
+- **前提条件:** Task 4.2 の Draft PR URL が存在 / Task 3.1 / 3.2 / 3.3 のマージ確認
 - **作成ブランチ:** `feat/outbox-factory`
 
 **Files:**
@@ -2888,7 +3237,7 @@ git merge-base --is-ancestor "$EXPECTED_BASE" "$CURRENT_BRANCH" || {
     echo "ERROR: 派生元ブランチが $EXPECTED_BASE ではありません。スタック構造が壊れています。"
     exit 1
 }
-# Task 3.2, 3.3, 3.4 を取り込む（既にマージ済みなら no-op）
+# Task 3.1, 3.2, 3.3 を取り込む（既にマージ済みなら no-op）
 for branch in feat/outbox-postgres-integration feat/outbox-sqlite-integration feat/outbox-supabase-integration; do
     git fetch origin "$branch" || true
     git merge --no-edit "origin/$branch" || {
@@ -2993,9 +3342,9 @@ async def create_storage_with_outbox(
         reader = PostgresOutboxReader(pool=storage._pool)  # type: ignore[attr-defined]
     elif settings.storage_backend == "supabase":
         storage._outbox_enabled = True  # type: ignore[attr-defined]
-        # Supabase は service_role の REST 経由でしか Outbox を読めないため
-        # 暫定実装として REST 経由の Reader を使う（または専用 RPC を追加）
-        from context_store.sync.outbox_reader import SupabaseOutboxReader  # 後続実装
+        # Supabase は asyncpg を直接使えないため、Task 1.3 で定義した RPC を
+        # 呼び出す SupabaseOutboxReader を使用する。
+        from context_store.sync.outbox_reader import SupabaseOutboxReader
         reader = SupabaseOutboxReader(client=storage._client)  # type: ignore[attr-defined]
     else:
         raise ValueError(f"Unsupported backend for outbox: {settings.storage_backend}")
@@ -3025,7 +3374,8 @@ async def create_storage_with_outbox(
         )
 ```
 
-注: `SupabaseOutboxReader` の実装は本Task内で簡易版（PostgREST 経由）を追加するか、別タスクに分離する。本計画ではここで簡易版を追加する。
+注: `SupabaseOutboxReader` の Python 実装は Task 4.1 で完了済み。本 Task は
+Factory ルーティングで結線するのみで、追加実装は不要。
 
 - [ ] **Step 5: テスト実行 (GREEN)**
 
@@ -3231,9 +3581,14 @@ git merge-base --is-ancestor "$EXPECTED_BASE" "$CURRENT_BRANCH" || {
 """Storage → Neo4j リカバリ CLI。
 
 Usage:
-    python -m scripts.sync_storage_to_neo4j --full
     python -m scripts.sync_storage_to_neo4j --catchup
+    python -m scripts.sync_storage_to_neo4j --full [--yes]
     python -m scripts.sync_storage_to_neo4j --full --dry-run --chunk-size 500
+
+WARNING:
+    --full モードは Neo4j の全ノードを一度 DETACH DELETE してから再構築するため、
+    実行中はグラフ traversal クエリが空結果を返す。設計仕様書 §10.1.1 の通り、
+    メンテナンス窓口内でのみ使用すること (非対話実行時は --yes を明示)。
 """
 
 from __future__ import annotations
@@ -3245,11 +3600,32 @@ import sys
 
 from context_store.config import Settings
 
+logger = logging.getLogger(__name__)
+
+_FULL_CONFIRM_PROMPT = (
+    "[!] --full は Neo4j の全 :Memory ノードを DETACH DELETE してから再構築します。\n"
+    "    実行中はグラフ traversal が空結果を返すため、メンテナンス窓口内でのみ\n"
+    "    実行してください。続行しますか? [yes/NO]: "
+)
+
+
+def _confirm_full(assume_yes: bool) -> bool:
+    if assume_yes:
+        logger.warning("--yes が指定されたため対話確認をスキップして --full を実行")
+        return True
+    if not sys.stdin.isatty():
+        logger.error(
+            "--full は TTY 経由か --yes 明示が必要です。バッチ実行時は --yes を付与してください。"
+        )
+        return False
+    answer = input(_FULL_CONFIRM_PROMPT).strip().lower()
+    return answer == "yes"
+
 
 async def _run_full(chunk_size: int, dry_run: bool) -> int:
     settings = Settings()
     if dry_run:
-        logging.info("Dry run: full sync would process chunks of %d", chunk_size)
+        logger.info("Dry run: full sync would process chunks of %d", chunk_size)
         return 0
     from context_store.storage.factory import create_storage_with_outbox
     from context_store.sync.graph_sync import GraphSyncService
@@ -3259,10 +3635,10 @@ async def _run_full(chunk_size: int, dry_run: bool) -> int:
         if graph is None:
             raise RuntimeError("graph_enabled=true required for sync")
         svc = GraphSyncService(graph_adapter=graph, storage_adapter=storage)
-        # 完全パージ
+        logger.warning("Full sync 開始: Neo4j を完全パージします")
         await graph.execute_write("MATCH (m:Memory) DETACH DELETE m", {})
         total = await svc.full_sync_from_storage(chunk_size=chunk_size)
-        logging.info("Full sync done: %d memories", total)
+        logger.info("Full sync done: %d memories", total)
         return total
     finally:
         await storage.dispose()
@@ -3277,15 +3653,7 @@ async def _run_catchup(dry_run: bool) -> int:
     try:
         if worker is None:
             raise RuntimeError("graph_sync_mode='async_outbox' required for catchup")
-        # actionable イベントを fetch して 1 サイクル処理
-        events = await worker._reader.fetch_all_actionable()
-        if dry_run:
-            logging.info("Dry run: would process %d events", len(events))
-            return len(events)
-        # メインループ 1 イテレーション相当
-        if events:
-            await worker._process_batch(events)
-        return len(events)
+        return await worker.run_catchup(dry_run=dry_run)
     finally:
         await storage.dispose()
         if graph: await graph.dispose()
@@ -3299,11 +3667,18 @@ def main() -> int:
     group.add_argument("--catchup", action="store_true")
     parser.add_argument("--chunk-size", type=int, default=1000)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--yes", action="store_true",
+        help="--full 実行時の対話確認をスキップ（非対話バッチ用）",
+    )
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
 
     logging.basicConfig(level=args.log_level)
     if args.full:
+        if not args.dry_run and not _confirm_full(assume_yes=args.yes):
+            logger.info("--full を中止しました")
+            return 1
         asyncio.run(_run_full(args.chunk_size, args.dry_run))
     else:
         asyncio.run(_run_catchup(args.dry_run))

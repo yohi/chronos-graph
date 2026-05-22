@@ -277,6 +277,82 @@ $$;
 
 GRANT EXECUTE ON FUNCTION upsert_memory_with_outbox(UUID, TEXT, VARCHAR, VARCHAR, JSONB, vector, FLOAT, FLOAT, TEXT[], TEXT, TEXT, VARCHAR) TO service_role;
 GRANT EXECUTE ON FUNCTION delete_memory_with_outbox(UUID) TO service_role;
+
+-- メモリ FK の無い Outbox に対するワーカー側操作は PostgREST + RPC を併用する。
+-- 状態遷移を伴う fetch_pending と reset_stuck_processing は単一 TX が必要なため RPC、
+-- それ以外（delete_completed / mark_failed / reset_to_pending / fetch_all_actionable）は
+-- supabase-py の table().update()/delete()/select() で直接実行する。
+
+CREATE OR REPLACE FUNCTION fetch_pending_outbox(p_limit INT)
+RETURNS TABLE (
+    id            UUID,
+    event_type    VARCHAR(20),
+    memory_id     UUID,
+    payload       JSONB,
+    status        VARCHAR(20),
+    retry_count   INT,
+    next_retry_at TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ,
+    updated_at    TIMESTAMPTZ,
+    error_message TEXT
+)
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public
+AS $$
+BEGIN
+    RETURN QUERY
+    UPDATE graph_sync_outbox o
+    SET status = 'PROCESSING', updated_at = NOW()
+    WHERE o.id IN (
+        SELECT inner_o.id FROM graph_sync_outbox inner_o
+        WHERE inner_o.status = 'PENDING'
+          AND inner_o.next_retry_at <= NOW()
+        ORDER BY inner_o.next_retry_at ASC
+        LIMIT p_limit
+        FOR UPDATE SKIP LOCKED
+    )
+    RETURNING o.id, o.event_type, o.memory_id, o.payload, o.status,
+              o.retry_count, o.next_retry_at, o.created_at, o.updated_at, o.error_message;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION reset_stuck_processing_outbox(
+    p_threshold_seconds INT,
+    p_max_retries INT
+)
+RETURNS INT
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public
+AS $$
+DECLARE
+    failed_count INT;
+    pending_count INT;
+BEGIN
+    UPDATE graph_sync_outbox
+    SET status = 'FAILED',
+        error_message = 'Recovered from stuck PROCESSING (max retries)',
+        updated_at = NOW()
+    WHERE status = 'PROCESSING'
+      AND updated_at < NOW() - (p_threshold_seconds || ' seconds')::interval
+      AND retry_count + 1 > p_max_retries;
+    GET DIAGNOSTICS failed_count = ROW_COUNT;
+
+    UPDATE graph_sync_outbox
+    SET status = 'PENDING',
+        retry_count = retry_count + 1,
+        updated_at = NOW()
+    WHERE status = 'PROCESSING'
+      AND updated_at < NOW() - (p_threshold_seconds || ' seconds')::interval;
+    GET DIAGNOSTICS pending_count = ROW_COUNT;
+
+    RETURN failed_count + pending_count;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION fetch_pending_outbox(INT) TO service_role;
+GRANT EXECUTE ON FUNCTION reset_stuck_processing_outbox(INT, INT) TO service_role;
 ```
 
 ### 4.4 MigrationRunner への影響
@@ -344,7 +420,9 @@ def _validate_graph_sync_mode(self) -> Self:
 ```text
 src/context_store/sync/
 ├── __init__.py
+├── models.py              # OutboxEvent / EventType / EventStatus データクラス
 ├── outbox_writer.py       # OutboxWriter Protocol + PostgresOutboxWriter / SqliteOutboxWriter
+├── outbox_reader.py       # OutboxReader Protocol + Postgres / Sqlite / Supabase 各実装
 ├── outbox_worker.py       # ポーリングループ + バッチ処理 + Backoff
 └── graph_sync.py          # GraphSyncService (MERGE Cypher 組み立て、Worker + スクリプト共有)
 ```
@@ -524,16 +602,21 @@ async def reset_stuck_processing(
 `FAILED` イベントは自動スキップされ、後続イベントの処理を妨げない。
 PostgreSQL では `FOR UPDATE SKIP LOCKED` により複数ワーカーの水平スケールにも対応。
 
-### 7.6 OutboxReader Protocol
+### 7.7 OutboxReader Protocol
 
 ```python
 class OutboxReader(Protocol):
     async def fetch_pending(self, limit: int) -> list[OutboxEvent]: ...
-    async def mark_processing(self, event_ids: list[str]) -> None: ...
     async def delete_completed(self, event_ids: list[str]) -> None: ...
     async def mark_failed(self, event_id: str, error_message: str) -> None: ...
-    async def reset_to_pending(self, event_id: str, retry_count: int, next_retry_at: datetime, error_message: str) -> None: ...
+    async def reset_to_pending(
+        self, event_id: str, retry_count: int,
+        next_retry_at: datetime, error_message: str,
+    ) -> None: ...
     async def fetch_all_actionable(self) -> list[OutboxEvent]: ...
+    async def reset_stuck_processing(
+        self, threshold_seconds: int = 300, max_retries: int = 10,
+    ) -> int: ...
 ```
 
 PostgreSQL `fetch_pending` 実装:
@@ -549,8 +632,28 @@ WHERE id IN (
     LIMIT $1
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, event_type, memory_id, payload, retry_count, created_at;
+RETURNING id, event_type, memory_id, payload, status, retry_count,
+          next_retry_at, created_at, updated_at, error_message;
 ```
+
+`fetch_all_actionable` も同様に `SELECT` 句に `status` カラムを必ず含める。
+ハードコードを避け、`OutboxEvent.status` は常に DB 上の実値を反映させる。
+
+### 7.8 Supabase 向け OutboxReader 実装方針
+
+Supabase はクライアントから直接 SQL を実行できず、`asyncpg` の `FOR UPDATE
+SKIP LOCKED` を Python から発行できない。そのため `SupabaseOutboxReader` は
+**状態遷移を伴う操作は §4.3 で定義した RPC、それ以外は supabase-py の
+table API** で実装する。
+
+| メソッド | 実装手段 | 備考 |
+| --- | --- | --- |
+| `fetch_pending` | RPC `fetch_pending_outbox(p_limit)` | UPDATE + RETURNING を 1 TX |
+| `reset_stuck_processing` | RPC `reset_stuck_processing_outbox` | 2 段階 UPDATE を 1 TX |
+| `delete_completed` | `client.table("graph_sync_outbox").delete().in_("id", ids)` |  |
+| `mark_failed` | `client.table("graph_sync_outbox").update({status:FAILED,...}).eq("id", id)` |  |
+| `reset_to_pending` | `client.table("graph_sync_outbox").update({...}).eq("id", id)` |  |
+| `fetch_all_actionable` | `client.table("graph_sync_outbox").select("*").in_("status", [...])` | `status` カラムも取得 |
 
 ## 8. GraphSyncService (共有同期ロジック)
 
@@ -634,7 +737,8 @@ async def get_memories_batch(self, memory_ids: list[str]) -> list[Memory]:
 ファイル: `scripts/sync_storage_to_neo4j.py`
 
 ```text
-usage: sync_storage_to_neo4j.py [--full | --catchup] [--chunk-size N] [--dry-run]
+usage: sync_storage_to_neo4j.py [--full | --catchup] [--chunk-size N]
+                                [--dry-run] [--yes]
 ```
 
 | モード | 動作 |
@@ -643,6 +747,25 @@ usage: sync_storage_to_neo4j.py [--full | --catchup] [--chunk-size N] [--dry-run
 | `--catchup` | Outbox の PENDING + PROCESSING + FAILED イベントを再処理 |
 | `--dry-run` | 実際の書き込みを行わず対象件数のみ出力 |
 | `--chunk-size` | バッチサイズ (デフォルト 1000) |
+| `--yes` | `--full` 実行時の対話確認をスキップする運用フラグ |
+
+### 10.1.1 `--full` モードの制約とダウンタイム
+
+`--full` は `MATCH (m:Memory) DETACH DELETE m` で全ノードを削除してから順次
+MERGE するため、**実行中はグラフ traversal クエリが空結果を返す**。
+以下の制約を必ず守る:
+
+- **想定ユースケース**: スキーマ非互換変更後の再構築・データ破損からの災害復旧。
+  通常運用での実行は禁止
+- **メンテナンス窓口内での実行を必須とする**。ChronosGraph を利用する
+  アプリケーション側でグラフ検索が一時的に空結果を返す前提のスケジュールを組む
+- 実行前に `--dry-run` で対象件数を確認し、`--yes` 未指定時は対話プロンプトで
+  オペレータの承認を要求する
+- ジョブ実行ログに開始時刻・終了時刻・処理件数を必ず INFO レベルで残す
+
+ダウンタイムレスな差分再同期が必要な場合は将来的に `--reconcile` モード（Storage 全 ID
+と Neo4j 全 ID の集合差分を計算し、不足ノードを MERGE / 孤児ノードのみ
+DETACH DELETE）を追加することを検討する。本リリースでは含まない。
 
 ### 10.2 冪等性
 

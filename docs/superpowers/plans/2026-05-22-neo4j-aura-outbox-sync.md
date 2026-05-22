@@ -634,10 +634,10 @@ CREATE TABLE graph_sync_outbox (
     status        TEXT NOT NULL DEFAULT 'PENDING'
                        CHECK (status IN ('PENDING', 'PROCESSING', 'FAILED')),
     retry_count   INTEGER NOT NULL DEFAULT 0,
-    next_retry_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    next_retry_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     error_message TEXT,
-    created_at    TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    updated_at    TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
 CREATE INDEX idx_outbox_status_retry ON graph_sync_outbox (status, next_retry_at);
@@ -657,10 +657,10 @@ CREATE TABLE graph_sync_outbox (
     status        VARCHAR(20)  NOT NULL DEFAULT 'PENDING'
                                CHECK (status IN ('PENDING', 'PROCESSING', 'FAILED')),
     retry_count   INT          NOT NULL DEFAULT 0,
-    next_retry_at TIMESTAMPTZ  DEFAULT NOW(),
+    next_retry_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     error_message TEXT,
-    created_at    TIMESTAMPTZ  DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ  DEFAULT NOW()
+    created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_outbox_status_retry ON graph_sync_outbox (status, next_retry_at ASC);
@@ -764,10 +764,10 @@ CREATE TABLE graph_sync_outbox (
     status        VARCHAR(20)  NOT NULL DEFAULT 'PENDING'
                                CHECK (status IN ('PENDING', 'PROCESSING', 'FAILED')),
     retry_count   INT          NOT NULL DEFAULT 0,
-    next_retry_at TIMESTAMPTZ  DEFAULT NOW(),
+    next_retry_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     error_message TEXT,
-    created_at   TIMESTAMPTZ   DEFAULT NOW(),
-    updated_at   TIMESTAMPTZ   DEFAULT NOW()
+    created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_outbox_status_retry ON graph_sync_outbox (status, next_retry_at ASC);
@@ -788,8 +788,7 @@ CREATE OR REPLACE FUNCTION upsert_memory_with_outbox(
     p_importance_score    FLOAT,
     p_tags                TEXT[],
     p_project             TEXT,
-    p_content_hash        TEXT,
-    p_event_type          VARCHAR(20) DEFAULT 'SYNC_MEMORY'
+    p_content_hash        TEXT
 )
 RETURNS UUID
 LANGUAGE plpgsql
@@ -823,7 +822,7 @@ BEGIN
     RETURNING id INTO v_memory_id;
 
     INSERT INTO graph_sync_outbox (event_type, memory_id)
-    VALUES (p_event_type, v_memory_id);
+    VALUES ('SYNC_MEMORY', v_memory_id);
 
     RETURN v_memory_id;
 END;
@@ -866,7 +865,7 @@ $$;
 
 GRANT EXECUTE ON FUNCTION upsert_memory_with_outbox(
     UUID, TEXT, VARCHAR, VARCHAR, JSONB, vector, FLOAT, FLOAT,
-    TEXT[], TEXT, TEXT, VARCHAR
+    TEXT[], TEXT, TEXT
 ) TO service_role;
 GRANT EXECUTE ON FUNCTION delete_memory_with_outbox(UUID) TO service_role;
 
@@ -950,7 +949,7 @@ GRANT EXECUTE ON FUNCTION reset_stuck_processing_outbox(INT, INT) TO service_rol
 
 ```bash
 # Supabase ローカル環境がない場合は静的構文だけ確認
-uv run python -c "import re, pathlib; sql = pathlib.Path('supabase/migrations/20260521000001_graph_sync_outbox.sql').read_text(); assert sql.count('CREATE TABLE') == 1; assert sql.count('CREATE OR REPLACE FUNCTION') == 2; print('OK')"
+uv run python -c "import re, pathlib; sql = pathlib.Path('supabase/migrations/20260521000001_graph_sync_outbox.sql').read_text(); assert sql.count('CREATE TABLE') == 1; assert sql.count('CREATE OR REPLACE FUNCTION') == 4; print('OK')"
 ```
 
 Expected: `OK`

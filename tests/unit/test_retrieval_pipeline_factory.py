@@ -4,13 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from context_store.retrieval.pipeline import RetrievalPipeline
 
 
-@pytest.mark.asyncio
-async def test_create_for_dashboard_returns_pipeline_with_search() -> None:
+def test_create_for_dashboard_returns_pipeline_with_search() -> None:
     storage = MagicMock(name="StorageAdapter")
     graph = MagicMock(name="GraphAdapter")
     settings = MagicMock(
@@ -23,7 +20,7 @@ async def test_create_for_dashboard_returns_pipeline_with_search() -> None:
 
     with patch("context_store.embedding.create_embedding_provider") as mock_create:
         mock_create.return_value = MagicMock()
-        pipeline = await RetrievalPipeline.create_for_dashboard(
+        pipeline = RetrievalPipeline.create_for_dashboard(
             storage=storage, graph=graph, settings=settings
         )
 

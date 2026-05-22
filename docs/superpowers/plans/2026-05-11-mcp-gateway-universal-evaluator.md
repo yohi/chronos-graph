@@ -1123,7 +1123,7 @@ gh pr create --draft \
 - Modify: `src/context_store/dashboard/api_server.py`
 - Test: `tests/unit/test_dashboard_semantic_search.py` (Task 2-2 で作成・拡張)
 
-- [ ] **Step 1: ブランチ作成 (Task 2-1 と 2-2 を統合)**
+- [x] **Step 1: ブランチ作成 (Task 2-1 と 2-2 を統合)**
 
 ```bash
 git fetch origin
@@ -1133,7 +1133,7 @@ git checkout -b feature/phase2-task3_memories_route
 git merge origin/feature/phase2-task1_pipeline_factory
 ```
 
-- [ ] **Step 2: route の失敗テストを追加**
+- [x] **Step 2: route の失敗テストを追加**
 
 `tests/unit/test_dashboard_semantic_search.py` の末尾に追記:
 
@@ -1185,7 +1185,7 @@ def test_semantic_search_endpoint_returns_503_when_pipeline_missing() -> None:
     assert r.status_code == 503
 ```
 
-- [ ] **Step 3: テストが失敗することを確認**
+- [x] **Step 3: テストが失敗することを確認**
 
 Run:
 
@@ -1195,7 +1195,7 @@ uv run pytest tests/unit/test_dashboard_semantic_search.py::test_semantic_search
 
 Expected: `404 Not Found` で FAIL (ルート未登録)
 
-- [ ] **Step 4: routes/memories.py にエンドポイントを追加**
+- [x] **Step 4: routes/memories.py にエンドポイントを追加**
 
 `src/context_store/dashboard/routes/memories.py` の末尾に追加:
 
@@ -1236,7 +1236,7 @@ async def semantic_search_memories(
     ]
 ```
 
-- [ ] **Step 5: api_server.py の lifespan で RetrievalPipeline.create_for_dashboard を呼び出し注入**
+- [x] **Step 5: api_server.py の lifespan で RetrievalPipeline.create_for_dashboard を呼び出し注入**
 
 `src/context_store/dashboard/api_server.py:50` 周辺の `app.state.service = DashboardService(storage=storage, graph=graph)` を以下に置き換え:
 
@@ -1269,7 +1269,7 @@ async def semantic_search_memories(
 
 > **NOTE:** `RetrievalPipeline.create_for_dashboard` は Task 2-1 で追加したメソッドを利用する。初期化に失敗した場合は `retrieval_pipeline=None` で dashboard を起動し、エンドポイントから 503 を返すようにする。
 
-- [ ] **Step 6: テスト通過確認**
+- [x] **Step 6: テスト通過確認**
 
 Run:
 
@@ -1279,7 +1279,7 @@ uv run pytest tests/unit/test_dashboard_semantic_search.py -v
 
 Expected: 全テスト PASS
 
-- [ ] **Step 7: 既存 dashboard ルートテストの回帰確認**
+- [x] **Step 7: 既存 dashboard ルートテストの回帰確認**
 
 Run:
 
@@ -1289,7 +1289,7 @@ uv run pytest tests/unit/test_api_server.py tests/unit/test_dashboard_service.py
 
 Expected: 全 PASS
 
-- [ ] **Step 8: ruff / mypy**
+- [x] **Step 8: ruff / mypy**
 
 Run:
 
@@ -1300,7 +1300,7 @@ uv run mypy src/context_store/dashboard/
 
 Expected: exit 0
 
-- [ ] **Step 9: コミット**
+- [x] **Step 9: コミット**
 
 ```bash
 git add src/context_store/dashboard/routes/memories.py src/context_store/dashboard/api_server.py tests/unit/test_dashboard_semantic_search.py
@@ -1308,7 +1308,7 @@ git commit -m "feat(dashboard): add POST /api/memories/semantic-search endpoint"
 git push -u origin feature/phase2-task3_memories_route
 ```
 
-- [ ] **Step 10: Phase Base 向け Draft PR**
+- [x] **Step 10: Phase Base 向け Draft PR**
 
 ```bash
 gh pr create --draft \

@@ -7,7 +7,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
+from context_store.dashboard.api_server import create_app
 from context_store.dashboard.schemas import SemanticSearchRequest
 from context_store.dashboard.services import DashboardService
 
@@ -70,3 +73,46 @@ def test_semantic_search_request_defaults() -> None:
 def test_semantic_search_request_top_k_validation() -> None:
     with pytest.raises(ValueError):
         SemanticSearchRequest(query="x", top_k=0)
+
+
+@pytest.fixture
+def app_with_pipeline() -> tuple[FastAPI, MagicMock]:
+    fake_memory = SimpleNamespace(
+        id="m-1",
+        content="hello",
+        memory_type="semantic",
+        importance_score=0.8,
+        project="demo",
+        access_count=3,
+        created_at=datetime(2026, 5, 11),
+    )
+    pipeline = MagicMock()
+    pipeline.search = AsyncMock(return_value=SimpleNamespace(memories=[fake_memory]))
+
+    service = DashboardService(storage=MagicMock(), graph=None, retrieval_pipeline=pipeline)
+    app = create_app(service_override=service)
+    return app, pipeline
+
+
+def test_semantic_search_endpoint_returns_memories(
+    app_with_pipeline: tuple[FastAPI, MagicMock],
+) -> None:
+    app, pipeline = app_with_pipeline
+    with TestClient(app, base_url="http://localhost") as client:
+        response = client.post(
+            "/api/memories/semantic-search",
+            json={"query": "tool:bash command=ls", "project": "demo", "top_k": 3},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["content"] == "hello"
+    pipeline.search.assert_awaited_once()
+
+
+def test_semantic_search_endpoint_returns_503_when_pipeline_missing() -> None:
+    service = DashboardService(storage=MagicMock(), graph=None)
+    app = create_app(service_override=service)
+    with TestClient(app, base_url="http://localhost") as client:
+        response = client.post("/api/memories/semantic-search", json={"query": "x"})
+    assert response.status_code == 503

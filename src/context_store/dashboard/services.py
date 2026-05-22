@@ -168,6 +168,9 @@ class DashboardService:
         if memories is not None:
             return list(memories)
 
+        if not hasattr(response, "get"):
+            return []
+
         memory_ids = self._extract_memory_ids(response)
         if not memory_ids:
             return []

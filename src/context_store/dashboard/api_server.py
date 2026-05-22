@@ -57,6 +57,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 settings=settings,
             )
         except Exception as exc:
+            if not isinstance(exc, (ValueError, RuntimeError, ImportError, OSError)):
+                raise
             logger.warning(
                 "RetrievalPipeline could not be initialized for dashboard "
                 "(semantic-search endpoint will return 503): %s",

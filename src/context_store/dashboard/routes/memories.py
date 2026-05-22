@@ -59,7 +59,7 @@ async def semantic_search_memories(
             project=req.project,
             top_k=req.top_k,
         )
-    except RuntimeError as exc:
+    except (RuntimeError, OSError, ConnectionError, TimeoutError) as exc:
         raise HTTPException(status_code=503, detail="Service temporarily unavailable") from exc
 
     return [

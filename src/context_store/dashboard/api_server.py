@@ -57,7 +57,18 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 settings=settings,
             )
         except Exception as exc:
-            if not isinstance(exc, (ValueError, RuntimeError, ImportError, OSError)):
+            if not isinstance(
+                exc,
+                (
+                    ValueError,
+                    RuntimeError,
+                    ImportError,
+                    OSError,
+                    AttributeError,
+                    KeyError,
+                    TypeError,
+                ),
+            ):
                 raise
             logger.warning(
                 "RetrievalPipeline could not be initialized for dashboard "

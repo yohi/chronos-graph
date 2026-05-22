@@ -174,6 +174,10 @@ class DashboardService:
         memory_ids = self._extract_memory_ids(response)
         if not memory_ids:
             return []
+        # NOTE: Pipeline results contain only a subset (memory_id, content, score,
+        # source_type, metadata). Full Memory requires memory_type, importance_score, project,
+        # access_count, created_at, necessitating a batch fetch. Future: extend
+        # RetrievalResponse to include all fields and eliminate this round-trip.
         memory_by_id = {
             str(memory.id): memory for memory in await self._storage.get_memories_batch(memory_ids)
         }

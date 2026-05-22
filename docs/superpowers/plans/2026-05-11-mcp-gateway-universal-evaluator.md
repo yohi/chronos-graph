@@ -212,7 +212,7 @@ if ! grep -qxF 'export DEVCONTAINER=1' "${HOME}/.bashrc" 2>/dev/null; then
 fi
 ```
 
-- [ ] **Step 3: setup.sh を直接実行して export が追記されることを Devcontainer 内で確認**
+- [x] **Step 3: setup.sh を直接実行して export が追記されることを Devcontainer 内で確認**
 
 Run (Devcontainer 内):
 
@@ -227,7 +227,7 @@ grep -c '^export DEVCONTAINER=1$' "${HOME}/.bashrc"
 
 Expected: 両方とも `1`
 
-- [ ] **Step 4: 新規 bash で DEVCONTAINER=1 が export されることを確認**
+- [x] **Step 4: 新規 bash で DEVCONTAINER=1 が export されることを確認**
 
 Run (Devcontainer 内):
 
@@ -237,7 +237,7 @@ bash -lc 'echo DEVCONTAINER=$DEVCONTAINER'
 
 Expected: `DEVCONTAINER=1`
 
-- [ ] **Step 5: shellcheck で setup.sh を検証**
+- [x] **Step 5: shellcheck で setup.sh を検証**
 
 Run (Devcontainer 内):
 
@@ -276,14 +276,14 @@ EOF
 
 ### Phase 0 完了処理
 
-- [ ] **Step 1: Phase Base への Task PR をすべてマージ (squash 推奨)**
+- [x] **Step 1: Phase Base への Task PR をすべてマージ (squash 推奨)**
 
 ```bash
 gh pr merge --squash feature/phase0-task1_ci_workflow
 gh pr merge --squash feature/phase0-task2_devcontainer_env
 ```
 
-- [ ] **Step 2: Phase Base を最新に同期し master 向け Draft PR を作成**
+- [x] **Step 2: Phase Base を最新に同期し master 向け Draft PR を作成**
 
 ```bash
 git fetch origin
@@ -705,14 +705,14 @@ EOF
 
 ### Phase 1 完了処理
 
-- [ ] **Step 1: Task PR を Phase Base にマージ**
+- [x] **Step 1: Task PR を Phase Base にマージ**
 
 ```bash
 gh pr merge --squash feature/phase1-task1_evaluator_models
 gh pr merge --squash feature/phase1-task2_pyproject_extras
 ```
 
-- [ ] **Step 2: Phase Base 向け master Draft PR**
+- [x] **Step 2: Phase Base 向け master Draft PR**
 
 ```bash
 git fetch origin

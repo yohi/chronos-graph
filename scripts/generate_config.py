@@ -50,12 +50,7 @@ def get_settings() -> Any:
             DEFAULT_REDIS_URL = "redis://localhost:6379"
 
             def __init__(self, _env_file: str | None = None):
-                pass
-
-            @property
-            def model_fields(self) -> dict[str, Any]:
-                """イミュータブルな定義を返すプロパティ。"""
-                return {
+                self._model_fields = {
                     "embedding_provider": type(
                         "obj",
                         (),
@@ -65,6 +60,11 @@ def get_settings() -> Any:
                         },
                     )
                 }
+
+            @property
+            def model_fields(self) -> dict[str, Any]:
+                """イミュータブルな定義を返すプロパティ。"""
+                return self._model_fields
 
         return SettingsFallback(_env_file=env_file)
 

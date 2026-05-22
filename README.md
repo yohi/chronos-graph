@@ -217,7 +217,7 @@ uv run python scripts/migrate_dimension.py
 ```
 
 #### 2. ストレージスキーマの更新
-Supabase または PostgreSQL を使用している場合は、次元不一致を解消するためにベクトルカラムの型を更新する必要があります。
+**重要:** スキーマ変更を実行する前に、必ずデータベースのバックアップを取得し、必要に応じて `scripts/migrate_dimension.py` を検証してから実行してください。
 
 **Supabase / PostgreSQL 用 SQL 例:**
 ```sql
@@ -228,6 +228,11 @@ ALTER TABLE memories ALTER COLUMN embedding TYPE vector(768);
 ALTER TABLE memories DROP COLUMN embedding;
 ALTER TABLE memories ADD COLUMN embedding vector(768);
 ```
+
+**SQLite 用の対応:**
+SQLite では `ALTER COLUMN TYPE` がサポートされていないため、以下のいずれかの手順が必要です。
+- **カラムの再作成:** `STORAGE_BACKEND=sqlite` を設定している場合、一度 `embedding` カラムを削除して再作成（`DROP/ADD`）するか、データベースをエクスポートしてから、新しい次元で `memories` テーブルを再作成してデータを移行してください。
+- **移行手順:** テーブルを再作成（またはカラムを NULL で追加）した後、`scripts/migrate_dimension.py` を実行して再埋め込みを行ってください。
 
 #### 3. エラーと対処
 起動時に `ConfigurationError` や `StorageError` が発生した場合は、`.env` の `EMBEDDING_DIMENSION` がストレージ側の次元と一致しているか確認してください。
@@ -243,6 +248,7 @@ ALTER TABLE memories ADD COLUMN embedding vector(768);
 | `SUPABASE_KEY` | `""` | **[Supabase用]** Supabase Service Role Key |
 | `EMBEDDING_PROVIDER` | `local-model` | 埋め込みプロバイダー (`local-model` / `openai` / `litellm`) |
 | `LOCAL_MODEL_NAME` | `cl-nagoya/ruri-v3-310m` | ローカルモデル名 (768次元) |
+| `EMBEDDING_DIMENSION` | `768` | 埋め込みベクトル次元数 (例: 768) |
 | `GRAPH_ENABLED` | `false` | グラフ機能の有効化 |
 | `CACHE_BACKEND` | `inmemory` | キャッシュバックエンド (`inmemory` / `redis`) |
 | `REDIS_URL` | `redis://localhost:6379` | Redis 接続 URL |

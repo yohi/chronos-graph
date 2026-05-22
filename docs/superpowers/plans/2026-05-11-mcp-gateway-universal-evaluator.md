@@ -1001,7 +1001,7 @@ uv run pytest tests/unit/test_dashboard_semantic_search.py -v
 
 Expected: `ImportError: cannot import name 'SemanticSearchRequest'` 等で FAIL
 
-- [ ] **Step 4: schemas.py に SemanticSearchRequest を追加**
+- [x] **Step 4: schemas.py に SemanticSearchRequest を追加**
 
 `src/context_store/dashboard/schemas.py` の末尾に追記:
 
@@ -1017,7 +1017,7 @@ class SemanticSearchRequest(DashboardBaseModel):
 
 `from pydantic import BaseModel, ConfigDict` の行を `from pydantic import BaseModel, ConfigDict, Field` に変更すれば末尾の import 行は不要。
 
-- [ ] **Step 5: services.py を修正**
+- [x] **Step 5: services.py を修正**
 
 `src/context_store/dashboard/services.py` の `DashboardService.__init__` を以下に置き換え:
 
@@ -1063,7 +1063,7 @@ if TYPE_CHECKING:
     from context_store.retrieval.pipeline import RetrievalPipeline
 ```
 
-- [ ] **Step 6: テスト通過確認**
+- [x] **Step 6: テスト通過確認**
 
 Run:
 
@@ -1073,7 +1073,7 @@ uv run pytest tests/unit/test_dashboard_semantic_search.py -v
 
 Expected: 4 テスト PASS
 
-- [ ] **Step 7: 既存 dashboard テストへの回帰確認**
+- [x] **Step 7: 既存 dashboard テストへの回帰確認**
 
 Run:
 
@@ -1083,7 +1083,7 @@ uv run pytest tests/unit/test_dashboard_service.py tests/unit/test_api_server.py
 
 Expected: 既存テスト PASS (DashboardService への新規 keyword 引数はデフォルト `None` のため互換性維持)
 
-- [ ] **Step 8: ruff / mypy**
+- [x] **Step 8: ruff / mypy**
 
 Run:
 
@@ -1094,7 +1094,7 @@ uv run mypy src/context_store/dashboard/services.py src/context_store/dashboard/
 
 Expected: exit 0
 
-- [ ] **Step 9: コミット**
+- [x] **Step 9: コミット**
 
 ```bash
 git add src/context_store/dashboard/services.py src/context_store/dashboard/schemas.py tests/unit/test_dashboard_semantic_search.py
@@ -1102,7 +1102,7 @@ git commit -m "feat(dashboard): add DashboardService.semantic_search and Semanti
 git push -u origin feature/phase2-task2_dashboard_service
 ```
 
-- [ ] **Step 10: Phase Base 向け Draft PR**
+- [x] **Step 10: Phase Base 向け Draft PR**
 
 ```bash
 gh pr create --draft \

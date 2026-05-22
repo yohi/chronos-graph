@@ -918,7 +918,7 @@ gh pr create --draft \
 - Modify: `src/context_store/dashboard/schemas.py`
 - Test: `tests/unit/test_dashboard_semantic_search.py` (新規)
 
-- [ ] **Step 1: ブランチ作成**
+- [x] **Step 1: ブランチ作成**
 
 ```bash
 git fetch origin
@@ -927,7 +927,7 @@ git pull --ff-only
 git checkout -b feature/phase2-task2_dashboard_service
 ```
 
-- [ ] **Step 2: 失敗するテストを書く**
+- [x] **Step 2: 失敗するテストを書く**
 
 `tests/unit/test_dashboard_semantic_search.py`:
 
@@ -991,7 +991,7 @@ def test_semantic_search_request_top_k_validation() -> None:
         SemanticSearchRequest(query="x", top_k=0)
 ```
 
-- [ ] **Step 3: テストが失敗することを確認**
+- [x] **Step 3: テストが失敗することを確認**
 
 Run:
 
@@ -1320,7 +1320,7 @@ gh pr create --draft \
 
 ### Phase 2 完了処理
 
-- [ ] **Step 1: Task PR を順序通りに Phase Base へマージ**
+- [x] **Step 1: Task PR を順序通りに Phase Base へマージ**
 
 ```bash
 gh pr merge --squash feature/phase2-task1_pipeline_factory
@@ -1328,7 +1328,7 @@ gh pr merge --squash feature/phase2-task2_dashboard_service
 gh pr merge --squash feature/phase2-task3_memories_route
 ```
 
-- [ ] **Step 2: master 向け Phase Draft PR**
+- [x] **Step 2: master 向け Phase Draft PR**
 
 ```bash
 git fetch origin

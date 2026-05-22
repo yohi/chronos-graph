@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -67,6 +68,16 @@ def test_semantic_search_request_defaults() -> None:
     assert req.top_k == 5
 
 
-def test_semantic_search_request_top_k_validation() -> None:
+@pytest.mark.parametrize(
+    "field,invalid_value",
+    [
+        ("top_k", 0),
+        ("top_k", 51),
+        ("query", ""),
+    ],
+)
+def test_semantic_search_request_validation(field: str, invalid_value: Any) -> None:
+    kwargs: dict[str, Any] = {"query": "x"}
+    kwargs[field] = invalid_value
     with pytest.raises(ValueError):
-        SemanticSearchRequest(query="x", top_k=0)
+        SemanticSearchRequest(**kwargs)

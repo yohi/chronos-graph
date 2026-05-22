@@ -162,11 +162,14 @@ class DashboardService:
         if self._retrieval is None:
             raise RuntimeError("retrieval_pipeline not configured for this dashboard")
 
+        top_k = max(1, min(top_k, 50))
         response = await self._retrieval.search(query=query, project=project, top_k=top_k)
         memories = getattr(response, "memories", None)
         if memories is not None:
             return list(memories)
 
+        if not hasattr(response, "get"):
+            return []
         memory_ids = self._extract_memory_ids(response)
         if not memory_ids:
             return []
@@ -176,7 +179,9 @@ class DashboardService:
         return [memory_by_id[memory_id] for memory_id in memory_ids if memory_id in memory_by_id]
 
     def _extract_memory_ids(self, response: "RetrievalResponse") -> list[str]:
-        return [str(item["memory_id"]) for item in response.get("results", [])]
+        return [
+            str(item["memory_id"]) for item in response.get("results", []) if "memory_id" in item
+        ]
 
     async def get_recent_logs(self, limit: int = 100) -> list[LogEntry]:
         """Get recent system logs from the in-memory circular buffer."""

@@ -505,13 +505,7 @@ async def create_orchestrator(
         SQLiteLifecycleStateStore,
     )
     from context_store.lifecycle.purger import Purger
-    from context_store.retrieval.graph_traversal import GraphTraversal
-    from context_store.retrieval.keyword_search import KeywordSearch
     from context_store.retrieval.pipeline import RetrievalPipeline
-    from context_store.retrieval.post_processor import PostProcessor
-    from context_store.retrieval.query_analyzer import QueryAnalyzer
-    from context_store.retrieval.result_fusion import ResultFusion
-    from context_store.retrieval.vector_search import VectorSearch
     from context_store.storage.factory import create_storage
 
     # アダプター生成
@@ -529,29 +523,11 @@ async def create_orchestrator(
             settings=settings,
         )
 
-        # RetrievalPipeline 組み立て
-        query_analyzer = QueryAnalyzer()
-        vector_search = VectorSearch(
+        retrieval_pipeline = RetrievalPipeline.create_from_parts(
+            storage=storage,
+            graph=graph,
             embedding_provider=embedding_provider,
-            storage_adapter=storage,
-        )
-        keyword_search = KeywordSearch(storage_adapter=storage)
-        graph_traversal = GraphTraversal(
-            graph_adapter=graph,
-            default_depth=settings.graph_max_logical_depth,
-            fanout_limit=settings.graph_fanout_limit,
-            max_physical_hops=settings.graph_max_physical_hops,
-        )
-        result_fusion = ResultFusion()
-        post_processor = PostProcessor(storage_adapter=storage)
-        retrieval_pipeline = RetrievalPipeline(
-            query_analyzer=query_analyzer,
-            vector_search=vector_search,
-            keyword_search=keyword_search,
-            graph_traversal=graph_traversal,
-            result_fusion=result_fusion,
-            post_processor=post_processor,
-            storage_adapter=storage,
+            settings=settings,
         )
 
         # LifecycleManager 組み立て

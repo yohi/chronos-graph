@@ -52,10 +52,10 @@ class ChronosServer:
 
     async def _do_initialize(self) -> None:
         """Orchestrator を実際に初期化する。"""
-        from context_store.config import Settings
+        from context_store.config import get_settings
         from context_store.orchestrator import create_orchestrator
 
-        self._settings = Settings()
+        self._settings = get_settings()
         self._orchestrator = await create_orchestrator(self._settings)
 
     async def _ensure_initialized(self) -> None:

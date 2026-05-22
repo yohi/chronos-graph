@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -22,7 +22,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --all-extras --dev
+        run: uv sync --extra storage-postgres --extra storage-supabase --extra embedding-openai --extra embedding-litellm --extra dashboard --extra evaluator --dev
 
       - name: Run ruff check
         run: uv run ruff check src/ tests/

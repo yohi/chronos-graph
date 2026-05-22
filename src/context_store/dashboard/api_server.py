@@ -14,7 +14,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from context_store.config import Settings
+from context_store.config import Settings, get_settings
 from context_store.dashboard.services import DashboardService
 from context_store.storage.factory import create_storage
 
@@ -77,7 +77,7 @@ def create_app(
     frontend_dist_override: Path | None = None,
 ) -> FastAPI:
     """Create FastAPI app for dashboard."""
-    settings = Settings()
+    settings = get_settings()
 
     app = FastAPI(
         title="Chronos Graph Dashboard",
@@ -198,7 +198,7 @@ def main() -> None:
     """Main entry point."""
     import uvicorn
 
-    settings = Settings()
+    settings = get_settings()
     app = create_app()
     uvicorn.run(
         app,

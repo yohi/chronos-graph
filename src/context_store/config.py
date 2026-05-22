@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any, ClassVar, Literal, assert_never
 from urllib.parse import quote
 
@@ -7,6 +8,16 @@ from pydantic import Field, SecretStr, computed_field, field_validator, model_va
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 SUPABASE_VECTOR_DIM = 768
+
+
+def get_settings() -> Settings:
+    """Settings インスタンスを環境変数に応じて生成して返す。"""
+    env_file = os.environ.get("ENV_FILE")
+    if env_file == "/dev/null":
+        return Settings(_env_file=None)
+    if env_file:
+        return Settings(_env_file=env_file)
+    return Settings()
 
 
 class Settings(BaseSettings):

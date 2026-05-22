@@ -20,14 +20,17 @@ def load_generate_config(script: Path) -> ModuleType:
 
 def test_generate_config_supports_supabase_uvx_backend(monkeypatch, capsys) -> None:
     """Supabase backend emits uvx config with Supabase env and explicit Redis cache."""
-    repo_root = Path(__file__).resolve().parents[2]
-    script = repo_root / "scripts" / "generate_config.py"
+    # Pydantic Settings が .env を読み込むのを抑制
+    monkeypatch.setenv("ENV_FILE", "/dev/null")
     supabase_url = "https://example.supabase.co"
     supabase_key = "test-service-role-key"
-
     monkeypatch.setenv("SUPABASE_URL", supabase_url)
     monkeypatch.setenv("SUPABASE_KEY", supabase_key)
+
+    repo_root = Path(__file__).resolve().parents[2]
+    script = repo_root / "scripts" / "generate_config.py"
     module = load_generate_config(script)
+
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -43,7 +46,6 @@ def test_generate_config_supports_supabase_uvx_backend(monkeypatch, capsys) -> N
     )
 
     module.main()
-
     config = json.loads(capsys.readouterr().out)
     server = config["mcpServers"]["chronos-graph"]
 
@@ -66,14 +68,17 @@ def test_generate_config_supports_supabase_uvx_backend(monkeypatch, capsys) -> N
 
 def test_generate_config_supports_explicit_supabase_inmemory_cache(monkeypatch, capsys) -> None:
     """Supabase backend allows InMemory cache only when explicitly selected."""
-    repo_root = Path(__file__).resolve().parents[2]
-    script = repo_root / "scripts" / "generate_config.py"
+    # Pydantic Settings が .env を読み込むのを抑制
+    monkeypatch.setenv("ENV_FILE", "/dev/null")
     supabase_url = "https://example.supabase.co"
     supabase_key = "test-service-role-key"
-
     monkeypatch.setenv("SUPABASE_URL", supabase_url)
     monkeypatch.setenv("SUPABASE_KEY", supabase_key)
+
+    repo_root = Path(__file__).resolve().parents[2]
+    script = repo_root / "scripts" / "generate_config.py"
     module = load_generate_config(script)
+
     monkeypatch.setattr(
         "sys.argv",
         [

@@ -8,12 +8,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from context_store.dashboard.api_server import create_app
-from context_store.dashboard.schemas import SemanticSearchRequest
-from context_store.dashboard.services import DashboardService
 from context_store.dashboard.schemas import SemanticSearchRequest
 from context_store.dashboard.services import DashboardService
 

@@ -13,7 +13,7 @@ from mcp_gateway.policy.models_evaluator import MemoryItem
 
 @pytest.mark.asyncio
 async def test_retrieve_returns_memory_items() -> None:
-    client = MemoryClient(dashboard_url="http://dashboard.local:9000", top_k=3)
+    client = MemoryClient(dashboard_url="http://localhost:9000", top_k=3)
     payload = [
         {
             "id": "1",
@@ -43,7 +43,7 @@ async def test_retrieve_returns_memory_items() -> None:
 
 @pytest.mark.asyncio
 async def test_retrieve_sends_authorization_header_when_api_key_configured() -> None:
-    client = MemoryClient(dashboard_url="http://dashboard.local:9000", _api_key="secret-token")
+    client = MemoryClient(dashboard_url="http://localhost:9000", _api_key="secret-token")
 
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["authorization"] == "Bearer secret-token"
@@ -58,20 +58,21 @@ async def test_retrieve_sends_authorization_header_when_api_key_configured() -> 
 
 @pytest.mark.asyncio
 async def test_retrieve_raises_memory_fetch_error_on_http_error() -> None:
-    client = MemoryClient(dashboard_url="http://dashboard.local:9000")
+    client = MemoryClient(dashboard_url="http://localhost:9000")
 
     async def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(503, text="pipeline missing")
+        return httpx.Response(503, text="secret should not be in exception")
 
     transport = httpx.MockTransport(handler)
     with patch.object(MemoryClient, "_build_transport", return_value=transport):
-        with pytest.raises(MemoryFetchError):
+        with pytest.raises(MemoryFetchError) as exc_info:
             _ = await client.retrieve(query="x")
+    assert "secret should not be in exception" not in str(exc_info.value)
 
 
 @pytest.mark.asyncio
 async def test_retrieve_raises_memory_fetch_error_on_timeout() -> None:
-    client = MemoryClient(dashboard_url="http://dashboard.local:9000", timeout_seconds=0.001)
+    client = MemoryClient(dashboard_url="http://localhost:9000", timeout_seconds=0.001)
 
     async def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.TimeoutException("boom", request=request)
@@ -84,7 +85,7 @@ async def test_retrieve_raises_memory_fetch_error_on_timeout() -> None:
 
 @pytest.mark.asyncio
 async def test_retrieve_raises_memory_fetch_error_on_invalid_json() -> None:
-    client = MemoryClient(dashboard_url="http://dashboard.local:9000")
+    client = MemoryClient(dashboard_url="http://localhost:9000")
 
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text="not-json")
@@ -97,7 +98,7 @@ async def test_retrieve_raises_memory_fetch_error_on_invalid_json() -> None:
 
 @pytest.mark.asyncio
 async def test_retrieve_raises_memory_fetch_error_on_non_list_response() -> None:
-    client = MemoryClient(dashboard_url="http://dashboard.local:9000")
+    client = MemoryClient(dashboard_url="http://localhost:9000")
 
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"content": "x"})
@@ -114,13 +115,39 @@ def test_from_env_returns_none_when_url_missing(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_from_env_picks_up_url_and_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CHRONOS_DASHBOARD_URL", "http://x:9000/")
+    monkeypatch.setenv("CHRONOS_DASHBOARD_URL", "http://localhost:9000/")
     c = MemoryClient.from_env()
     assert c is not None
-    assert c.dashboard_url == "http://x:9000"
+    assert c.dashboard_url == "http://localhost:9000"
+
+
+def test_from_env_rejects_unallowed_dashboard_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CHRONOS_DASHBOARD_URL", "http://attacker.example:9000")
+    with pytest.raises(MemoryFetchError):
+        _ = MemoryClient.from_env()
+
+
+def test_from_env_accepts_explicit_allowed_dashboard_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CHRONOS_DASHBOARD_URL", "https://dashboard.internal")
+    monkeypatch.setenv("CHRONOS_DASHBOARD_ALLOWED_HOSTS", "dashboard.internal")
+    c = MemoryClient.from_env()
+    assert c is not None
+    assert c.dashboard_url == "https://dashboard.internal"
+
+
+def test_rejects_dashboard_url_with_userinfo() -> None:
+    with pytest.raises(MemoryFetchError):
+        _ = MemoryClient(dashboard_url="http://token@localhost:9000")
+
+
+def test_rejects_dashboard_url_with_unsupported_scheme() -> None:
+    with pytest.raises(MemoryFetchError):
+        _ = MemoryClient(dashboard_url="file:///etc/passwd")
 
 
 def test_repr_does_not_include_api_key() -> None:
     assert "secret-token" not in repr(
-        MemoryClient(dashboard_url="http://x", _api_key="secret-token")
+        MemoryClient(dashboard_url="http://localhost", _api_key="secret-token")
     )

@@ -4,7 +4,7 @@
 
 **Goal:** Storage Layer のメモリ書き込みと同一トランザクション内で Outbox テーブルにグラフ同期イベントを記録し、バックグラウンドワーカーが非同期に Neo4j Aura へバルク MERGE 同期する Transactional Outbox Pattern を実装する。
 
-**Architecture:** PostgreSQL/SQLite/Supabase の各 Storage Adapter は `save_memory`/`delete_memory` 時に同一 TX で `graph_sync_outbox` テーブルへ書き込む（Supabase は RPC で Atomicity 保証）。`OutboxWorker` が `next_retry_at` に基づき PENDING/FAILED イベントを polling し、`GraphSyncService` 経由で Neo4j に UNWIND+MERGE する。失敗時は DB レベルで Exponential Backoff を永続化、Worker クラッシュは起動時 `reset_stuck_processing` でリカバリする。
+**Architecture:** PostgreSQL/SQLite/Supabase の各 Storage Adapter は `save_memory`/`delete_memory` 時に同一 TX で `graph_sync_outbox` テーブルへ無条件 INSERT する（Supabase は RPC で Atomicity 保証）。同一 `memory_id` に対する重複 `SYNC_MEMORY` は意図的に許容し、ワーカー側の「最新状態フェッチ + MERGE」によって収束させる（dedup-at-convergence。詳細は設計 §3.4 を参照）。`OutboxWorker` が `next_retry_at` に基づき PENDING/FAILED イベントを polling し、`GraphSyncService` 経由で Neo4j に UNWIND+MERGE する。失敗時は DB レベルで Exponential Backoff を永続化、Worker クラッシュは起動時 `reset_stuck_processing` でリカバリする。
 
 **Tech Stack:** Python 3.12 / asyncio / asyncpg / aiosqlite / supabase-py / neo4j-python-driver / pydantic-settings / pytest / Devcontainer (Ubuntu slim, uv)
 
@@ -709,6 +709,8 @@ gh pr create --draft --base feat/outbox-base --title "feat(storage): graph_sync_
 ## Schema
 - `id`/`event_type`/`memory_id`/`payload`/`status`/`retry_count`/`next_retry_at`/`error_message`/`created_at`/`updated_at`
 - Index: `(status, next_retry_at)` + `(memory_id)`
+  - `(memory_id)` は運用/障害調査クエリ用。書き込み時の重複制御には**使用しない**
+    （設計 §3.4 を参照）。UNIQUE 制約も追加しない（dedup-at-convergence 方針）。
 
 ## Test plan
 - [x] 新規マイグレーション適用テスト
@@ -1139,6 +1141,11 @@ class OutboxWriter(Protocol):
 
     各 StorageAdapter のトランザクション内で呼び出される。
     Postgres は asyncpg.Connection、SQLite は aiosqlite.Connection を期待する。
+
+    Note:
+        書き込み時の重複チェック (dedup-at-insert) は意図的に行わない。
+        同一 memory_id への複数 SYNC_MEMORY は許容され、Worker 側の
+        「最新状態フェッチ + MERGE」で収束する。設計 §3.4 を参照。
     """
 
     async def enqueue_sync(

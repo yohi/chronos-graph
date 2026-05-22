@@ -116,7 +116,8 @@ VectorSearch / KeywordSearch で補完される。
 
 **インデックス:**
 - `(status, next_retry_at ASC)` — ワーカーの PENDING フェッチ用 (Backoff 対応)
-- `(memory_id)` — 重複イベント検出用
+- `(memory_id)` — 運用/障害調査クエリ用 (例: 特定メモリのイベント履歴を引く)。
+  書き込み時の重複チェックには使用しない。詳細は §3.4 を参照
 
 ### 3.2 イベント粒度: 粗粒度モデル
 
@@ -134,6 +135,65 @@ VectorSearch / KeywordSearch で補完される。
 
 `DELETE_MEMORY` イベントの処理時にメモリが既に削除されている。FK 制約があると
 Outbox レコードが cascade 削除され、ワーカーが Neo4j 側のノード削除を実行できなくなる。
+
+### 3.4 重複イベントの収束契約
+
+#### 設計判断: 「dedup-at-convergence」を採用、「dedup-at-insert」は採用しない
+
+同一 `memory_id` に対する複数の `SYNC_MEMORY` イベントが Outbox に並存することを
+**意図的に許容する**。重複そのものを書き込み時に防ぐのではなく、ワーカー側で
+最新状態を再フェッチして MERGE することにより収束させる。根拠は以下のとおり。
+
+- **MERGE の冪等性**: §8.2 `bulk_merge_memories` は Cypher `MERGE` ベースで、
+  同一ノードへの複数 MERGE は副作用を持たない
+- **最新状態の再取得**: §7.3 ステップ2 のとおり、ワーカーはイベント処理時に
+  `StorageAdapter.get_memories_batch()` で Storage から最新メモリを取得する。
+  古い `SYNC_MEMORY` イベントを処理しても、結果は常に「現時点の Storage 状態」と一致する
+- **Storage TX の単純化**: §1.2 の核心は「メモリ保存と Outbox 書き込みを同一 TX で
+  Atomic に実行する」点にある。UNIQUE 制約や `SELECT FOR UPDATE` を Outbox に挿入する
+  経路に持ち込むと、メモリ書き込み TX が Outbox 由来で失敗し得る経路を生み、
+  Atomicity 保証の実効性が損なわれる
+
+#### UNIQUE 制約 + UPSERT を採用しない理由
+
+`UNIQUE (memory_id, event_type)` + `ON CONFLICT DO UPDATE` 案は以下の副作用を持つため
+不採用とする。
+
+- **PROCESSING との競合**: PROCESSING 中のレコードを UPSERT で上書きすると、
+  ワーカーが保持している retry_count / next_retry_at の進行状態と DB 状態が乖離し、
+  二重処理 or 古い状態への巻き戻しが発生する
+- **FAILED 残骸との衝突**: 過去の FAILED が残存する間、新規 `SYNC_MEMORY` 書き込みが
+  UPSERT パス上で待機 or 既存レコード書き換えとなり、メモリ書き込み TX のレイテンシと
+  失敗確率が上昇する
+- **DELETE_MEMORY との順序問題**: `SYNC_MEMORY` と `DELETE_MEMORY` を別行として
+  保持しないと、削除イベントが UPSERT で打ち消される可能性がある（event_type を
+  UNIQUE キーに含めれば回避できるが、書き込み経路の分岐が増える）
+
+#### 重複時の正規動作
+
+| ケース | 動作 |
+|---|---|
+| 同一 `memory_id` に複数の PENDING が並存 | `fetch_pending` で `next_retry_at` 昇順に取得し、それぞれ MERGE。最後に処理されたイベントの結果が最終状態と一致 |
+| 同一 `memory_id` に PROCESSING + PENDING が並存 | PROCESSING はそのまま完走させ、PENDING は次サイクルで処理。MERGE 冪等性により問題なし |
+| 同一 `memory_id` に FAILED + PENDING が並存 | PENDING を通常処理（FAILED は §7.6 によりスキップされ、`--catchup` で再処理） |
+| `SYNC_MEMORY` と `DELETE_MEMORY` が並存 | `next_retry_at` 昇順、すなわち挿入順に処理。最終的に DELETE が反映されれば DETACH DELETE が後勝ち |
+
+#### `(memory_id)` インデックスの実際の用途
+
+`(memory_id)` インデックスは **書き込み時の重複制御には使わない**。実用途は以下に限定される。
+
+- 運用/障害調査クエリ: `SELECT * FROM graph_sync_outbox WHERE memory_id = ?`
+- リカバリスクリプト (`--catchup`) の追跡調査
+- 将来追加候補の `--reconcile` モード (§10.1.1) における集合差分計算
+
+#### 受け入れたトレードオフ
+
+- ✅ Storage TX を単純な無条件 INSERT に保ち、Atomicity 保証の経路を最短化
+- ✅ ワーカー側ロジックを変更せず水平スケール (`FOR UPDATE SKIP LOCKED`) と両立
+- ⚠️ 同一メモリに対する冗長な MERGE が発生し得る。Neo4j への RTT が1回分余計に走るが、
+  MERGE は冪等であり、性能上のオーバーヘッドのみ（数 ms 程度）。データ整合性への影響なし
+- ⚠️ Outbox テーブル行数の短期的増加。`delete_completed` により処理成功イベントは
+  即時削除されるため、定常状態では PENDING + FAILED + PROCESSING の合計のみが残る
 
 ## 4. マイグレーション
 

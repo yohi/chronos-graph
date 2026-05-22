@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from context_store.dashboard.schemas import (
     DashboardStats,
@@ -18,6 +18,9 @@ from context_store.storage.protocols import (
     StorageAdapter,
 )
 
+if TYPE_CHECKING:
+    from context_store.retrieval.pipeline import RetrievalPipeline, RetrievalResponse
+
 MAX_CONCURRENT_DASHBOARD_TASKS = 5
 
 
@@ -28,9 +31,11 @@ class DashboardService:
         self,
         storage: StorageAdapter,
         graph: GraphAdapter | None,
+        retrieval_pipeline: "RetrievalPipeline | None" = None,
     ) -> None:
         self._storage = storage
         self._graph = graph
+        self._retrieval = retrieval_pipeline
 
     async def get_stats_summary(self) -> DashboardStats:
         active, archived, total, projects = await asyncio.gather(
@@ -146,6 +151,42 @@ class DashboardService:
     async def search_memories(self, filters: MemoryFilters) -> list[Memory]:
         """Search memories by filters."""
         return await self._storage.list_by_filter(filters)
+
+    async def semantic_search(
+        self,
+        query: str,
+        project: str | None = None,
+        top_k: int = 5,
+    ) -> list[Memory]:
+        """Vector similarity semantic search via the injected retrieval pipeline."""
+        if self._retrieval is None:
+            raise RuntimeError("retrieval_pipeline not configured for this dashboard")
+
+        top_k = max(1, min(top_k, 50))
+        response = await self._retrieval.search(query=query, project=project, top_k=top_k)
+        memories = getattr(response, "memories", None)
+        if memories is not None:
+            return list(memories)
+
+        if not hasattr(response, "get"):
+            raise RuntimeError("Invalid retrieval response format")
+
+        memory_ids = self._extract_memory_ids(response)
+        if not memory_ids:
+            return []
+        # NOTE: Pipeline results contain only a subset (memory_id, content, score,
+        # source_type, metadata). Full Memory requires memory_type, importance_score, project,
+        # access_count, created_at, necessitating a batch fetch. Future: extend
+        # RetrievalResponse to include all fields and eliminate this round-trip.
+        memory_by_id = {
+            str(memory.id): memory for memory in await self._storage.get_memories_batch(memory_ids)
+        }
+        return [memory_by_id[memory_id] for memory_id in memory_ids if memory_id in memory_by_id]
+
+    def _extract_memory_ids(self, response: "RetrievalResponse") -> list[str]:
+        return [
+            str(item["memory_id"]) for item in response.get("results", []) if "memory_id" in item
+        ]
 
     async def get_recent_logs(self, limit: int = 100) -> list[LogEntry]:
         """Get recent system logs from the in-memory circular buffer."""

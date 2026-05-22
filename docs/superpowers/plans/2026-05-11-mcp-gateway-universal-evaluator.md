@@ -743,7 +743,7 @@ gh pr create --draft \
 
 **目的:** `Orchestrator` を起動せずに dashboard 単独で `RetrievalPipeline` を組み立てる経路を確立する。`orchestrator.py:490-620` 周辺の retrieval セクション (query_analyzer / vector_search / keyword_search / graph_traversal / result_fusion / post_processor) を dashboard 用に切り出した classmethod を追加する。
 
-- [ ] **Step 1: ブランチ作成**
+- [x] **Step 1: ブランチ作成**
 
 ```bash
 git fetch origin master
@@ -752,7 +752,7 @@ git push -u origin feature/phase2_dashboard_semantic_search__base
 git checkout -b feature/phase2-task1_pipeline_factory
 ```
 
-- [ ] **Step 2: 失敗するテストを書く**
+- [x] **Step 2: 失敗するテストを書く**
 
 `tests/unit/test_retrieval_pipeline_factory.py` を新規作成:
 
@@ -792,7 +792,7 @@ async def test_create_for_dashboard_returns_pipeline_with_search() -> None:
     assert hasattr(pipeline, "search")
 ```
 
-- [ ] **Step 3: テストが失敗することを確認**
+- [x] **Step 3: テストが失敗することを確認**
 
 ```bash
 uv run pytest tests/unit/test_retrieval_pipeline_factory.py -v
@@ -800,7 +800,7 @@ uv run pytest tests/unit/test_retrieval_pipeline_factory.py -v
 
 Expected: `AttributeError: type object 'RetrievalPipeline' has no attribute 'create_for_dashboard'` で FAIL
 
-- [ ] **Step 4: `create_for_dashboard` と共有ビルダーを追加し、Orchestrator をリファクタリング**
+- [x] **Step 4: `create_for_dashboard` と共有ビルダーを追加し、Orchestrator をリファクタリング**
 
 `src/context_store/retrieval/pipeline.py` に共有ビルダー `create_from_parts` と、そのラッパー `create_for_dashboard` を追加。その後、`src/context_store/orchestrator.py` の組み立てロジックをこの共有ビルダーを使うように書き換える。
 
@@ -864,7 +864,7 @@ Expected: `AttributeError: type object 'RetrievalPipeline' has no attribute 'cre
 `retrieval_pipeline = RetrievalPipeline(...)` の直接構築箇所を `RetrievalPipeline.create_from_parts(...)` 呼び出しに置き換え。
 
 
-- [ ] **Step 5: テスト通過確認**
+- [x] **Step 5: テスト通過確認**
 
 ```bash
 uv run pytest tests/unit/test_retrieval_pipeline_factory.py -v
@@ -872,7 +872,7 @@ uv run pytest tests/unit/test_retrieval_pipeline_factory.py -v
 
 Expected: PASS
 
-- [ ] **Step 6: 既存テストへの回帰確認**
+- [x] **Step 6: 既存テストへの回帰確認**
 
 ```bash
 uv run pytest tests/unit/test_orchestrator.py tests/unit -k "retrieval or pipeline" -v
@@ -880,7 +880,7 @@ uv run pytest tests/unit/test_orchestrator.py tests/unit -k "retrieval or pipeli
 
 Expected: 既存テストが全て PASS (新規 classmethod 追加のみで既存挙動に変更なし)
 
-- [ ] **Step 7: ruff / mypy**
+- [x] **Step 7: ruff / mypy**
 
 ```bash
 uv run ruff check src/context_store/retrieval/pipeline.py src/context_store/orchestrator.py tests/unit/test_retrieval_pipeline_factory.py
@@ -889,7 +889,7 @@ uv run mypy src/context_store/retrieval/pipeline.py src/context_store/orchestrat
 
 Expected: exit 0
 
-- [ ] **Step 8: コミット**
+- [x] **Step 8: コミット**
 
 ```bash
 git add src/context_store/retrieval/pipeline.py src/context_store/orchestrator.py tests/unit/test_retrieval_pipeline_factory.py
@@ -897,7 +897,7 @@ git commit -m "feat(retrieval): add RetrievalPipeline.create_for_dashboard facto
 git push -u origin feature/phase2-task1_pipeline_factory
 ```
 
-- [ ] **Step 9: Phase Base 向け Draft PR**
+- [x] **Step 9: Phase Base 向け Draft PR**
 
 ```bash
 gh pr create --draft \
@@ -918,7 +918,7 @@ gh pr create --draft \
 - Modify: `src/context_store/dashboard/schemas.py`
 - Test: `tests/unit/test_dashboard_semantic_search.py` (新規)
 
-- [ ] **Step 1: ブランチ作成**
+- [x] **Step 1: ブランチ作成**
 
 ```bash
 git fetch origin
@@ -927,7 +927,7 @@ git pull --ff-only
 git checkout -b feature/phase2-task2_dashboard_service
 ```
 
-- [ ] **Step 2: 失敗するテストを書く**
+- [x] **Step 2: 失敗するテストを書く**
 
 `tests/unit/test_dashboard_semantic_search.py`:
 
@@ -991,7 +991,7 @@ def test_semantic_search_request_top_k_validation() -> None:
         SemanticSearchRequest(query="x", top_k=0)
 ```
 
-- [ ] **Step 3: テストが失敗することを確認**
+- [x] **Step 3: テストが失敗することを確認**
 
 Run:
 
@@ -1001,7 +1001,7 @@ uv run pytest tests/unit/test_dashboard_semantic_search.py -v
 
 Expected: `ImportError: cannot import name 'SemanticSearchRequest'` 等で FAIL
 
-- [ ] **Step 4: schemas.py に SemanticSearchRequest を追加**
+- [x] **Step 4: schemas.py に SemanticSearchRequest を追加**
 
 `src/context_store/dashboard/schemas.py` の末尾に追記:
 
@@ -1017,7 +1017,7 @@ class SemanticSearchRequest(DashboardBaseModel):
 
 `from pydantic import BaseModel, ConfigDict` の行を `from pydantic import BaseModel, ConfigDict, Field` に変更すれば末尾の import 行は不要。
 
-- [ ] **Step 5: services.py を修正**
+- [x] **Step 5: services.py を修正**
 
 `src/context_store/dashboard/services.py` の `DashboardService.__init__` を以下に置き換え:
 
@@ -1063,7 +1063,7 @@ if TYPE_CHECKING:
     from context_store.retrieval.pipeline import RetrievalPipeline
 ```
 
-- [ ] **Step 6: テスト通過確認**
+- [x] **Step 6: テスト通過確認**
 
 Run:
 
@@ -1073,7 +1073,7 @@ uv run pytest tests/unit/test_dashboard_semantic_search.py -v
 
 Expected: 4 テスト PASS
 
-- [ ] **Step 7: 既存 dashboard テストへの回帰確認**
+- [x] **Step 7: 既存 dashboard テストへの回帰確認**
 
 Run:
 
@@ -1083,7 +1083,7 @@ uv run pytest tests/unit/test_dashboard_service.py tests/unit/test_api_server.py
 
 Expected: 既存テスト PASS (DashboardService への新規 keyword 引数はデフォルト `None` のため互換性維持)
 
-- [ ] **Step 8: ruff / mypy**
+- [x] **Step 8: ruff / mypy**
 
 Run:
 
@@ -1094,7 +1094,7 @@ uv run mypy src/context_store/dashboard/services.py src/context_store/dashboard/
 
 Expected: exit 0
 
-- [ ] **Step 9: コミット**
+- [x] **Step 9: コミット**
 
 ```bash
 git add src/context_store/dashboard/services.py src/context_store/dashboard/schemas.py tests/unit/test_dashboard_semantic_search.py
@@ -1102,7 +1102,7 @@ git commit -m "feat(dashboard): add DashboardService.semantic_search and Semanti
 git push -u origin feature/phase2-task2_dashboard_service
 ```
 
-- [ ] **Step 10: Phase Base 向け Draft PR**
+- [x] **Step 10: Phase Base 向け Draft PR**
 
 ```bash
 gh pr create --draft \
@@ -1123,7 +1123,7 @@ gh pr create --draft \
 - Modify: `src/context_store/dashboard/api_server.py`
 - Test: `tests/unit/test_dashboard_semantic_search.py` (Task 2-2 で作成・拡張)
 
-- [ ] **Step 1: ブランチ作成 (Task 2-1 と 2-2 を統合)**
+- [x] **Step 1: ブランチ作成 (Task 2-1 と 2-2 を統合)**
 
 ```bash
 git fetch origin
@@ -1133,7 +1133,7 @@ git checkout -b feature/phase2-task3_memories_route
 git merge origin/feature/phase2-task1_pipeline_factory
 ```
 
-- [ ] **Step 2: route の失敗テストを追加**
+- [x] **Step 2: route の失敗テストを追加**
 
 `tests/unit/test_dashboard_semantic_search.py` の末尾に追記:
 
@@ -1185,7 +1185,7 @@ def test_semantic_search_endpoint_returns_503_when_pipeline_missing() -> None:
     assert r.status_code == 503
 ```
 
-- [ ] **Step 3: テストが失敗することを確認**
+- [x] **Step 3: テストが失敗することを確認**
 
 Run:
 
@@ -1195,7 +1195,7 @@ uv run pytest tests/unit/test_dashboard_semantic_search.py::test_semantic_search
 
 Expected: `404 Not Found` で FAIL (ルート未登録)
 
-- [ ] **Step 4: routes/memories.py にエンドポイントを追加**
+- [x] **Step 4: routes/memories.py にエンドポイントを追加**
 
 `src/context_store/dashboard/routes/memories.py` の末尾に追加:
 
@@ -1236,7 +1236,7 @@ async def semantic_search_memories(
     ]
 ```
 
-- [ ] **Step 5: api_server.py の lifespan で RetrievalPipeline.create_for_dashboard を呼び出し注入**
+- [x] **Step 5: api_server.py の lifespan で RetrievalPipeline.create_for_dashboard を呼び出し注入**
 
 `src/context_store/dashboard/api_server.py:50` 周辺の `app.state.service = DashboardService(storage=storage, graph=graph)` を以下に置き換え:
 
@@ -1269,7 +1269,7 @@ async def semantic_search_memories(
 
 > **NOTE:** `RetrievalPipeline.create_for_dashboard` は Task 2-1 で追加したメソッドを利用する。初期化に失敗した場合は `retrieval_pipeline=None` で dashboard を起動し、エンドポイントから 503 を返すようにする。
 
-- [ ] **Step 6: テスト通過確認**
+- [x] **Step 6: テスト通過確認**
 
 Run:
 
@@ -1279,7 +1279,7 @@ uv run pytest tests/unit/test_dashboard_semantic_search.py -v
 
 Expected: 全テスト PASS
 
-- [ ] **Step 7: 既存 dashboard ルートテストの回帰確認**
+- [x] **Step 7: 既存 dashboard ルートテストの回帰確認**
 
 Run:
 
@@ -1289,7 +1289,7 @@ uv run pytest tests/unit/test_api_server.py tests/unit/test_dashboard_service.py
 
 Expected: 全 PASS
 
-- [ ] **Step 8: ruff / mypy**
+- [x] **Step 8: ruff / mypy**
 
 Run:
 
@@ -1300,7 +1300,7 @@ uv run mypy src/context_store/dashboard/
 
 Expected: exit 0
 
-- [ ] **Step 9: コミット**
+- [x] **Step 9: コミット**
 
 ```bash
 git add src/context_store/dashboard/routes/memories.py src/context_store/dashboard/api_server.py tests/unit/test_dashboard_semantic_search.py
@@ -1308,7 +1308,7 @@ git commit -m "feat(dashboard): add POST /api/memories/semantic-search endpoint"
 git push -u origin feature/phase2-task3_memories_route
 ```
 
-- [ ] **Step 10: Phase Base 向け Draft PR**
+- [x] **Step 10: Phase Base 向け Draft PR**
 
 ```bash
 gh pr create --draft \
@@ -1320,7 +1320,7 @@ gh pr create --draft \
 
 ### Phase 2 完了処理
 
-- [ ] **Step 1: Task PR を順序通りに Phase Base へマージ**
+- [x] **Step 1: Task PR を順序通りに Phase Base へマージ**
 
 ```bash
 gh pr merge --squash feature/phase2-task1_pipeline_factory
@@ -1328,7 +1328,7 @@ gh pr merge --squash feature/phase2-task2_dashboard_service
 gh pr merge --squash feature/phase2-task3_memories_route
 ```
 
-- [ ] **Step 2: master 向け Phase Draft PR**
+- [x] **Step 2: master 向け Phase Draft PR**
 
 ```bash
 git fetch origin

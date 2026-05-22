@@ -17,7 +17,7 @@ from typing import Any, ClassVar, Protocol, cast, runtime_checkable
 
 import httpx
 
-from context_store.config import Settings
+from context_store.config import Settings, get_settings
 from context_store.models.memory import SourceType
 
 logger = logging.getLogger(__name__)
@@ -261,7 +261,7 @@ class URLAdapter:
     """
 
     def __init__(self, settings: Settings | None = None) -> None:
-        self.settings = settings or Settings()
+        self.settings = settings or get_settings()
 
     def _is_restricted_ip(self, ip_str: str) -> bool:
         """IPアドレスが制限されたアドレスかどうかを判定する。

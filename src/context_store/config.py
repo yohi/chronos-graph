@@ -10,12 +10,22 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, Settings
 SUPABASE_VECTOR_DIM = 768
 
 
+def get_settings() -> Settings:
+    """Settings インスタンスを環境変数に応じて生成して返す。"""
+    env_file = os.environ.get("ENV_FILE")
+    if env_file == "/dev/null":
+        return Settings(_env_file=None)
+    if env_file:
+        return Settings(_env_file=env_file)
+    return Settings()
+
+
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
         env_prefix="",
-        env_file=".env" if os.environ.get("ENV_FILE") != "/dev/null" else None,
+        env_file=".env",
         extra="ignore",
     )
 

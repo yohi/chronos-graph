@@ -26,22 +26,31 @@ import json
 import os
 import shutil
 import sys
+from functools import lru_cache
 from typing import Any, Literal, get_args
 
 # src を sys.path に追加して context_store をインポート可能にする
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
+@lru_cache
 def get_settings() -> Any:
     """Settings インスタンスを遅延ロードして返す。"""
+    env_file: str | None = os.environ.get("ENV_FILE", ".env")
+    if env_file == "/dev/null":
+        env_file = None
+
     try:
         from context_store.config import Settings as RealSettings
 
-        return RealSettings()
+        return RealSettings(_env_file=env_file)
     except ImportError:
         # インポート失敗時のフォールバック(スタンドアロン実行用)
         class SettingsFallback:
             DEFAULT_REDIS_URL = "redis://localhost:6379"
+
+            def __init__(self, _env_file: str | None = None):
+                pass
 
             @property
             def model_fields(self) -> dict[str, Any]:
@@ -57,7 +66,7 @@ def get_settings() -> Any:
                     )
                 }
 
-        return SettingsFallback()
+        return SettingsFallback(_env_file=env_file)
 
 
 def str_to_bool(value: str) -> bool:
@@ -85,7 +94,7 @@ def get_embedding_envs(provider: str) -> dict[str, str]:
         envs["OPENAI_API_KEY"] = get_secret(settings, "openai_api_key", "<your-openai-api-key>")
     elif provider == "local-model":
         envs["LOCAL_MODEL_NAME"] = getattr(settings, "local_model_name", "cl-nagoya/ruri-v3-310m")
-        envs["EMBEDDING_DIMENSION"] = str(getattr(settings, "embedding_dimension", "768"))
+        envs["EMBEDDING_DIMENSION"] = str(getattr(settings, "embedding_dimension", 768))
     elif provider == "litellm":
         envs["LITELLM_API_BASE"] = getattr(settings, "litellm_api_base", "http://localhost:4000")
         envs["LITELLM_MODEL"] = getattr(settings, "litellm_model", "openai/text-embedding-3-small")

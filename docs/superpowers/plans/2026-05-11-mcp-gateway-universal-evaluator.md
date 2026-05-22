@@ -743,7 +743,7 @@ gh pr create --draft \
 
 **目的:** `Orchestrator` を起動せずに dashboard 単独で `RetrievalPipeline` を組み立てる経路を確立する。`orchestrator.py:490-620` 周辺の retrieval セクション (query_analyzer / vector_search / keyword_search / graph_traversal / result_fusion / post_processor) を dashboard 用に切り出した classmethod を追加する。
 
-- [ ] **Step 1: ブランチ作成**
+- [x] **Step 1: ブランチ作成**
 
 ```bash
 git fetch origin master
@@ -752,7 +752,7 @@ git push -u origin feature/phase2_dashboard_semantic_search__base
 git checkout -b feature/phase2-task1_pipeline_factory
 ```
 
-- [ ] **Step 2: 失敗するテストを書く**
+- [x] **Step 2: 失敗するテストを書く**
 
 `tests/unit/test_retrieval_pipeline_factory.py` を新規作成:
 
@@ -792,7 +792,7 @@ async def test_create_for_dashboard_returns_pipeline_with_search() -> None:
     assert hasattr(pipeline, "search")
 ```
 
-- [ ] **Step 3: テストが失敗することを確認**
+- [x] **Step 3: テストが失敗することを確認**
 
 ```bash
 uv run pytest tests/unit/test_retrieval_pipeline_factory.py -v
@@ -800,7 +800,7 @@ uv run pytest tests/unit/test_retrieval_pipeline_factory.py -v
 
 Expected: `AttributeError: type object 'RetrievalPipeline' has no attribute 'create_for_dashboard'` で FAIL
 
-- [ ] **Step 4: `create_for_dashboard` と共有ビルダーを追加し、Orchestrator をリファクタリング**
+- [x] **Step 4: `create_for_dashboard` と共有ビルダーを追加し、Orchestrator をリファクタリング**
 
 `src/context_store/retrieval/pipeline.py` に共有ビルダー `create_from_parts` と、そのラッパー `create_for_dashboard` を追加。その後、`src/context_store/orchestrator.py` の組み立てロジックをこの共有ビルダーを使うように書き換える。
 
@@ -864,7 +864,7 @@ Expected: `AttributeError: type object 'RetrievalPipeline' has no attribute 'cre
 `retrieval_pipeline = RetrievalPipeline(...)` の直接構築箇所を `RetrievalPipeline.create_from_parts(...)` 呼び出しに置き換え。
 
 
-- [ ] **Step 5: テスト通過確認**
+- [x] **Step 5: テスト通過確認**
 
 ```bash
 uv run pytest tests/unit/test_retrieval_pipeline_factory.py -v
@@ -872,7 +872,7 @@ uv run pytest tests/unit/test_retrieval_pipeline_factory.py -v
 
 Expected: PASS
 
-- [ ] **Step 6: 既存テストへの回帰確認**
+- [x] **Step 6: 既存テストへの回帰確認**
 
 ```bash
 uv run pytest tests/unit/test_orchestrator.py tests/unit -k "retrieval or pipeline" -v
@@ -880,7 +880,7 @@ uv run pytest tests/unit/test_orchestrator.py tests/unit -k "retrieval or pipeli
 
 Expected: 既存テストが全て PASS (新規 classmethod 追加のみで既存挙動に変更なし)
 
-- [ ] **Step 7: ruff / mypy**
+- [x] **Step 7: ruff / mypy**
 
 ```bash
 uv run ruff check src/context_store/retrieval/pipeline.py src/context_store/orchestrator.py tests/unit/test_retrieval_pipeline_factory.py
@@ -889,7 +889,7 @@ uv run mypy src/context_store/retrieval/pipeline.py src/context_store/orchestrat
 
 Expected: exit 0
 
-- [ ] **Step 8: コミット**
+- [x] **Step 8: コミット**
 
 ```bash
 git add src/context_store/retrieval/pipeline.py src/context_store/orchestrator.py tests/unit/test_retrieval_pipeline_factory.py
@@ -897,7 +897,7 @@ git commit -m "feat(retrieval): add RetrievalPipeline.create_for_dashboard facto
 git push -u origin feature/phase2-task1_pipeline_factory
 ```
 
-- [ ] **Step 9: Phase Base 向け Draft PR**
+- [x] **Step 9: Phase Base 向け Draft PR**
 
 ```bash
 gh pr create --draft \

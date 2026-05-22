@@ -204,6 +204,36 @@ If any item fails, cancel the save or correct the content before finalizing.
 
 ---
 
+## マイグレーション (Migration)
+
+### ベクトル次元数の変更 (1024 -> 768)
+
+ChronosGraph の推奨埋め込みモデルの変更に伴い、デフォルトのベクトル次元数が **1024** から **768** に更新されました。以前のバージョンから移行する場合、次元不一致により `ConfigurationError` が発生します。
+
+#### 1. データの再埋め込み (推奨)
+既存の記憶を新しい 768 次元モデルで再計算します。
+```bash
+uv run python scripts/migrate_dimension.py
+```
+
+#### 2. ストレージスキーマの更新
+Supabase または PostgreSQL を使用している場合は、次元不一致を解消するためにベクトルカラムの型を更新する必要があります。
+
+**Supabase / PostgreSQL 用 SQL 例:**
+```sql
+-- memories テーブルのベクトルカラムを 768 次元の新しい定義に変更する
+ALTER TABLE memories ALTER COLUMN embedding TYPE vector(768);
+
+-- または、一度削除して再作成する場合（データが失われるため migrate_dimension.py 実行前に実施）
+ALTER TABLE memories DROP COLUMN embedding;
+ALTER TABLE memories ADD COLUMN embedding vector(768);
+```
+
+#### 3. エラーと対処
+起動時に `ConfigurationError` や `StorageError` が発生した場合は、`.env` の `EMBEDDING_DIMENSION` がストレージ側の次元と一致しているか確認してください。
+
+---
+
 ## 設定リファレンス
 
 | 環境変数 | デフォルト | 説明 |

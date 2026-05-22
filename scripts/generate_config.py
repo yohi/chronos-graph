@@ -94,6 +94,9 @@ def get_embedding_envs(provider: str) -> dict[str, str]:
         envs["OPENAI_API_KEY"] = get_secret(settings, "openai_api_key", "<your-openai-api-key>")
     elif provider == "local-model":
         envs["LOCAL_MODEL_NAME"] = getattr(settings, "local_model_name", "cl-nagoya/ruri-v3-310m")
+        # デフォルトの 768 次元は推奨モデル ruri-v3-310m の出力仕様に基づいています。
+        # 以前のバージョン(1024次元)から移行する場合は
+        # scripts/migrate_dimension.py を使用してください。
         envs["EMBEDDING_DIMENSION"] = str(getattr(settings, "embedding_dimension", 768))
     elif provider == "litellm":
         envs["LITELLM_API_BASE"] = getattr(settings, "litellm_api_base", "http://localhost:4000")

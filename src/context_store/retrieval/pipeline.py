@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Awaitable, Callable, TypedDict
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, TypedDict
 
 from context_store.models.memory import MemorySource, ScoredMemory
 from context_store.models.search import SearchStrategy
@@ -15,6 +15,11 @@ from context_store.retrieval.query_analyzer import QueryAnalyzer
 from context_store.retrieval.result_fusion import ResultFusion
 from context_store.retrieval.vector_search import VectorSearch
 from context_store.storage.protocols import StorageAdapter
+
+if TYPE_CHECKING:
+    from context_store.config import Settings
+    from context_store.embedding.protocols import EmbeddingProvider
+    from context_store.storage.protocols import GraphAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +49,53 @@ def _coerce_graph_score(raw_score: Any) -> float:
 
 class RetrievalPipeline:
     """検索パイプライン統合"""
+
+    @classmethod
+    async def create_for_dashboard(
+        cls,
+        *,
+        storage: StorageAdapter,
+        graph: GraphAdapter | None,
+        settings: Settings,
+    ) -> RetrievalPipeline:
+        """Build a RetrievalPipeline for the read-only dashboard."""
+        from context_store.embedding import create_embedding_provider
+
+        embedding_provider = create_embedding_provider(settings)
+        return cls.create_from_parts(
+            storage=storage,
+            graph=graph,
+            embedding_provider=embedding_provider,
+            settings=settings,
+        )
+
+    @classmethod
+    def create_from_parts(
+        cls,
+        *,
+        storage: StorageAdapter,
+        graph: GraphAdapter | None,
+        embedding_provider: EmbeddingProvider,
+        settings: Settings,
+    ) -> RetrievalPipeline:
+        """Shared builder used by Orchestrator and Dashboard."""
+        return cls(
+            query_analyzer=QueryAnalyzer(),
+            vector_search=VectorSearch(
+                embedding_provider=embedding_provider,
+                storage_adapter=storage,
+            ),
+            keyword_search=KeywordSearch(storage_adapter=storage),
+            graph_traversal=GraphTraversal(
+                graph_adapter=graph,
+                default_depth=settings.graph_max_logical_depth,
+                fanout_limit=settings.graph_fanout_limit,
+                max_physical_hops=settings.graph_max_physical_hops,
+            ),
+            result_fusion=ResultFusion(),
+            post_processor=PostProcessor(storage_adapter=storage),
+            storage_adapter=storage,
+        )
 
     def __init__(
         self,

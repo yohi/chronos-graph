@@ -10,12 +10,6 @@ echo "Installing dependencies..."
 uv venv "${UV_PROJECT_ENVIRONMENT}"
 uv sync --frozen --all-extras
 
-# Phase 6 の scripts/check_evaluator.sh が DEVCONTAINER=1 を要求するため、
-# devcontainer 経由で起動した bash で確実に export されるよう ~/.bashrc に追記する。
-if ! grep -qxF 'export DEVCONTAINER=1' "${HOME}/.bashrc" 2>/dev/null; then
-    echo 'export DEVCONTAINER=1' >> "${HOME}/.bashrc"
-fi
-
 echo "Devcontainer setup complete!"
 echo ""
 echo "Available tasks (Ctrl+Shift+P → Tasks: Run Task):"

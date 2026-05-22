@@ -9,6 +9,7 @@ services:
     working_dir: /workspaces/chronos-graph
     environment:
       - UV_PROJECT_ENVIRONMENT=/home/vscode/.venv
+      - DEVCONTAINER=1
     command: ["bash"]
 
   postgres:

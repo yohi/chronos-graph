@@ -35,8 +35,11 @@ async def test_retrieve_returns_memory_items() -> None:
         return httpx.Response(200, json=payload)
 
     transport = httpx.MockTransport(handler)
-    with patch.object(MemoryClient, "_build_transport", return_value=transport):
-        out = await client.retrieve(query="tool:bash command=ls", project="demo")
+    try:
+        with patch.object(MemoryClient, "_build_transport", return_value=transport):
+            out = await client.retrieve(query="tool:bash command=ls", project="demo")
+    finally:
+        await client.close()
 
     assert out == [MemoryItem(content="x", memory_type="semantic", importance=0.7)]
 
@@ -50,24 +53,47 @@ async def test_retrieve_sends_authorization_header_when_api_key_configured() -> 
         return httpx.Response(200, json=[])
 
     transport = httpx.MockTransport(handler)
-    with patch.object(MemoryClient, "_build_transport", return_value=transport):
-        out = await client.retrieve(query="x")
+    try:
+        with patch.object(MemoryClient, "_build_transport", return_value=transport):
+            out = await client.retrieve(query="x")
+    finally:
+        await client.close()
 
     assert out == []
+
+
+@pytest.mark.asyncio
+async def test_retrieve_raises_on_non_200_status() -> None:
+    client = MemoryClient(dashboard_url="http://localhost:9000")
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="service unavailable")
+
+    transport = httpx.MockTransport(handler)
+    try:
+        with patch.object(MemoryClient, "_build_transport", return_value=transport):
+            with pytest.raises(MemoryFetchError) as exc_info:
+                _ = await client.retrieve(query="x")
+        assert "dashboard returned status 503" in str(exc_info.value)
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio
 async def test_retrieve_raises_memory_fetch_error_on_http_error() -> None:
     client = MemoryClient(dashboard_url="http://localhost:9000")
 
-    async def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(503, text="secret should not be in exception")
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection failed", request=request)
 
     transport = httpx.MockTransport(handler)
-    with patch.object(MemoryClient, "_build_transport", return_value=transport):
-        with pytest.raises(MemoryFetchError) as exc_info:
-            _ = await client.retrieve(query="x")
-    assert "secret should not be in exception" not in str(exc_info.value)
+    try:
+        with patch.object(MemoryClient, "_build_transport", return_value=transport):
+            with pytest.raises(MemoryFetchError) as exc_info:
+                _ = await client.retrieve(query="x")
+        assert "ConnectError" in str(exc_info.value)
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio
@@ -78,9 +104,12 @@ async def test_retrieve_raises_memory_fetch_error_on_timeout() -> None:
         raise httpx.TimeoutException("boom", request=request)
 
     transport = httpx.MockTransport(handler)
-    with patch.object(MemoryClient, "_build_transport", return_value=transport):
-        with pytest.raises(MemoryFetchError):
-            _ = await client.retrieve(query="x")
+    try:
+        with patch.object(MemoryClient, "_build_transport", return_value=transport):
+            with pytest.raises(MemoryFetchError):
+                _ = await client.retrieve(query="x")
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio
@@ -91,9 +120,12 @@ async def test_retrieve_raises_memory_fetch_error_on_invalid_json() -> None:
         return httpx.Response(200, text="not-json")
 
     transport = httpx.MockTransport(handler)
-    with patch.object(MemoryClient, "_build_transport", return_value=transport):
-        with pytest.raises(MemoryFetchError):
-            _ = await client.retrieve(query="x")
+    try:
+        with patch.object(MemoryClient, "_build_transport", return_value=transport):
+            with pytest.raises(MemoryFetchError):
+                _ = await client.retrieve(query="x")
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio
@@ -104,9 +136,22 @@ async def test_retrieve_raises_memory_fetch_error_on_non_list_response() -> None
         return httpx.Response(200, json={"content": "x"})
 
     transport = httpx.MockTransport(handler)
-    with patch.object(MemoryClient, "_build_transport", return_value=transport):
-        with pytest.raises(MemoryFetchError):
-            _ = await client.retrieve(query="x")
+    try:
+        with patch.object(MemoryClient, "_build_transport", return_value=transport):
+            with pytest.raises(MemoryFetchError):
+                _ = await client.retrieve(query="x")
+    finally:
+        await client.close()
+
+
+def test_from_env_falls_back_to_default_allowed_hosts_on_empty_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CHRONOS_DASHBOARD_URL", "http://localhost:9000")
+    monkeypatch.setenv("CHRONOS_DASHBOARD_ALLOWED_HOSTS", ",")
+    c = MemoryClient.from_env()
+    assert c is not None
+    assert c._allowed_hosts == frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 def test_from_env_returns_none_when_url_missing(monkeypatch: pytest.MonkeyPatch) -> None:

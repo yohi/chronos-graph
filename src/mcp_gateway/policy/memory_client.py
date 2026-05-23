@@ -28,6 +28,7 @@ class MemoryClient:
     top_k: int = 5
     _api_key: str | None = field(default=None, repr=False)
     _allowed_hosts: frozenset[str] = field(default=_DEFAULT_ALLOWED_HOSTS, repr=False)
+    _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.dashboard_url = self.dashboard_url.rstrip("/")
@@ -46,7 +47,22 @@ class MemoryClient:
             _allowed_hosts=_allowed_hosts_from_env(),
         )
 
-    def _build_transport(self) -> "httpx.AsyncBaseTransport | None":
+    def _get_client(self) -> httpx.AsyncClient:
+        import httpx
+
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(self.timeout_seconds),
+                transport=self._build_transport(),
+            )
+        return self._client
+
+    async def close(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+    def _build_transport(self) -> httpx.AsyncBaseTransport | None:
         return None
 
     async def retrieve(self, query: str, project: str | None = None) -> list[MemoryItem]:
@@ -56,18 +72,14 @@ class MemoryClient:
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
-        transport = self._build_transport()
+        http = self._get_client()
 
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(self.timeout_seconds),
-                transport=transport,
-            ) as http:
-                response = await http.post(
-                    f"{self.dashboard_url}/api/memories/semantic-search",
-                    json={"query": query, "project": project, "top_k": self.top_k},
-                    headers=headers,
-                )
+            response = await http.post(
+                f"{self.dashboard_url}/api/memories/semantic-search",
+                json={"query": query, "project": project, "top_k": self.top_k},
+                headers=headers,
+            )
         except httpx.TimeoutException as exc:
             raise MemoryFetchError("dashboard request timed out") from exc
         except httpx.HTTPError as exc:
@@ -78,7 +90,7 @@ class MemoryClient:
 
         try:
             data = cast(object, response.json())
-        except ValueError as exc:
+        except (ValueError, UnicodeDecodeError) as exc:
             raise MemoryFetchError(f"invalid JSON from dashboard: {exc}") from exc
 
         if not isinstance(data, list):
@@ -112,7 +124,8 @@ def _allowed_hosts_from_env() -> frozenset[str]:
     raw = os.getenv("CHRONOS_DASHBOARD_ALLOWED_HOSTS")
     if not raw:
         return _DEFAULT_ALLOWED_HOSTS
-    return frozenset(host.strip().lower() for host in raw.split(",") if host.strip())
+    parsed = frozenset(host.strip().lower() for host in raw.split(",") if host.strip())
+    return parsed if parsed else _DEFAULT_ALLOWED_HOSTS
 
 
 def _validate_dashboard_url(url: str, allowed_hosts: frozenset[str]) -> None:

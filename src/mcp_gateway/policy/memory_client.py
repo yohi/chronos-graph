@@ -122,7 +122,10 @@ class MemoryClient:
                     continue
 
                 # memory_type should be str or None
-                raw_type = memory.get("memoryType") or memory.get("memory_type")
+                raw_type_alt = memory.get("memoryType")
+                raw_type_fallback = memory.get("memory_type")
+                raw_type = raw_type_alt if raw_type_alt is not None else raw_type_fallback
+
                 if raw_type is not None and not isinstance(raw_type, str):
                     logger.warning("skipping malformed memory item: memory_type must be str")
                     continue

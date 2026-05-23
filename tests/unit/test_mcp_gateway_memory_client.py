@@ -185,9 +185,11 @@ def test_from_env_returns_none_when_url_missing(monkeypatch: pytest.MonkeyPatch)
 
 def test_from_env_picks_up_url_and_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CHRONOS_DASHBOARD_URL", "http://localhost:9000/")
+    monkeypatch.setenv("CHRONOS_DASHBOARD_API_KEY", "expected-key")
     c = MemoryClient.from_env()
     assert c is not None
     assert c.dashboard_url == "http://localhost:9000"
+    assert c._api_key == "expected-key"
 
 
 def test_from_env_rejects_unallowed_dashboard_host(monkeypatch: pytest.MonkeyPatch) -> None:

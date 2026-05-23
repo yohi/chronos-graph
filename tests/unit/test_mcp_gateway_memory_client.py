@@ -144,6 +144,30 @@ async def test_retrieve_raises_memory_fetch_error_on_non_list_response() -> None
         await client.close()
 
 
+@pytest.mark.asyncio
+async def test_retrieve_skips_malformed_items() -> None:
+    client = MemoryClient(dashboard_url="http://localhost:9000")
+    payload = [
+        {"content": "good", "memoryType": "semantic", "importance": 0.5},
+        {"content": 123, "memoryType": "bad_content_type"},  # content must be str
+        {"content": "bad_type", "memoryType": ["not", "str"]},  # memoryType must be str
+        "not-a-mapping",
+    ]
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    transport = httpx.MockTransport(handler)
+    try:
+        with patch.object(MemoryClient, "_build_transport", return_value=transport):
+            out = await client.retrieve(query="x")
+    finally:
+        await client.close()
+
+    assert len(out) == 1
+    assert out[0].content == "good"
+
+
 def test_from_env_falls_back_to_default_allowed_hosts_on_empty_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -180,6 +204,26 @@ def test_from_env_accepts_explicit_allowed_dashboard_host(
     c = MemoryClient.from_env()
     assert c is not None
     assert c.dashboard_url == "https://dashboard.internal"
+
+
+def test_from_env_raises_on_invalid_numeric_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CHRONOS_DASHBOARD_URL", "http://localhost:9000")
+
+    # Invalid string
+    monkeypatch.setenv("CHRONOS_DASHBOARD_TIMEOUT_SECONDS", "abc")
+    with pytest.raises(MemoryFetchError, match="invalid numeric value"):
+        MemoryClient.from_env()
+
+    # Zero timeout
+    monkeypatch.setenv("CHRONOS_DASHBOARD_TIMEOUT_SECONDS", "0")
+    with pytest.raises(MemoryFetchError, match="must be > 0"):
+        MemoryClient.from_env()
+
+    # Negative top_k
+    monkeypatch.setenv("CHRONOS_DASHBOARD_TIMEOUT_SECONDS", "3.0")
+    monkeypatch.setenv("CHRONOS_DASHBOARD_TOP_K", "-1")
+    with pytest.raises(MemoryFetchError, match="must be > 0"):
+        MemoryClient.from_env()
 
 
 def test_rejects_dashboard_url_with_userinfo() -> None:

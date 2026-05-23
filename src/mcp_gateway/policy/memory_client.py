@@ -39,10 +39,22 @@ class MemoryClient:
         url = os.getenv("CHRONOS_DASHBOARD_URL")
         if not url:
             return None
+
+        try:
+            timeout_seconds = float(os.getenv("CHRONOS_DASHBOARD_TIMEOUT_SECONDS", "3.0"))
+            if timeout_seconds <= 0:
+                raise MemoryFetchError("CHRONOS_DASHBOARD_TIMEOUT_SECONDS must be > 0")
+
+            top_k = int(os.getenv("CHRONOS_DASHBOARD_TOP_K", "5"))
+            if top_k <= 0:
+                raise MemoryFetchError("CHRONOS_DASHBOARD_TOP_K must be > 0")
+        except (ValueError, TypeError) as exc:
+            raise MemoryFetchError(f"invalid numeric value in environment: {exc}") from exc
+
         return cls(
             dashboard_url=url,
-            timeout_seconds=float(os.getenv("CHRONOS_DASHBOARD_TIMEOUT_SECONDS", "3.0")),
-            top_k=int(os.getenv("CHRONOS_DASHBOARD_TOP_K", "5")),
+            timeout_seconds=timeout_seconds,
+            top_k=top_k,
             _api_key=os.getenv("CHRONOS_DASHBOARD_API_KEY"),
             _allowed_hosts=_allowed_hosts_from_env(),
         )
@@ -103,15 +115,27 @@ class MemoryClient:
                 continue
             memory = cast(Mapping[str, object], item)
             try:
+                # content must be strictly str
+                content = memory.get("content")
+                if not isinstance(content, str):
+                    logger.warning("skipping malformed memory item: content must be str")
+                    continue
+
+                # memory_type should be str or None
+                raw_type = memory.get("memoryType") or memory.get("memory_type")
+                if raw_type is not None and not isinstance(raw_type, str):
+                    logger.warning("skipping malformed memory item: memory_type must be str")
+                    continue
+                memory_type = raw_type or ""
+
                 importance_value = memory.get("importance")
                 if not isinstance(importance_value, (int, float, str)):
                     importance_value = 0.0
+
                 items.append(
                     MemoryItem(
-                        content=str(memory["content"]),
-                        memory_type=str(
-                            memory.get("memoryType") or memory.get("memory_type") or ""
-                        ),
+                        content=content,
+                        memory_type=memory_type,
                         importance=float(importance_value),
                     )
                 )

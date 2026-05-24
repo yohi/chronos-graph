@@ -159,25 +159,28 @@ def _build_user_prompt(
 ) -> str:
     redacted = _redact_prompt_value(input_.tool_input)
     tool_input_json = _json_for_prompt(redacted)
+    tool_name_safe = _escape_prompt_text(input_.tool_name)
     cwd = _escape_prompt_text(str(input_.context.get("cwd") or "unknown"))
     agent_id = _escape_prompt_text(str(input_.context.get("agent_id") or "unknown"))
     rules_text = _escape_prompt_text(rules)
+    intent_name_safe = _escape_prompt_text(intent_name)
     memory_blocks = "\n".join(
         (
-            f'  <item type="{memory.memory_type}" importance="{memory.importance:.2f}">'
+            f'  <item type="{_escape_prompt_text(memory.memory_type)}"'
+            f' importance="{memory.importance:.2f}">'
             f"\n    {_escape_prompt_text(memory.content)}\n  </item>"
         )
         for memory in memories
     )
 
     return f"""<tool_intent>
-  <tool_name>{input_.tool_name}</tool_name>
+  <tool_name>{tool_name_safe}</tool_name>
   <tool_input>{tool_input_json}</tool_input>
   <cwd>{cwd}</cwd>
   <agent_id>{agent_id}</agent_id>
 </tool_intent>
 
-<rules source="intents.yaml" intent="{intent_name}">
+<rules source="intents.yaml" intent="{intent_name_safe}">
 {rules_text}
 </rules>
 
@@ -193,7 +196,9 @@ def _json_for_prompt(value: object) -> str:
 
 
 def _escape_prompt_text(value: str) -> str:
-    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    )
 
 
 def _redact_prompt_value(value: object) -> object:
@@ -242,11 +247,27 @@ class LlmEvaluator:
         except ImportError:
             logger.warning("anthropic SDK not installed; LLM evaluator disabled")
             return None
+
+        thinking_budget = int(os.getenv("CHRONOS_EVALUATOR_THINKING_BUDGET", "1024"))
+        max_tokens = int(os.getenv("CHRONOS_EVALUATOR_MAX_TOKENS", "1536"))
+
+        # Anthropic req: thinking.budget_tokens < max_tokens
+        if thinking_budget >= max_tokens:
+            new_max = thinking_budget + 512
+            logger.warning(
+                "thinking_budget (%d) >= max_tokens (%d); bumping max_tokens to %d",
+                thinking_budget,
+                max_tokens,
+                new_max,
+            )
+            max_tokens = new_max
+
         return cls(
             api_key=api_key,
             model=os.getenv("CHRONOS_EVALUATOR_MODEL", "claude-haiku-4-5-20251001"),
             timeout_seconds=float(os.getenv("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", "10.0")),
-            thinking_budget=int(os.getenv("CHRONOS_EVALUATOR_THINKING_BUDGET", "1024")),
+            thinking_budget=thinking_budget,
+            max_tokens=max_tokens,
         )
 
     def _get_client(self) -> _AnthropicClientProtocol:

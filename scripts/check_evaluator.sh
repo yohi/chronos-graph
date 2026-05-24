@@ -19,11 +19,7 @@ fi
 
 echo "==> ruff check"
 uv run ruff check \
-    src/mcp_gateway/cli.py \
-    src/mcp_gateway/policy/composite.py \
-    src/mcp_gateway/policy/llm_evaluator.py \
-    src/mcp_gateway/policy/memory_client.py \
-    src/mcp_gateway/policy/models_evaluator.py \
+    src/mcp_gateway \
     tests/unit/test_mcp_gateway_cli.py \
     tests/unit/test_mcp_gateway_composite.py \
     tests/unit/test_mcp_gateway_llm_evaluator.py \

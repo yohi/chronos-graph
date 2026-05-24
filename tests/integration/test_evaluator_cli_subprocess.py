@@ -131,6 +131,7 @@ def test_cli_evaluate_invalid_stdin(policy_path: Path) -> None:
         check=False,
     )
     assert result.returncode == 2
+    assert result.stdout.count("\n") == 1
     body = _loads_json_object(result.stdout.strip())
     assert body["decision"] == "ask"
 

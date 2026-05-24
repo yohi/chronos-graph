@@ -172,6 +172,8 @@ If any item fails, cancel the save or correct the content before finalizing.
 - **RL 拡張ポイント** — ActionLogger / RewardSignal / PolicyHook インターフェース
 - **Dashboard Web UI** — Cytoscape.js グラフ可視化・リアルタイムログストリーミング（React + FastAPI）
 
+- **Universal Evaluator** — AIエージェントのツール呼び出しを deterministic + LLM の二層で判定する CLI (`PreToolUse` Hook 対応)
+
 ---
 
 ## Quick Start (uvx を使用する場合)
@@ -236,6 +238,70 @@ SQLite では `ALTER COLUMN TYPE` がサポートされていないため、以�
 
 #### 3. エラーと対処
 起動時に `ConfigurationError` や `StorageError` が発生した場合は、`.env` の `EMBEDDING_DIMENSION` がストレージ側の次元と一致しているか確認してください。
+
+## Universal Evaluator (MCP Gateway)
+
+`PreToolUse` Hook から呼び出され、AI エージェントの提案するツール呼び出しを
+deterministic + LLM の二層で判定する CLI。設計書: `docs/superpowers/specs/2026-05-11-mcp-gateway-universal-evaluator-design.md`。
+
+### 起動例
+
+```bash
+echo '{"tool_name":"bash","tool_input":{"command":"ls"}}' \
+  | uv run python -m mcp_gateway evaluate --json-io \
+    --policy-path /etc/chronos/intents.yaml
+```
+
+### 環境変数 (推奨値含む)
+
+| 環境変数 | デフォルト | 本番推奨値 | 用途 |
+|---|---|---|---|
+| `ANTHROPIC_API_KEY` | 未設定 | **設定必須** | 未設定なら LLM 評価をスキップ |
+| `CHRONOS_EVALUATOR_MODEL` | `claude-haiku-4-5-20251001` | デフォルト可 | LLM モデル切替 |
+| `CHRONOS_EVALUATOR_TIMEOUT_SECONDS` | `10.0` | デフォルト可 | LLM タイムアウト |
+| `CHRONOS_EVALUATOR_THINKING_BUDGET` | `1024` | デフォルト可 | thinking 上限 |
+| `CHRONOS_DASHBOARD_URL` | 未設定 | **設定必須** | 未設定なら memory 取得をスキップ |
+| `CHRONOS_DASHBOARD_API_KEY` | 未設定 | **--auth 起動時必須** | dashboard 認証 |
+| `CHRONOS_EVALUATOR_FALLBACK` | `allow` | **`ask` を強く推奨** | LLM 未構成時の挙動 |
+| `CHRONOS_EVALUATOR_POLICY_PATH` | (必須) | **設定必須** | intents.yaml のパス |
+| `CHRONOS_EVALUATOR_DEFAULT_INTENT` | `default` | 環境次第 | intent 未指定時の既定 |
+| `CHRONOS_EVALUATOR_DEFAULT_AGENT_ID` | `claude-code` | 環境次第 | agent_id 未指定時の既定 |
+| `CHRONOS_EVALUATOR_LOG_LEVEL` | `WARNING` | デフォルト可 | stderr ログレベル |
+> ⚠️ **セキュリティ警告:** `CHRONOS_EVALUATOR_FALLBACK` のデフォルトは `allow` です。`ANTHROPIC_API_KEY` 未設定の環境でそのままデプロイすると、deterministic 判定が不明瞭なツール呼び出しも**自動的に許可**されます。本番環境では必ず `ask` に設定してください。
+
+### 起動ログの読み方
+
+`CompositeEvaluator` は起動時に以下を stderr に WARNING で 1 行出力する:
+
+```
+evaluator config: llm=enabled memory=enabled fallback_when_llm_not_configured=ask
+```
+
+`llm=DISABLED` のときは LLM 評価が完全に無効化されている。`CHRONOS_EVALUATOR_FALLBACK=ask` 設定下では Tier 1 ALLOW でも常に `ask` 判定が返るため、運用者は必ず確認すること。
+
+### 高リスクツール群の hook 構成 (推奨)
+
+機微情報マスキングはキー名ベースのため、`bash` / `curl` / `Write` / `Edit` 等で **値の内部に埋め込まれた秘密** は検出できない。以下のいずれかを必ず適用する:
+
+1. **hook 対象から除外**: クライアント側 `matcher` で対象外にする
+2. **前段マスキング hook**: AST 解析 / URL parse / 正規表現スキャンで先にサニタイズ
+3. **ツール側で秘密検出**: `truffleHog` / `gitleaks` 等で実行前に拒否
+
+詳細は設計書 §5.4 を参照。
+
+### Devcontainer 内チェック
+
+```bash
+# (ホスト) Devcontainer を開く
+$ code .       # 「Reopen in Container」を選択
+# (Devcontainer 内)
+$ bash scripts/check_evaluator.sh
+```
+
+devcontainer CLI 利用時は以下のいずれか:
+
+- `.devcontainer/docker-compose.yml` が設定する `DEVCONTAINER=1` を利用
+- もしくは手動で `export DEVCONTAINER=1`
 
 ---
 

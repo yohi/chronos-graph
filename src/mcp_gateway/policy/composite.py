@@ -17,7 +17,7 @@ from .models_evaluator import (
     Decision,
     MemoryItem,
     ToolCallInput,
-    _summarize_tool_input,
+    summarize_tool_input,
 )
 
 logger = logging.getLogger("chronos_evaluator")
@@ -34,21 +34,27 @@ class CompositeEvaluator:
         llm_evaluator: LlmEvaluator | None,
         default_intent: str = "default",
         default_agent_id: str = "claude-code",
-        fallback_when_llm_unavailable: Literal["allow", "ask"] = "allow",
+        fallback_when_llm_not_configured: Literal["allow", "ask"] = "allow",
     ) -> None:
         self._engine: PolicyEngine = engine
         self._memory: MemoryClient | None = memory_client
         self._llm: LlmEvaluator | None = llm_evaluator
         self._default_intent: str = default_intent
         self._default_agent_id: str = default_agent_id
-        self._fallback: Literal["allow", "ask"] = fallback_when_llm_unavailable
+        self._fallback: Literal["allow", "ask"] = fallback_when_llm_not_configured
 
-        logger.warning(
-            "evaluator config: llm=%s memory=%s fallback_when_llm_unavailable=%s",
-            "enabled" if llm_evaluator is not None else "DISABLED",
-            "enabled" if memory_client is not None else "disabled",
-            self._fallback,
-        )
+        if llm_evaluator is None and self._fallback == "allow":
+            logger.warning(
+                "evaluator config: llm=DISABLED fallback=allow — "
+                "tools will be auto-approved without LLM review"
+            )
+        else:
+            logger.info(
+                "evaluator config: llm=%s memory=%s fallback_when_llm_not_configured=%s",
+                "enabled" if llm_evaluator is not None else "DISABLED",
+                "enabled" if memory_client is not None else "disabled",
+                self._fallback,
+            )
 
     async def evaluate(self, input_: ToolCallInput) -> Decision:
         intent = str(input_.context.get("intent") or self._default_intent)
@@ -105,7 +111,7 @@ class CompositeEvaluator:
         if self._memory is None:
             return []
 
-        query = f"tool:{input_.tool_name} " + _summarize_tool_input(input_.tool_input)
+        query = f"tool:{input_.tool_name} " + summarize_tool_input(input_.tool_input)
         project = str(input_.context.get("project") or "")
         try:
             return await self._memory.retrieve(query=query, project=project or None)
@@ -126,7 +132,7 @@ class CompositeEvaluator:
                 bits.append("FORBIDDEN")
             if constraint.type:
                 bits.append(f"type={constraint.type}")
-            if constraint.max_length:
+            if constraint.max_length is not None:
                 bits.append(f"max_length={constraint.max_length}")
             if constraint.pattern:
                 bits.append(f"pattern={constraint.pattern!r}")

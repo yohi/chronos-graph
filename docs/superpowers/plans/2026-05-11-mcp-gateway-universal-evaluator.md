@@ -2254,7 +2254,7 @@ def _make_evaluator(
         llm_evaluator=llm,
         default_intent="default",
         default_agent_id="claude-code",
-        fallback_when_llm_unavailable=fallback,
+        fallback_when_llm_not_configured=fallback,
     )
 
 
@@ -2440,144 +2440,27 @@ Expected: `ModuleNotFoundError` で FAIL
 
 `src/mcp_gateway/policy/composite.py`:
 
+**設計要約**
+
+- **クラス**: `CompositeEvaluator`
+- **責務**:
+  - Tier 1: 決定論的評価 (`PolicyEngine.evaluate_grant` → `evaluate_call`)
+  - Tier 2: LLM 評価 (`LlmEvaluator.judge`)
+  - メモリ取得: 失敗しても LLM 評価をブロックしない (`_fetch_memories_safely`)
+- **決定フロー**:
+  1. `evaluate_grant` で許可範囲を取得。例外時は `deny`
+  2. `evaluate_call` でガードレール評価。`DENY` → `deny`、`REQUIRES_APPROVAL` → `ask`
+  3. `ALLOW` の場合:
+     - LLM 未設定 (`llm=None`) → `fallback_when_llm_not_configured` (\"allow\" または \"ask\") に従う
+     - LLM 設定済み → `LlmEvaluator.judge` を呼び出し
+     - `LlmUnavailableError` / `ResponseParseError` → ハードコードで `"ask"` にフォールバック
+
 ```python
-"""CompositeEvaluator: Tier 1 (deterministic PolicyEngine) + Tier 2 (LLM)."""
-
-from __future__ import annotations
-
-import logging
-from typing import Literal
-
-from mcp_gateway.errors import PolicyError
-from mcp_gateway.policy.engine import EvaluationResult, Grant, PolicyEngine
-from mcp_gateway.policy.llm_evaluator import (
-    LlmEvaluator,
-    LlmUnavailableError,
-    ResponseParseError,
-)
-from mcp_gateway.policy.memory_client import MemoryClient, MemoryFetchError
-from mcp_gateway.policy.models_evaluator import (
-    Decision,
-    MemoryItem,
-    ToolCallInput,
-    _summarize_tool_input,
-)
-
-logger = logging.getLogger("chronos_evaluator")
-
-_FALLBACK_ASK_MESSAGE = "System evaluation failed. Human confirmation required."
-
-
 class CompositeEvaluator:
-    def __init__(
-        self,
-        *,
-        engine: PolicyEngine,
-        memory_client: MemoryClient | None,
-        llm_evaluator: LlmEvaluator | None,
-        default_intent: str = "default",
-        default_agent_id: str = "claude-code",
-        fallback_when_llm_unavailable: Literal["allow", "ask"] = "allow",
-    ) -> None:
-        self._engine = engine
-        self._memory = memory_client
-        self._llm = llm_evaluator
-        self._default_intent = default_intent
-        self._default_agent_id = default_agent_id
-        self._fallback = fallback_when_llm_unavailable
-
-        logger.warning(
-            "evaluator config: llm=%s memory=%s fallback_when_llm_unavailable=%s",
-            "enabled" if llm_evaluator is not None else "DISABLED",
-            "enabled" if memory_client is not None else "disabled",
-            self._fallback,
-        )
-
-    async def evaluate(self, input_: ToolCallInput) -> Decision:
-        # ---- Tier 1: deterministic ----
-        intent = str(input_.context.get("intent") or self._default_intent)
-        agent_id = str(input_.context.get("agent_id") or self._default_agent_id)
-
-        try:
-            grant = self._engine.evaluate_grant(
-                agent_id=agent_id, intent=intent, requested_tools=None
-            )
-        except PolicyError as exc:
-            return Decision(
-                decision="deny",
-                reason=(exc.reason or "policy_violation"),
-            )
-
-        try:
-            tier1 = self._engine.evaluate_call(
-                grant=grant, tool_name=input_.tool_name, arguments=input_.tool_input
-            )
-        except PolicyError as exc:
-            return Decision(decision="deny", reason=(exc.reason or "policy_violation"))
-
-        if tier1.status == "DENY":
-            return Decision(decision="deny", reason=(tier1.reason or "guardrail_violation"))
-        if tier1.status == "REQUIRES_APPROVAL":
-            return Decision(
-                decision="ask",
-                ask_message=f"Tool {input_.tool_name!r} requires manual approval.",
-            )
-
-        # tier1.status == "ALLOW"
-        if self._llm is None:
-            if self._fallback == "ask":
-                return Decision(
-                    decision="ask",
-                    ask_message=(
-                        "LLM evaluator is not configured; human confirmation required."
-                    ),
-                )
-            return Decision(decision="allow")
-
-        # ---- Tier 2: LLM ----
-        memories = await self._fetch_memories_safely(input_)
-        rules = self._render_rules_for_prompt(grant, input_.tool_name)
-        try:
-            return await self._llm.judge(
-                input_=input_, rules=rules, memories=memories, intent_name=intent
-            )
-        except (LlmUnavailableError, ResponseParseError) as exc:
-            logger.warning("Tier-2 fallback to ask: %s", exc)
-            return Decision(decision="ask", ask_message=_FALLBACK_ASK_MESSAGE)
-
-    async def _fetch_memories_safely(self, input_: ToolCallInput) -> list[MemoryItem]:
-        if self._memory is None:
-            return []
-        query = f"tool:{input_.tool_name} " + _summarize_tool_input(input_.tool_input)
-        project = str(input_.context.get("project") or "")  # optional
-        try:
-            return await self._memory.retrieve(query=query, project=project or None)
-        except MemoryFetchError as exc:
-            logger.warning("memory fetch failed (continuing without memory): %s", exc)
-            return []
-
+    async def evaluate(self, input_: ToolCallInput) -> Decision: ...
+    async def _fetch_memories_safely(self, input_: ToolCallInput) -> list[MemoryItem]: ...
     @staticmethod
-    def _render_rules_for_prompt(grant: Grant, tool_name: str) -> str:
-        guardrail = grant.guardrails.get(tool_name)
-        if guardrail is None:
-            return f"- intent={grant.intent}: no specific guardrails for tool {tool_name}."
-        lines: list[str] = [f"- intent={grant.intent}, tool={tool_name}"]
-        for param, c in guardrail.params.items():
-            bits: list[str] = []
-            if c.forbidden:
-                bits.append("FORBIDDEN")
-            if c.type:
-                bits.append(f"type={c.type}")
-            if c.max_length:
-                bits.append(f"max_length={c.max_length}")
-            if c.pattern:
-                bits.append(f"pattern={c.pattern!r}")
-            if c.allowed_values:
-                bits.append(f"allowed_values={c.allowed_values}")
-            lines.append(f"  - {param}: {', '.join(bits) or '(no constraints)'}")
-        if guardrail.requires_approval:
-            lines.append("  - requires_approval=true")
-        return "\n".join(lines)
+    def _render_rules_for_prompt(grant: Grant, tool_name: str) -> str: ...
 ```
 
 - [x] **Step 5: テスト通過確認**
@@ -2891,7 +2774,7 @@ def _build_composite_evaluator(policy_path: Path) -> CompositeEvaluator:
         llm_evaluator=LlmEvaluator.from_env(),
         default_intent=os.getenv("CHRONOS_EVALUATOR_DEFAULT_INTENT", "default"),
         default_agent_id=os.getenv("CHRONOS_EVALUATOR_DEFAULT_AGENT_ID", "claude-code"),
-        fallback_when_llm_unavailable=fallback,  # type: ignore[arg-type]
+        fallback_when_llm_not_configured=fallback,  # type: ignore[arg-type]
     )
 
 
@@ -3553,7 +3436,7 @@ echo '{"tool_name":"bash","tool_input":{"command":"ls"}}' \
 `CompositeEvaluator` は起動時に以下を stderr に WARNING で 1 行出力する:
 
 ```
-evaluator config: llm=enabled memory=enabled fallback_when_llm_unavailable=ask
+evaluator config: llm=enabled memory=enabled fallback_when_llm_not_configured=ask
 ```
 
 `llm=DISABLED` のときは LLM 評価が完全に無効化されている。`CHRONOS_EVALUATOR_FALLBACK=ask` 設定下では Tier 1 ALLOW でも常に `ask` 判定が返るため、運用者は必ず確認すること。

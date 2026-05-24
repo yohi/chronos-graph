@@ -41,7 +41,7 @@ def _make_evaluator(
         llm_evaluator=llm,
         default_intent="default",
         default_agent_id="claude-code",
-        fallback_when_llm_unavailable=fallback,
+        fallback_when_llm_not_configured=fallback,
     )
 
 
@@ -199,7 +199,31 @@ async def test_policy_error_on_grant_returns_deny() -> None:
     assert "unknown_intent" in (out.reason or "")
 
 
-def test_startup_log_emits_warning(caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.asyncio
+async def test_policy_error_on_call_returns_deny() -> None:
+    engine = MagicMock(spec=PolicyEngine)
+    engine.evaluate_grant.return_value = Grant(
+        intent="default",
+        caps=frozenset(["bash"]),
+        output_filter_profile="none",
+        guardrails=MappingProxyType({}),
+    )
+    engine.evaluate_call.side_effect = PolicyError("unknown intent", reason="unknown_intent")
+    ev = CompositeEvaluator(
+        engine=engine,
+        memory_client=None,
+        llm_evaluator=None,
+        default_intent="default",
+        default_agent_id="claude-code",
+    )
+    out = await ev.evaluate(ToolCallInput(tool_name="bash", tool_input={}))
+    assert out.decision == "deny"
+    assert "unknown_intent" in (out.reason or "")
+
+
+def test_startup_log_warns_llm_disabled_fallback_allow(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     import logging
 
     with caplog.at_level(logging.WARNING, logger="chronos_evaluator"):
@@ -208,4 +232,4 @@ def test_startup_log_emits_warning(caplog: pytest.LogCaptureFixture) -> None:
             llm=None,
             memory=None,
         )
-    assert any("evaluator config" in r.message for r in caplog.records)
+    assert any("auto-approved without LLM review" in r.message for r in caplog.records)

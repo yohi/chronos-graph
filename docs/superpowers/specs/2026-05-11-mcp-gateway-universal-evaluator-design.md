@@ -330,16 +330,16 @@ async def evaluate(self, input):
 ```python
 class CompositeEvaluator:
     def __init__(self, policy, memory_client, llm_evaluator, default_intent="default",
-                 fallback_when_llm_unavailable: Literal["allow", "ask"] = "allow") -> None:
+                 fallback_when_llm_not_configured: Literal["allow", "ask"] = "allow") -> None:
         self._policy = policy
         self._memory = memory_client
         self._llm = llm_evaluator
         self._default_intent = default_intent
-        self._fallback = fallback_when_llm_unavailable
+        self._fallback = fallback_when_llm_not_configured
 
         # 構成サマリーを WARNING で出して必ず見えるようにする (INFO だと運用者が見落とす)
         logger.warning(
-            "evaluator config: llm=%s memory=%s fallback_when_llm_unavailable=%s",
+            "evaluator config: llm=%s memory=%s fallback_when_llm_not_configured=%s",
             "enabled" if llm_evaluator is not None else "DISABLED",
             "enabled" if memory_client is not None else "disabled",
             self._fallback,

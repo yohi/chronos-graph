@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, HTTPException, Request
 
 from context_store.dashboard.schemas import (
@@ -10,6 +12,8 @@ from context_store.dashboard.schemas import (
     SemanticSearchRequest,
 )
 from context_store.storage.protocols import MemoryFilters
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -60,7 +64,8 @@ async def semantic_search_memories(
             top_k=req.top_k,
         )
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        logger.error("semantic_search failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable") from exc
 
     return [
         MemoryResponse(

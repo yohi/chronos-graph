@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Make RetrievalPipeline factory methods asynchronous
+## Task 1: Make RetrievalPipeline factory methods asynchronous
 
 **Files:**
 - Modify: `src/context_store/retrieval/pipeline.py`
@@ -111,7 +111,7 @@ git add src/context_store/retrieval/pipeline.py src/context_store/dashboard/api_
 git commit -m "fix(mcp_gateway): make RetrievalPipeline factory methods asynchronous"
 ```
 
-### Task 2: Restrict Exception Catching in Semantic Search Route
+## Task 2: Restrict Exception Catching in Semantic Search Route
 
 **Files:**
 - Modify: `src/context_store/dashboard/routes/memories.py`

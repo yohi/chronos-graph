@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("chronos_evaluator.memory")
 
 _DEFAULT_ALLOWED_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+_MAX_TOP_K = 50
 
 
 class MemoryFetchError(Exception):
@@ -33,8 +34,8 @@ class MemoryClient:
     def __post_init__(self) -> None:
         if self.timeout_seconds <= 0:
             raise MemoryFetchError("CHRONOS_DASHBOARD_TIMEOUT_SECONDS must be > 0")
-        if self.top_k <= 0:
-            raise MemoryFetchError("CHRONOS_DASHBOARD_TOP_K must be > 0")
+        if not (0 < self.top_k <= _MAX_TOP_K):
+            raise MemoryFetchError(f"CHRONOS_DASHBOARD_TOP_K must be 0 < k <= {_MAX_TOP_K}")
         self.dashboard_url = self.dashboard_url.rstrip("/")
         _validate_dashboard_url(self.dashboard_url, self._allowed_hosts)
 
@@ -50,8 +51,8 @@ class MemoryClient:
                 raise MemoryFetchError("CHRONOS_DASHBOARD_TIMEOUT_SECONDS must be > 0")
 
             top_k = int(os.getenv("CHRONOS_DASHBOARD_TOP_K", "5"))
-            if top_k <= 0:
-                raise MemoryFetchError("CHRONOS_DASHBOARD_TOP_K must be > 0")
+            if not (0 < top_k <= _MAX_TOP_K):
+                raise MemoryFetchError(f"CHRONOS_DASHBOARD_TOP_K must be 0 < k <= {_MAX_TOP_K}")
         except (ValueError, TypeError) as exc:
             raise MemoryFetchError(f"invalid numeric value in environment: {exc}") from exc
 

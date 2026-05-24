@@ -224,7 +224,12 @@ def test_from_env_raises_on_invalid_numeric_env(monkeypatch: pytest.MonkeyPatch)
     # Negative top_k
     monkeypatch.setenv("CHRONOS_DASHBOARD_TIMEOUT_SECONDS", "3.0")
     monkeypatch.setenv("CHRONOS_DASHBOARD_TOP_K", "-1")
-    with pytest.raises(MemoryFetchError, match="must be > 0"):
+    with pytest.raises(MemoryFetchError, match="must be 0 < k <= 50"):
+        MemoryClient.from_env()
+
+    # Too high top_k
+    monkeypatch.setenv("CHRONOS_DASHBOARD_TOP_K", "51")
+    with pytest.raises(MemoryFetchError, match="must be 0 < k <= 50"):
         MemoryClient.from_env()
 
 

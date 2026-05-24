@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import threading
 from collections.abc import Mapping
 from typing import Protocol, cast
 
@@ -18,6 +19,11 @@ from mcp_gateway.policy.models_evaluator import (
 )
 
 logger = logging.getLogger("chronos_evaluator.llm")
+
+# §2.2: LlmEvaluator._get_client uses threading.Lock to prevent race conditions
+# when multiple judge() calls attempt to initialize the client simultaneously
+# via asyncio.to_thread.
+_CLIENT_INIT_LOCK = threading.Lock()
 
 __all__ = [
     "LlmEvaluator",
@@ -255,8 +261,20 @@ class LlmEvaluator:
             logger.warning("anthropic SDK not installed; LLM evaluator disabled")
             return None
 
-        thinking_budget = int(os.getenv("CHRONOS_EVALUATOR_THINKING_BUDGET", "1024"))
-        max_tokens = int(os.getenv("CHRONOS_EVALUATOR_MAX_TOKENS", "1536"))
+        def _parse_int_env(key: str, default: int) -> int:
+            val = os.getenv(key)
+            if val is None:
+                return default
+            try:
+                return int(val)
+            except ValueError:
+                logger.warning(
+                    "invalid numeric value for %s: %r; using default %d", key, val, default
+                )
+                return default
+
+        thinking_budget = _parse_int_env("CHRONOS_EVALUATOR_THINKING_BUDGET", 1024)
+        max_tokens = _parse_int_env("CHRONOS_EVALUATOR_MAX_TOKENS", 1536)
 
         # Anthropic req: thinking.budget_tokens < max_tokens
         if thinking_budget >= max_tokens:
@@ -278,19 +296,20 @@ class LlmEvaluator:
         )
 
     def _get_client(self) -> _AnthropicClientProtocol:
-        if self._client is None:
-            import httpx
+        with _CLIENT_INIT_LOCK:
+            if self._client is None:
+                import httpx
 
-            anthropic_module = importlib.import_module("anthropic")
-            anthropic_factory = cast(
-                _AnthropicFactoryProtocol,
-                anthropic_module.__dict__["Anthropic"],
-            )
-            self._client = anthropic_factory(
-                api_key=self._api_key,
-                timeout=httpx.Timeout(self._timeout_seconds, connect=2.0),
-            )
-        return self._client
+                anthropic_module = importlib.import_module("anthropic")
+                anthropic_factory = cast(
+                    _AnthropicFactoryProtocol,
+                    anthropic_module.__dict__["Anthropic"],
+                )
+                self._client = anthropic_factory(
+                    api_key=self._api_key,
+                    timeout=httpx.Timeout(self._timeout_seconds, connect=2.0),
+                )
+            return self._client
 
     async def judge(
         self,

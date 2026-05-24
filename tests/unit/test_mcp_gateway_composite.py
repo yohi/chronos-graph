@@ -249,16 +249,3 @@ async def test_unknown_tier1_status_returns_deny(
     assert out.decision == "deny"
     assert "unexpected_evaluation_status" in (out.reason or "")
     assert any("Unexpected tier1 status" in r.message for r in caplog.records)
-    """Literal only covers ALLOW/DENY/REQUIRES_APPROVAL; unknown values must be denied."""
-    ev = _make_evaluator(
-        tier1_result=EvaluationResult(status="QUARANTINE"),  # type: ignore[arg-type]
-        llm=None,
-        memory=None,
-    )
-    import logging
-
-    with caplog.at_level(logging.WARNING, logger="chronos_evaluator"):
-        out = await ev.evaluate(ToolCallInput(tool_name="bash", tool_input={}))
-    assert out.decision == "deny"
-    assert "unexpected_evaluation_status" in (out.reason or "")
-    assert any("Unexpected tier1 status" in r.message for r in caplog.records)

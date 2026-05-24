@@ -36,7 +36,6 @@ def _run_cli_with_input(
     ):
         code = main(["--json-io"] if argv is None else argv)
     return code, stdout.getvalue(), stderr.getvalue()
-    return code, stdout.getvalue(), stderr.getvalue()
 
 
 @pytest.fixture(autouse=True)

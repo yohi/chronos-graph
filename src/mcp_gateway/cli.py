@@ -127,7 +127,6 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     arg_values = cast(dict[str, object], vars(args))
-    arg_values = cast(dict[str, object], vars(args))
     policy_path = arg_values["policy_path"]
     if not isinstance(policy_path, Path):
         raise TypeError("--policy-path must parse to pathlib.Path")

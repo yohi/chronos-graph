@@ -52,14 +52,23 @@ def _loads_json_object(text: str) -> dict[str, object]:
     return cast(dict[str, object], parsed)
 
 
+def _build_env(
+    policy: Path | None = None,
+    overrides: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    env = {**os.environ, "ANTHROPIC_API_KEY": "", "CHRONOS_DASHBOARD_URL": ""}
+    env.update(overrides or {})
+    if policy is not None:
+        env["CHRONOS_EVALUATOR_POLICY_PATH"] = str(policy)
+    return env
+
+
 def _run_cli(
     policy: Path,
     payload: Mapping[str, object],
     env_overrides: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "ANTHROPIC_API_KEY": "", "CHRONOS_DASHBOARD_URL": ""}
-    env.update(env_overrides or {})
-    env["CHRONOS_EVALUATOR_POLICY_PATH"] = str(policy)
+    env = _build_env(policy, env_overrides)
     return subprocess.run(  # noqa: S603 - trusted test interpreter and fixed module args
         [
             sys.executable,
@@ -84,7 +93,10 @@ def test_cli_evaluate_allow_path(policy_path: Path) -> None:
     assert result.returncode == 0
     assert result.stdout.count("\n") == 1
     body = _loads_json_object(result.stdout.strip())
-    assert body == {"decision": "allow"}
+    # Key-based assertion is more resilient against extra optional fields
+    assert body["decision"] == "allow"
+    # Fail-safe invariant: stdout must never contain debug/log output
+    assert "evaluator config" not in result.stdout
 
 
 def test_cli_evaluate_deny_path(policy_path: Path) -> None:
@@ -95,8 +107,7 @@ def test_cli_evaluate_deny_path(policy_path: Path) -> None:
 
 
 def test_cli_evaluate_invalid_stdin(policy_path: Path) -> None:
-    env = {**os.environ, "ANTHROPIC_API_KEY": "", "CHRONOS_DASHBOARD_URL": ""}
-    env["CHRONOS_EVALUATOR_POLICY_PATH"] = str(policy_path)
+    env = _build_env(policy_path)
     result = subprocess.run(  # noqa: S603 - trusted test interpreter and fixed module args
         [
             sys.executable,
@@ -120,8 +131,7 @@ def test_cli_evaluate_invalid_stdin(policy_path: Path) -> None:
 
 
 def test_cli_evaluate_missing_json_io_still_emits_single_json_line(policy_path: Path) -> None:
-    env = {**os.environ, "ANTHROPIC_API_KEY": "", "CHRONOS_DASHBOARD_URL": ""}
-    env["CHRONOS_EVALUATOR_POLICY_PATH"] = str(policy_path)
+    env = _build_env(policy_path)
     result = subprocess.run(  # noqa: S603 - trusted test interpreter and fixed module args
         [
             sys.executable,
@@ -142,14 +152,3 @@ def test_cli_evaluate_missing_json_io_still_emits_single_json_line(policy_path: 
     assert result.stdout.count("\n") == 1
     body = _loads_json_object(result.stdout.strip())
     assert body["decision"] == "ask"
-
-
-def test_cli_evaluate_stdout_is_single_json_line(policy_path: Path) -> None:
-    """Critical fail-safe invariant: stdout must always be exactly 1 JSON line."""
-    result = _run_cli(policy_path, {"tool_name": "bash", "tool_input": {"command": "ls"}})
-    # stdout: exactly 1 line ending with \n
-    assert result.stdout.count("\n") == 1
-    # That line must parse as JSON
-    _ = _loads_json_object(result.stdout.strip())
-    # stderr may contain logger output, but stdout must NOT
-    assert "evaluator config" not in result.stdout

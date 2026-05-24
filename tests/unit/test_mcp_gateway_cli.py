@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import sys
 from collections.abc import Iterator
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -187,6 +188,9 @@ def test_main_routes_evaluate_without_importing_uvicorn(monkeypatch: pytest.Monk
     from mcp_gateway import __main__ as gateway_main
 
     real_import = builtins.__import__
+
+    # Clear any cached uvicorn import so the guard below reliably detects it.
+    sys.modules.pop("uvicorn", None)
 
     def guarded_import(
         name: str,

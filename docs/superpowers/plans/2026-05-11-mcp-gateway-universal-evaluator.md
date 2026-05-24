@@ -2550,7 +2550,7 @@ gh pr create --draft \
 - Create: `src/mcp_gateway/cli.py`
 - Test: `tests/unit/test_mcp_gateway_cli.py`
 
-- [ ] **Step 1: ブランチ作成**
+- [x] **Step 1: ブランチ作成**
 
 ```bash
 git fetch origin master
@@ -2559,7 +2559,7 @@ git push -u origin feature/phase5_evaluator_cli__base
 git checkout -b feature/phase5-task1_cli_main
 ```
 
-- [ ] **Step 2: 失敗するテストを書く**
+- [x] **Step 2: 失敗するテストを書く**
 
 `tests/unit/test_mcp_gateway_cli.py`:
 
@@ -2673,7 +2673,7 @@ def test_main_returns_int_not_calls_sys_exit(_patch_composite) -> None:
     assert isinstance(code, int)
 ```
 
-- [ ] **Step 3: テスト失敗確認**
+- [x] **Step 3: テスト失敗確認**
 
 Run:
 
@@ -2683,7 +2683,7 @@ uv run pytest tests/unit/test_mcp_gateway_cli.py -v
 
 Expected: `ModuleNotFoundError` で FAIL
 
-- [ ] **Step 4: cli.py を実装**
+- [x] **Step 4: cli.py を実装**
 
 `src/mcp_gateway/cli.py`:
 
@@ -2820,7 +2820,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 ```
 
-- [ ] **Step 5: テスト通過確認**
+- [x] **Step 5: テスト通過確認**
 
 Run:
 
@@ -2830,7 +2830,7 @@ uv run pytest tests/unit/test_mcp_gateway_cli.py -v
 
 Expected: 全 PASS
 
-- [ ] **Step 6: ruff (T20 check) / mypy / format**
+- [x] **Step 6: ruff (T20 check) / mypy / format**
 
 Run:
 
@@ -2842,7 +2842,7 @@ uv run mypy src/mcp_gateway/cli.py
 
 Expected: exit 0 (特に `print()` が含まれていれば T201 で fail するため、それを検出して修正)
 
-- [ ] **Step 7: コミット**
+- [x] **Step 7: コミット**
 
 ```bash
 git add src/mcp_gateway/cli.py tests/unit/test_mcp_gateway_cli.py
@@ -2850,7 +2850,7 @@ git commit -m "feat(mcp_gateway): add evaluate CLI with stdout-purity guarantees
 git push -u origin feature/phase5-task1_cli_main
 ```
 
-- [ ] **Step 8: Phase Base 向け Draft PR**
+- [x] **Step 8: Phase Base 向け Draft PR**
 
 ```bash
 gh pr create --draft \
@@ -2869,7 +2869,7 @@ gh pr create --draft \
 **Files:**
 - Modify: `src/mcp_gateway/__main__.py`
 
-- [ ] **Step 1: ブランチ作成 (Task 5-1 から派生)**
+- [x] **Step 1: ブランチ作成 (Task 5-1 から派生)**
 
 ```bash
 git fetch origin
@@ -2878,7 +2878,7 @@ git pull --ff-only
 git checkout -b feature/phase5-task2_main_router
 ```
 
-- [ ] **Step 2: 失敗するテストを書く**
+- [x] **Step 2: 失敗するテストを書く**
 
 `tests/unit/test_mcp_gateway_cli.py` の末尾に追記:
 
@@ -2917,7 +2917,7 @@ def test_main_defaults_to_serve_when_no_subcommand(monkeypatch) -> None:
     assert called["serve"] == 1
 ```
 
-- [ ] **Step 3: 失敗確認**
+- [x] **Step 3: 失敗確認**
 
 Run:
 
@@ -2927,7 +2927,7 @@ uv run pytest tests/unit/test_mcp_gateway_cli.py::test_main_routes_evaluate_to_c
 
 Expected: `AttributeError` で FAIL
 
-- [ ] **Step 4: __main__.py を書き換え**
+- [x] **Step 4: __main__.py を書き換え**
 
 `src/mcp_gateway/__main__.py` 全文:
 
@@ -2980,7 +2980,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 5: テスト通過確認**
+- [x] **Step 5: テスト通過確認**
 
 Run:
 
@@ -2990,7 +2990,7 @@ uv run pytest tests/unit/test_mcp_gateway_cli.py -v
 
 Expected: 新規 2 テスト含め全 PASS
 
-- [ ] **Step 6: ruff / mypy / format**
+- [x] **Step 6: ruff / mypy / format**
 
 Run:
 
@@ -3002,7 +3002,7 @@ uv run mypy src/mcp_gateway/__main__.py
 
 Expected: exit 0
 
-- [ ] **Step 7: 既存 mcp_gateway テストへの回帰確認**
+- [x] **Step 7: 既存 mcp_gateway テストへの回帰確認**
 
 Run:
 
@@ -3012,7 +3012,7 @@ uv run pytest tests/unit/test_mcp_gateway.py tests/unit/test_param_constraint.py
 
 Expected: PASS
 
-- [ ] **Step 8: コミット**
+- [x] **Step 8: コミット**
 
 ```bash
 git add src/mcp_gateway/__main__.py tests/unit/test_mcp_gateway_cli.py
@@ -3020,7 +3020,7 @@ git commit -m "feat(mcp_gateway): route 'evaluate' subcommand to cli.main"
 git push -u origin feature/phase5-task2_main_router
 ```
 
-- [ ] **Step 9: Phase Base 向け Draft PR**
+- [x] **Step 9: Phase Base 向け Draft PR**
 
 ```bash
 gh pr create --draft \
@@ -3040,7 +3040,7 @@ gh pr create --draft \
 - Create: `tests/integration/test_evaluator_cli_subprocess.py`
 - Test fixture: 既存 `tests/data/policy_*.yaml` があれば再利用、なければ最小ポリシーを fixture でテンポラリ作成
 
-- [ ] **Step 1: ブランチ作成 (Task 5-2 から派生)**
+- [x] **Step 1: ブランチ作成 (Task 5-2 から派生)**
 
 ```bash
 git fetch origin
@@ -3049,7 +3049,7 @@ git pull --ff-only
 git checkout -b feature/phase5-task3_subprocess_e2e
 ```
 
-- [ ] **Step 2: 既存 policy fixture を確認**
+- [x] **Step 2: 既存 policy fixture を確認**
 
 Run:
 
@@ -3060,7 +3060,7 @@ find tests -name '*intents*.yaml' -o -name 'policy*.yaml' 2>/dev/null
 
 該当 fixture が無い場合はテスト内で `tmp_path` に最小 YAML を書き出す。以下のテストは tmp_path 方式を採用する。
 
-- [ ] **Step 3: 失敗するテストを書く**
+- [x] **Step 3: 失敗するテストを書く**
 
 `tests/integration/test_evaluator_cli_subprocess.py`:
 
@@ -3169,7 +3169,7 @@ def test_cli_evaluate_stdout_is_single_json_line(policy_path: Path) -> None:
     assert "evaluator config" not in result.stdout
 ```
 
-- [ ] **Step 4: テスト失敗確認 (Devcontainer 内)**
+- [x] **Step 4: テスト失敗確認 (Devcontainer 内)**
 
 Run:
 
@@ -3179,7 +3179,7 @@ uv run pytest tests/integration/test_evaluator_cli_subprocess.py -v
 
 Expected: 既に Phase 5 Task 1, 2 がブランチ内に存在するので PASS が期待されるが、もし fixture や ENV の問題で FAIL したら原因を分析して修正。
 
-- [ ] **Step 5: ruff / format**
+- [x] **Step 5: ruff / format**
 
 Run:
 
@@ -3190,7 +3190,7 @@ uv run ruff format --check tests/integration/test_evaluator_cli_subprocess.py
 
 Expected: exit 0
 
-- [ ] **Step 6: コミット**
+- [x] **Step 6: コミット**
 
 ```bash
 git add tests/integration/test_evaluator_cli_subprocess.py
@@ -3198,7 +3198,7 @@ git commit -m "test(integration): subprocess E2E for evaluate CLI"
 git push -u origin feature/phase5-task3_subprocess_e2e
 ```
 
-- [ ] **Step 7: Phase Base 向け Draft PR**
+- [x] **Step 7: Phase Base 向け Draft PR**
 
 ```bash
 gh pr create --draft \

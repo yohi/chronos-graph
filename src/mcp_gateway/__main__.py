@@ -1,4 +1,4 @@
-"""`python -m mcp_gateway` entrypoint."""
+"""`python -m mcp_gateway [evaluate|<serve>]` entrypoint with lazy routing."""
 
 from __future__ import annotations
 
@@ -6,12 +6,13 @@ import os
 import sys
 import traceback
 
-import uvicorn
 
-from mcp_gateway.audit.logger import AuditLogger
+def _serve() -> None:
+    """Default behaviour: run uvicorn HTTP server (legacy mode)."""
+    import uvicorn
 
+    from mcp_gateway.audit.logger import AuditLogger
 
-def main() -> None:
     try:
         host = os.getenv("MCP_GATEWAY_HOST", "127.0.0.1")
         port = int(os.getenv("MCP_GATEWAY_PORT", "9100"))
@@ -31,6 +32,14 @@ def main() -> None:
             stacktrace=traceback.format_exc(),
         )
         sys.exit(1)
+
+
+def main() -> None:
+    if len(sys.argv) >= 2 and sys.argv[1] == "evaluate":
+        from mcp_gateway.cli import main as cli_main
+
+        sys.exit(cli_main(sys.argv[2:]))
+    _serve()
 
 
 if __name__ == "__main__":

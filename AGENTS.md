@@ -12,6 +12,7 @@
 Always run verification commands before claiming success. Delegate style rules to linters.
 
 **Backend** (Run inside Devcontainer):
+- Install: `uv sync --all-extras`
 - Test: `uv run pytest tests/unit/ -v`
 - Lint: `uv run ruff check src/ tests/` & `uv run mypy src/`
 

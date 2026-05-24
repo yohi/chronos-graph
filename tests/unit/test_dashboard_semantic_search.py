@@ -119,3 +119,15 @@ def test_semantic_search_endpoint_returns_503_when_pipeline_missing() -> None:
     with TestClient(app, base_url="http://localhost") as client:
         response = client.post("/api/memories/semantic-search", json={"query": "x"})
     assert response.status_code == 503
+
+
+def test_semantic_search_endpoint_does_not_mask_other_exceptions() -> None:
+    pipeline = MagicMock()
+    pipeline.search = AsyncMock(side_effect=ConnectionError("Database down"))
+
+    service = DashboardService(storage=MagicMock(), graph=None, retrieval_pipeline=pipeline)
+    app = create_app(service_override=service)
+
+    with TestClient(app, base_url="http://localhost") as client:
+        with pytest.raises(ConnectionError, match="Database down"):
+            client.post("/api/memories/semantic-search", json={"query": "x"})

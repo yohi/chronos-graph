@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import textwrap
@@ -56,10 +55,16 @@ def _build_env(
     policy: Path | None = None,
     overrides: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    env = {**os.environ, "ANTHROPIC_API_KEY": "", "CHRONOS_DASHBOARD_URL": ""}
-    env.update(overrides or {})
+    env = {
+        "ANTHROPIC_API_KEY": "",
+        "CHRONOS_DASHBOARD_URL": "",
+        "CHRONOS_EVALUATOR_FALLBACK": "allow",
+        "CHRONOS_EVALUATOR_DEFAULT_INTENT": "default",
+        "CHRONOS_EVALUATOR_DEFAULT_AGENT_ID": "claude-code",
+    }
     if policy is not None:
         env["CHRONOS_EVALUATOR_POLICY_PATH"] = str(policy)
+    env.update(overrides or {})
     return env
 
 

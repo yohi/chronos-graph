@@ -99,7 +99,7 @@ def test_invalid_json_emits_fallback_ask_and_exit_2() -> None:
 
 def test_argparse_error_emits_fallback_ask_and_exit_2() -> None:
     # --json-io is required; omitting it triggers argparse error
-    code, out, err = _run_cli_with_input('{"tool_name": "bash"}', argv=[])
+    code, out, _err = _run_cli_with_input('{"tool_name": "bash"}', argv=[])
     # main() must catch ValueError and return 2 while writing fallback JSON
     assert code == 2
     body = _loads_json_object(out.strip())

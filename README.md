@@ -242,7 +242,7 @@ SQLite では `ALTER COLUMN TYPE` がサポートされていないため、以�
 ## Universal Evaluator (MCP Gateway)
 
 `PreToolUse` Hook から呼び出され、AI エージェントの提案するツール呼び出しを
-deterministic + LLM の二層で判定する CLI。設計書: `docs/superpowers/specs/2026-05-11-mcp-gateway-universal-evaluator-design.md`。
+deterministic + LLM の二層で判定する CLI。
 
 ### 起動例
 
@@ -267,6 +267,7 @@ echo '{"tool_name":"bash","tool_input":{"command":"ls"}}' \
 | `CHRONOS_EVALUATOR_DEFAULT_INTENT` | `default` | 環境次第 | intent 未指定時の既定 |
 | `CHRONOS_EVALUATOR_DEFAULT_AGENT_ID` | `claude-code` | 環境次第 | agent_id 未指定時の既定 |
 | `CHRONOS_EVALUATOR_LOG_LEVEL` | `WARNING` | デフォルト可 | stderr ログレベル |
+
 > ⚠️ **セキュリティ警告:** `CHRONOS_EVALUATOR_FALLBACK` のデフォルトは `allow` です。`ANTHROPIC_API_KEY` 未設定の環境でそのままデプロイすると、deterministic 判定が不明瞭なツール呼び出しも**自動的に許可**されます。本番環境では必ず `ask` に設定してください。
 
 ### 起動ログの読み方
@@ -286,8 +287,6 @@ evaluator config: llm=enabled memory=enabled fallback_when_llm_not_configured=as
 1. **hook 対象から除外**: クライアント側 `matcher` で対象外にする
 2. **前段マスキング hook**: AST 解析 / URL parse / 正規表現スキャンで先にサニタイズ
 3. **ツール側で秘密検出**: `truffleHog` / `gitleaks` 等で実行前に拒否
-
-詳細は設計書 §5.4 を参照。
 
 ### Devcontainer 内チェック
 

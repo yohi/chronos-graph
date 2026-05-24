@@ -1435,6 +1435,79 @@ Blocking モードで待機中の承認を解決するための REST エンド�
 | `-32003` | approval_timeout | タイムアウト時 |
 | `-32603` | internal_error | 待機上限（`approval_max_pending`）超過時 |
 
+### 15.7 Universal Evaluator (LLM 拡張)
+
+AI エージェントの `PreToolUse` Hook から呼び出される Universal Evaluator CLI を提供します。
+判定は二層構造で実施されます: Tier 1 で既存 deterministic `PolicyEngine` (intents.yaml + guardrails) を評価し、ALLOW の場合のみ Tier 2 で LLM が記憶を踏まえた最終判定を下します。
+
+#### 15.7.1 アーキテクチャ
+
+```text
+┌──────────────────────────────────────────────────────────────┐
+│  AI Agent (Claude Code / Gemini CLI)                          │
+│  PreToolUse Hook → JSON to stdin                              │
+└──────────────────┬───────────────────────────────────────────┘
+                   ▼
+┌──────────────────────────────────────────────────────────────┐
+│  $ uv run python -m mcp_gateway evaluate --json-io            │
+└──────────────────┬───────────────────────────────────────────┘
+                   ▼
+┌──────────────────────────────────────────────────────────────┐
+│  cli.py                                                       │
+│   1. configure_logging(stream=sys.stderr)                    │
+│   2. parse stdin JSON  → ToolCallInput                       │
+│   3. await composite.evaluate(input) → Decision              │
+│   4. json.dump(Decision, sys.stdout); sys.stdout.write("\n")  │
+│   5. sys.exit(0)   (例外時のみ exit(2))                        │
+└──────────────────┬───────────────────────────────────────────┘
+                   ▼
+┌──────────────────────────────────────────────────────────────┐
+│  composite.py (CompositeEvaluator)                            │
+│  ┌─ Tier 1: deterministic ──────────────────────────────┐    │
+│  │  PolicyEngine.evaluate_call()                        │    │
+│  │   ├─ DENY    → 即返却                                │    │
+│  │   ├─ REQUIRES_APPROVAL → ask に正規化               │    │
+│  │   └─ ALLOW   → Tier 2 へ                             │    │
+│  └──────────────────────────────────────────────────────┘    │
+│  ┌─ Tier 2: LLM (Anthropic) + Dashboard Memory ──────── ┐    │
+│  │  1. memory_client.retrieve(query)                    │    │
+│  │  2. llm_evaluator.judge(input, rules, memory)        │    │
+│  │  3. parse → Decision                                 │    │
+│  │  fallback: SDK未導入/キー無し/timeout → allow or ask │    │
+│  └──────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────┘
+```
+
+#### 15.7.2 判定結果 (Decision)
+
+評価器は以下のいずれかを必ず JSON フォーマットで標準出力 (stdout) に返却します。
+例外発生時など、システムが判定不能に陥った場合は安全のため `ask` にフォールバックします。
+
+- `"allow"`: 安全と判断され、ツールを実行可能
+- `"deny"`: 危険またはポリシー違反。`reason` フィールド (理由) が必須。
+- `"ask"`: 曖昧または未構成。`ask_message` フィールド (確認事項) が必須。ユーザーへ確認を求める。
+
+#### 15.7.3 機微情報マスキング
+
+LLM へプロンプトとしてツール引数を送信する前、およびダッシュボードへセマンティック検索クエリとして送信する前に、パスワードやAPIキーなどの機微情報をマスクする処理が行われます。
+キー名ベースでの走査（`password`, `secret`, `api_key` など）および、値の正規表現パターンに基づくスキャンが適用され、該当箇所は `<REDACTED>` に置換されます。
+
+#### 15.7.4 標準出力の純度保証とフェールセーフ
+
+エージェント側でフック出力が確実にパース可能であることを保証するため、以下の厳格な制約が設けられています。
+- **Lazy Import**: `evaluate` サブコマンドでは `app.py` などの重いフレームワーク（FastAPI, Uvicorn等）は一切 import されず、起動の高速性を担保します。
+- **Stdoutの純度**: `cli`, `composite`, `llm`, `memory` モジュールでは `print()` 関数の使用が ruff (`T201`) によりグローバルに禁止されています。標準出力には最終的な Decision JSON を 1行だけ出力し、その他のすべてのログ（サードパーティ製ライブラリ含む）は `sys.stderr` へリダイレクトされます。
+- **Exit Code**:
+  - `0`: 評価プロセス自体は正常完了（`allow`, `deny`, `ask` のいずれかを stdout に出力して終了）
+  - `2`: システム評価の実行自体が致命的に失敗（stdin パースエラー、予期せぬ例外）。この場合も必ず fallback として `{"decision":"ask", "ask_message":"..."}` の JSON が標準出力に吐かれます。
+
+#### 15.7.5 LLM 評価プロンプト設計
+
+Claude 4.7 系のベストプラクティスに準拠し、以下の構成で評価を行います。
+- **Prompt Caching**: システムプロンプト（静的）は `ephemeral` としてキャッシュされ、フック呼び出しごとのレイテンシを最小化します。
+- **構造化データ**: ツール入力、ルール、ダッシュボードから取得した関連記憶（`Top-K`）はすべて XML タグ（`<tool_intent>`, `<rules>`, `<memory>`）で囲まれ、厳密に分離されます。
+- **Adaptive Thinking**: `thinking_budget` トークンが割り当てられ、単純な拒否判定は即座に、複雑なポリシーの競合や文脈的判断がある場合は推論（Thinking）を行ってから最終的な JSON 出力へ至ります。
+
 ---
 
 ## 16. ロードマップ

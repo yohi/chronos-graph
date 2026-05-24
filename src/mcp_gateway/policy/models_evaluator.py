@@ -15,6 +15,23 @@ SENSITIVE_KEY_PATTERN = re.compile(
     r"(password|passwd|secret|token|api[_-]?key|authorization|bearer|credential|private[_-]?key|passphrase|\bprivate\b|\bcert\b|\bssh\b)",
     re.IGNORECASE,
 )
+_SENSITIVE_VALUE_REGEX = "|".join(
+    (
+        r"(?:password|passwd|secret|token|api[_-]?key|authorization|credential)"
+        + r"\s*[:=]\s*(?:Bearer\s+)?\S+",
+        r"Bearer\s+[A-Za-z0-9._~+/=-]{8,}",
+        r"sk-[A-Za-z0-9_-]{8,}",
+        r"ghp_[A-Za-z0-9_]{8,}",
+        r"xox[baprs]-[A-Za-z0-9-]{8,}",
+        r"AKIA[0-9A-Z]{16}",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
+    )
+)
+_SENSITIVE_VALUE_PATTERN = re.compile(
+    f"({_SENSITIVE_VALUE_REGEX})",
+    re.IGNORECASE,
+)
+
 MAX_VALUE_LENGTH = 200
 REDACTED_MARKER = "<REDACTED>"
 
@@ -47,15 +64,19 @@ def _summarize_tool_input(d: dict[str, Any]) -> str:
 
 
 def _redact_tool_input_for_llm(obj: Any) -> Any:
-    """Recursively redact sensitive keys while preserving the JSON structure."""
+    """Recursively redact sensitive keys and values while preserving the JSON structure."""
     if isinstance(obj, dict):
         return {
-            k: (REDACTED_MARKER if _is_sensitive_key(k) else _redact_tool_input_for_llm(v))
+            str(k): (
+                REDACTED_MARKER if _is_sensitive_key(str(k)) else _redact_tool_input_for_llm(v)
+            )
             for k, v in obj.items()
         }
     if isinstance(obj, list):
         return [_redact_tool_input_for_llm(v) for v in obj]
-    # Do not truncate strings here to preserve context for the LLM
+    if isinstance(obj, str):
+        # Do not truncate strings here to preserve context for the LLM
+        return _SENSITIVE_VALUE_PATTERN.sub(REDACTED_MARKER, obj)
     return obj
 
 

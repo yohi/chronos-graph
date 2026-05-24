@@ -5,17 +5,15 @@ import importlib
 import json
 import logging
 import os
-import re
 import threading
 from collections.abc import Mapping
 from typing import Protocol, cast
 
 from mcp_gateway.policy.models_evaluator import (
-    REDACTED_MARKER,
-    SENSITIVE_KEY_PATTERN,
     Decision,
     MemoryItem,
     ToolCallInput,
+    _redact_tool_input_for_llm,
 )
 
 logger = logging.getLogger("chronos_evaluator.llm")
@@ -36,22 +34,6 @@ __all__ = [
 
 _REASON_MAX = 200
 _ASK_MESSAGE_MAX = 300
-_SENSITIVE_VALUE_REGEX = "|".join(
-    (
-        r"(?:password|passwd|secret|token|api[_-]?key|authorization|credential)"
-        + r"\s*[:=]\s*(?:Bearer\s+)?\S+",
-        r"Bearer\s+[A-Za-z0-9._~+/=-]{8,}",
-        r"sk-[A-Za-z0-9_-]{8,}",
-        r"ghp_[A-Za-z0-9_]{8,}",
-        r"xox[baprs]-[A-Za-z0-9-]{8,}",
-        r"AKIA[0-9A-Z]{16}",
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
-    )
-)
-_SENSITIVE_VALUE_PATTERN = re.compile(
-    f"({_SENSITIVE_VALUE_REGEX})",
-    re.IGNORECASE,
-)
 
 
 class LlmUnavailableError(Exception):
@@ -163,7 +145,7 @@ def _build_user_prompt(
     memories: list[MemoryItem],
     intent_name: str,
 ) -> str:
-    redacted = _redact_prompt_value(input_.tool_input)
+    redacted = _redact_tool_input_for_llm(input_.tool_input)
     tool_input_json = _json_for_prompt(redacted)
     tool_name_safe = _escape_prompt_text(input_.tool_name)
     cwd = _escape_prompt_text(str(input_.context.get("cwd") or "unknown"))
@@ -208,25 +190,6 @@ def _escape_prompt_text(value: str) -> str:
     return (
         value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
     )
-
-
-def _redact_prompt_value(value: object) -> object:
-    if isinstance(value, dict):
-        mapping = cast(dict[object, object], value)
-        return {
-            str(key): (
-                REDACTED_MARKER
-                if SENSITIVE_KEY_PATTERN.search(str(key))
-                else _redact_prompt_value(child)
-            )
-            for key, child in mapping.items()
-        }
-    if isinstance(value, list):
-        values = cast(list[object], value)
-        return [_redact_prompt_value(child) for child in values]
-    if isinstance(value, str):
-        return _SENSITIVE_VALUE_PATTERN.sub(REDACTED_MARKER, value)
-    return value
 
 
 class LlmEvaluator:

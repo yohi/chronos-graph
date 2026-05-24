@@ -659,17 +659,17 @@ def _summarize_tool_input(d: dict[str, Any]) -> str:
     return " ".join(parts)
 
 
-# (B) LLM プロンプト用 (JSON 構造を保ったままキーレベルでマスク・再帰)
+# (B) LLM プロンプト用 (JSON 構造を保ったままキー・値レベルでマスク・再帰)
 def _redact_tool_input_for_llm(obj: Any) -> Any:
     if isinstance(obj, dict):
         return {
-            k: (REDACTED_MARKER if _is_sensitive_key(k) else _redact_tool_input_for_llm(v))
+            str(k): (REDACTED_MARKER if _is_sensitive_key(str(k)) else _redact_tool_input_for_llm(v))
             for k, v in obj.items()
         }
     if isinstance(obj, list):
         return [_redact_tool_input_for_llm(v) for v in obj]
     if isinstance(obj, str):
-        return _truncate(obj)
+        return _SENSITIVE_VALUE_PATTERN.sub(REDACTED_MARKER, obj)
     return obj
 ```
 
@@ -677,11 +677,11 @@ def _redact_tool_input_for_llm(obj: Any) -> Any:
 
 - LLM プロンプトに埋め込む `<tool_input>` は **必ず `_redact_tool_input_for_llm()` を経由**する (§3.2 のテンプレート参照)
 - メモリ検索クエリに埋め込む文字列も **必ず `_summarize_tool_input()` を経由**する (§4.5 参照)
-- ユニットテストで `password` / `api_key` などのキーが含まれる入力に対し、生成プロンプト/クエリ両方に `<REDACTED>` が含まれることを assert する
+- ユニットテストで `password` / `api_key` などのキーが含まれる入力に対し、生成プロンプト/クエリ両方に `<REDACTED>` が含まれることを assertする
 
 **限界の明記**:
 
-本マスキングは **キー名ベース** のため、**値 (value) の内部に秘密が埋め込まれているケースは任意のツールで検出不可**。これは `bash` 固有の問題ではなく、任意の文字列値を受け取るすべてのツールで発生しうる構造的限界。
+本マスキングはキー名ベースおよび **正規表現によるベストエフォートの値（Value）スキャン** の二段構えで行われる。しかし、**正規表現パターンに合致しない形式で値の内部に秘密が埋め込まれているケースは任意のツールで検出不可**。これは `bash` 固有の問題ではなく、任意の文字列値を受け取るすべてのツールで発生しうる構造的限界。
 
 **典型的な値埋め込みパターン (検出不可)**:
 

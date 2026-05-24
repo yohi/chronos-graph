@@ -39,7 +39,11 @@ def _configure_stderr_logging(level: str = "WARNING") -> None:
     handler = logging.StreamHandler(stream=sys.stderr)
     handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
     root.addHandler(handler)
-    root.setLevel(level)
+    try:
+        root.setLevel(level)
+    except ValueError:
+        root.setLevel("WARNING")
+        logger.warning("Invalid log level %r, falling back to WARNING", level)
     for name in ("httpx", "httpcore", "anthropic", "asyncio"):
         logging.getLogger(name).setLevel("WARNING")
 
@@ -133,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.warning("stdin parse failed: %s", exc)
         _emit_fallback_ask(sys.stdout)
         return 2
-    except Exception:
+    except (Exception, KeyboardInterrupt):
         traceback.print_exc(file=sys.stderr)
         _emit_fallback_ask(sys.stdout)
         return 2

@@ -122,15 +122,15 @@ def test_argparse_error_emits_fallback_ask_and_exit_2() -> None:
 
 
 def test_logger_output_goes_to_stderr_only(_patch_composite: PatchedComposite) -> None:
-    # Configure a noisy logger before main(); main() must reroute it to stderr.
-    code, out, err = _run_cli_with_input(
-        json.dumps({"tool_name": "bash", "tool_input": {"command": "ls"}})
-    )
-    assert code == 0
-    # Single JSON line on stdout
+    # Use invalid JSON to guarantee a log line on stderr; assert both streams.
+    code, out, err = _run_cli_with_input("not-json")
+    assert code == 2
+    # Single JSON line on stdout (fallback ask)
     assert out.count("\n") == 1
-    # No raw log lines on stdout
-    assert "evaluator config" not in out
+    # Positive assertion: log line goes to stderr
+    assert "stdin parse failed" in err
+    # Negative assertion: same log line never leaks to stdout
+    assert "stdin parse failed" not in out
 
 
 def test_unknown_fallback_env_warns(caplog: pytest.LogCaptureFixture) -> None:
@@ -140,6 +140,17 @@ def test_unknown_fallback_env_warns(caplog: pytest.LogCaptureFixture) -> None:
             result = _fallback_mode_from_env()
     assert result == "allow"
     assert "Unknown CHRONOS_EVALUATOR_FALLBACK='invalid_value'" in caplog.text
+
+
+def test_invalid_log_level_emits_fallback_and_exit_2() -> None:
+    """Invalid CHRONOS_EVALUATOR_LOG_LEVEL must not crash the CLI.
+    Fallback ask JSON and exit code 2 are still emitted."""
+    with patch.dict("os.environ", {"CHRONOS_EVALUATOR_LOG_LEVEL": "INVALID"}):
+        code, out, _ = _run_cli_with_input('{"tool_name":"bash"}', argv=[])
+    assert code == 2
+    body = _loads_json_object(out.strip())
+    assert body["decision"] == "ask"
+    assert "System evaluation failed" in str(body["ask_message"])
 
 
 def test_main_returns_int_not_calls_sys_exit(_patch_composite: PatchedComposite) -> None:

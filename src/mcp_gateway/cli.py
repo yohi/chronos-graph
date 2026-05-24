@@ -40,17 +40,27 @@ class _JsonIoArgumentParser(argparse.ArgumentParser):
 
 def _configure_stderr_logging(level: str = "WARNING") -> None:
     gateway_logger = logging.getLogger("mcp_gateway")
-    gateway_logger.propagate = False
-    for handler in list(gateway_logger.handlers):
-        gateway_logger.removeHandler(handler)
+    legacy_logger = logging.getLogger("chronos_evaluator.cli")
+
+    for log in (gateway_logger, legacy_logger):
+        for handler in list(log.handlers):
+            log.removeHandler(handler)
+
     handler = logging.StreamHandler(stream=sys.stderr)
     handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
-    gateway_logger.addHandler(handler)
+
+    for log in (gateway_logger, legacy_logger):
+        log.addHandler(handler)
+        try:
+            log.setLevel(level)
+        except ValueError:
+            log.setLevel("WARNING")
+
     try:
-        gateway_logger.setLevel(level)
+        logging.getLogger().setLevel(level)  # Validate level once for the warning
     except ValueError:
-        gateway_logger.setLevel("WARNING")
-        logger.warning("Invalid log level %r, falling back to WARNING", level)
+        gateway_logger.warning("Invalid log level %r, falling back to WARNING", level)
+
     for name in ("httpx", "httpcore", "anthropic", "asyncio"):
         logging.getLogger(name).setLevel("WARNING")
 

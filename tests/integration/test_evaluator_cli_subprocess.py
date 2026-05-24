@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import textwrap
@@ -55,13 +56,16 @@ def _build_env(
     policy: Path | None = None,
     overrides: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
-    env = {
-        "ANTHROPIC_API_KEY": "",
-        "CHRONOS_DASHBOARD_URL": "",
-        "CHRONOS_EVALUATOR_FALLBACK": "allow",
-        "CHRONOS_EVALUATOR_DEFAULT_INTENT": "default",
-        "CHRONOS_EVALUATOR_DEFAULT_AGENT_ID": "claude-code",
-    }
+    env = os.environ.copy()
+    env.update(
+        {
+            "ANTHROPIC_API_KEY": "",
+            "CHRONOS_DASHBOARD_URL": "",
+            "CHRONOS_EVALUATOR_FALLBACK": "allow",
+            "CHRONOS_EVALUATOR_DEFAULT_INTENT": "default",
+            "CHRONOS_EVALUATOR_DEFAULT_AGENT_ID": "claude-code",
+        }
+    )
     if policy is not None:
         env["CHRONOS_EVALUATOR_POLICY_PATH"] = str(policy)
     env.update(overrides or {})
@@ -74,7 +78,7 @@ def _run_cli(
     env_overrides: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = _build_env(policy, env_overrides)
-    return subprocess.run(  # noqa: S603 - trusted test interpreter and fixed module args
+    return subprocess.run(  # noqa: S603 - trusted test interpreter and fixed module args # nosec
         [
             sys.executable,
             "-m",
@@ -113,7 +117,7 @@ def test_cli_evaluate_deny_path(policy_path: Path) -> None:
 
 def test_cli_evaluate_invalid_stdin(policy_path: Path) -> None:
     env = _build_env(policy_path)
-    result = subprocess.run(  # noqa: S603 - trusted test interpreter and fixed module args
+    result = subprocess.run(  # noqa: S603 - trusted test interpreter and fixed module args # nosec
         [
             sys.executable,
             "-m",
@@ -138,7 +142,7 @@ def test_cli_evaluate_invalid_stdin(policy_path: Path) -> None:
 
 def test_cli_evaluate_missing_json_io_still_emits_single_json_line(policy_path: Path) -> None:
     env = _build_env(policy_path)
-    result = subprocess.run(  # noqa: S603 - trusted test interpreter and fixed module args
+    result = subprocess.run(  # noqa: S603 - trusted test interpreter and fixed module args # nosec
         [
             sys.executable,
             "-m",

@@ -122,16 +122,21 @@ def test_unexpected_exception_emits_fallback_ask_and_exit_2(
     assert "Traceback" not in out
 
 
-def test_logger_output_goes_to_stderr_only(_patch_composite: PatchedComposite) -> None:
+def test_logger_output_goes_to_stderr_only(
+    _patch_composite: PatchedComposite,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     # Use invalid JSON to guarantee a log line on stderr; assert both streams.
-    code, out, err = _run_cli_with_input("not-json")
+    with caplog.at_level(logging.WARNING, logger="chronos_evaluator.cli"):
+        code, out, err = _run_cli_with_input("not-json")
+
     assert code == 2
     # Single JSON line on stdout (fallback ask)
     assert out.count("\n") == 1
-    # Positive assertion: log line goes to stderr
-    assert "stdin parse failed" in err
     # Negative assertion: same log line never leaks to stdout
     assert "stdin parse failed" not in out
+    # Positive assertion: log line is emitted as a WARNING
+    assert "stdin parse failed" in caplog.text
 
 
 def test_unknown_fallback_env_warns(caplog: pytest.LogCaptureFixture) -> None:
@@ -143,15 +148,19 @@ def test_unknown_fallback_env_warns(caplog: pytest.LogCaptureFixture) -> None:
     assert "Unknown CHRONOS_EVALUATOR_FALLBACK='invalid_value'" in caplog.text
 
 
-def test_invalid_log_level_emits_fallback_and_exit_2() -> None:
+def test_invalid_log_level_falls_back_to_warning_and_proceeds(
+    caplog: pytest.LogCaptureFixture,
+    _patch_composite: PatchedComposite,
+) -> None:
     """Invalid CHRONOS_EVALUATOR_LOG_LEVEL must not crash the CLI.
-    Fallback ask JSON and exit code 2 are still emitted."""
-    with patch.dict("os.environ", {"CHRONOS_EVALUATOR_LOG_LEVEL": "INVALID"}):
-        code, out, _ = _run_cli_with_input('{"tool_name":"bash"}', argv=[])
-    assert code == 2
+    It logs a warning and proceeds with normal execution."""
+    with caplog.at_level(logging.WARNING, logger="mcp_gateway"):
+        with patch.dict("os.environ", {"CHRONOS_EVALUATOR_LOG_LEVEL": "INVALID"}):
+            code, out, _ = _run_cli_with_input('{"tool_name":"bash"}', argv=["--json-io"])
+    assert code == 0
     body = _loads_json_object(out.strip())
-    assert body["decision"] == "ask"
-    assert "System evaluation failed" in str(body["ask_message"])
+    assert body["decision"] == "allow"
+    assert "Invalid log level 'INVALID'" in caplog.text
 
 
 def test_main_returns_int_not_calls_sys_exit(_patch_composite: PatchedComposite) -> None:

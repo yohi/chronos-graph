@@ -11,7 +11,7 @@ from mcp_gateway.policy.models_evaluator import (
     MemoryItem,
     ToolCallInput,
     _redact_tool_input_for_llm,
-    _summarize_tool_input,
+    summarize_tool_input,
 )
 
 
@@ -51,7 +51,7 @@ class TestDecisionToDict:
 
 class TestSummarizeToolInput:
     def test_redacts_sensitive_keys(self) -> None:
-        out = _summarize_tool_input(
+        out = summarize_tool_input(
             {"password": "TEST_PASSWORD", "api_key": "TEST_API_KEY", "command": "ls"}
         )
         assert f"password={REDACTED_MARKER}" in out
@@ -60,19 +60,19 @@ class TestSummarizeToolInput:
 
     def test_truncates_long_values(self) -> None:
         long = "a" * (MAX_VALUE_LENGTH + 50)
-        out = _summarize_tool_input({"command": long})
+        out = summarize_tool_input({"command": long})
         assert "...[truncated]" in out
         # Truncated content + marker should be shorter than original
         assert len(out) < len(long) + len("command=")
 
     def test_handles_int_value(self) -> None:
-        out = _summarize_tool_input({"count": 42})
+        out = summarize_tool_input({"count": 42})
         assert out == "count=42"
 
     def test_redacts_sensitive_keys_in_nested_input(self) -> None:
         # Verify Issue 1: nested sensitive keys are redacted
         auth_header_value = "DUMMY_TOKEN"
-        out = _summarize_tool_input({"headers": {"authorization": auth_header_value}, "cmd": "ls"})
+        out = summarize_tool_input({"headers": {"authorization": auth_header_value}, "cmd": "ls"})
         # Do not rely on exact dict repr: just check that token is gone and marker is present
         assert auth_header_value not in out
         assert REDACTED_MARKER in out
@@ -81,7 +81,7 @@ class TestSummarizeToolInput:
 
     def test_redacts_new_sensitive_patterns(self) -> None:
         # Verify Issue 3: new patterns like private_key are redacted
-        out = _summarize_tool_input({"private_key": "---BEGIN---", "cert": "trust-me"})
+        out = summarize_tool_input({"private_key": "---BEGIN---", "cert": "trust-me"})
         assert f"private_key={REDACTED_MARKER}" in out
         assert f"cert={REDACTED_MARKER}" in out
 

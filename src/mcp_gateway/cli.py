@@ -82,6 +82,9 @@ def _fallback_mode_from_env() -> Literal["allow", "ask"]:
     value = os.getenv("CHRONOS_EVALUATOR_FALLBACK", "allow")
     if value == "ask":
         return "ask"
+    if value == "allow":
+        return "allow"
+    logger.warning("Unknown CHRONOS_EVALUATOR_FALLBACK=%r, defaulting to 'allow'", value)
     return "allow"
 
 
@@ -113,7 +116,12 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=Path(os.getenv("CHRONOS_EVALUATOR_POLICY_PATH", "intents.yaml")),
     )
-    args = parser.parse_args(argv if argv is not None else sys.argv[1:])
+    try:
+        args = parser.parse_args(argv if argv is not None else sys.argv[1:])
+    except SystemExit:
+        _emit_fallback_ask(sys.stdout)
+        return 2
+
     arg_values = cast(dict[str, object], vars(args))
     policy_path = arg_values["policy_path"]
     if not isinstance(policy_path, Path):
@@ -135,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
         decision = asyncio.run(evaluator.evaluate(input_))
         _write_decision(decision, sys.stdout)
         return 0
-    except Exception:
+    except (Exception, asyncio.CancelledError, KeyboardInterrupt):
         traceback.print_exc(file=sys.stderr)
         _emit_fallback_ask(sys.stdout)
         return 2

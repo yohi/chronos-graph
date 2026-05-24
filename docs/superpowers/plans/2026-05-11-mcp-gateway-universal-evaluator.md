@@ -2869,7 +2869,7 @@ gh pr create --draft \
 **Files:**
 - Modify: `src/mcp_gateway/__main__.py`
 
-- [ ] **Step 1: ブランチ作成 (Task 5-1 から派生)**
+- [x] **Step 1: ブランチ作成 (Task 5-1 から派生)**
 
 ```bash
 git fetch origin
@@ -2878,7 +2878,7 @@ git pull --ff-only
 git checkout -b feature/phase5-task2_main_router
 ```
 
-- [ ] **Step 2: 失敗するテストを書く**
+- [x] **Step 2: 失敗するテストを書く**
 
 `tests/unit/test_mcp_gateway_cli.py` の末尾に追記:
 
@@ -2917,7 +2917,7 @@ def test_main_defaults_to_serve_when_no_subcommand(monkeypatch) -> None:
     assert called["serve"] == 1
 ```
 
-- [ ] **Step 3: 失敗確認**
+- [x] **Step 3: 失敗確認**
 
 Run:
 
@@ -2927,7 +2927,7 @@ uv run pytest tests/unit/test_mcp_gateway_cli.py::test_main_routes_evaluate_to_c
 
 Expected: `AttributeError` で FAIL
 
-- [ ] **Step 4: __main__.py を書き換え**
+- [x] **Step 4: __main__.py を書き換え**
 
 `src/mcp_gateway/__main__.py` 全文:
 
@@ -2980,7 +2980,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 5: テスト通過確認**
+- [x] **Step 5: テスト通過確認**
 
 Run:
 
@@ -2990,7 +2990,7 @@ uv run pytest tests/unit/test_mcp_gateway_cli.py -v
 
 Expected: 新規 2 テスト含め全 PASS
 
-- [ ] **Step 6: ruff / mypy / format**
+- [x] **Step 6: ruff / mypy / format**
 
 Run:
 
@@ -3002,7 +3002,7 @@ uv run mypy src/mcp_gateway/__main__.py
 
 Expected: exit 0
 
-- [ ] **Step 7: 既存 mcp_gateway テストへの回帰確認**
+- [x] **Step 7: 既存 mcp_gateway テストへの回帰確認**
 
 Run:
 
@@ -3012,7 +3012,7 @@ uv run pytest tests/unit/test_mcp_gateway.py tests/unit/test_param_constraint.py
 
 Expected: PASS
 
-- [ ] **Step 8: コミット**
+- [x] **Step 8: コミット**
 
 ```bash
 git add src/mcp_gateway/__main__.py tests/unit/test_mcp_gateway_cli.py

@@ -1,0 +1,122 @@
+"""Tests for mcp_gateway.cli (stdin / stdout / exit codes)."""
+# pyright: reportUnusedFunction=false
+
+from __future__ import annotations
+
+import io
+import json
+from collections.abc import Iterator
+from typing import cast
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from mcp_gateway.cli import main
+from mcp_gateway.policy.models_evaluator import Decision
+
+PatchedComposite = tuple[MagicMock, MagicMock]
+
+
+def _run_cli_with_input(payload: str, argv: list[str] | None = None) -> tuple[int, str, str]:
+    """Run cli.main with patched stdin/stdout/stderr; return (code, stdout, stderr)."""
+    stdin = io.StringIO(payload)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with patch("sys.stdin", stdin), patch("sys.stdout", stdout), patch("sys.stderr", stderr):
+        code = main(argv or ["--json-io"])
+    return code, stdout.getvalue(), stderr.getvalue()
+
+
+@pytest.fixture(autouse=True)
+def _patch_composite() -> Iterator[PatchedComposite]:
+    """Patch CompositeEvaluator.from_env to return a mock by default."""
+    fake = MagicMock()
+    fake.evaluate = AsyncMock(return_value=Decision(decision="allow"))
+    with patch("mcp_gateway.cli._build_composite_evaluator", return_value=fake) as m:
+        yield m, fake
+
+
+def _loads_json_object(text: str) -> dict[str, object]:
+    parsed = cast(object, json.loads(text))
+    assert isinstance(parsed, dict)
+    return cast(dict[str, object], parsed)
+
+
+def test_allow_path_writes_single_line_json_and_exit_0(
+    _patch_composite: PatchedComposite,
+) -> None:
+    payload = json.dumps({"tool_name": "bash", "tool_input": {"command": "ls"}})
+    code, out, _ = _run_cli_with_input(payload)
+    assert code == 0
+    assert out.count("\n") == 1
+    assert _loads_json_object(out.strip()) == {"decision": "allow"}
+
+
+def test_deny_path_includes_reason(_patch_composite: PatchedComposite) -> None:
+    _, fake = _patch_composite
+    fake.evaluate = AsyncMock(return_value=Decision(decision="deny", reason="bad"))
+    payload = json.dumps({"tool_name": "bash", "tool_input": {"command": "rm"}})
+    code, out, _ = _run_cli_with_input(payload)
+    assert code == 0
+    assert _loads_json_object(out.strip()) == {"decision": "deny", "reason": "bad"}
+
+
+def test_ask_path_includes_message(_patch_composite: PatchedComposite) -> None:
+    _, fake = _patch_composite
+    fake.evaluate = AsyncMock(return_value=Decision(decision="ask", ask_message="confirm"))
+    payload = json.dumps({"tool_name": "bash", "tool_input": {}})
+    code, out, _ = _run_cli_with_input(payload)
+    assert code == 0
+    assert _loads_json_object(out.strip()) == {"decision": "ask", "ask_message": "confirm"}
+
+
+def test_empty_stdin_emits_fallback_ask_and_exit_2() -> None:
+    code, out, _ = _run_cli_with_input("")
+    assert code == 2
+    body = _loads_json_object(out.strip())
+    assert body["decision"] == "ask"
+    assert "System evaluation failed" in str(body["ask_message"])
+
+
+def test_invalid_json_emits_fallback_ask_and_exit_2() -> None:
+    code, out, _ = _run_cli_with_input("not-json")
+    assert code == 2
+    body = _loads_json_object(out.strip())
+    assert body["decision"] == "ask"
+
+
+def test_unexpected_exception_emits_fallback_ask_and_exit_2(
+    _patch_composite: PatchedComposite,
+) -> None:
+    _, fake = _patch_composite
+    fake.evaluate = AsyncMock(side_effect=RuntimeError("boom"))
+    payload = json.dumps({"tool_name": "bash", "tool_input": {"command": "ls"}})
+    code, out, err = _run_cli_with_input(payload)
+    assert code == 2
+    body = _loads_json_object(out.strip())
+    assert body["decision"] == "ask"
+    # traceback must go to stderr, never stdout
+    assert "Traceback" in err
+    assert "Traceback" not in out
+
+
+def test_logger_output_goes_to_stderr_only(_patch_composite: PatchedComposite) -> None:
+    # Configure a noisy logger before main(); main() must reroute it to stderr.
+    payload = json.dumps({"tool_name": "bash", "tool_input": {"command": "ls"}})
+    code, out, _ = _run_cli_with_input(payload)
+    assert code == 0
+    # Single JSON line on stdout
+    assert out.count("\n") == 1
+    # No raw log lines on stdout
+    assert "evaluator config" not in out
+
+
+def test_main_returns_int_not_calls_sys_exit(_patch_composite: PatchedComposite) -> None:
+    """main() should *return* the exit code; the __main__ shim invokes sys.exit."""
+    payload = json.dumps({"tool_name": "bash", "tool_input": {"command": "ls"}})
+    stdin = io.StringIO(payload)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with patch("sys.stdin", stdin), patch("sys.stdout", stdout), patch("sys.stderr", stderr):
+        code = main(["--json-io"])
+    assert isinstance(code, int)

@@ -2612,7 +2612,7 @@ uv run mypy src/mcp_gateway/policy/composite.py
 
 Expected: exit 0
 
-- [ ] **Step 8: コミット**
+- [x] **Step 8: コミット**
 
 ```bash
 git add src/mcp_gateway/policy/composite.py tests/unit/test_mcp_gateway_composite.py
@@ -2620,7 +2620,7 @@ git commit -m "feat(mcp_gateway): add CompositeEvaluator (Tier1 deterministic + 
 git push -u origin feature/phase4-task1_composite_evaluator
 ```
 
-- [ ] **Step 9: Phase Base 向け Draft PR**
+- [x] **Step 9: Phase Base 向け Draft PR**
 
 ```bash
 gh pr create --draft \

@@ -193,10 +193,9 @@ Decide now. Output JSON only."""
 
 def _json_for_prompt(value: object) -> str:
     # §5.5: JSON content inside XML tags must be escaped to prevent structure breaking.
-    # We escape &, <, > first, then handle the </ escape for additional safety.
+    # We escape &, <, > and keep them as HTML entities to ensure XML safety.
     text = json.dumps(value, ensure_ascii=False)
-    escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    return escaped.replace("&lt;/", "<\\/")
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _escape_prompt_text(value: str) -> str:

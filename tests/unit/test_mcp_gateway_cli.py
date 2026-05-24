@@ -162,3 +162,34 @@ def test_main_returns_int_not_calls_sys_exit(_patch_composite: PatchedComposite)
     with patch("sys.stdin", stdin), patch("sys.stdout", stdout), patch("sys.stderr", stderr):
         code = main(["--json-io"])
     assert isinstance(code, int)
+
+
+def test_main_routes_evaluate_to_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mcp_gateway import __main__ as gateway_main
+
+    called: dict[str, list[str]] = {}
+
+    def fake_cli_main(argv: list[str]) -> int:
+        called["argv"] = argv
+        return 0
+
+    monkeypatch.setattr("mcp_gateway.cli.main", fake_cli_main)
+    monkeypatch.setattr("sys.argv", ["mcp_gateway", "evaluate", "--json-io"])
+    with pytest.raises(SystemExit) as exc:
+        gateway_main.main()
+    assert exc.value.code == 0
+    assert called["argv"] == ["--json-io"]
+
+
+def test_main_defaults_to_serve_when_no_subcommand(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mcp_gateway import __main__ as gateway_main
+
+    called = {"serve": 0}
+
+    def fake_serve() -> None:
+        called["serve"] += 1
+
+    monkeypatch.setattr(gateway_main, "_serve", fake_serve)
+    monkeypatch.setattr("sys.argv", ["mcp_gateway"])
+    gateway_main.main()
+    assert called["serve"] == 1

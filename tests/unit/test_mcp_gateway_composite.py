@@ -221,15 +221,44 @@ async def test_policy_error_on_call_returns_deny() -> None:
     assert "unknown_intent" in (out.reason or "")
 
 
-def test_startup_log_warns_llm_disabled_fallback_allow(
+def test_fallback_validation_rejects_invalid_value() -> None:
+    engine = _make_policy_engine_mock(EvaluationResult(status="ALLOW"))
+    with pytest.raises(ValueError, match="fallback_when_llm_not_configured"):
+        CompositeEvaluator(
+            engine=engine,
+            memory_client=None,
+            llm_evaluator=None,
+            fallback_when_llm_not_configured="invalid",
+        )
+
+
+@pytest.mark.asyncio
+async def test_unknown_tier1_status_returns_deny(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Literal only covers ALLOW/DENY/REQUIRES_APPROVAL; unknown values must be denied."""
+    ev = _make_evaluator(
+        tier1_result=EvaluationResult(status="QUARANTINE"),  # type: ignore[arg-type]
+        llm=None,
+        memory=None,
+    )
     import logging
 
     with caplog.at_level(logging.WARNING, logger="chronos_evaluator"):
-        _make_evaluator(
-            tier1_result=EvaluationResult(status="ALLOW"),
-            llm=None,
-            memory=None,
-        )
-    assert any("auto-approved without LLM review" in r.message for r in caplog.records)
+        out = await ev.evaluate(ToolCallInput(tool_name="bash", tool_input={}))
+    assert out.decision == "deny"
+    assert "unexpected_evaluation_status" in (out.reason or "")
+    assert any("Unexpected tier1 status" in r.message for r in caplog.records)
+    """Literal only covers ALLOW/DENY/REQUIRES_APPROVAL; unknown values must be denied."""
+    ev = _make_evaluator(
+        tier1_result=EvaluationResult(status="QUARANTINE"),  # type: ignore[arg-type]
+        llm=None,
+        memory=None,
+    )
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="chronos_evaluator"):
+        out = await ev.evaluate(ToolCallInput(tool_name="bash", tool_input={}))
+    assert out.decision == "deny"
+    assert "unexpected_evaluation_status" in (out.reason or "")
+    assert any("Unexpected tier1 status" in r.message for r in caplog.records)

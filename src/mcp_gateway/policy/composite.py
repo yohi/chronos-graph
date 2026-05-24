@@ -41,20 +41,25 @@ class CompositeEvaluator:
         self._llm: LlmEvaluator | None = llm_evaluator
         self._default_intent: str = default_intent
         self._default_agent_id: str = default_agent_id
+        if fallback_when_llm_not_configured not in {"allow", "ask"}:
+            raise ValueError(
+                "fallback_when_llm_not_configured must be 'allow' or 'ask',"
+                f" got {fallback_when_llm_not_configured!r}"
+            )
         self._fallback: Literal["allow", "ask"] = fallback_when_llm_not_configured
 
+        logger.warning(
+            "evaluator config: llm=%s memory=%s fallback_when_llm_not_configured=%s",
+            "enabled" if llm_evaluator is not None else "DISABLED",
+            "enabled" if memory_client is not None else "disabled",
+            self._fallback,
+        )
         if llm_evaluator is None and self._fallback == "allow":
-            logger.warning(
-                "evaluator config: llm=DISABLED fallback=allow — "
+            msg = (
+                "evaluator config: llm=DISABLED fallback=allow - "
                 "tools will be auto-approved without LLM review"
             )
-        else:
-            logger.info(
-                "evaluator config: llm=%s memory=%s fallback_when_llm_not_configured=%s",
-                "enabled" if llm_evaluator is not None else "DISABLED",
-                "enabled" if memory_client is not None else "disabled",
-                self._fallback,
-            )
+            logger.warning(msg)
 
     async def evaluate(self, input_: ToolCallInput) -> Decision:
         intent = str(input_.context.get("intent") or self._default_intent)
@@ -85,6 +90,13 @@ class CompositeEvaluator:
                 decision="ask",
                 ask_message=f"Tool {input_.tool_name!r} requires manual approval.",
             )
+        if tier1.status != "ALLOW":
+            logger.warning(
+                "Unexpected tier1 status %r for tool %r; treating as deny",
+                tier1.status,
+                input_.tool_name,
+            )
+            return Decision(decision="deny", reason="unexpected_evaluation_status")
 
         if self._llm is None:
             if self._fallback == "ask":

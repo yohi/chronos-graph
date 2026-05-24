@@ -46,7 +46,7 @@ def _truncate(value: str) -> str:
     return value
 
 
-def _summarize_tool_input(d: dict[str, Any]) -> str:
+def summarize_tool_input(d: dict[str, Any]) -> str:
     """Build a flat key=value string for memory semantic-search queries.
 
     Sensitive keys (matching SENSITIVE_KEY_PATTERN) are replaced with REDACTED_MARKER.
@@ -61,6 +61,10 @@ def _summarize_tool_input(d: dict[str, Any]) -> str:
         sanitized_v = _redact_tool_input_for_llm(v)
         parts.append(f"{k}={_truncate(str(sanitized_v))}")
     return " ".join(parts)
+
+
+# Backwards compatibility alias
+_summarize_tool_input = summarize_tool_input
 
 
 def _redact_tool_input_for_llm(obj: Any) -> Any:

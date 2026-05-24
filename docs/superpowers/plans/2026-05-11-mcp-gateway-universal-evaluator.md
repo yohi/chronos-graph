@@ -3040,7 +3040,7 @@ gh pr create --draft \
 - Create: `tests/integration/test_evaluator_cli_subprocess.py`
 - Test fixture: 既存 `tests/data/policy_*.yaml` があれば再利用、なければ最小ポリシーを fixture でテンポラリ作成
 
-- [ ] **Step 1: ブランチ作成 (Task 5-2 から派生)**
+- [x] **Step 1: ブランチ作成 (Task 5-2 から派生)**
 
 ```bash
 git fetch origin
@@ -3049,7 +3049,7 @@ git pull --ff-only
 git checkout -b feature/phase5-task3_subprocess_e2e
 ```
 
-- [ ] **Step 2: 既存 policy fixture を確認**
+- [x] **Step 2: 既存 policy fixture を確認**
 
 Run:
 
@@ -3060,7 +3060,7 @@ find tests -name '*intents*.yaml' -o -name 'policy*.yaml' 2>/dev/null
 
 該当 fixture が無い場合はテスト内で `tmp_path` に最小 YAML を書き出す。以下のテストは tmp_path 方式を採用する。
 
-- [ ] **Step 3: 失敗するテストを書く**
+- [x] **Step 3: 失敗するテストを書く**
 
 `tests/integration/test_evaluator_cli_subprocess.py`:
 
@@ -3169,7 +3169,7 @@ def test_cli_evaluate_stdout_is_single_json_line(policy_path: Path) -> None:
     assert "evaluator config" not in result.stdout
 ```
 
-- [ ] **Step 4: テスト失敗確認 (Devcontainer 内)**
+- [x] **Step 4: テスト失敗確認 (Devcontainer 内)**
 
 Run:
 
@@ -3179,7 +3179,7 @@ uv run pytest tests/integration/test_evaluator_cli_subprocess.py -v
 
 Expected: 既に Phase 5 Task 1, 2 がブランチ内に存在するので PASS が期待されるが、もし fixture や ENV の問題で FAIL したら原因を分析して修正。
 
-- [ ] **Step 5: ruff / format**
+- [x] **Step 5: ruff / format**
 
 Run:
 
@@ -3190,7 +3190,7 @@ uv run ruff format --check tests/integration/test_evaluator_cli_subprocess.py
 
 Expected: exit 0
 
-- [ ] **Step 6: コミット**
+- [x] **Step 6: コミット**
 
 ```bash
 git add tests/integration/test_evaluator_cli_subprocess.py

@@ -3198,7 +3198,7 @@ git commit -m "test(integration): subprocess E2E for evaluate CLI"
 git push -u origin feature/phase5-task3_subprocess_e2e
 ```
 
-- [ ] **Step 7: Phase Base 向け Draft PR**
+- [x] **Step 7: Phase Base 向け Draft PR**
 
 ```bash
 gh pr create --draft \

@@ -233,6 +233,10 @@ class LlmEvaluator:
         thinking_budget: int = 1024,
         max_tokens: int = 1536,
     ) -> None:
+        if thinking_budget >= max_tokens:
+            raise ValueError(
+                f"thinking_budget ({thinking_budget}) must be less than max_tokens ({max_tokens})"
+            )
         self._api_key: str = api_key
         self._model: str = model
         self._timeout_seconds: float = timeout_seconds

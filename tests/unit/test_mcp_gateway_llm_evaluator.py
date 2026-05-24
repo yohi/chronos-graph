@@ -223,3 +223,15 @@ def test_system_prompt_contains_role_and_output_format() -> None:
     assert "<output_format>" in SYSTEM_PROMPT
     assert "untrusted data" in SYSTEM_PROMPT
     assert "allow" in SYSTEM_PROMPT and "deny" in SYSTEM_PROMPT and "ask" in SYSTEM_PROMPT
+
+
+def test_llm_evaluator_init_raises_on_invalid_thinking_budget() -> None:
+    with pytest.raises(
+        ValueError, match=r"thinking_budget \(2000\) must be less than max_tokens \(1000\)"
+    ):
+        LlmEvaluator(api_key="x", thinking_budget=2000, max_tokens=1000)
+
+    with pytest.raises(
+        ValueError, match=r"thinking_budget \(1000\) must be less than max_tokens \(1000\)"
+    ):
+        LlmEvaluator(api_key="x", thinking_budget=1000, max_tokens=1000)

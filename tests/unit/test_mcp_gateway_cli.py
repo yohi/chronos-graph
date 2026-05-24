@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import sys
 from collections.abc import Iterator
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -96,6 +97,16 @@ def test_invalid_json_emits_fallback_ask_and_exit_2() -> None:
     assert body["decision"] == "ask"
 
 
+def test_argparse_error_emits_fallback_ask_and_exit_2() -> None:
+    # --json-io is required; omitting it triggers argparse error
+    code, out, _err = _run_cli_with_input('{"tool_name": "bash"}', argv=[])
+    # main() must catch ValueError and return 2 while writing fallback JSON
+    assert code == 2
+    body = _loads_json_object(out.strip())
+    assert body["decision"] == "ask"
+    assert "System evaluation failed" in str(body["ask_message"])
+
+
 def test_unexpected_exception_emits_fallback_ask_and_exit_2(
     _patch_composite: PatchedComposite,
 ) -> None:
@@ -109,16 +120,6 @@ def test_unexpected_exception_emits_fallback_ask_and_exit_2(
     # traceback must go to stderr, never stdout
     assert "Traceback" in err
     assert "Traceback" not in out
-
-
-def test_argparse_error_emits_fallback_ask_and_exit_2() -> None:
-    # --json-io is required; omitting it triggers argparse error
-    code, out, err = _run_cli_with_input('{"tool_name": "bash"}', argv=[])
-    # main() must catch SystemExit and return 2 while writing fallback JSON
-    assert code == 2
-    body = _loads_json_object(out.strip())
-    assert body["decision"] == "ask"
-    assert "System evaluation failed" in str(body["ask_message"])
 
 
 def test_logger_output_goes_to_stderr_only(_patch_composite: PatchedComposite) -> None:
@@ -179,6 +180,38 @@ def test_main_routes_evaluate_to_cli(monkeypatch: pytest.MonkeyPatch) -> None:
         gateway_main.main()
     assert exc.value.code == 0
     assert called["argv"] == ["--json-io"]
+
+
+def test_main_routes_evaluate_without_importing_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
+    import builtins
+
+    from mcp_gateway import __main__ as gateway_main
+
+    real_import = builtins.__import__
+
+    # Clear any cached uvicorn import so the guard below reliably detects it.
+    sys.modules.pop("uvicorn", None)
+
+    def guarded_import(
+        name: str,
+        globals_: dict[str, object] | None = None,
+        locals_: dict[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> object:
+        if name == "uvicorn":
+            raise AssertionError("evaluate path must not import uvicorn")
+        return cast(object, real_import(name, globals_, locals_, fromlist, level))
+
+    def fake_cli_main(_argv: list[str]) -> int:
+        return 0
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    monkeypatch.setattr("mcp_gateway.cli.main", fake_cli_main)
+    monkeypatch.setattr("sys.argv", ["mcp_gateway", "evaluate", "--json-io"])
+    with pytest.raises(SystemExit) as exc:
+        gateway_main.main()
+    assert exc.value.code == 0
 
 
 def test_main_defaults_to_serve_when_no_subcommand(monkeypatch: pytest.MonkeyPatch) -> None:

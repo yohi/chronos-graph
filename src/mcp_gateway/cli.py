@@ -15,7 +15,7 @@ import sys
 import traceback
 from collections.abc import Mapping
 from pathlib import Path
-from typing import IO, Literal, cast
+from typing import IO, Literal, NoReturn, cast, override
 
 from mcp_gateway.policy.composite import CompositeEvaluator
 from mcp_gateway.policy.engine import PolicyEngine
@@ -30,6 +30,12 @@ _FALLBACK_ASK = Decision(
     decision="ask",
     ask_message="System evaluation failed. Human confirmation required.",
 )
+
+
+class _JsonIoArgumentParser(argparse.ArgumentParser):
+    @override
+    def error(self, message: str) -> NoReturn:
+        raise ValueError(message)
 
 
 def _configure_stderr_logging(level: str = "WARNING") -> None:
@@ -108,7 +114,7 @@ def _build_composite_evaluator(policy_path: Path) -> CompositeEvaluator:
 def main(argv: list[str] | None = None) -> int:
     _configure_stderr_logging(os.getenv("CHRONOS_EVALUATOR_LOG_LEVEL", "WARNING"))
 
-    parser = argparse.ArgumentParser(prog="mcp_gateway evaluate")
+    parser = _JsonIoArgumentParser(prog="mcp_gateway evaluate")
     _ = parser.add_argument(
         "--json-io",
         action="store_true",
@@ -122,7 +128,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         args = parser.parse_args(argv if argv is not None else sys.argv[1:])
-    except SystemExit:
+    except ValueError:
+        # Our custom parser raises ValueError instead of SystemExit
         _emit_fallback_ask(sys.stdout)
         return 2
 

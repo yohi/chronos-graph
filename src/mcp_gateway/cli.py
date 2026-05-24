@@ -45,7 +45,11 @@ def _configure_stderr_logging(level: str = "WARNING") -> None:
     handler = logging.StreamHandler(stream=sys.stderr)
     handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
     root.addHandler(handler)
-    root.setLevel(level)
+    try:
+        root.setLevel(level)
+    except ValueError:
+        root.setLevel("WARNING")
+        logger.warning("Invalid log level %r, falling back to WARNING", level)
     for name in ("httpx", "httpcore", "anthropic", "asyncio"):
         logging.getLogger(name).setLevel("WARNING")
 
@@ -88,6 +92,9 @@ def _fallback_mode_from_env() -> Literal["allow", "ask"]:
     value = os.getenv("CHRONOS_EVALUATOR_FALLBACK", "allow")
     if value == "ask":
         return "ask"
+    if value == "allow":
+        return "allow"
+    logger.warning("Unknown CHRONOS_EVALUATOR_FALLBACK=%r, defaulting to 'allow'", value)
     return "allow"
 
 
@@ -121,16 +128,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         args = parser.parse_args(argv if argv is not None else sys.argv[1:])
-        arg_values = cast(dict[str, object], vars(args))
-        policy_path = arg_values["policy_path"]
-        if not isinstance(policy_path, Path):
-            raise TypeError("--policy-path must parse to pathlib.Path")
-        input_ = _read_input(sys.stdin)
-    except (ValueError, json.JSONDecodeError) as exc:
-        logger.warning("CLI input parse failed: %s", exc)
+    except ValueError:
+        # Our custom parser raises ValueError instead of SystemExit
         _emit_fallback_ask(sys.stdout)
         return 2
-    except Exception:
+
+    arg_values = cast(dict[str, object], vars(args))
+    policy_path = arg_values["policy_path"]
+    if not isinstance(policy_path, Path):
+        raise TypeError("--policy-path must parse to pathlib.Path")
+
+    try:
+        input_ = _read_input(sys.stdin)
+    except (ValueError, json.JSONDecodeError) as exc:
+        logger.warning("stdin parse failed: %s", exc)
+        _emit_fallback_ask(sys.stdout)
+        return 2
+    except (Exception, KeyboardInterrupt):
         traceback.print_exc(file=sys.stderr)
         _emit_fallback_ask(sys.stdout)
         return 2
@@ -140,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
         decision = asyncio.run(evaluator.evaluate(input_))
         _write_decision(decision, sys.stdout)
         return 0
-    except Exception:
+    except (Exception, asyncio.CancelledError, KeyboardInterrupt):
         traceback.print_exc(file=sys.stderr)
         _emit_fallback_ask(sys.stdout)
         return 2

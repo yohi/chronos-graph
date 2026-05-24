@@ -2550,7 +2550,7 @@ gh pr create --draft \
 - Create: `src/mcp_gateway/cli.py`
 - Test: `tests/unit/test_mcp_gateway_cli.py`
 
-- [ ] **Step 1: ブランチ作成**
+- [x] **Step 1: ブランチ作成**
 
 ```bash
 git fetch origin master
@@ -2559,7 +2559,7 @@ git push -u origin feature/phase5_evaluator_cli__base
 git checkout -b feature/phase5-task1_cli_main
 ```
 
-- [ ] **Step 2: 失敗するテストを書く**
+- [x] **Step 2: 失敗するテストを書く**
 
 `tests/unit/test_mcp_gateway_cli.py`:
 
@@ -2673,7 +2673,7 @@ def test_main_returns_int_not_calls_sys_exit(_patch_composite) -> None:
     assert isinstance(code, int)
 ```
 
-- [ ] **Step 3: テスト失敗確認**
+- [x] **Step 3: テスト失敗確認**
 
 Run:
 
@@ -2683,7 +2683,7 @@ uv run pytest tests/unit/test_mcp_gateway_cli.py -v
 
 Expected: `ModuleNotFoundError` で FAIL
 
-- [ ] **Step 4: cli.py を実装**
+- [x] **Step 4: cli.py を実装**
 
 `src/mcp_gateway/cli.py`:
 
@@ -2820,7 +2820,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 ```
 
-- [ ] **Step 5: テスト通過確認**
+- [x] **Step 5: テスト通過確認**
 
 Run:
 
@@ -2830,7 +2830,7 @@ uv run pytest tests/unit/test_mcp_gateway_cli.py -v
 
 Expected: 全 PASS
 
-- [ ] **Step 6: ruff (T20 check) / mypy / format**
+- [x] **Step 6: ruff (T20 check) / mypy / format**
 
 Run:
 
@@ -2842,7 +2842,7 @@ uv run mypy src/mcp_gateway/cli.py
 
 Expected: exit 0 (特に `print()` が含まれていれば T201 で fail するため、それを検出して修正)
 
-- [ ] **Step 7: コミット**
+- [x] **Step 7: コミット**
 
 ```bash
 git add src/mcp_gateway/cli.py tests/unit/test_mcp_gateway_cli.py
@@ -2850,7 +2850,7 @@ git commit -m "feat(mcp_gateway): add evaluate CLI with stdout-purity guarantees
 git push -u origin feature/phase5-task1_cli_main
 ```
 
-- [ ] **Step 8: Phase Base 向け Draft PR**
+- [x] **Step 8: Phase Base 向け Draft PR**
 
 ```bash
 gh pr create --draft \

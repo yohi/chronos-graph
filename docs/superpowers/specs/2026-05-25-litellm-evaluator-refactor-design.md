@@ -28,10 +28,10 @@ class EvaluatorSettings(BaseSettings):
         env_file=".env",
         extra="ignore",
     )
-    api_key: SecretStr | None = None           # CHRONOS_EVALUATOR_API_KEY
-    model: str = "claude-haiku-4-5-20251001"   # CHRONOS_EVALUATOR_MODEL
-    max_tokens: int = 1536                     # CHRONOS_EVALUATOR_MAX_TOKENS
-    timeout_seconds: float = 10.0              # CHRONOS_EVALUATOR_TIMEOUT_SECONDS
+    api_key: SecretStr | None = None                          # CHRONOS_EVALUATOR_API_KEY
+    model: str = "claude-haiku-4-5-20251001"                  # CHRONOS_EVALUATOR_MODEL
+    max_tokens: int = 1536                                    # CHRONOS_EVALUATOR_MAX_TOKENS
+    timeout_seconds: float = Field(default=10.0, gt=0.0)      # CHRONOS_EVALUATOR_TIMEOUT_SECONDS
 ```
 
 **Migration note:** `ANTHROPIC_API_KEY` → `CHRONOS_EVALUATOR_API_KEY`. `CHRONOS_EVALUATOR_THINKING_BUDGET` is removed with no replacement.
@@ -121,6 +121,13 @@ async def judge(self, *, input_, rules, memories, intent_name="default") -> Deci
     return _parse_decision(text)
 ```
 
+#### `cache_control: ephemeral` の削除について
+
+現行の `_invoke_sdk()` は Anthropic のプロンプトキャッシュ（`"cache_control": {"type": "ephemeral"}`）を system フィールドに付与している。LiteLLM の標準 messages 形式にはこの拡張フィールドが存在しないため、**意図的に削除する**。
+
+- `SYSTEM_PROMPT` は 600 トークン超であるため、Anthropic モデルを引き続き使用する場合は毎リクエストで入力トークンがフルカウントされる（コスト増）。
+- これはプロバイダ非依存化のトレードオフとして受け入れる。Anthropic キャッシュの再有効化が必要になった場合は、LiteLLM の `extra_body` パラメータ経由で対応可能だが、本リファクタのスコープ外とする。
+
 ### Updated: `pyproject.toml`
 
 ```toml
@@ -139,7 +146,7 @@ evaluator = [
 | Test | Change |
 |------|--------|
 | `test_from_env_returns_none_without_api_key` | `ANTHROPIC_API_KEY` → `CHRONOS_EVALUATOR_API_KEY` |
-| `test_from_env_returns_none_when_anthropic_missing` | patch target: `litellm` import |
+| `test_from_env_returns_none_when_litellm_missing` (旧: `…when_anthropic_missing`) | patch target: module-level `litellm` を `None` に差し替え |
 | `test_from_env_bumps_max_tokens_if_budget_too_high` | **Deleted** (thinking_budget removed) |
 | `test_from_env_respects_max_tokens_env` | env var key unchanged (`CHRONOS_EVALUATOR_MAX_TOKENS`) |
 | `test_from_env_handles_invalid_timeout_env` | env var key unchanged |

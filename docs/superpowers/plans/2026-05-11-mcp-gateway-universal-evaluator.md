@@ -2193,7 +2193,7 @@ gh pr create --draft \
 - Create: `src/mcp_gateway/policy/composite.py`
 - Test: `tests/unit/test_mcp_gateway_composite.py`
 
-- [ ] **Step 1: ブランチ作成**
+- [x] **Step 1: ブランチ作成**
 
 ```bash
 git fetch origin master
@@ -2202,7 +2202,7 @@ git push -u origin feature/phase4_composite_evaluator__base
 git checkout -b feature/phase4-task1_composite_evaluator
 ```
 
-- [ ] **Step 2: 失敗するテストを書く**
+- [x] **Step 2: 失敗するテストを書く**
 
 `tests/unit/test_mcp_gateway_composite.py`:
 
@@ -2426,7 +2426,7 @@ def test_startup_log_emits_warning(caplog) -> None:
     assert any("evaluator config" in r.message for r in caplog.records)
 ```
 
-- [ ] **Step 3: テスト失敗確認**
+- [x] **Step 3: テスト失敗確認**
 
 Run:
 
@@ -2436,7 +2436,7 @@ uv run pytest tests/unit/test_mcp_gateway_composite.py -v
 
 Expected: `ModuleNotFoundError` で FAIL
 
-- [ ] **Step 4: composite.py を実装**
+- [x] **Step 4: composite.py を実装**
 
 `src/mcp_gateway/policy/composite.py`:
 
@@ -2580,7 +2580,7 @@ class CompositeEvaluator:
         return "\n".join(lines)
 ```
 
-- [ ] **Step 5: テスト通過確認**
+- [x] **Step 5: テスト通過確認**
 
 Run:
 
@@ -2590,7 +2590,7 @@ uv run pytest tests/unit/test_mcp_gateway_composite.py -v
 
 Expected: 全 PASS
 
-- [ ] **Step 6: 既存 mcp_gateway テストへの回帰確認**
+- [x] **Step 6: 既存 mcp_gateway テストへの回帰確認**
 
 Run:
 
@@ -2600,7 +2600,7 @@ uv run pytest tests/unit/test_mcp_gateway.py tests/unit/test_param_constraint.py
 
 Expected: 既存テスト PASS
 
-- [ ] **Step 7: ruff / mypy / format**
+- [x] **Step 7: ruff / mypy / format**
 
 Run:
 

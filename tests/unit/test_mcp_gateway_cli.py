@@ -23,7 +23,7 @@ def _run_cli_with_input(payload: str, argv: list[str] | None = None) -> tuple[in
     stdout = io.StringIO()
     stderr = io.StringIO()
     with patch("sys.stdin", stdin), patch("sys.stdout", stdout), patch("sys.stderr", stderr):
-        code = main(argv or ["--json-io"])
+        code = main(["--json-io"] if argv is None else argv)
     return code, stdout.getvalue(), stderr.getvalue()
 
 
@@ -85,6 +85,26 @@ def test_invalid_json_emits_fallback_ask_and_exit_2() -> None:
     assert body["decision"] == "ask"
 
 
+def test_missing_json_io_emits_fallback_ask_and_exit_2() -> None:
+    payload = json.dumps({"tool_name": "bash", "tool_input": {"command": "ls"}})
+    code, out, err = _run_cli_with_input(payload, argv=[])
+    assert code == 2
+    assert out.count("\n") == 1
+    body = _loads_json_object(out.strip())
+    assert body["decision"] == "ask"
+    assert "required" in err
+
+
+def test_unknown_arg_emits_fallback_ask_and_exit_2() -> None:
+    payload = json.dumps({"tool_name": "bash", "tool_input": {"command": "ls"}})
+    code, out, err = _run_cli_with_input(payload, argv=["--json-io", "--unknown"])
+    assert code == 2
+    assert out.count("\n") == 1
+    body = _loads_json_object(out.strip())
+    assert body["decision"] == "ask"
+    assert "unrecognized" in err
+
+
 def test_unexpected_exception_emits_fallback_ask_and_exit_2(
     _patch_composite: PatchedComposite,
 ) -> None:
@@ -137,6 +157,35 @@ def test_main_routes_evaluate_to_cli(monkeypatch: pytest.MonkeyPatch) -> None:
         gateway_main.main()
     assert exc.value.code == 0
     assert called["argv"] == ["--json-io"]
+
+
+def test_main_routes_evaluate_without_importing_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
+    import builtins
+
+    from mcp_gateway import __main__ as gateway_main
+
+    real_import = builtins.__import__
+
+    def guarded_import(
+        name: str,
+        globals_: dict[str, object] | None = None,
+        locals_: dict[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> object:
+        if name == "uvicorn":
+            raise AssertionError("evaluate path must not import uvicorn")
+        return cast(object, real_import(name, globals_, locals_, fromlist, level))
+
+    def fake_cli_main(_argv: list[str]) -> int:
+        return 0
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    monkeypatch.setattr("mcp_gateway.cli.main", fake_cli_main)
+    monkeypatch.setattr("sys.argv", ["mcp_gateway", "evaluate", "--json-io"])
+    with pytest.raises(SystemExit) as exc:
+        gateway_main.main()
+    assert exc.value.code == 0
 
 
 def test_main_defaults_to_serve_when_no_subcommand(monkeypatch: pytest.MonkeyPatch) -> None:

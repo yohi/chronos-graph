@@ -119,6 +119,31 @@ def test_cli_evaluate_invalid_stdin(policy_path: Path) -> None:
     assert body["decision"] == "ask"
 
 
+def test_cli_evaluate_missing_json_io_still_emits_single_json_line(policy_path: Path) -> None:
+    env = {**os.environ, "ANTHROPIC_API_KEY": "", "CHRONOS_DASHBOARD_URL": ""}
+    env["CHRONOS_EVALUATOR_POLICY_PATH"] = str(policy_path)
+    result = subprocess.run(  # noqa: S603 - trusted test interpreter and fixed module args
+        [
+            sys.executable,
+            "-m",
+            "mcp_gateway",
+            "evaluate",
+            "--policy-path",
+            str(policy_path),
+        ],
+        input=json.dumps({"tool_name": "bash", "tool_input": {"command": "ls"}}),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        env=env,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert result.stdout.count("\n") == 1
+    body = _loads_json_object(result.stdout.strip())
+    assert body["decision"] == "ask"
+
+
 def test_cli_evaluate_stdout_is_single_json_line(policy_path: Path) -> None:
     """Critical fail-safe invariant: stdout must always be exactly 1 JSON line."""
     result = _run_cli(policy_path, {"tool_name": "bash", "tool_input": {"command": "ls"}})

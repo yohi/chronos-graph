@@ -15,7 +15,7 @@ import sys
 import traceback
 from collections.abc import Mapping
 from pathlib import Path
-from typing import IO, Literal, cast
+from typing import IO, Literal, NoReturn, cast, override
 
 from mcp_gateway.policy.composite import CompositeEvaluator
 from mcp_gateway.policy.engine import PolicyEngine
@@ -30,6 +30,12 @@ _FALLBACK_ASK = Decision(
     decision="ask",
     ask_message="System evaluation failed. Human confirmation required.",
 )
+
+
+class _JsonIoArgumentParser(argparse.ArgumentParser):
+    @override
+    def error(self, message: str) -> NoReturn:
+        raise ValueError(message)
 
 
 def _configure_stderr_logging(level: str = "WARNING") -> None:
@@ -101,7 +107,7 @@ def _build_composite_evaluator(policy_path: Path) -> CompositeEvaluator:
 def main(argv: list[str] | None = None) -> int:
     _configure_stderr_logging(os.getenv("CHRONOS_EVALUATOR_LOG_LEVEL", "WARNING"))
 
-    parser = argparse.ArgumentParser(prog="mcp_gateway evaluate")
+    parser = _JsonIoArgumentParser(prog="mcp_gateway evaluate")
     _ = parser.add_argument(
         "--json-io",
         action="store_true",
@@ -113,16 +119,15 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=Path(os.getenv("CHRONOS_EVALUATOR_POLICY_PATH", "intents.yaml")),
     )
-    args = parser.parse_args(argv if argv is not None else sys.argv[1:])
-    arg_values = cast(dict[str, object], vars(args))
-    policy_path = arg_values["policy_path"]
-    if not isinstance(policy_path, Path):
-        raise TypeError("--policy-path must parse to pathlib.Path")
-
     try:
+        args = parser.parse_args(argv if argv is not None else sys.argv[1:])
+        arg_values = cast(dict[str, object], vars(args))
+        policy_path = arg_values["policy_path"]
+        if not isinstance(policy_path, Path):
+            raise TypeError("--policy-path must parse to pathlib.Path")
         input_ = _read_input(sys.stdin)
     except (ValueError, json.JSONDecodeError) as exc:
-        logger.warning("stdin parse failed: %s", exc)
+        logger.warning("CLI input parse failed: %s", exc)
         _emit_fallback_ask(sys.stdout)
         return 2
     except Exception:

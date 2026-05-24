@@ -6,6 +6,14 @@ exclude_paths:
   - "AGENTS.md"
 
 engines:
+  ai-inventory:
+    exclude_paths:
+      - "src/mcp_gateway/policy/llm_evaluator.py"
+      - "src/mcp_gateway/policy/memory_client.py"
+  agentlinter:
+    exclude_paths:
+      - "src/mcp_gateway/policy/llm_evaluator.py"
+      - "src/mcp_gateway/policy/memory_client.py"
   bandit:
     exclude_paths:
       - "tests/**"

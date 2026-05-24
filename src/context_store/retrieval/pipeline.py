@@ -51,7 +51,7 @@ class RetrievalPipeline:
     """検索パイプライン統合"""
 
     @classmethod
-    def create_for_dashboard(
+    async def create_for_dashboard(
         cls,
         *,
         storage: StorageAdapter,
@@ -62,7 +62,7 @@ class RetrievalPipeline:
         from context_store.embedding import create_embedding_provider
 
         embedding_provider = create_embedding_provider(settings)
-        return cls.create_from_parts(
+        return await cls.create_from_parts(
             storage=storage,
             graph=graph,
             embedding_provider=embedding_provider,
@@ -70,7 +70,7 @@ class RetrievalPipeline:
         )
 
     @classmethod
-    def create_from_parts(
+    async def create_from_parts(
         cls,
         *,
         storage: StorageAdapter,

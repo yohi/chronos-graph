@@ -523,7 +523,7 @@ async def create_orchestrator(
             settings=settings,
         )
 
-        retrieval_pipeline = RetrievalPipeline.create_from_parts(
+        retrieval_pipeline = await RetrievalPipeline.create_from_parts(
             storage=storage,
             graph=graph,
             embedding_provider=embedding_provider,

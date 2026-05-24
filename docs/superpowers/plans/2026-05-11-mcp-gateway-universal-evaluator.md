@@ -1362,7 +1362,7 @@ gh pr create --draft \
 - Create: `src/mcp_gateway/policy/memory_client.py`
 - Test: `tests/unit/test_mcp_gateway_memory_client.py`
 
-- [ ] **Step 1: ブランチ作成**
+- [x] **Step 1: ブランチ作成**
 
 ```bash
 git fetch origin master
@@ -1371,7 +1371,7 @@ git push -u origin feature/phase3_gateway_memory_llm__base
 git checkout -b feature/phase3-task1_memory_client
 ```
 
-- [ ] **Step 2: 失敗するテストを書く**
+- [x] **Step 2: 失敗するテストを書く**
 
 `tests/unit/test_mcp_gateway_memory_client.py`:
 
@@ -1457,7 +1457,7 @@ def test_from_env_picks_up_url_and_api_key(monkeypatch) -> None:
     assert c._api_key == "abc"
 ```
 
-- [ ] **Step 3: テストが失敗することを確認**
+- [x] **Step 3: テストが失敗することを確認**
 
 Run:
 
@@ -1467,7 +1467,7 @@ uv run pytest tests/unit/test_mcp_gateway_memory_client.py -v
 
 Expected: `ModuleNotFoundError` で FAIL
 
-- [ ] **Step 4: 実装ファイル作成**
+- [x] **Step 4: 実装ファイル作成**
 
 `src/mcp_gateway/policy/memory_client.py`:
 
@@ -1564,7 +1564,7 @@ class MemoryClient:
         return out
 ```
 
-- [ ] **Step 5: テスト通過確認**
+- [x] **Step 5: テスト通過確認**
 
 Run:
 
@@ -1574,7 +1574,7 @@ uv run pytest tests/unit/test_mcp_gateway_memory_client.py -v
 
 Expected: 全 PASS
 
-- [ ] **Step 6: ruff / mypy / format**
+- [x] **Step 6: ruff / mypy / format**
 
 Run:
 
@@ -1586,7 +1586,7 @@ uv run mypy src/mcp_gateway/policy/memory_client.py
 
 Expected: exit 0
 
-- [ ] **Step 7: コミット**
+- [x] **Step 7: コミット**
 
 ```bash
 git add src/mcp_gateway/policy/memory_client.py tests/unit/test_mcp_gateway_memory_client.py
@@ -1594,7 +1594,7 @@ git commit -m "feat(mcp_gateway): add MemoryClient for chronos-dashboard semanti
 git push -u origin feature/phase3-task1_memory_client
 ```
 
-- [ ] **Step 8: Phase Base 向け Draft PR**
+- [x] **Step 8: Phase Base 向け Draft PR**
 
 ```bash
 gh pr create --draft \
@@ -1614,7 +1614,7 @@ gh pr create --draft \
 - Create: `src/mcp_gateway/policy/llm_evaluator.py` (まずは `_parse_decision` のみ + 例外クラス)
 - Test: `tests/unit/test_mcp_gateway_llm_evaluator.py`
 
-- [ ] **Step 1: ブランチ作成**
+- [x] **Step 1: ブランチ作成**
 
 ```bash
 git fetch origin
@@ -1623,7 +1623,7 @@ git pull --ff-only
 git checkout -b feature/phase3-task2_llm_parse_decision
 ```
 
-- [ ] **Step 2: 失敗するテストを書く**
+- [x] **Step 2: 失敗するテストを書く**
 
 `tests/unit/test_mcp_gateway_llm_evaluator.py`:
 
@@ -1692,7 +1692,7 @@ def test_parse_rejects_invalid(text: str) -> None:
         _parse_decision(text)
 ```
 
-- [ ] **Step 3: テストが失敗することを確認**
+- [x] **Step 3: テストが失敗することを確認**
 
 Run:
 
@@ -1702,7 +1702,7 @@ uv run pytest tests/unit/test_mcp_gateway_llm_evaluator.py -v
 
 Expected: `ModuleNotFoundError` で FAIL
 
-- [ ] **Step 4: llm_evaluator.py に `_parse_decision` を実装**
+- [x] **Step 4: llm_evaluator.py に `_parse_decision` を実装**
 
 `src/mcp_gateway/policy/llm_evaluator.py`:
 
@@ -1763,7 +1763,7 @@ def _parse_decision(text: str) -> Decision:
     raise ResponseParseError(f"unknown decision: {decision!r}")
 ```
 
-- [ ] **Step 5: テスト通過確認**
+- [x] **Step 5: テスト通過確認**
 
 Run:
 
@@ -1773,7 +1773,7 @@ uv run pytest tests/unit/test_mcp_gateway_llm_evaluator.py -v
 
 Expected: 全 PASS
 
-- [ ] **Step 6: ruff / mypy / format**
+- [x] **Step 6: ruff / mypy / format**
 
 Run:
 
@@ -1785,7 +1785,7 @@ uv run mypy src/mcp_gateway/policy/llm_evaluator.py
 
 Expected: exit 0
 
-- [ ] **Step 7: コミット**
+- [x] **Step 7: コミット**
 
 ```bash
 git add src/mcp_gateway/policy/llm_evaluator.py tests/unit/test_mcp_gateway_llm_evaluator.py
@@ -1793,7 +1793,7 @@ git commit -m "feat(mcp_gateway): add LLM response parser (_parse_decision)"
 git push -u origin feature/phase3-task2_llm_parse_decision
 ```
 
-- [ ] **Step 8: Phase Base 向け Draft PR**
+- [x] **Step 8: Phase Base 向け Draft PR**
 
 ```bash
 gh pr create --draft \
@@ -1813,7 +1813,7 @@ gh pr create --draft \
 - Modify: `src/mcp_gateway/policy/llm_evaluator.py`
 - Test: `tests/unit/test_mcp_gateway_llm_evaluator.py` (Task 3-2 で作成・拡張)
 
-- [ ] **Step 1: ブランチ作成 (Task 3-2 から派生)**
+- [x] **Step 1: ブランチ作成 (Task 3-2 から派生)**
 
 ```bash
 git fetch origin
@@ -1822,7 +1822,7 @@ git pull --ff-only
 git checkout -b feature/phase3-task3_llm_evaluator_judge
 ```
 
-- [ ] **Step 2: 失敗するテストを書く (test_mcp_gateway_llm_evaluator.py に追記)**
+- [x] **Step 2: 失敗するテストを書く (test_mcp_gateway_llm_evaluator.py に追記)**
 
 ```python
 import os
@@ -1924,7 +1924,7 @@ def test_system_prompt_contains_role_and_output_format() -> None:
     assert "allow" in SYSTEM_PROMPT and "deny" in SYSTEM_PROMPT and "ask" in SYSTEM_PROMPT
 ```
 
-- [ ] **Step 3: テストが失敗することを確認**
+- [x] **Step 3: テストが失敗することを確認**
 
 Run:
 
@@ -1934,7 +1934,7 @@ uv run pytest tests/unit/test_mcp_gateway_llm_evaluator.py -v
 
 Expected: 新規テスト群で `ImportError` or `AttributeError` により FAIL
 
-- [ ] **Step 4: llm_evaluator.py を拡張**
+- [x] **Step 4: llm_evaluator.py を拡張**
 
 `src/mcp_gateway/policy/llm_evaluator.py` の末尾に追加 (`_parse_decision` の下):
 
@@ -2111,7 +2111,7 @@ class LlmEvaluator:
         )
 ```
 
-- [ ] **Step 5: テスト通過確認**
+- [x] **Step 5: テスト通過確認**
 
 Run:
 
@@ -2121,7 +2121,7 @@ uv run pytest tests/unit/test_mcp_gateway_llm_evaluator.py -v
 
 Expected: 全 PASS
 
-- [ ] **Step 6: ruff / mypy / format**
+- [x] **Step 6: ruff / mypy / format**
 
 Run:
 
@@ -2133,7 +2133,7 @@ uv run mypy src/mcp_gateway/policy/llm_evaluator.py
 
 Expected: exit 0
 
-- [ ] **Step 7: コミット**
+- [x] **Step 7: コミット**
 
 ```bash
 git add src/mcp_gateway/policy/llm_evaluator.py tests/unit/test_mcp_gateway_llm_evaluator.py
@@ -2141,7 +2141,7 @@ git commit -m "feat(mcp_gateway): add LlmEvaluator with prompt caching and adapt
 git push -u origin feature/phase3-task3_llm_evaluator_judge
 ```
 
-- [ ] **Step 8: Phase Base 向け Draft PR**
+- [x] **Step 8: Phase Base 向け Draft PR**
 
 ```bash
 gh pr create --draft \

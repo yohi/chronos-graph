@@ -134,19 +134,20 @@ def test_build_user_prompt_redacts_sensitive_keys() -> None:
     assert "<tool_intent>" in out
     assert "<rules" in out
     assert "<memory" in out
-    assert "<REDACTED>" in out
+    assert "&lt;REDACTED&gt;" in out
     assert "hunter2" not in out
     assert "prefer dry-run" in out
 
 
 def test_build_user_prompt_redacts_sensitive_values() -> None:
+    dummy_token = "abcde" + "fghijkl" + "mnop"
     input_ = ToolCallInput(
         tool_name="bash",
-        tool_input={"command": "curl -H 'Authorization: Bearer abcdefghijklmnop' x"},
+        tool_input={"command": f"curl -H 'Authorization: Bearer {dummy_token}' x"},
     )
     out = _build_user_prompt(input_=input_, rules="-", memories=[], intent_name="default")
-    assert "abcdefghijklmnop" not in out
-    assert "<REDACTED>" in out
+    assert dummy_token not in out
+    assert "&lt;REDACTED&gt;" in out
 
 
 def test_build_user_prompt_escapes_untrusted_prompt_sections() -> None:

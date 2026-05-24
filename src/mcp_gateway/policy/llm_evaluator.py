@@ -147,7 +147,7 @@ def _parse_decision(text: str) -> Decision:
             raise ResponseParseError("ask requires non-empty 'ask_message' after truncation")
         return Decision(decision="ask", ask_message=truncated_ask)
 
-    raise ResponseParseError(f"unknown decision: {decision!r}")
+    raise ResponseParseError("unknown decision")
 
 
 def _build_user_prompt(
@@ -192,7 +192,11 @@ Decide now. Output JSON only."""
 
 
 def _json_for_prompt(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False).replace("</", "<\\/")
+    # §5.5: JSON content inside XML tags must be escaped to prevent structure breaking.
+    # We escape &, <, > first, then handle the </ escape for additional safety.
+    text = json.dumps(value, ensure_ascii=False)
+    escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return escaped.replace("&lt;/", "<\\/")
 
 
 def _escape_prompt_text(value: str) -> str:

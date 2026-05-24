@@ -51,7 +51,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
             from context_store.retrieval.pipeline import RetrievalPipeline
 
-            retrieval_pipeline = RetrievalPipeline.create_for_dashboard(
+            retrieval_pipeline = await RetrievalPipeline.create_for_dashboard(
                 storage=storage,
                 graph=graph,
                 settings=settings,

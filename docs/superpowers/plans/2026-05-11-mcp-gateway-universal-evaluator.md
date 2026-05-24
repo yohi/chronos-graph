@@ -2850,7 +2850,7 @@ git commit -m "feat(mcp_gateway): add evaluate CLI with stdout-purity guarantees
 git push -u origin feature/phase5-task1_cli_main
 ```
 
-- [ ] **Step 8: Phase Base 向け Draft PR**
+- [x] **Step 8: Phase Base 向け Draft PR**
 
 ```bash
 gh pr create --draft \

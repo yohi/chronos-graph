@@ -120,6 +120,28 @@ def test_from_env_respects_max_tokens_env(monkeypatch: pytest.MonkeyPatch) -> No
     assert evaluator._max_tokens == 4096
 
 
+def test_from_env_handles_invalid_timeout_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    # Case 1: Invalid float string
+    monkeypatch.setenv("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", "invalid")
+    evaluator = LlmEvaluator.from_env()
+    assert evaluator is not None
+    assert evaluator._timeout_seconds == 10.0
+
+    # Case 2: Non-positive float
+    monkeypatch.setenv("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", "0.0")
+    evaluator = LlmEvaluator.from_env()
+    assert evaluator is not None
+    assert evaluator._timeout_seconds == 10.0
+
+    # Case 3: Valid positive float
+    monkeypatch.setenv("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", "5.5")
+    evaluator = LlmEvaluator.from_env()
+    assert evaluator is not None
+    assert evaluator._timeout_seconds == 5.5
+
+
 def test_build_user_prompt_redacts_sensitive_keys() -> None:
     input_ = ToolCallInput(
         tool_name="bash",

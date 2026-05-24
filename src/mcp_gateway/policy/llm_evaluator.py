@@ -236,8 +236,27 @@ class LlmEvaluator:
                 )
                 return default
 
+        def _parse_float_env(key: str, default: float) -> float:
+            val = os.getenv(key)
+            if val is None:
+                return default
+            try:
+                parsed = float(val)
+                if parsed <= 0:
+                    logger.warning(
+                        "non-positive value for %s: %r; using default %.1f", key, val, default
+                    )
+                    return default
+                return parsed
+            except ValueError:
+                logger.warning(
+                    "invalid numeric value for %s: %r; using default %.1f", key, val, default
+                )
+                return default
+
         thinking_budget = _parse_int_env("CHRONOS_EVALUATOR_THINKING_BUDGET", 1024)
         max_tokens = _parse_int_env("CHRONOS_EVALUATOR_MAX_TOKENS", 1536)
+        timeout_seconds = _parse_float_env("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", 10.0)
 
         # Anthropic req: thinking.budget_tokens < max_tokens
         if thinking_budget >= max_tokens:
@@ -253,7 +272,7 @@ class LlmEvaluator:
         return cls(
             api_key=api_key,
             model=os.getenv("CHRONOS_EVALUATOR_MODEL", "claude-haiku-4-5-20251001"),
-            timeout_seconds=float(os.getenv("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", "10.0")),
+            timeout_seconds=timeout_seconds,
             thinking_budget=thinking_budget,
             max_tokens=max_tokens,
         )

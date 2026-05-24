@@ -31,6 +31,10 @@ class MemoryClient:
     _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if self.timeout_seconds <= 0:
+            raise MemoryFetchError("CHRONOS_DASHBOARD_TIMEOUT_SECONDS must be > 0")
+        if self.top_k <= 0:
+            raise MemoryFetchError("CHRONOS_DASHBOARD_TOP_K must be > 0")
         self.dashboard_url = self.dashboard_url.rstrip("/")
         _validate_dashboard_url(self.dashboard_url, self._allowed_hosts)
 

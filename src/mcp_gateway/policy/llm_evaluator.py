@@ -9,7 +9,7 @@ from mcp_gateway.policy.models_evaluator import Decision
 
 logger = logging.getLogger("chronos_evaluator.llm")
 
-__all__ = ["LlmUnavailableError", "ResponseParseError", "_parse_decision"]
+__all__ = ["LlmUnavailableError", "ResponseParseError"]
 
 _REASON_MAX = 200
 _ASK_MESSAGE_MAX = 300
@@ -39,16 +39,23 @@ def _parse_decision(text: str) -> Decision:
     obj = cast(Mapping[str, object], parsed)
     decision = obj.get("decision")
     if decision == "allow":
+        # §5.5: allow の場合 reason は任意。LLM が reason を返しても使用しない。
         return Decision(decision="allow")
     if decision == "deny":
         reason = obj.get("reason")
         if not isinstance(reason, str) or not reason.strip():
             raise ResponseParseError("deny requires non-empty 'reason'")
-        return Decision(decision="deny", reason=reason[:_REASON_MAX])
+        truncated_reason = reason[:_REASON_MAX]
+        if not truncated_reason.strip():
+            raise ResponseParseError("deny requires non-empty 'reason' after truncation")
+        return Decision(decision="deny", reason=truncated_reason)
     if decision == "ask":
         ask_message = obj.get("ask_message")
         if not isinstance(ask_message, str) or not ask_message.strip():
             raise ResponseParseError("ask requires non-empty 'ask_message'")
-        return Decision(decision="ask", ask_message=ask_message[:_ASK_MESSAGE_MAX])
+        truncated_ask = ask_message[:_ASK_MESSAGE_MAX]
+        if not truncated_ask.strip():
+            raise ResponseParseError("ask requires non-empty 'ask_message' after truncation")
+        return Decision(decision="ask", ask_message=truncated_ask)
 
     raise ResponseParseError(f"unknown decision: {decision!r}")

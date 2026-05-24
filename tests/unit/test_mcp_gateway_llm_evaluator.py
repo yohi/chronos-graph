@@ -31,14 +31,16 @@ def test_parse_truncates_long_reason() -> None:
     long_reason = "x" * 500
     out = _parse_decision(f'{{"decision":"deny","reason":"{long_reason}"}}')
     assert out.reason is not None
-    assert len(out.reason) <= 200
+    assert len(out.reason) == 200
+    assert out.reason.startswith("x" * 200)
 
 
 def test_parse_truncates_long_ask_message() -> None:
-    long_message = "x" * 500
+    long_message = "y" * 500
     out = _parse_decision(f'{{"decision":"ask","ask_message":"{long_message}"}}')
     assert out.ask_message is not None
-    assert len(out.ask_message) <= 300
+    assert len(out.ask_message) == 300
+    assert out.ask_message.startswith("y" * 300)
 
 
 @pytest.mark.parametrize(
@@ -49,7 +51,10 @@ def test_parse_truncates_long_ask_message() -> None:
         '{"decision":"maybe"}',
         '{"decision":"deny"}',
         '{"decision":"deny","reason":"   "}',
+        '{"decision":"deny","reason":"' + (" " * 201) + 'x"}',  # empty after truncation
         '{"decision":"ask"}',
+        '{"decision":"ask","ask_message":"   "}',
+        '{"decision":"ask","ask_message":"' + (" " * 301) + 'y"}',  # empty after truncation
     ],
 )
 def test_parse_rejects_invalid(text: str) -> None:

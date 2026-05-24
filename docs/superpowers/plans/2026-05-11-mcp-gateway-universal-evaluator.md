@@ -3020,7 +3020,7 @@ git commit -m "feat(mcp_gateway): route 'evaluate' subcommand to cli.main"
 git push -u origin feature/phase5-task2_main_router
 ```
 
-- [ ] **Step 9: Phase Base 向け Draft PR**
+- [x] **Step 9: Phase Base 向け Draft PR**
 
 ```bash
 gh pr create --draft \

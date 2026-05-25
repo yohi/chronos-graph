@@ -46,12 +46,12 @@ embedding-litellm = [
     "litellm>=1.0.0",
 ]
 evaluator = [
-    "anthropic>=0.40.0",
+    "litellm>=1.0.0",
 ]
+
 all = [
     "context-store-mcp[storage-postgres,storage-supabase,embedding-local,embedding-openai,embedding-litellm,dashboard,evaluator]",
 ]
-
 [project.scripts]
 context-store = "context_store.__main__:main"
 chronos-dashboard = "context_store.dashboard.api_server:main"

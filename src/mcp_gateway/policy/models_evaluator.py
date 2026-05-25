@@ -1,7 +1,7 @@
 """Shared data models and redaction utilities for the Universal Evaluator.
 
 This module is imported by composite.py, llm_evaluator.py, memory_client.py,
-and cli.py. Importing it must not require any optional dependency (anthropic /
+and cli.py. Importing it must not require any optional dependency (litellm /
 httpx); only stdlib + dataclasses is allowed.
 """
 

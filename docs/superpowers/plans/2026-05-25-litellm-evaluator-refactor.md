@@ -24,13 +24,17 @@
 - すべてのテスト・lint・branch 検証は **Devcontainer 内** で実行する。
 
 ### Task 依存関係グラフ
-```
+
+`master` の直下に並ぶ `├──` / `└──` は **すべて master の独立した子ノード** (相互に並列実行可能)。
+`└──` 配下のインデントされた `└──` のみが「親への直列依存」を意味する。
+
+```text
 master
- ├── Task 0.1 (CI update)          [並列]
- ├── Task 0.2 (Devcontainer verify) [並列]
- └── Task 1.1 (EvaluatorSettings)  [並列]
-       └── Task 2.1 (LiteLLM migration)  [直列必須]
-             └── Task 3.1 (Docs update)  [直列必須]
+ ├── Task 0.1 (CI update)           [並列, base=master]
+ ├── Task 0.2 (Devcontainer verify) [並列, base=master]
+ └── Task 1.1 (EvaluatorSettings)   [並列, base=master]
+       └── Task 2.1 (LiteLLM migration) [直列必須, base=Task 1.1]
+             └── Task 3.1 (Docs update) [直列必須, base=Task 2.1]
 ```
 
 ---
@@ -148,7 +152,7 @@ jobs:
         run: uv run mypy src/
 
       - name: Run unit tests
-        run: uv run pytest tests/unit -v --cov=src/context_store --cov-report=term-missing
+        run: uv run pytest tests/unit -v --cov=src/context_store --cov=src/mcp_gateway --cov-report=term-missing
         env:
           OPENAI_API_KEY: sk-dummy-key-for-ci-validation
 ```
@@ -178,10 +182,12 @@ gh pr create --draft --base master --title "chore(ci): ubuntu-slim runner & mast
 ## Summary
 - CI ランナーを `ubuntu-slim` に変更
 - push/PR トリガを `master` ブランチのみに限定
+- カバレッジ対象に `src/mcp_gateway` を追加 (LiteLLM 移行後のユニットテストを計測範囲に含めるため)
 
 ## Test plan
 - [ ] CI 上で `ubuntu-slim` の解決が成功すること（ジョブが起動）
 - [ ] 全 lint / mypy / unit test が緑
+- [ ] coverage レポートに `src/mcp_gateway` 配下の行が出現する
 
 Refs: docs/superpowers/specs/2026-05-25-litellm-evaluator-refactor-design.md
 EOF

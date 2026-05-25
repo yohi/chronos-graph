@@ -254,21 +254,26 @@ echo '{"tool_name":"bash","tool_input":{"command":"ls"}}' \
 
 ### 環境変数 (推奨値含む)
 
-| 環境変数 | デフォルト | 本番推奨値 | 用途 |
+| 環境変数 | デフォルト | 推奨設定 | 説明 |
 |---|---|---|---|
-| `ANTHROPIC_API_KEY` | 未設定 | **設定必須** | 未設定なら LLM 評価をスキップ |
-| `CHRONOS_EVALUATOR_MODEL` | `claude-haiku-4-5-20251001` | デフォルト可 | LLM モデル切替 |
-| `CHRONOS_EVALUATOR_TIMEOUT_SECONDS` | `10.0` | デフォルト可 | LLM タイムアウト |
-| `CHRONOS_EVALUATOR_THINKING_BUDGET` | `1024` | デフォルト可 | thinking 上限 |
-| `CHRONOS_DASHBOARD_URL` | 未設定 | **設定必須** | 未設定なら memory 取得をスキップ |
-| `CHRONOS_DASHBOARD_API_KEY` | 未設定 | **--auth 起動時必須** | dashboard 認証 |
+| `CHRONOS_EVALUATOR_API_KEY` | 未設定 | **設定必須** | 未設定なら LLM 評価をスキップ。LiteLLM 経由で任意プロバイダの key を受ける |
+| `CHRONOS_EVALUATOR_MODEL` | `claude-haiku-4-5-20251001` | デフォルト可 | LiteLLM model identifier (例: `openai/gpt-4o-mini`, `anthropic/claude-haiku-4-5`) |
+| `CHRONOS_EVALUATOR_MAX_TOKENS` | `1536` | デフォルト可 | 出力 token 上限。不正値・非正値は警告 + デフォルトへフォールバック (fail-soft) |
+| `CHRONOS_EVALUATOR_TIMEOUT_SECONDS` | `10.0` | デフォルト可 | LLM タイムアウト。不正値・非正値は警告 + デフォルトへフォールバック (fail-soft) |
 | `CHRONOS_EVALUATOR_FALLBACK` | `allow` | **`ask` を強く推奨** | LLM 未構成時の挙動 |
 | `CHRONOS_EVALUATOR_POLICY_PATH` | (必須) | **設定必須** | intents.yaml のパス |
 | `CHRONOS_EVALUATOR_DEFAULT_INTENT` | `default` | 環境次第 | intent 未指定時の既定 |
 | `CHRONOS_EVALUATOR_DEFAULT_AGENT_ID` | `claude-code` | 環境次第 | agent_id 未指定時の既定 |
 | `CHRONOS_EVALUATOR_LOG_LEVEL` | `WARNING` | デフォルト可 | stderr ログレベル |
+| `CHRONOS_DASHBOARD_URL` | 未設定 | **設定必須** | 未設定なら memory 取得をスキップ (Universal Evaluator の retrieval base) |
+| `CHRONOS_DASHBOARD_API_KEY` | 未設定 | **`--auth` 起動時必須** | dashboard 認証 |
 
-> ⚠️ **セキュリティ警告:** `CHRONOS_EVALUATOR_FALLBACK` のデフォルトは `allow` です。`ANTHROPIC_API_KEY` 未設定の環境でそのままデプロイすると、deterministic 判定が不明瞭なツール呼び出しも**自動的に許可**されます。本番環境では必ず `ask` に設定してください。
+> ⚠️ **セキュリティ警告:** `CHRONOS_EVALUATOR_FALLBACK` のデフォルトは `allow` です。`CHRONOS_EVALUATOR_API_KEY` 未設定の環境でそのままデプロイすると、deterministic 判定が不明瞭なツール呼び出しも**自動的に許可**されます。本番環境では必ず `ask` に設定してください。
+
+> 🔄 **移行ノート (v2.x → v3.0):**
+> - `ANTHROPIC_API_KEY` は使用しません。代わりに `CHRONOS_EVALUATOR_API_KEY` を設定してください。
+> - `CHRONOS_EVALUATOR_THINKING_BUDGET` は削除されました。Anthropic Extended Thinking を使いたい場合は LiteLLM `extra_body` 経由で再構成してください（本リファクタのスコープ外）。
+> - `CHRONOS_EVALUATOR_MAX_TOKENS` / `CHRONOS_EVALUATOR_TIMEOUT_SECONDS` の解釈 (不正値・非正値は警告 + デフォルト) は **v2.x と同一** です。設定バリデーション厳格化は別 PR で予定。
 
 ### 起動ログの読み方
 

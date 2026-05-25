@@ -85,6 +85,7 @@ class GatewaySettings(BaseSettings):
         """JSON シリアライズ時のみ、SecretStr フィールドを '**********' にマスクする。"""
         return _mask_secret_fields(self, handler, info)
 
+
 class EvaluatorSettings(BaseSettings):
     """Universal LLM Evaluator (LiteLLM backend) の設定。"""
 

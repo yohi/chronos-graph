@@ -232,7 +232,7 @@ class LlmEvaluator:
         self,
         *,
         api_key: str,
-        model: str = "claude-haiku-4-5-20251001",
+        model: str = "anthropic/claude-haiku-4-5-20251001",
         timeout_seconds: float = 10.0,
         max_tokens: int = 1536,
     ) -> None:

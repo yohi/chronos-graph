@@ -1469,7 +1469,7 @@ AI エージェントの `PreToolUse` Hook から呼び出される Universal Ev
 │  │   ├─ REQUIRES_APPROVAL → ask に正規化               │    │
 │  │   └─ ALLOW   → Tier 2 へ                             │    │
 │  └──────────────────────────────────────────────────────┘    │
-│  ┌─ Tier 2: LLM (Anthropic) + Dashboard Memory ──────── ┐    │
+│  ┌─ Tier 2: LLM (LiteLLM) + Dashboard Memory ─────────── ┐    │
 │  │  1. memory_client.retrieve(query)                    │    │
 │  │  2. llm_evaluator.judge(input, rules, memory)        │    │
 │  │  3. parse → Decision                                 │    │
@@ -1503,10 +1503,10 @@ LLM へプロンプトとしてツール引数を送信する前、およびダ�
 
 #### 15.7.5 LLM 評価プロンプト設計
 
-Claude 4.7 系のベストプラクティスに準拠し、以下の構成で評価を行います。
-- **Prompt Caching**: システムプロンプト（静的）は `ephemeral` としてキャッシュされ、フック呼び出しごとのレイテンシを最小化します。
+Universal LLM Evaluatorとして設計され、LiteLLM経由で任意のプロバイダ（OpenAI, Anthropic 等）のモデルを利用可能です。以下の構成で評価を行います。
+- **プロバイダ非依存化**: `CHRONOS_EVALUATOR_MODEL` を指定することで、エージェント環境に応じた柔軟なモデルの切り替えが可能です。
 - **構造化データ**: ツール入力、ルール、ダッシュボードから取得した関連記憶（`Top-K`）はすべて XML タグ（`<tool_intent>`, `<rules>`, `<memory>`）で囲まれ、厳密に分離されます。
-- **Adaptive Thinking**: `thinking_budget` トークンが割り当てられ、単純な拒否判定は即座に、複雑なポリシーの競合や文脈的判断がある場合は推論（Thinking）を行ってから最終的な JSON 出力へ至ります。
+- **キャッシュおよび推論（Thinking）の除外**: プロバイダ非依存化を最優先とするため、Anthropic 特有のプロンプトキャッシュ（`ephemeral`）や `thinking_budget` は意図的に除外されています。レイテンシやコストの最適化は必要に応じて LiteLLM の `extra_body` 等を経由して再構成可能です。
 
 ---
 

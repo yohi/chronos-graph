@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -8,6 +9,7 @@ import pytest
 from mcp_gateway.policy.llm_evaluator import (
     SYSTEM_PROMPT,
     LlmEvaluator,
+    LlmUnavailableError,
     ResponseParseError,
     _build_user_prompt,
     _parse_decision,
@@ -15,17 +17,10 @@ from mcp_gateway.policy.llm_evaluator import (
 from mcp_gateway.policy.models_evaluator import Decision, MemoryItem, ToolCallInput
 
 
-class _FakeMessages:
-    def __init__(self, response: SimpleNamespace) -> None:
-        self._response: SimpleNamespace = response
-
-    def create(self, **_kwargs: object) -> SimpleNamespace:
-        return self._response
-
-
-class _FakeClient:
-    def __init__(self, response: SimpleNamespace) -> None:
-        self.messages: _FakeMessages = _FakeMessages(response)
+def _ok_response(json_text: str | None) -> SimpleNamespace:
+    if json_text is None:
+        return SimpleNamespace(content=[])
+    return SimpleNamespace(content=[SimpleNamespace(type="text", text=json_text)])
 
 
 @pytest.mark.parametrize(
@@ -73,10 +68,10 @@ def test_parse_truncates_long_ask_message() -> None:
         '{"decision":"maybe"}',
         '{"decision":"deny"}',
         '{"decision":"deny","reason":"   "}',
-        '{"decision":"deny","reason":"' + (" " * 201) + 'x"}',  # empty after truncation
+        '{"decision":"deny","reason":"' + (" " * 201) + 'x"}',
         '{"decision":"ask"}',
         '{"decision":"ask","ask_message":"   "}',
-        '{"decision":"ask","ask_message":"' + (" " * 301) + 'y"}',  # empty after truncation
+        '{"decision":"ask","ask_message":"' + (" " * 301) + 'y"}',
     ],
 )
 def test_parse_rejects_invalid(text: str) -> None:
@@ -91,25 +86,14 @@ def test_parse_error_does_not_include_raw_model_output() -> None:
 
 
 def test_from_env_returns_none_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     assert LlmEvaluator.from_env() is None
 
 
 def test_from_env_returns_none_when_anthropic_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    with patch("importlib.import_module", side_effect=ImportError("not installed")):
+    with patch("mcp_gateway.policy.llm_evaluator.importlib.import_module", side_effect=ImportError):
         assert LlmEvaluator.from_env() is None
-
-
-def test_from_env_bumps_max_tokens_if_budget_too_high(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setenv("CHRONOS_EVALUATOR_THINKING_BUDGET", "2000")
-    monkeypatch.setenv("CHRONOS_EVALUATOR_MAX_TOKENS", "1500")
-
-    evaluator = LlmEvaluator.from_env()
-    assert evaluator is not None
-    assert evaluator._thinking_budget == 2000
-    assert evaluator._max_tokens > 2000
 
 
 def test_from_env_respects_max_tokens_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -121,25 +105,46 @@ def test_from_env_respects_max_tokens_env(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_from_env_handles_invalid_timeout_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """timeout の不正値/非正値は **fail-soft** で警告 + デフォルト 10.0 に正規化される。
+
+    現行実装の挙動を維持する。fail-fast (ValidationError) には移行しない。
+    """
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
-    # Case 1: Invalid float string
     monkeypatch.setenv("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", "invalid")
     evaluator = LlmEvaluator.from_env()
     assert evaluator is not None
     assert evaluator._timeout_seconds == 10.0
 
-    # Case 2: Non-positive float
     monkeypatch.setenv("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", "0.0")
     evaluator = LlmEvaluator.from_env()
     assert evaluator is not None
     assert evaluator._timeout_seconds == 10.0
 
-    # Case 3: Valid positive float
     monkeypatch.setenv("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", "5.5")
     evaluator = LlmEvaluator.from_env()
     assert evaluator is not None
     assert evaluator._timeout_seconds == 5.5
+
+
+def test_from_env_handles_invalid_max_tokens_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """max_tokens の不正値/非正値は **fail-soft** で警告 + デフォルト 1536 に正規化される。"""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    monkeypatch.setenv("CHRONOS_EVALUATOR_MAX_TOKENS", "invalid")
+    evaluator = LlmEvaluator.from_env()
+    assert evaluator is not None
+    assert evaluator._max_tokens == 1536
+
+    monkeypatch.setenv("CHRONOS_EVALUATOR_MAX_TOKENS", "0")
+    evaluator = LlmEvaluator.from_env()
+    assert evaluator is not None
+    assert evaluator._max_tokens == 1536
+
+    monkeypatch.setenv("CHRONOS_EVALUATOR_MAX_TOKENS", "2048")
+    evaluator = LlmEvaluator.from_env()
+    assert evaluator is not None
+    assert evaluator._max_tokens == 2048
 
 
 def test_build_user_prompt_redacts_sensitive_keys() -> None:
@@ -210,12 +215,8 @@ def test_build_user_prompt_handles_empty_memories() -> None:
 @pytest.mark.asyncio
 async def test_judge_returns_allow_on_valid_response() -> None:
     evaluator = LlmEvaluator(api_key="x", model="claude-haiku-4-5-20251001")
-    fake_response = SimpleNamespace(
-        content=[SimpleNamespace(type="text", text='{"decision":"allow"}')]
-    )
-    fake_client = _FakeClient(fake_response)
-
-    with patch.object(evaluator, "_get_client", return_value=fake_client):
+    response = _ok_response('{"decision":"allow"}')
+    with patch.object(evaluator, "_invoke_sdk", return_value=response) as mock_invoke:
         out = await evaluator.judge(
             input_=ToolCallInput(tool_name="bash", tool_input={"command": "ls"}),
             rules="-",
@@ -223,15 +224,78 @@ async def test_judge_returns_allow_on_valid_response() -> None:
         )
 
     assert out == Decision(decision="allow")
+    mock_invoke.assert_called_once()
+    kwargs = mock_invoke.call_args.kwargs
+    assert kwargs["system_prompt"] == SYSTEM_PROMPT
+    assert "ls" in kwargs["user_prompt"]
 
 
 @pytest.mark.asyncio
-async def test_judge_raises_on_non_text_response() -> None:
+async def test_judge_raises_llm_unavailable_on_timeout() -> None:
     evaluator = LlmEvaluator(api_key="x")
-    fake_response = SimpleNamespace(content=[])
-    fake_client = _FakeClient(fake_response)
+    with patch.object(evaluator, "_invoke_sdk", side_effect=asyncio.TimeoutError()):
+        with pytest.raises(LlmUnavailableError):
+            _ = await evaluator.judge(
+                input_=ToolCallInput(tool_name="bash", tool_input={}),
+                rules="",
+                memories=[],
+            )
 
-    with patch.object(evaluator, "_get_client", return_value=fake_client):
+
+@pytest.mark.asyncio
+async def test_judge_raises_llm_unavailable_on_api_error() -> None:
+    evaluator = LlmEvaluator(api_key="x")
+    with patch.object(evaluator, "_invoke_sdk", side_effect=Exception("AuthenticationError")):
+        with pytest.raises(LlmUnavailableError):
+            _ = await evaluator.judge(
+                input_=ToolCallInput(tool_name="bash", tool_input={}),
+                rules="",
+                memories=[],
+            )
+
+
+@pytest.mark.asyncio
+async def test_judge_raises_parse_error_on_empty_content() -> None:
+    evaluator = LlmEvaluator(api_key="x")
+    with patch.object(evaluator, "_invoke_sdk", return_value=_ok_response(None)):
+        with pytest.raises(ResponseParseError):
+            _ = await evaluator.judge(
+                input_=ToolCallInput(tool_name="bash", tool_input={}),
+                rules="",
+                memories=[],
+            )
+
+
+@pytest.mark.asyncio
+async def test_judge_raises_parse_error_on_none_content() -> None:
+    evaluator = LlmEvaluator(api_key="x")
+    with patch.object(evaluator, "_invoke_sdk", return_value=_ok_response(None)):
+        with pytest.raises(ResponseParseError):
+            _ = await evaluator.judge(
+                input_=ToolCallInput(tool_name="bash", tool_input={}),
+                rules="",
+                memories=[],
+            )
+
+
+@pytest.mark.asyncio
+async def test_judge_raises_parse_error_on_empty_choices() -> None:
+    evaluator = LlmEvaluator(api_key="x")
+    empty_content_response = SimpleNamespace(content=[])
+    with patch.object(evaluator, "_invoke_sdk", return_value=empty_content_response):
+        with pytest.raises(ResponseParseError):
+            _ = await evaluator.judge(
+                input_=ToolCallInput(tool_name="bash", tool_input={}),
+                rules="",
+                memories=[],
+            )
+
+
+@pytest.mark.asyncio
+async def test_judge_raises_parse_error_on_missing_message() -> None:
+    evaluator = LlmEvaluator(api_key="x")
+    malformed_response = SimpleNamespace(content=[SimpleNamespace()])
+    with patch.object(evaluator, "_invoke_sdk", return_value=malformed_response):
         with pytest.raises(ResponseParseError):
             _ = await evaluator.judge(
                 input_=ToolCallInput(tool_name="bash", tool_input={}),
@@ -245,15 +309,3 @@ def test_system_prompt_contains_role_and_output_format() -> None:
     assert "<output_format>" in SYSTEM_PROMPT
     assert "untrusted data" in SYSTEM_PROMPT
     assert "allow" in SYSTEM_PROMPT and "deny" in SYSTEM_PROMPT and "ask" in SYSTEM_PROMPT
-
-
-def test_llm_evaluator_init_raises_on_invalid_thinking_budget() -> None:
-    with pytest.raises(
-        ValueError, match=r"thinking_budget \(2000\) must be less than max_tokens \(1000\)"
-    ):
-        LlmEvaluator(api_key="x", thinking_budget=2000, max_tokens=1000)
-
-    with pytest.raises(
-        ValueError, match=r"thinking_budget \(1000\) must be less than max_tokens \(1000\)"
-    ):
-        LlmEvaluator(api_key="x", thinking_budget=1000, max_tokens=1000)

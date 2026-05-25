@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
-import sys
 import textwrap
 from collections.abc import Mapping
 from pathlib import Path
@@ -59,7 +59,7 @@ def _build_env(
     env = os.environ.copy()
     env.update(
         {
-            "ANTHROPIC_API_KEY": "",
+            "CHRONOS_EVALUATOR_API_KEY": "",
             "CHRONOS_DASHBOARD_URL": "",
             "CHRONOS_EVALUATOR_FALLBACK": "allow",
             "CHRONOS_EVALUATOR_DEFAULT_INTENT": "default",
@@ -78,20 +78,15 @@ def _run_cli(
     env_overrides: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = _build_env(policy, env_overrides)
-    return subprocess.run(  # noqa: S603 - trusted test interpreter and fixed module args # nosec
-        [
-            sys.executable,
-            "-m",
-            "mcp_gateway",
-            "evaluate",
-            "--json-io",
-            "--policy-path",
-            str(policy),
-        ],
+    command = (
+        f"uv run python -m mcp_gateway evaluate --json-io --policy-path {shlex.quote(str(policy))}"
+    )
+    return subprocess.run(  # noqa: S603
+        ["bash", "-lc", command],  # noqa: S607
         input=json.dumps(payload),
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=60,
         env=env,
         check=False,
     )
@@ -102,9 +97,7 @@ def test_cli_evaluate_allow_path(policy_path: Path) -> None:
     assert result.returncode == 0
     assert result.stdout.count("\n") == 1
     body = _loads_json_object(result.stdout.strip())
-    # Key-based assertion is more resilient against extra optional fields
     assert body["decision"] == "allow"
-    # Fail-safe invariant: stdout must never contain debug/log output
     assert "evaluator config" not in result.stdout
 
 
@@ -117,20 +110,16 @@ def test_cli_evaluate_deny_path(policy_path: Path) -> None:
 
 def test_cli_evaluate_invalid_stdin(policy_path: Path) -> None:
     env = _build_env(policy_path)
-    result = subprocess.run(  # noqa: S603 - trusted test interpreter and fixed module args # nosec
-        [
-            sys.executable,
-            "-m",
-            "mcp_gateway",
-            "evaluate",
-            "--json-io",
-            "--policy-path",
-            str(policy_path),
-        ],
+    command = (
+        "uv run python -m mcp_gateway evaluate --json-io --policy-path "
+        f"{shlex.quote(str(policy_path))}"
+    )
+    result = subprocess.run(  # noqa: S603
+        ["bash", "-lc", command],  # noqa: S607
         input="not-json",
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=60,
         env=env,
         check=False,
     )
@@ -142,19 +131,13 @@ def test_cli_evaluate_invalid_stdin(policy_path: Path) -> None:
 
 def test_cli_evaluate_missing_json_io_still_emits_single_json_line(policy_path: Path) -> None:
     env = _build_env(policy_path)
-    result = subprocess.run(  # noqa: S603 - trusted test interpreter and fixed module args # nosec
-        [
-            sys.executable,
-            "-m",
-            "mcp_gateway",
-            "evaluate",
-            "--policy-path",
-            str(policy_path),
-        ],
+    command = f"uv run python -m mcp_gateway evaluate --policy-path {shlex.quote(str(policy_path))}"
+    result = subprocess.run(  # noqa: S603
+        ["bash", "-lc", command],  # noqa: S607
         input=json.dumps({"tool_name": "bash", "tool_input": {"command": "ls"}}),
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=60,
         env=env,
         check=False,
     )

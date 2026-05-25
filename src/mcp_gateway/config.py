@@ -82,3 +82,16 @@ class GatewaySettings(BaseSettings):
                 if data.get(field_name) is not None:
                     data[field_name] = "**********"
         return data
+
+
+class EvaluatorSettings(BaseSettings):
+    """Universal LLM Evaluator (LiteLLM backend) の設定。"""
+
+    model_config = SettingsConfigDict(
+        env_prefix="CHRONOS_EVALUATOR_",
+        env_file=".env",
+        extra="ignore",
+    )
+
+    api_key: SecretStr | None = None
+    model: str = "claude-haiku-4-5-20251001"

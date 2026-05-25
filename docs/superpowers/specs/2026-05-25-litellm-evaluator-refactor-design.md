@@ -30,11 +30,14 @@ class EvaluatorSettings(BaseSettings):
     )
     api_key: SecretStr | None = None                          # CHRONOS_EVALUATOR_API_KEY
     model: str = "claude-haiku-4-5-20251001"                  # CHRONOS_EVALUATOR_MODEL
-    max_tokens: int = 1536                                    # CHRONOS_EVALUATOR_MAX_TOKENS
-    timeout_seconds: float = Field(default=10.0, gt=0.0)      # CHRONOS_EVALUATOR_TIMEOUT_SECONDS
 ```
 
-**Migration note:** `ANTHROPIC_API_KEY` → `CHRONOS_EVALUATOR_API_KEY`. `CHRONOS_EVALUATOR_THINKING_BUDGET` is removed with no replacement.
+**設計判断 — 数値設定の fail-soft 維持:**
+`max_tokens` と `timeout_seconds` は **意図的に `EvaluatorSettings` に含めない**。理由は、現行実装が「不正値・非正値 → 警告ログ + デフォルトへフォールバック」という fail-soft セマンティクスを持っており、Pydantic v2 の標準バリデーション（`Field(gt=0.0)` 等）に置き換えると `ValidationError` で fail-fast に観測可能な挙動変更が生じるため。これは本リファクタの目的（"純粋な LiteLLM 移行"）を超えるスコープ拡大となる。
+
+数値 env はモジュールレベルのヘルパー `_parse_int_env` / `_parse_float_env`（現行実装から踏襲）で `from_env()` 内から `os.getenv` 経由で読み取り、不正値・非正値はそれぞれ警告ログを残してデフォルトを採用する。設定バリデーション厳格化は別 PR で migration note + CLI 契約と一緒に扱う。
+
+**Migration note:** `ANTHROPIC_API_KEY` → `CHRONOS_EVALUATOR_API_KEY`。`CHRONOS_EVALUATOR_THINKING_BUDGET` は置換なしで削除。`CHRONOS_EVALUATOR_MAX_TOKENS` / `CHRONOS_EVALUATOR_TIMEOUT_SECONDS` の解釈（不正値/非正値は警告 + デフォルト）は **現行と同一** を維持する。
 
 ### Updated: `LlmEvaluator` in `llm_evaluator.py`
 
@@ -77,7 +80,7 @@ def __init__(
 
 #### Updated `from_env()`
 
-Reads from `EvaluatorSettings()`. Returns `None` if `api_key` is absent or `litellm` is not installed (モジュールレベル import が失敗していれば `litellm is None`)。
+`EvaluatorSettings()` から `api_key` と `model` を読む。数値設定は `_parse_int_env` / `_parse_float_env` ヘルパー（モジュールレベル）で `os.getenv` 経由から取得し、fail-soft で正規化する。`api_key` が空、または `litellm` が未インストールの場合は `None` を返す。
 
 ```python
 @classmethod
@@ -91,10 +94,21 @@ def from_env(cls) -> LlmEvaluator | None:
     return cls(
         api_key=settings.api_key.get_secret_value(),
         model=settings.model,
-        timeout_seconds=settings.timeout_seconds,
-        max_tokens=settings.max_tokens,
+        timeout_seconds=_parse_float_env("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", 10.0),
+        max_tokens=_parse_int_env("CHRONOS_EVALUATOR_MAX_TOKENS", 1536),
     )
 ```
+
+#### Module-level helpers: `_parse_int_env` / `_parse_float_env`
+
+現行実装の同名ヘルパー（`from_env()` 内のネスト関数）をモジュールレベルに昇格させて流用する。シグネチャと挙動は不変:
+
+- 値が未設定 (`None`) → デフォルト返却
+- 値が数値変換不可 → `logger.warning("invalid numeric value for %s: %r; using default %s", ...)` + デフォルト返却
+- 値が `<= 0` → `logger.warning("non-positive value for %s: %r; using default %s", ...)` + デフォルト返却
+- 値が正値 → そのまま返却
+
+モジュールレベルにすることで `from_env()` 経由テストとは別に単体テストを書きやすくする。
 
 #### Updated `judge()`
 
@@ -115,11 +129,26 @@ async def judge(self, *, input_, rules, memories, intent_name="default") -> Deci
     except Exception as exc:
         raise LlmUnavailableError(f"LLM call failed: {type(exc).__name__}") from exc
 
-    text = response.choices[0].message.content
+    # LiteLLM レスポンスは OpenAI 互換構造を想定するが、プロバイダや障害時は
+    # choices=[] / message 欠落 / content=None など歪んだ形で返り得る。
+    # IndexError / AttributeError / KeyError / TypeError が外に漏れると
+    # CompositeEvaluator の (LlmUnavailableError, ResponseParseError) 捕捉を
+    # すり抜け、graceful fallback（ask 降格）が崩れる。すべて
+    # ResponseParseError に変換して契約を守る。
+    try:
+        choices = response.choices
+        if not choices:
+            raise ResponseParseError("LLM returned no choices")
+        text = choices[0].message.content
+    except (AttributeError, IndexError, KeyError, TypeError) as exc:
+        raise ResponseParseError(f"unexpected response shape: {type(exc).__name__}") from exc
+
     if not text:
         raise ResponseParseError("LLM returned no text content")
     return _parse_decision(text)
 ```
+
+**呼び出し側との契約:** `composite.py:CompositeEvaluator` は `judge()` から送出される例外として `LlmUnavailableError` / `ResponseParseError` の 2 種類のみを捕捉する。その他の例外型（`IndexError` 等）は graceful fallback の対象外となるため、本実装では境界で必ずどちらかに変換する。
 
 #### `cache_control: ephemeral` の削除について
 
@@ -145,11 +174,12 @@ evaluator = [
 
 | Test | Change |
 |------|--------|
-| `test_from_env_returns_none_without_api_key` | `ANTHROPIC_API_KEY` → `CHRONOS_EVALUATOR_API_KEY` |
+| `test_from_env_returns_none_without_api_key` | env var を `CHRONOS_EVALUATOR_API_KEY=""` に上書き (`delenv` ではローカル `.env` ファイルから値を拾うため flaky) |
 | `test_from_env_returns_none_when_litellm_missing` (旧: `…when_anthropic_missing`) | patch target: module-level `litellm` を `None` に差し替え |
 | `test_from_env_bumps_max_tokens_if_budget_too_high` | **Deleted** (thinking_budget removed) |
 | `test_from_env_respects_max_tokens_env` | env var key unchanged (`CHRONOS_EVALUATOR_MAX_TOKENS`) |
-| `test_from_env_handles_invalid_timeout_env` | env var key unchanged |
+| `test_from_env_handles_invalid_timeout_env` | **fail-soft 維持**。`"invalid"` / `"0.0"` のいずれも `_timeout_seconds == 10.0` を期待（`ValidationError` は **送出しない**） |
+| `test_from_env_handles_invalid_max_tokens_env` (新規) | `CHRONOS_EVALUATOR_MAX_TOKENS="invalid"` / `"0"` の両方で `_max_tokens == 1536` を期待 |
 | `test_judge_*` | Mock `litellm.acompletion`; response format → OpenAI-compatible |
 | `test_llm_evaluator_init_raises_on_invalid_thinking_budget` | **Deleted** |
 | All `_parse_decision`, `_build_user_prompt`, `SYSTEM_PROMPT` tests | **No change** |
@@ -159,12 +189,14 @@ evaluator = [
 `judge()` の例外ハンドリングを網羅するため、以下のテストを追加する。
 モック対象はすべて `patch("mcp_gateway.policy.llm_evaluator.litellm.acompletion", ...)` で統一。
 
-| テスト名 | モック入力（side_effect） | 期待する例外 |
-|----------|--------------------------|-------------|
-| `test_judge_raises_llm_unavailable_on_timeout` | `asyncio.TimeoutError()` | `LlmUnavailableError` |
-| `test_judge_raises_llm_unavailable_on_api_error` | `Exception("AuthenticationError")` | `LlmUnavailableError` |
+| テスト名 | モック入力（side_effect / return_value） | 期待する例外 |
+|----------|------------------------------------------|-------------|
+| `test_judge_raises_llm_unavailable_on_timeout` | `side_effect=asyncio.TimeoutError()` | `LlmUnavailableError` |
+| `test_judge_raises_llm_unavailable_on_api_error` | `side_effect=Exception("AuthenticationError")` | `LlmUnavailableError` |
 | `test_judge_raises_parse_error_on_empty_content` | `return_value` = `choices[0].message.content = ""` | `ResponseParseError` |
 | `test_judge_raises_parse_error_on_none_content` | `return_value` = `choices[0].message.content = None` | `ResponseParseError` |
+| `test_judge_raises_parse_error_on_empty_choices` (新規) | `return_value` = `SimpleNamespace(choices=[])` | `ResponseParseError` |
+| `test_judge_raises_parse_error_on_missing_message` (新規) | `return_value` = `choices[0]` から `message` 属性欠落 (`SimpleNamespace()`) | `ResponseParseError` |
 
 **レスポンスのモック構造（OpenAI互換）:**
 ```python
@@ -173,7 +205,7 @@ SimpleNamespace(
 )
 ```
 
-`LlmUnavailableError` は `judge()` の `except Exception` ブロックで捕捉される全例外に対して送出される。`ResponseParseError` は `content` が空文字列・`None` の場合の明示ガードで送出される。
+`LlmUnavailableError` は `judge()` の `await litellm.acompletion(...)` を包む `except Exception` ブロックで捕捉される全例外に対して送出される。`ResponseParseError` は (a) `content` が空文字列・`None` の明示ガード、(b) `choices=[]` の明示ガード、(c) レスポンス構造アクセス時の `AttributeError` / `IndexError` / `KeyError` / `TypeError` の変換、いずれかで送出される。これにより `CompositeEvaluator` の `(LlmUnavailableError, ResponseParseError)` 捕捉契約から漏れる例外を作らない。
 
 ---
 

@@ -121,8 +121,11 @@ name: CI
 on:
   push:
     branches: ["master"]
+  # NOTE: pull_request には branches フィルタを設定しない。
+  # 本リポジトリは stacked PR ワークフローを採用しており、Task 2.1 / 3.1 のような
+  # base=feature-branch の PR でも CI を必ず起動させるため、target branch を絞らない。
+  # push は master のみに限定して masters を二重実行しない。
   pull_request:
-    branches: ["master"]
 
 jobs:
   test:
@@ -181,13 +184,15 @@ git push -u origin chore/ci-ubuntu-slim-master
 gh pr create --draft --base master --title "chore(ci): ubuntu-slim runner & master trigger" --body "$(cat <<'EOF'
 ## Summary
 - CI ランナーを `ubuntu-slim` に変更
-- push/PR トリガを `master` ブランチのみに限定
+- `push` トリガを `master` ブランチのみに限定
+- `pull_request` トリガからは `branches` フィルタを撤去 (stacked PR で base が feature branch の PR でも CI を必ず起動させるため)
 - カバレッジ対象に `src/mcp_gateway` を追加 (LiteLLM 移行後のユニットテストを計測範囲に含めるため)
 
 ## Test plan
 - [ ] CI 上で `ubuntu-slim` の解決が成功すること（ジョブが起動）
 - [ ] 全 lint / mypy / unit test が緑
 - [ ] coverage レポートに `src/mcp_gateway` 配下の行が出現する
+- [ ] 後続 Task (2.1, 3.1) の PR が base=feature-branch であっても CI が起動する
 
 Refs: docs/superpowers/specs/2026-05-25-litellm-evaluator-refactor-design.md
 EOF
@@ -345,54 +350,39 @@ echo "OK: branch=$CURRENT_BRANCH は origin/$EXPECTED_BASE を祖先に含む"
 
 - [ ] **Step 2: 失敗するテストを書く**
 
+`EvaluatorSettings` は **secret / string フィールド (`api_key`, `model`) のみを Pydantic で扱う**。数値設定 (`max_tokens`, `timeout_seconds`) は Task 2.1 の `from_env()` 内でヘルパー関数経由で fail-soft に読み取るため、本クラスには含めない。詳細は設計書 §"設計判断 — 数値設定の fail-soft 維持" を参照。
+
 新規ファイル `tests/unit/test_mcp_gateway_evaluator_settings.py`:
 
 ```python
 from __future__ import annotations
 
 import pytest
-from pydantic import SecretStr, ValidationError
+from pydantic import SecretStr
 
 from mcp_gateway.config import EvaluatorSettings
 
 
 def test_defaults_match_design(monkeypatch: pytest.MonkeyPatch) -> None:
     """env が一切設定されていないときの既定値を検証する。"""
-    for key in [
-        "CHRONOS_EVALUATOR_API_KEY",
-        "CHRONOS_EVALUATOR_MODEL",
-        "CHRONOS_EVALUATOR_MAX_TOKENS",
-        "CHRONOS_EVALUATOR_TIMEOUT_SECONDS",
-    ]:
+    for key in ["CHRONOS_EVALUATOR_API_KEY", "CHRONOS_EVALUATOR_MODEL"]:
         monkeypatch.delenv(key, raising=False)
 
     settings = EvaluatorSettings(_env_file=None)  # type: ignore[call-arg]
 
     assert settings.api_key is None
     assert settings.model == "claude-haiku-4-5-20251001"
-    assert settings.max_tokens == 1536
-    assert settings.timeout_seconds == 10.0
 
 
 def test_env_vars_override_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CHRONOS_EVALUATOR_API_KEY", "sk-test-123")
     monkeypatch.setenv("CHRONOS_EVALUATOR_MODEL", "openai/gpt-4o-mini")
-    monkeypatch.setenv("CHRONOS_EVALUATOR_MAX_TOKENS", "4096")
-    monkeypatch.setenv("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", "5.5")
 
     settings = EvaluatorSettings(_env_file=None)  # type: ignore[call-arg]
 
     assert isinstance(settings.api_key, SecretStr)
     assert settings.api_key.get_secret_value() == "sk-test-123"
     assert settings.model == "openai/gpt-4o-mini"
-    assert settings.max_tokens == 4096
-    assert settings.timeout_seconds == 5.5
-
-
-def test_non_positive_timeout_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", "0.0")
-    with pytest.raises(ValidationError):
-        _ = EvaluatorSettings(_env_file=None)  # type: ignore[call-arg]
 
 
 def test_api_key_is_secret_str(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -402,6 +392,17 @@ def test_api_key_is_secret_str(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert "should-not-leak" not in repr(settings)
     assert "should-not-leak" not in str(settings)
+
+
+def test_extra_env_vars_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    """数値系の CHRONOS_EVALUATOR_* env は本クラスでは読まず、ignore される。"""
+    monkeypatch.setenv("CHRONOS_EVALUATOR_MAX_TOKENS", "9999")
+    monkeypatch.setenv("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", "99.9")
+
+    settings = EvaluatorSettings(_env_file=None)  # type: ignore[call-arg]
+
+    assert not hasattr(settings, "max_tokens")
+    assert not hasattr(settings, "timeout_seconds")
 ```
 
 - [ ] **Step 3: テストを実行して失敗を確認**
@@ -423,6 +424,10 @@ class EvaluatorSettings(BaseSettings):
     `GatewaySettings` とは独立に instantiate できる。
     プロバイダ非依存にするため、`CHRONOS_EVALUATOR_API_KEY` を読み LiteLLM へ
     `api_key=` で直接渡す。
+
+    Note: 数値設定 (max_tokens, timeout_seconds) は本クラスに含めない。
+    現行実装の fail-soft 挙動 (不正値・非正値は警告 + デフォルト) を維持する
+    ため、LlmEvaluator.from_env() 内で os.getenv ベースのヘルパーから読む。
     """
 
     model_config = SettingsConfigDict(
@@ -433,8 +438,6 @@ class EvaluatorSettings(BaseSettings):
 
     api_key: SecretStr | None = None
     model: str = "claude-haiku-4-5-20251001"
-    max_tokens: int = Field(default=1536, gt=0)
-    timeout_seconds: float = Field(default=10.0, gt=0.0)
 ```
 
 - [ ] **Step 5: テストを再実行して通過を確認**
@@ -469,7 +472,8 @@ git push -u origin feat/evaluator-settings
 gh pr create --draft --base master --title "feat(mcp_gateway): EvaluatorSettings for LiteLLM evaluator" --body "$(cat <<'EOF'
 ## Summary
 - `EvaluatorSettings` (Pydantic `BaseSettings`) を `src/mcp_gateway/config.py` に新設
-- `CHRONOS_EVALUATOR_*` env prefix で `api_key` / `model` / `max_tokens` / `timeout_seconds` を読み込む
+- `CHRONOS_EVALUATOR_API_KEY` (SecretStr) と `CHRONOS_EVALUATOR_MODEL` のみを担当
+- 数値設定 (`max_tokens`, `timeout_seconds`) は本クラスに含めない。現行の fail-soft 挙動を維持するため Task 2.1 の `from_env()` 内でヘルパー経由で読む
 - `GatewaySettings` (policy_path 必須) とは独立に instantiate 可能
 
 ## Test plan
@@ -550,6 +554,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Mapping
 from typing import cast
 
@@ -587,6 +592,38 @@ class LlmUnavailableError(Exception):
 
 class ResponseParseError(Exception):
     pass
+
+
+def _parse_int_env(key: str, default: int) -> int:
+    """env を int に正規化する fail-soft ヘルパー。不正値/非正値は警告 + default。"""
+    val = os.getenv(key)
+    if val is None:
+        return default
+    try:
+        parsed = int(val)
+    except ValueError:
+        logger.warning("invalid numeric value for %s: %r; using default %d", key, val, default)
+        return default
+    if parsed <= 0:
+        logger.warning("non-positive value for %s: %r; using default %d", key, val, default)
+        return default
+    return parsed
+
+
+def _parse_float_env(key: str, default: float) -> float:
+    """env を float に正規化する fail-soft ヘルパー。不正値/非正値は警告 + default。"""
+    val = os.getenv(key)
+    if val is None:
+        return default
+    try:
+        parsed = float(val)
+    except ValueError:
+        logger.warning("invalid numeric value for %s: %r; using default %.1f", key, val, default)
+        return default
+    if parsed <= 0:
+        logger.warning("non-positive value for %s: %r; using default %.1f", key, val, default)
+        return default
+    return parsed
 
 
 SYSTEM_PROMPT = """<role>
@@ -742,8 +779,8 @@ class LlmEvaluator:
         return cls(
             api_key=settings.api_key.get_secret_value(),
             model=settings.model,
-            timeout_seconds=settings.timeout_seconds,
-            max_tokens=settings.max_tokens,
+            timeout_seconds=_parse_float_env("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", 10.0),
+            max_tokens=_parse_int_env("CHRONOS_EVALUATOR_MAX_TOKENS", 1536),
         )
 
     async def judge(
@@ -771,7 +808,18 @@ class LlmEvaluator:
         except Exception as exc:
             raise LlmUnavailableError(f"LLM call failed: {type(exc).__name__}") from exc
 
-        text = response.choices[0].message.content
+        # LiteLLM の OpenAI 互換レスポンス構造は障害時に choices=[] / message 欠落 /
+        # content=None など歪んだ形で返り得る。CompositeEvaluator は
+        # (LlmUnavailableError, ResponseParseError) しか捕捉しないため、
+        # 構造アクセスの例外も必ず ResponseParseError へ変換する。
+        try:
+            choices = response.choices
+            if not choices:
+                raise ResponseParseError("LLM returned no choices")
+            text = choices[0].message.content
+        except (AttributeError, IndexError, KeyError, TypeError) as exc:
+            raise ResponseParseError(f"unexpected response shape: {type(exc).__name__}") from exc
+
         if not text:
             raise ResponseParseError("LLM returned no text content")
         return _parse_decision(text)
@@ -870,7 +918,10 @@ def test_parse_error_does_not_include_raw_model_output() -> None:
 
 
 def test_from_env_returns_none_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("CHRONOS_EVALUATOR_API_KEY", raising=False)
+    # monkeypatch.setenv で空文字列を入れて os.environ を最優先化する。
+    # `delenv` だけだと Pydantic が EvaluatorSettings の env_file=".env" から
+    # ローカル .env の値を拾い、テストが flaky になる。空 SecretStr は falsy。
+    monkeypatch.setenv("CHRONOS_EVALUATOR_API_KEY", "")
     assert LlmEvaluator.from_env() is None
 
 
@@ -889,21 +940,52 @@ def test_from_env_respects_max_tokens_env(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_from_env_handles_invalid_timeout_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """無効な timeout は ValidationError を発生させる (Pydantic gt=0.0)。"""
-    from pydantic import ValidationError
+    """timeout の不正値/非正値は **fail-soft** で警告 + デフォルト 10.0 に正規化される。
 
+    現行実装の挙動を維持する。fail-fast (ValidationError) には移行しない。
+    """
     monkeypatch.setenv("CHRONOS_EVALUATOR_API_KEY", "test-key")
 
-    # Case 1: 非正値
-    monkeypatch.setenv("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", "0.0")
-    with pytest.raises(ValidationError):
-        _ = LlmEvaluator.from_env()
+    # Case 1: 数値変換不可文字列
+    monkeypatch.setenv("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", "invalid")
+    evaluator = LlmEvaluator.from_env()
+    assert evaluator is not None
+    assert evaluator._timeout_seconds == 10.0
 
-    # Case 2: 正値
+    # Case 2: 非正値
+    monkeypatch.setenv("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", "0.0")
+    evaluator = LlmEvaluator.from_env()
+    assert evaluator is not None
+    assert evaluator._timeout_seconds == 10.0
+
+    # Case 3: 正値はそのまま採用
     monkeypatch.setenv("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", "5.5")
     evaluator = LlmEvaluator.from_env()
     assert evaluator is not None
     assert evaluator._timeout_seconds == 5.5
+
+
+def test_from_env_handles_invalid_max_tokens_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """max_tokens の不正値/非正値は **fail-soft** で警告 + デフォルト 1536 に正規化される。"""
+    monkeypatch.setenv("CHRONOS_EVALUATOR_API_KEY", "test-key")
+
+    # Case 1: 数値変換不可文字列
+    monkeypatch.setenv("CHRONOS_EVALUATOR_MAX_TOKENS", "invalid")
+    evaluator = LlmEvaluator.from_env()
+    assert evaluator is not None
+    assert evaluator._max_tokens == 1536
+
+    # Case 2: 非正値 (0)
+    monkeypatch.setenv("CHRONOS_EVALUATOR_MAX_TOKENS", "0")
+    evaluator = LlmEvaluator.from_env()
+    assert evaluator is not None
+    assert evaluator._max_tokens == 1536
+
+    # Case 3: 正値はそのまま採用
+    monkeypatch.setenv("CHRONOS_EVALUATOR_MAX_TOKENS", "2048")
+    evaluator = LlmEvaluator.from_env()
+    assert evaluator is not None
+    assert evaluator._max_tokens == 2048
 
 
 def test_build_user_prompt_redacts_sensitive_keys() -> None:
@@ -1055,6 +1137,41 @@ async def test_judge_raises_parse_error_on_none_content() -> None:
             )
 
 
+@pytest.mark.asyncio
+async def test_judge_raises_parse_error_on_empty_choices() -> None:
+    """choices=[] でも IndexError ではなく ResponseParseError として扱う。"""
+    evaluator = LlmEvaluator(api_key="x")
+    empty_choices_response = SimpleNamespace(choices=[])
+    with patch(
+        "mcp_gateway.policy.llm_evaluator.litellm.acompletion",
+        new=AsyncMock(return_value=empty_choices_response),
+    ):
+        with pytest.raises(ResponseParseError):
+            _ = await evaluator.judge(
+                input_=ToolCallInput(tool_name="bash", tool_input={}),
+                rules="",
+                memories=[],
+            )
+
+
+@pytest.mark.asyncio
+async def test_judge_raises_parse_error_on_missing_message() -> None:
+    """choices[0] に message 属性が無くても AttributeError ではなく ResponseParseError。"""
+    evaluator = LlmEvaluator(api_key="x")
+    # message 属性のない choice (SimpleNamespace は属性アクセス時に AttributeError)
+    malformed_response = SimpleNamespace(choices=[SimpleNamespace()])
+    with patch(
+        "mcp_gateway.policy.llm_evaluator.litellm.acompletion",
+        new=AsyncMock(return_value=malformed_response),
+    ):
+        with pytest.raises(ResponseParseError):
+            _ = await evaluator.judge(
+                input_=ToolCallInput(tool_name="bash", tool_input={}),
+                rules="",
+                memories=[],
+            )
+
+
 def test_system_prompt_contains_role_and_output_format() -> None:
     assert "<role>" in SYSTEM_PROMPT
     assert "<output_format>" in SYSTEM_PROMPT
@@ -1156,7 +1273,10 @@ gh pr create --draft --base feat/evaluator-settings \
 - `pyproject.toml` の `evaluator` extra を `anthropic>=0.40.0` → `litellm>=1.0.0` へ差替
 - 環境変数 `ANTHROPIC_API_KEY` を `CHRONOS_EVALUATOR_API_KEY` に移行
 - `thinking_budget`, `_get_client`, threading lock, Protocol 群, `cache_control:ephemeral` を削除
-- ユニットテストを LiteLLM 用に書き直し、エラーパス 4 ケースを追加
+- 数値設定 (`max_tokens`, `timeout_seconds`) の **fail-soft 挙動を維持** (`_parse_int_env` / `_parse_float_env` をモジュールレベルに昇格して再利用)
+- `judge()` の OpenAI 互換レスポンス解析を try ブロックで保護し、`choices=[]` / `message` 欠落で `IndexError`/`AttributeError` が漏れないよう `ResponseParseError` に変換
+- ユニットテストを LiteLLM 用に書き直し、エラーパス 6 ケース (`timeout`, `api_error`, `empty_content`, `none_content`, `empty_choices`, `missing_message`) を追加
+- `from_env` テストの `.env` 依存を解消 (`monkeypatch.setenv("...", "")`)
 - 統合テスト (`test_evaluator_cli_subprocess.py`) の env var 名を更新
 
 ## Stack
@@ -1168,6 +1288,7 @@ gh pr create --draft --base feat/evaluator-settings \
 - [ ] `pytest tests/integration/test_evaluator_cli_subprocess.py` 全件 PASS
 - [ ] `ruff check` / `ruff format --check` / `mypy` エラー 0
 - [ ] `git grep "anthropic"` がコードと pyproject.toml で 0 件
+- [ ] ローカル `.env` に `CHRONOS_EVALUATOR_API_KEY` を設定した状態でも `test_from_env_returns_none_without_api_key` が PASS
 
 Refs: docs/superpowers/specs/2026-05-25-litellm-evaluator-refactor-design.md
 EOF
@@ -1214,19 +1335,22 @@ echo "OK: branch=$CURRENT_BRANCH は origin/$EXPECTED_BASE を祖先に含む"
 | --- | --- | --- | --- |
 | `CHRONOS_EVALUATOR_API_KEY` | 未設定 | **設定必須** | 未設定なら LLM 評価をスキップ。LiteLLM 経由で任意プロバイダの key を受ける |
 | `CHRONOS_EVALUATOR_MODEL` | `claude-haiku-4-5-20251001` | デフォルト可 | LiteLLM model identifier (例: `openai/gpt-4o-mini`, `anthropic/claude-haiku-4-5`) |
-| `CHRONOS_EVALUATOR_MAX_TOKENS` | `1536` | デフォルト可 | 出力 token 上限 |
-| `CHRONOS_EVALUATOR_TIMEOUT_SECONDS` | `10.0` | デフォルト可 | LLM タイムアウト |
+| `CHRONOS_EVALUATOR_MAX_TOKENS` | `1536` | デフォルト可 | 出力 token 上限。不正値・非正値は警告 + デフォルトへフォールバック (fail-soft) |
+| `CHRONOS_EVALUATOR_TIMEOUT_SECONDS` | `10.0` | デフォルト可 | LLM タイムアウト。不正値・非正値は警告 + デフォルトへフォールバック (fail-soft) |
 | `CHRONOS_EVALUATOR_FALLBACK` | `allow` | **`ask` を強く推奨** | LLM 未構成時の挙動 |
 | `CHRONOS_EVALUATOR_POLICY_PATH` | (必須) | **設定必須** | intents.yaml のパス |
 | `CHRONOS_EVALUATOR_DEFAULT_INTENT` | `default` | 環境次第 | intent 未指定時の既定 |
 | `CHRONOS_EVALUATOR_DEFAULT_AGENT_ID` | `claude-code` | 環境次第 | agent_id 未指定時の既定 |
 | `CHRONOS_EVALUATOR_LOG_LEVEL` | `WARNING` | デフォルト可 | stderr ログレベル |
+| `CHRONOS_DASHBOARD_URL` | 未設定 | **設定必須** | 未設定なら memory 取得をスキップ (Universal Evaluator の retrieval base) |
+| `CHRONOS_DASHBOARD_API_KEY` | 未設定 | **`--auth` 起動時必須** | dashboard 認証 |
 
 > ⚠️ **セキュリティ警告:** `CHRONOS_EVALUATOR_FALLBACK` のデフォルトは `allow` です。`CHRONOS_EVALUATOR_API_KEY` 未設定の環境でそのままデプロイすると、deterministic 判定が不明瞭なツール呼び出しも**自動的に許可**されます。本番環境では必ず `ask` に設定してください。
 
 > 🔄 **移行ノート (v2.x → v3.0):**
 > - `ANTHROPIC_API_KEY` は使用しません。代わりに `CHRONOS_EVALUATOR_API_KEY` を設定してください。
 > - `CHRONOS_EVALUATOR_THINKING_BUDGET` は削除されました。Anthropic Extended Thinking を使いたい場合は LiteLLM `extra_body` 経由で再構成してください（本リファクタのスコープ外）。
+> - `CHRONOS_EVALUATOR_MAX_TOKENS` / `CHRONOS_EVALUATOR_TIMEOUT_SECONDS` の解釈 (不正値・非正値は警告 + デフォルト) は **v2.x と同一** です。設定バリデーション厳格化は別 PR で予定。
 ```
 
 - [ ] **Step 3: `.env.example` に Evaluator セクションを追記**

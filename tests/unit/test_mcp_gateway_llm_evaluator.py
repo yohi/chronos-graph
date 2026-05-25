@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
-import mcp_gateway.policy.llm_evaluator as llm_evaluator_module
 from mcp_gateway.policy.llm_evaluator import (
     SYSTEM_PROMPT,
     LlmEvaluator,

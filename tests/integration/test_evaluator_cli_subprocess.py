@@ -82,8 +82,8 @@ def _run_cli(
         "uv run python -m mcp_gateway evaluate --json-io --policy-path "
         f"{shlex.quote(str(policy))}"
     )
-    return subprocess.run(  # noqa: S603, S607
-        ["bash", "-lc", command],
+    return subprocess.run(  # noqa: S603
+        ["bash", "-lc", command],  # noqa: S607
         input=json.dumps(payload),
         capture_output=True,
         text=True,
@@ -115,8 +115,8 @@ def test_cli_evaluate_invalid_stdin(policy_path: Path) -> None:
         "uv run python -m mcp_gateway evaluate --json-io --policy-path "
         f"{shlex.quote(str(policy_path))}"
     )
-    result = subprocess.run(  # noqa: S603, S607
-        ["bash", "-lc", command],
+    result = subprocess.run(  # noqa: S603
+        ["bash", "-lc", command],  # noqa: S607
         input="not-json",
         capture_output=True,
         text=True,
@@ -133,8 +133,8 @@ def test_cli_evaluate_invalid_stdin(policy_path: Path) -> None:
 def test_cli_evaluate_missing_json_io_still_emits_single_json_line(policy_path: Path) -> None:
     env = _build_env(policy_path)
     command = f"uv run python -m mcp_gateway evaluate --policy-path {shlex.quote(str(policy_path))}"
-    result = subprocess.run(  # noqa: S603, S607
-        ["bash", "-lc", command],
+    result = subprocess.run(  # noqa: S603
+        ["bash", "-lc", command],  # noqa: S607
         input=json.dumps({"tool_name": "bash", "tool_input": {"command": "ls"}}),
         capture_output=True,
         text=True,

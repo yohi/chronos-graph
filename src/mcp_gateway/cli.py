@@ -61,7 +61,7 @@ def _configure_stderr_logging(level: str = "WARNING") -> None:
     except ValueError:
         gateway_logger.warning("Invalid log level %r, falling back to WARNING", level)
 
-    for name in ("httpx", "httpcore", "anthropic", "asyncio"):
+    for name in ("httpx", "httpcore", "litellm", "asyncio"):
         logging.getLogger(name).setLevel("WARNING")
 
 

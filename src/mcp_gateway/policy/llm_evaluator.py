@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import asyncio
 import importlib
 import json
 import logging
 import os
-import threading
 from collections.abc import Mapping
 from typing import Protocol, cast
 
+from mcp_gateway.config import EvaluatorSettings
 from mcp_gateway.policy.models_evaluator import (
     Decision,
     MemoryItem,
@@ -16,12 +15,9 @@ from mcp_gateway.policy.models_evaluator import (
     _redact_tool_input_for_llm,
 )
 
-logger = logging.getLogger("chronos_evaluator.llm")
+litellm = None
 
-# §2.2: LlmEvaluator._get_client uses threading.Lock to prevent race conditions
-# when multiple judge() calls attempt to initialize the client simultaneously
-# via asyncio.to_thread.
-_CLIENT_INIT_LOCK = threading.Lock()
+logger = logging.getLogger("chronos_evaluator.llm")
 
 __all__ = [
     "LlmEvaluator",
@@ -44,21 +40,63 @@ class ResponseParseError(Exception):
     pass
 
 
-class _MessagesProtocol(Protocol):
-    def create(self, **kwargs: object) -> object: ...
+class _LiteLLMProtocol(Protocol):
+    async def acompletion(self, **kwargs: object) -> object: ...
 
 
-class _AnthropicClientProtocol(Protocol):
-    messages: _MessagesProtocol
+class _ResponseMessageProtocol(Protocol):
+    content: object
 
 
-class _AnthropicFactoryProtocol(Protocol):
-    def __call__(self, *, api_key: str, timeout: object) -> _AnthropicClientProtocol: ...
+class _ChoiceProtocol(Protocol):
+    message: _ResponseMessageProtocol
 
 
-class _TextBlockProtocol(Protocol):
-    type: str
-    text: str
+class _CompletionResponseProtocol(Protocol):
+    choices: list[_ChoiceProtocol]
+
+
+def _load_litellm() -> object | None:
+    global litellm
+    if litellm is not None:
+        return litellm
+    try:
+        litellm = importlib.import_module("litellm")
+    except ImportError:
+        return None
+    return litellm
+
+
+def _parse_int_env(key: str, default: int) -> int:
+    """env を int に正規化する fail-soft ヘルパー。不正値/非正値は警告 + default。"""
+    val = os.getenv(key)
+    if val is None:
+        return default
+    try:
+        parsed = int(val)
+    except ValueError:
+        logger.warning("invalid numeric value for %s: %r; using default %d", key, val, default)
+        return default
+    if parsed <= 0:
+        logger.warning("non-positive value for %s: %r; using default %d", key, val, default)
+        return default
+    return parsed
+
+
+def _parse_float_env(key: str, default: float) -> float:
+    """env を float に正規化する fail-soft ヘルパー。不正値/非正値は警告 + default。"""
+    val = os.getenv(key)
+    if val is None:
+        return default
+    try:
+        parsed = float(val)
+    except ValueError:
+        logger.warning("invalid numeric value for %s: %r; using default %.1f", key, val, default)
+        return default
+    if parsed <= 0:
+        logger.warning("non-positive value for %s: %r; using default %.1f", key, val, default)
+        return default
+    return parsed
 
 
 SYSTEM_PROMPT = """<role>
@@ -116,7 +154,6 @@ def _parse_decision(text: str) -> Decision:
     obj = cast(Mapping[str, object], parsed)
     decision = obj.get("decision")
     if decision == "allow":
-        # §5.5: allow の場合 reason は任意。LLM が reason を返しても使用しない。
         return Decision(decision="allow")
     if decision == "deny":
         reason = obj.get("reason")
@@ -180,8 +217,6 @@ Decide now. Output JSON only."""
 
 
 def _json_for_prompt(value: object) -> str:
-    # §5.5: JSON content inside XML tags must be escaped to prevent structure breaking.
-    # We escape &, <, > and keep them as HTML entities to ensure XML safety.
     text = json.dumps(value, ensure_ascii=False)
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -199,99 +234,27 @@ class LlmEvaluator:
         api_key: str,
         model: str = "claude-haiku-4-5-20251001",
         timeout_seconds: float = 10.0,
-        thinking_budget: int = 1024,
         max_tokens: int = 1536,
     ) -> None:
-        if thinking_budget >= max_tokens:
-            raise ValueError(
-                f"thinking_budget ({thinking_budget}) must be less than max_tokens ({max_tokens})"
-            )
         self._api_key: str = api_key
         self._model: str = model
         self._timeout_seconds: float = timeout_seconds
-        self._thinking_budget: int = thinking_budget
         self._max_tokens: int = max_tokens
-        self._client: _AnthropicClientProtocol | None = None
 
     @classmethod
     def from_env(cls) -> LlmEvaluator | None:
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
+        if _load_litellm() is None:
+            logger.warning("litellm not installed; LLM evaluator disabled")
             return None
-        try:
-            _ = importlib.import_module("anthropic")
-        except ImportError:
-            logger.warning("anthropic SDK not installed; LLM evaluator disabled")
+        settings = EvaluatorSettings()
+        if not settings.api_key:
             return None
-
-        def _parse_int_env(key: str, default: int) -> int:
-            val = os.getenv(key)
-            if val is None:
-                return default
-            try:
-                return int(val)
-            except ValueError:
-                logger.warning(
-                    "invalid numeric value for %s: %r; using default %d", key, val, default
-                )
-                return default
-
-        def _parse_float_env(key: str, default: float) -> float:
-            val = os.getenv(key)
-            if val is None:
-                return default
-            try:
-                parsed = float(val)
-                if parsed <= 0:
-                    logger.warning(
-                        "non-positive value for %s: %r; using default %.1f", key, val, default
-                    )
-                    return default
-                return parsed
-            except ValueError:
-                logger.warning(
-                    "invalid numeric value for %s: %r; using default %.1f", key, val, default
-                )
-                return default
-
-        thinking_budget = _parse_int_env("CHRONOS_EVALUATOR_THINKING_BUDGET", 1024)
-        max_tokens = _parse_int_env("CHRONOS_EVALUATOR_MAX_TOKENS", 1536)
-        timeout_seconds = _parse_float_env("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", 10.0)
-
-        # Anthropic req: thinking.budget_tokens < max_tokens
-        if thinking_budget >= max_tokens:
-            new_max = thinking_budget + 512
-            logger.warning(
-                "thinking_budget (%d) >= max_tokens (%d); bumping max_tokens to %d",
-                thinking_budget,
-                max_tokens,
-                new_max,
-            )
-            max_tokens = new_max
-
         return cls(
-            api_key=api_key,
-            model=os.getenv("CHRONOS_EVALUATOR_MODEL", "claude-haiku-4-5-20251001"),
-            timeout_seconds=timeout_seconds,
-            thinking_budget=thinking_budget,
-            max_tokens=max_tokens,
+            api_key=settings.api_key.get_secret_value(),
+            model=settings.model,
+            timeout_seconds=_parse_float_env("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", 10.0),
+            max_tokens=_parse_int_env("CHRONOS_EVALUATOR_MAX_TOKENS", 1536),
         )
-
-    def _get_client(self) -> _AnthropicClientProtocol:
-        with _CLIENT_INIT_LOCK:
-            if self._client is None:
-                import httpx
-
-                anthropic_module = importlib.import_module("anthropic")
-                anthropic_factory = cast(
-                    _AnthropicFactoryProtocol,
-                    anthropic_module.__dict__["Anthropic"],
-                )
-                self._client = anthropic_factory(
-                    api_key=self._api_key,
-                    timeout=httpx.Timeout(self._timeout_seconds, connect=2.0),
-                )
-            return self._client
 
     async def judge(
         self,
@@ -301,37 +264,42 @@ class LlmEvaluator:
         memories: list[MemoryItem],
         intent_name: str = "default",
     ) -> Decision:
+        client = _load_litellm()
+        if client is None:
+            raise LlmUnavailableError("LLM call failed: ImportError")
+        litellm_client = cast(_LiteLLMProtocol, client)
         user_prompt = _build_user_prompt(
             input_=input_, rules=rules, memories=memories, intent_name=intent_name
         )
         try:
-            response = await asyncio.to_thread(
-                self._invoke_sdk,
-                system_prompt=SYSTEM_PROMPT,
-                user_prompt=user_prompt,
+            response = await litellm_client.acompletion(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=self._max_tokens,
+                timeout=self._timeout_seconds,
+                api_key=self._api_key,
             )
         except Exception as exc:
             raise LlmUnavailableError(f"LLM call failed: {type(exc).__name__}") from exc
 
-        content = cast(list[object], getattr(response, "content", []))
-        text_blocks = [block for block in content if getattr(block, "type", None) == "text"]
-        if not text_blocks:
-            raise ResponseParseError("LLM returned no text block")
-        text = cast(_TextBlockProtocol, text_blocks[0]).text
-        return _parse_decision(text)
+        # LiteLLM の OpenAI 互換レスポンス構造は障害時に choices=[] / message 欠落 /
+        # content=None など歪んだ形で返り得る。CompositeEvaluator は
+        # (LlmUnavailableError, ResponseParseError) しか捕捉しないため、
+        # 構造アクセスの例外も必ず ResponseParseError へ変換する。
+        typed_response = cast(_CompletionResponseProtocol, response)
+        try:
+            choices = typed_response.choices
+            if not choices:
+                raise ResponseParseError("LLM returned no choices")
+            text = choices[0].message.content
+        except (AttributeError, IndexError, KeyError, TypeError) as exc:
+            raise ResponseParseError(f"unexpected response shape: {type(exc).__name__}") from exc
 
-    def _invoke_sdk(self, *, system_prompt: str, user_prompt: str) -> object:
-        client = self._get_client()
-        return client.messages.create(
-            model=self._model,
-            max_tokens=self._max_tokens,
-            system=[
-                {
-                    "type": "text",
-                    "text": system_prompt,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-            messages=[{"role": "user", "content": user_prompt}],
-            thinking={"type": "enabled", "budget_tokens": self._thinking_budget},
-        )
+        if not isinstance(text, str):
+            raise ResponseParseError(f"unexpected text content type: {type(text).__name__}")
+        if not text:
+            raise ResponseParseError("LLM returned no text content")
+        return _parse_decision(text)

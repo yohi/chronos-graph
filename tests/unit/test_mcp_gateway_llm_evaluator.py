@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
+import mcp_gateway.policy.llm_evaluator as llm_evaluator_module
 from mcp_gateway.policy.llm_evaluator import (
     SYSTEM_PROMPT,
     LlmEvaluator,
@@ -17,10 +18,8 @@ from mcp_gateway.policy.llm_evaluator import (
 from mcp_gateway.policy.models_evaluator import Decision, MemoryItem, ToolCallInput
 
 
-def _ok_response(json_text: str | None) -> SimpleNamespace:
-    if json_text is None:
-        return SimpleNamespace(content=[])
-    return SimpleNamespace(content=[SimpleNamespace(type="text", text=json_text)])
+def _ok_response(json_text: str) -> SimpleNamespace:
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json_text))])
 
 
 @pytest.mark.parametrize(
@@ -86,18 +85,22 @@ def test_parse_error_does_not_include_raw_model_output() -> None:
 
 
 def test_from_env_returns_none_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    # monkeypatch.setenv で空文字列を入れて os.environ を最優先化する。
+    # `delenv` だけだと Pydantic が EvaluatorSettings の env_file=".env" から
+    # ローカル .env の値を拾い、テストが flaky になる。空 SecretStr は falsy。
+    monkeypatch.setenv("CHRONOS_EVALUATOR_API_KEY", "")
     assert LlmEvaluator.from_env() is None
 
 
-def test_from_env_returns_none_when_anthropic_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+def test_from_env_returns_none_when_litellm_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CHRONOS_EVALUATOR_API_KEY", "test-key")
+    monkeypatch.setattr(llm_evaluator_module, "litellm", None)
     with patch("mcp_gateway.policy.llm_evaluator.importlib.import_module", side_effect=ImportError):
         assert LlmEvaluator.from_env() is None
 
 
 def test_from_env_respects_max_tokens_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("CHRONOS_EVALUATOR_API_KEY", "test-key")
     monkeypatch.setenv("CHRONOS_EVALUATOR_MAX_TOKENS", "4096")
     evaluator = LlmEvaluator.from_env()
     assert evaluator is not None
@@ -109,18 +112,21 @@ def test_from_env_handles_invalid_timeout_env(monkeypatch: pytest.MonkeyPatch) -
 
     現行実装の挙動を維持する。fail-fast (ValidationError) には移行しない。
     """
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("CHRONOS_EVALUATOR_API_KEY", "test-key")
 
+    # Case 1: 数値変換不可文字列
     monkeypatch.setenv("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", "invalid")
     evaluator = LlmEvaluator.from_env()
     assert evaluator is not None
     assert evaluator._timeout_seconds == 10.0
 
+    # Case 2: 非正値
     monkeypatch.setenv("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", "0.0")
     evaluator = LlmEvaluator.from_env()
     assert evaluator is not None
     assert evaluator._timeout_seconds == 10.0
 
+    # Case 3: 正値はそのまま採用
     monkeypatch.setenv("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", "5.5")
     evaluator = LlmEvaluator.from_env()
     assert evaluator is not None
@@ -129,18 +135,21 @@ def test_from_env_handles_invalid_timeout_env(monkeypatch: pytest.MonkeyPatch) -
 
 def test_from_env_handles_invalid_max_tokens_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """max_tokens の不正値/非正値は **fail-soft** で警告 + デフォルト 1536 に正規化される。"""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("CHRONOS_EVALUATOR_API_KEY", "test-key")
 
+    # Case 1: 数値変換不可文字列
     monkeypatch.setenv("CHRONOS_EVALUATOR_MAX_TOKENS", "invalid")
     evaluator = LlmEvaluator.from_env()
     assert evaluator is not None
     assert evaluator._max_tokens == 1536
 
+    # Case 2: 非正値 (0)
     monkeypatch.setenv("CHRONOS_EVALUATOR_MAX_TOKENS", "0")
     evaluator = LlmEvaluator.from_env()
     assert evaluator is not None
     assert evaluator._max_tokens == 1536
 
+    # Case 3: 正値はそのまま採用
     monkeypatch.setenv("CHRONOS_EVALUATOR_MAX_TOKENS", "2048")
     evaluator = LlmEvaluator.from_env()
     assert evaluator is not None
@@ -212,96 +221,113 @@ def test_build_user_prompt_handles_empty_memories() -> None:
     assert "</memory>" in out
 
 
+@pytest.fixture
+def mock_litellm(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    mock_acompletion = AsyncMock()
+    monkeypatch.setattr(
+        llm_evaluator_module,
+        "litellm",
+        SimpleNamespace(acompletion=mock_acompletion),
+    )
+    return mock_acompletion
+
+
 @pytest.mark.asyncio
-async def test_judge_returns_allow_on_valid_response() -> None:
+async def test_judge_returns_allow_on_valid_response(mock_litellm: AsyncMock) -> None:
     evaluator = LlmEvaluator(api_key="x", model="claude-haiku-4-5-20251001")
-    response = _ok_response('{"decision":"allow"}')
-    with patch.object(evaluator, "_invoke_sdk", return_value=response) as mock_invoke:
-        out = await evaluator.judge(
-            input_=ToolCallInput(tool_name="bash", tool_input={"command": "ls"}),
-            rules="-",
+    mock_litellm.return_value = _ok_response('{"decision":"allow"}')
+    out = await evaluator.judge(
+        input_=ToolCallInput(tool_name="bash", tool_input={"command": "ls"}),
+        rules="-",
+        memories=[],
+    )
+
+    assert out == Decision(decision="allow")
+    # 呼び出し引数を最低限検証する
+    assert mock_litellm.await_count == 1
+    kwargs = mock_litellm.await_args.kwargs
+    assert kwargs["model"] == "claude-haiku-4-5-20251001"
+    assert kwargs["api_key"] == "x"
+    assert kwargs["max_tokens"] == 1536
+    assert kwargs["timeout"] == 10.0
+    assert kwargs["messages"][0] == {"role": "system", "content": SYSTEM_PROMPT}
+
+
+@pytest.mark.asyncio
+async def test_judge_raises_llm_unavailable_on_timeout(mock_litellm: AsyncMock) -> None:
+    evaluator = LlmEvaluator(api_key="x")
+    mock_litellm.side_effect = asyncio.TimeoutError()
+    with pytest.raises(LlmUnavailableError):
+        _ = await evaluator.judge(
+            input_=ToolCallInput(tool_name="bash", tool_input={}),
+            rules="",
             memories=[],
         )
 
-    assert out == Decision(decision="allow")
-    mock_invoke.assert_called_once()
-    kwargs = mock_invoke.call_args.kwargs
-    assert kwargs["system_prompt"] == SYSTEM_PROMPT
-    assert "ls" in kwargs["user_prompt"]
+
+@pytest.mark.asyncio
+async def test_judge_raises_llm_unavailable_on_api_error(mock_litellm: AsyncMock) -> None:
+    evaluator = LlmEvaluator(api_key="x")
+    mock_litellm.side_effect = Exception("AuthenticationError")
+    with pytest.raises(LlmUnavailableError):
+        _ = await evaluator.judge(
+            input_=ToolCallInput(tool_name="bash", tool_input={}),
+            rules="",
+            memories=[],
+        )
 
 
 @pytest.mark.asyncio
-async def test_judge_raises_llm_unavailable_on_timeout() -> None:
+async def test_judge_raises_parse_error_on_empty_content(mock_litellm: AsyncMock) -> None:
     evaluator = LlmEvaluator(api_key="x")
-    with patch.object(evaluator, "_invoke_sdk", side_effect=asyncio.TimeoutError()):
-        with pytest.raises(LlmUnavailableError):
-            _ = await evaluator.judge(
-                input_=ToolCallInput(tool_name="bash", tool_input={}),
-                rules="",
-                memories=[],
-            )
+    mock_litellm.return_value = _ok_response("")
+    with pytest.raises(ResponseParseError):
+        _ = await evaluator.judge(
+            input_=ToolCallInput(tool_name="bash", tool_input={}),
+            rules="",
+            memories=[],
+        )
 
 
 @pytest.mark.asyncio
-async def test_judge_raises_llm_unavailable_on_api_error() -> None:
+async def test_judge_raises_parse_error_on_none_content(mock_litellm: AsyncMock) -> None:
     evaluator = LlmEvaluator(api_key="x")
-    with patch.object(evaluator, "_invoke_sdk", side_effect=Exception("AuthenticationError")):
-        with pytest.raises(LlmUnavailableError):
-            _ = await evaluator.judge(
-                input_=ToolCallInput(tool_name="bash", tool_input={}),
-                rules="",
-                memories=[],
-            )
+    mock_litellm.return_value = _ok_response(None)  # type: ignore[arg-type]
+    with pytest.raises(ResponseParseError):
+        _ = await evaluator.judge(
+            input_=ToolCallInput(tool_name="bash", tool_input={}),
+            rules="",
+            memories=[],
+        )
 
 
 @pytest.mark.asyncio
-async def test_judge_raises_parse_error_on_empty_content() -> None:
+async def test_judge_raises_parse_error_on_empty_choices(mock_litellm: AsyncMock) -> None:
+    """choices=[] でも IndexError ではなく ResponseParseError として扱う。"""
     evaluator = LlmEvaluator(api_key="x")
-    with patch.object(evaluator, "_invoke_sdk", return_value=_ok_response(None)):
-        with pytest.raises(ResponseParseError):
-            _ = await evaluator.judge(
-                input_=ToolCallInput(tool_name="bash", tool_input={}),
-                rules="",
-                memories=[],
-            )
+    empty_choices_response = SimpleNamespace(choices=[])
+    mock_litellm.return_value = empty_choices_response
+    with pytest.raises(ResponseParseError):
+        _ = await evaluator.judge(
+            input_=ToolCallInput(tool_name="bash", tool_input={}),
+            rules="",
+            memories=[],
+        )
 
 
 @pytest.mark.asyncio
-async def test_judge_raises_parse_error_on_none_content() -> None:
+async def test_judge_raises_parse_error_on_missing_message(mock_litellm: AsyncMock) -> None:
+    """choices[0] に message 属性が無くても AttributeError ではなく ResponseParseError。"""
     evaluator = LlmEvaluator(api_key="x")
-    with patch.object(evaluator, "_invoke_sdk", return_value=_ok_response(None)):
-        with pytest.raises(ResponseParseError):
-            _ = await evaluator.judge(
-                input_=ToolCallInput(tool_name="bash", tool_input={}),
-                rules="",
-                memories=[],
-            )
-
-
-@pytest.mark.asyncio
-async def test_judge_raises_parse_error_on_empty_choices() -> None:
-    evaluator = LlmEvaluator(api_key="x")
-    empty_content_response = SimpleNamespace(content=[])
-    with patch.object(evaluator, "_invoke_sdk", return_value=empty_content_response):
-        with pytest.raises(ResponseParseError):
-            _ = await evaluator.judge(
-                input_=ToolCallInput(tool_name="bash", tool_input={}),
-                rules="",
-                memories=[],
-            )
-
-
-@pytest.mark.asyncio
-async def test_judge_raises_parse_error_on_missing_message() -> None:
-    evaluator = LlmEvaluator(api_key="x")
-    malformed_response = SimpleNamespace(content=[SimpleNamespace()])
-    with patch.object(evaluator, "_invoke_sdk", return_value=malformed_response):
-        with pytest.raises(ResponseParseError):
-            _ = await evaluator.judge(
-                input_=ToolCallInput(tool_name="bash", tool_input={}),
-                rules="",
-                memories=[],
-            )
+    # message 属性のない choice (SimpleNamespace は属性アクセス時に AttributeError)
+    malformed_response = SimpleNamespace(choices=[SimpleNamespace()])
+    mock_litellm.return_value = malformed_response
+    with pytest.raises(ResponseParseError):
+        _ = await evaluator.judge(
+            input_=ToolCallInput(tool_name="bash", tool_input={}),
+            rules="",
+            memories=[],
+        )
 
 
 def test_system_prompt_contains_role_and_output_format() -> None:

@@ -29,12 +29,16 @@ def test_env_vars_override_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_api_key_is_secret_str(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SecretStr が repr で値を漏らさないことを保証する。"""
+    """SecretStr が repr, str, model_dump(mode='json') で値を漏らさないことを保証する。"""
     monkeypatch.setenv("CHRONOS_EVALUATOR_API_KEY", "should-not-leak")
     settings = EvaluatorSettings(_env_file=None)  # type: ignore[call-arg]
 
     assert "should-not-leak" not in repr(settings)
     assert "should-not-leak" not in str(settings)
+    # model_dump(mode='json') でのマスクを確認
+    dumped = settings.model_dump(mode="json")
+    assert dumped["api_key"] == "**********"
+    assert "should-not-leak" not in dumped["api_key"]
 
 
 def test_extra_env_vars_ignored(monkeypatch: pytest.MonkeyPatch) -> None:

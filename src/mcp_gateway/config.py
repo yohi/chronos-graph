@@ -95,3 +95,19 @@ class EvaluatorSettings(BaseSettings):
 
     api_key: SecretStr | None = None
     model: str = "claude-haiku-4-5-20251001"
+
+    @model_serializer(mode="wrap")
+    def _mask_secrets(self, handler: Any, info: SerializationInfo) -> dict[str, Any]:
+        """JSON シリアライズ時のみ、SecretStr フィールドを '**********' にマスクする。"""
+        data: dict[str, Any] = handler(self)
+        if info.mode != "json":
+            return data
+
+        for field_name, field_info in self.__class__.model_fields.items():
+            if field_info.annotation is SecretStr or (
+                hasattr(field_info.annotation, "__args__")
+                and SecretStr in getattr(field_info.annotation, "__args__", ())
+            ):
+                if data.get(field_name) is not None:
+                    data[field_name] = "**********"
+        return data

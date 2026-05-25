@@ -221,23 +221,31 @@ def test_build_user_prompt_handles_empty_memories() -> None:
     assert "</memory>" in out
 
 
+@pytest.fixture
+def mock_litellm(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    mock_acompletion = AsyncMock()
+    monkeypatch.setattr(
+        llm_evaluator_module,
+        "litellm",
+        SimpleNamespace(acompletion=mock_acompletion),
+    )
+    return mock_acompletion
+
+
 @pytest.mark.asyncio
-async def test_judge_returns_allow_on_valid_response() -> None:
+async def test_judge_returns_allow_on_valid_response(mock_litellm: AsyncMock) -> None:
     evaluator = LlmEvaluator(api_key="x", model="claude-haiku-4-5-20251001")
-    with patch(
-        "mcp_gateway.policy.llm_evaluator.litellm.acompletion",
-        new=AsyncMock(return_value=_ok_response('{"decision":"allow"}')),
-    ) as mock_call:
-        out = await evaluator.judge(
-            input_=ToolCallInput(tool_name="bash", tool_input={"command": "ls"}),
-            rules="-",
-            memories=[],
-        )
+    mock_litellm.return_value = _ok_response('{"decision":"allow"}')
+    out = await evaluator.judge(
+        input_=ToolCallInput(tool_name="bash", tool_input={"command": "ls"}),
+        rules="-",
+        memories=[],
+    )
 
     assert out == Decision(decision="allow")
     # 呼び出し引数を最低限検証する
-    assert mock_call.await_count == 1
-    kwargs = mock_call.await_args.kwargs
+    assert mock_litellm.await_count == 1
+    kwargs = mock_litellm.await_args.kwargs
     assert kwargs["model"] == "claude-haiku-4-5-20251001"
     assert kwargs["api_key"] == "x"
     assert kwargs["max_tokens"] == 1536
@@ -246,98 +254,80 @@ async def test_judge_returns_allow_on_valid_response() -> None:
 
 
 @pytest.mark.asyncio
-async def test_judge_raises_llm_unavailable_on_timeout() -> None:
+async def test_judge_raises_llm_unavailable_on_timeout(mock_litellm: AsyncMock) -> None:
     evaluator = LlmEvaluator(api_key="x")
-    with patch(
-        "mcp_gateway.policy.llm_evaluator.litellm.acompletion",
-        new=AsyncMock(side_effect=asyncio.TimeoutError()),
-    ):
-        with pytest.raises(LlmUnavailableError):
-            _ = await evaluator.judge(
-                input_=ToolCallInput(tool_name="bash", tool_input={}),
-                rules="",
-                memories=[],
-            )
+    mock_litellm.side_effect = asyncio.TimeoutError()
+    with pytest.raises(LlmUnavailableError):
+        _ = await evaluator.judge(
+            input_=ToolCallInput(tool_name="bash", tool_input={}),
+            rules="",
+            memories=[],
+        )
 
 
 @pytest.mark.asyncio
-async def test_judge_raises_llm_unavailable_on_api_error() -> None:
+async def test_judge_raises_llm_unavailable_on_api_error(mock_litellm: AsyncMock) -> None:
     evaluator = LlmEvaluator(api_key="x")
-    with patch(
-        "mcp_gateway.policy.llm_evaluator.litellm.acompletion",
-        new=AsyncMock(side_effect=Exception("AuthenticationError")),
-    ):
-        with pytest.raises(LlmUnavailableError):
-            _ = await evaluator.judge(
-                input_=ToolCallInput(tool_name="bash", tool_input={}),
-                rules="",
-                memories=[],
-            )
+    mock_litellm.side_effect = Exception("AuthenticationError")
+    with pytest.raises(LlmUnavailableError):
+        _ = await evaluator.judge(
+            input_=ToolCallInput(tool_name="bash", tool_input={}),
+            rules="",
+            memories=[],
+        )
 
 
 @pytest.mark.asyncio
-async def test_judge_raises_parse_error_on_empty_content() -> None:
+async def test_judge_raises_parse_error_on_empty_content(mock_litellm: AsyncMock) -> None:
     evaluator = LlmEvaluator(api_key="x")
-    with patch(
-        "mcp_gateway.policy.llm_evaluator.litellm.acompletion",
-        new=AsyncMock(return_value=_ok_response("")),
-    ):
-        with pytest.raises(ResponseParseError):
-            _ = await evaluator.judge(
-                input_=ToolCallInput(tool_name="bash", tool_input={}),
-                rules="",
-                memories=[],
-            )
+    mock_litellm.return_value = _ok_response("")
+    with pytest.raises(ResponseParseError):
+        _ = await evaluator.judge(
+            input_=ToolCallInput(tool_name="bash", tool_input={}),
+            rules="",
+            memories=[],
+        )
 
 
 @pytest.mark.asyncio
-async def test_judge_raises_parse_error_on_none_content() -> None:
+async def test_judge_raises_parse_error_on_none_content(mock_litellm: AsyncMock) -> None:
     evaluator = LlmEvaluator(api_key="x")
-    with patch(
-        "mcp_gateway.policy.llm_evaluator.litellm.acompletion",
-        new=AsyncMock(return_value=_ok_response(None)),  # type: ignore[arg-type]
-    ):
-        with pytest.raises(ResponseParseError):
-            _ = await evaluator.judge(
-                input_=ToolCallInput(tool_name="bash", tool_input={}),
-                rules="",
-                memories=[],
-            )
+    mock_litellm.return_value = _ok_response(None)  # type: ignore[arg-type]
+    with pytest.raises(ResponseParseError):
+        _ = await evaluator.judge(
+            input_=ToolCallInput(tool_name="bash", tool_input={}),
+            rules="",
+            memories=[],
+        )
 
 
 @pytest.mark.asyncio
-async def test_judge_raises_parse_error_on_empty_choices() -> None:
+async def test_judge_raises_parse_error_on_empty_choices(mock_litellm: AsyncMock) -> None:
     """choices=[] でも IndexError ではなく ResponseParseError として扱う。"""
     evaluator = LlmEvaluator(api_key="x")
     empty_choices_response = SimpleNamespace(choices=[])
-    with patch(
-        "mcp_gateway.policy.llm_evaluator.litellm.acompletion",
-        new=AsyncMock(return_value=empty_choices_response),
-    ):
-        with pytest.raises(ResponseParseError):
-            _ = await evaluator.judge(
-                input_=ToolCallInput(tool_name="bash", tool_input={}),
-                rules="",
-                memories=[],
-            )
+    mock_litellm.return_value = empty_choices_response
+    with pytest.raises(ResponseParseError):
+        _ = await evaluator.judge(
+            input_=ToolCallInput(tool_name="bash", tool_input={}),
+            rules="",
+            memories=[],
+        )
 
 
 @pytest.mark.asyncio
-async def test_judge_raises_parse_error_on_missing_message() -> None:
+async def test_judge_raises_parse_error_on_missing_message(mock_litellm: AsyncMock) -> None:
     """choices[0] に message 属性が無くても AttributeError ではなく ResponseParseError。"""
     evaluator = LlmEvaluator(api_key="x")
     # message 属性のない choice (SimpleNamespace は属性アクセス時に AttributeError)
     malformed_response = SimpleNamespace(choices=[SimpleNamespace()])
-    with patch(
-        "mcp_gateway.policy.llm_evaluator.litellm.acompletion",
-        new=AsyncMock(return_value=malformed_response),
-    ):
-        with pytest.raises(ResponseParseError):
-            _ = await evaluator.judge(
-                input_=ToolCallInput(tool_name="bash", tool_input={}),
-                rules="",
-                memories=[],
-            )
+    mock_litellm.return_value = malformed_response
+    with pytest.raises(ResponseParseError):
+        _ = await evaluator.judge(
+            input_=ToolCallInput(tool_name="bash", tool_input={}),
+            rules="",
+            memories=[],
+        )
 
 
 def test_system_prompt_contains_role_and_output_format() -> None:

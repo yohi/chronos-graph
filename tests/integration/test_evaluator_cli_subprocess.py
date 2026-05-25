@@ -97,9 +97,7 @@ def test_cli_evaluate_allow_path(policy_path: Path) -> None:
     assert result.returncode == 0
     assert result.stdout.count("\n") == 1
     body = _loads_json_object(result.stdout.strip())
-    # Key-based assertion is more resilient against extra optional fields
     assert body["decision"] == "allow"
-    # Fail-safe invariant: stdout must never contain debug/log output
     assert "evaluator config" not in result.stdout
 
 

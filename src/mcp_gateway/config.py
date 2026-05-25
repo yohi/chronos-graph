@@ -13,6 +13,22 @@ from pydantic import Field, SecretStr, SerializationInfo, field_validator, model
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _mask_secret_fields(instance: Any, handler: Any, info: SerializationInfo) -> dict[str, Any]:
+    """Pydantic モデルの SecretStr フィールドを '**********' にマスクする共通ヘルパー。"""
+    data: dict[str, Any] = handler(instance)
+    if info.mode != "json":
+        return data
+
+    for field_name, field_info in instance.__class__.model_fields.items():
+        if field_info.annotation is SecretStr or (
+            hasattr(field_info.annotation, "__args__")
+            and SecretStr in getattr(field_info.annotation, "__args__", ())
+        ):
+            if data.get(field_name) is not None:
+                data[field_name] = "**********"
+    return data
+
+
 class GatewaySettings(BaseSettings):
     """Runtime configuration for the MCP gateway."""
 
@@ -66,23 +82,8 @@ class GatewaySettings(BaseSettings):
 
     @model_serializer(mode="wrap")
     def _mask_secrets(self, handler: Any, info: SerializationInfo) -> dict[str, Any]:
-        """Pydantic v2 の model_dump(mode='json') で SecretStr が
-        プレーンテキスト化される問題を防ぐカスタムシリアライザ。
-        JSON シリアライズ時のみ、SecretStr フィールドを '**********' にマスクする。
-        """
-        data: dict[str, Any] = handler(self)
-        if info.mode != "json":
-            return data
-
-        for field_name, field_info in self.__class__.model_fields.items():
-            if field_info.annotation is SecretStr or (
-                hasattr(field_info.annotation, "__args__")
-                and SecretStr in getattr(field_info.annotation, "__args__", ())
-            ):
-                if data.get(field_name) is not None:
-                    data[field_name] = "**********"
-        return data
-
+        """JSON シリアライズ時のみ、SecretStr フィールドを '**********' にマスクする。"""
+        return _mask_secret_fields(self, handler, info)
 
 class EvaluatorSettings(BaseSettings):
     """Universal LLM Evaluator (LiteLLM backend) の設定。"""
@@ -95,3 +96,8 @@ class EvaluatorSettings(BaseSettings):
 
     api_key: SecretStr | None = None
     model: str = "claude-haiku-4-5-20251001"
+
+    @model_serializer(mode="wrap")
+    def _mask_secrets(self, handler: Any, info: SerializationInfo) -> dict[str, Any]:
+        """JSON シリアライズ時のみ、SecretStr フィールドを '**********' にマスクする。"""
+        return _mask_secret_fields(self, handler, info)

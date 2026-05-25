@@ -19,9 +19,7 @@ from mcp_gateway.policy.models_evaluator import Decision, MemoryItem, ToolCallIn
 
 
 def _ok_response(json_text: str) -> SimpleNamespace:
-    return SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content=json_text))]
-    )
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json_text))])
 
 
 @pytest.mark.parametrize(

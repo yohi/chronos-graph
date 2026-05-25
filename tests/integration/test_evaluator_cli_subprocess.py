@@ -79,8 +79,7 @@ def _run_cli(
 ) -> subprocess.CompletedProcess[str]:
     env = _build_env(policy, env_overrides)
     command = (
-        "uv run python -m mcp_gateway evaluate --json-io --policy-path "
-        f"{shlex.quote(str(policy))}"
+        f"uv run python -m mcp_gateway evaluate --json-io --policy-path {shlex.quote(str(policy))}"
     )
     return subprocess.run(  # noqa: S603
         ["bash", "-lc", command],  # noqa: S607

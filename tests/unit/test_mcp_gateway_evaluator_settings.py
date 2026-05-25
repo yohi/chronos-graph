@@ -14,7 +14,7 @@ def test_defaults_match_design(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = EvaluatorSettings(_env_file=None)  # type: ignore[call-arg]
 
     assert settings.api_key is None
-    assert settings.model == "claude-haiku-4-5-20251001"
+    assert settings.model == "anthropic/claude-haiku-4-5-20251001"
 
 
 def test_env_vars_override_defaults(monkeypatch: pytest.MonkeyPatch) -> None:

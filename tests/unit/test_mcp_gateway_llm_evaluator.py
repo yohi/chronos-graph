@@ -99,6 +99,18 @@ def test_from_env_returns_none_when_litellm_missing(monkeypatch: pytest.MonkeyPa
         assert LlmEvaluator.from_env() is None
 
 
+def test_from_env_creates_evaluator_with_default_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 1. verify from_env copies settings.model default
+    monkeypatch.setenv("CHRONOS_EVALUATOR_API_KEY", "test-key")
+    evaluator = LlmEvaluator.from_env()
+    assert evaluator is not None
+    assert evaluator._model == "anthropic/claude-haiku-4-5-20251001"
+
+    # 2. verify direct instantiation without model matches default
+    evaluator_direct = LlmEvaluator(api_key="test-key")
+    assert evaluator_direct._model == "anthropic/claude-haiku-4-5-20251001"
+
+
 def test_from_env_respects_max_tokens_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CHRONOS_EVALUATOR_API_KEY", "test-key")
     monkeypatch.setenv("CHRONOS_EVALUATOR_MAX_TOKENS", "4096")
@@ -234,7 +246,7 @@ def mock_litellm(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
 
 @pytest.mark.asyncio
 async def test_judge_returns_allow_on_valid_response(mock_litellm: AsyncMock) -> None:
-    evaluator = LlmEvaluator(api_key="x", model="claude-haiku-4-5-20251001")
+    evaluator = LlmEvaluator(api_key="x")
     mock_litellm.return_value = _ok_response('{"decision":"allow"}')
     out = await evaluator.judge(
         input_=ToolCallInput(tool_name="bash", tool_input={"command": "ls"}),
@@ -246,7 +258,7 @@ async def test_judge_returns_allow_on_valid_response(mock_litellm: AsyncMock) ->
     # 呼び出し引数を最低限検証する
     assert mock_litellm.await_count == 1
     kwargs = mock_litellm.await_args.kwargs
-    assert kwargs["model"] == "claude-haiku-4-5-20251001"
+    assert kwargs["model"] == "anthropic/claude-haiku-4-5-20251001"
     assert kwargs["api_key"] == "x"
     assert kwargs["max_tokens"] == 1536
     assert kwargs["timeout"] == 10.0

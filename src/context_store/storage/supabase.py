@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -68,6 +69,7 @@ class SupabaseStorageAdapter:
     def __init__(self, client: "AsyncClient") -> None:
         self._client = client
         self._cached_dimension: int | None = None
+        self._dimension_lock = asyncio.Lock()
 
     @classmethod
     async def create(cls, settings: "Settings") -> "SupabaseStorageAdapter":
@@ -104,40 +106,44 @@ class SupabaseStorageAdapter:
         if self._cached_dimension is not None:
             return self._cached_dimension
 
-        chain = (
-            self._client.table("memories")
-            .select("embedding")
-            .not_.is_("embedding", "null")
-            .limit(1)
-        )
-        response = await chain.execute()
-        rows = response.data or []
-        if rows:
-            embedding = _parse_embedding(rows[0].get("embedding"))
-            if embedding:
-                self._cached_dimension = len(embedding)
+        async with self._dimension_lock:
+            if self._cached_dimension is not None:
                 return self._cached_dimension
-        # Empty table: query schema dimension via RPC
-        try:
-            rpc_response = await self._client.rpc("get_embedding_dimension", {}).execute()
-        except Exception as exc:
-            raise self._map_to_storage_error(exc) from exc
-        data = rpc_response.data
-        if isinstance(data, list) and data:
-            dim = data[0]
-        elif isinstance(data, int):
-            dim = data
-        else:
-            dim = None
-        if isinstance(dim, int) and dim > 0:
-            self._cached_dimension = dim
-            return self._cached_dimension
-        raise StorageError(
-            "Could not determine memories.embedding dimension from schema. "
-            "Ensure pgvector extension is installed and the memories table exists.",
-            code="INVALID_STATE",
-            recoverable=False,
-        )
+
+            chain = (
+                self._client.table("memories")
+                .select("embedding")
+                .not_.is_("embedding", "null")
+                .limit(1)
+            )
+            response = await chain.execute()
+            rows = response.data or []
+            if rows:
+                embedding = _parse_embedding(rows[0].get("embedding"))
+                if embedding:
+                    self._cached_dimension = len(embedding)
+                    return self._cached_dimension
+            # Empty table: query schema dimension via RPC
+            try:
+                rpc_response = await self._client.rpc("get_embedding_dimension", {}).execute()
+            except Exception as exc:
+                raise self._map_to_storage_error(exc) from exc
+            data = rpc_response.data
+            if isinstance(data, list) and data:
+                dim = data[0]
+            elif isinstance(data, int):
+                dim = data
+            else:
+                dim = None
+            if isinstance(dim, int) and dim > 0:
+                self._cached_dimension = dim
+                return self._cached_dimension
+            raise StorageError(
+                "Could not determine memories.embedding dimension from schema. "
+                "Ensure pgvector extension is installed and the memories table exists.",
+                code="INVALID_STATE",
+                recoverable=False,
+            )
 
     async def dispose(self) -> None:
         client = self._client

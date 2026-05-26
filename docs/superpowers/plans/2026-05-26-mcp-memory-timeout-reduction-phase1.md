@@ -62,7 +62,7 @@
 - Modify: `tests/unit/storage/test_config_supabase.py`
 - Modify: `tests/unit/storage/test_supabase_adapter.py`
 
-- [ ] **Step 1: Add a failing test for the new setting default**
+- [x] **Step 1: Add a failing test for the new setting default**
 
 Append to `tests/unit/storage/test_config_supabase.py`:
 
@@ -96,12 +96,12 @@ def test_supabase_request_timeout_env_override(monkeypatch):
     assert settings.supabase_request_timeout_seconds == 30.0
 ```
 
-- [ ] **Step 2: Run the test and confirm it fails**
+- [x] **Step 2: Run the test and confirm it fails**
 
 Run: `uv run pytest tests/unit/storage/test_config_supabase.py::test_supabase_request_timeout_default tests/unit/storage/test_config_supabase.py::test_supabase_request_timeout_env_override -v`
 Expected: FAIL with `AttributeError` on `supabase_request_timeout_seconds`.
 
-- [ ] **Step 3: Add the setting**
+- [x] **Step 3: Add the setting**
 
 In `src/context_store/config.py`, add inside `class Settings` (right after the existing `supabase_key` field around line 99-103):
 
@@ -114,12 +114,12 @@ In `src/context_store/config.py`, add inside `class Settings` (right after the e
     )
 ```
 
-- [ ] **Step 4: Re-run the setting tests**
+- [x] **Step 4: Re-run the setting tests**
 
 Run: `uv run pytest tests/unit/storage/test_config_supabase.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Add a failing test that the adapter passes options through**
+- [x] **Step 5: Add a failing test that the adapter passes options through**
 
 Append to `tests/unit/storage/test_supabase_adapter.py`:
 
@@ -163,12 +163,12 @@ async def test_create_passes_request_timeout_to_client(monkeypatch):
     assert captured["options"].postgrest_client_timeout == 12.5
 ```
 
-- [ ] **Step 6: Run the adapter test and confirm it fails**
+- [x] **Step 6: Run the adapter test and confirm it fails**
 
 Run: `uv run pytest tests/unit/storage/test_supabase_adapter.py::test_create_passes_request_timeout_to_client -v`
 Expected: FAIL — `captured["options"]` is `None` because the adapter does not pass options.
 
-- [ ] **Step 7: Update the adapter to construct and pass `AsyncClientOptions`**
+- [x] **Step 7: Update the adapter to construct and pass `AsyncClientOptions`**
 
 In `src/context_store/storage/supabase.py`, change the `try` block at the top to import `AsyncClientOptions`:
 
@@ -204,17 +204,17 @@ Then in `SupabaseStorageAdapter.create` (lines 69-95), change the `create_async_
         )
 ```
 
-- [ ] **Step 8: Re-run the adapter test**
+- [x] **Step 8: Re-run the adapter test**
 
 Run: `uv run pytest tests/unit/storage/test_supabase_adapter.py::test_create_passes_request_timeout_to_client -v`
 Expected: PASS.
 
-- [ ] **Step 9: Run the full Supabase adapter test module to catch regressions**
+- [x] **Step 9: Run the full Supabase adapter test module to catch regressions**
 
 Run: `uv run pytest tests/unit/storage/test_supabase_adapter.py -v`
 Expected: All PASS (existing tests continue to work because the new option is additive).
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add src/context_store/config.py src/context_store/storage/supabase.py \
@@ -230,7 +230,7 @@ git commit -m "feat(storage): add supabase_request_timeout_seconds and wire thro
 - Modify: `src/context_store/storage/supabase.py`
 - Modify: `tests/unit/storage/test_supabase_adapter.py`
 
-- [ ] **Step 1: Add a failing test that asserts the second call does not hit the wire**
+- [x] **Step 1: Add a failing test that asserts the second call does not hit the wire**
 
 Append to `tests/unit/storage/test_supabase_adapter.py`:
 
@@ -256,12 +256,12 @@ async def test_get_vector_dimension_is_cached_after_first_call():
     client.rpc.assert_not_called()
 ```
 
-- [ ] **Step 2: Run the test and confirm it fails**
+- [x] **Step 2: Run the test and confirm it fails**
 
 Run: `uv run pytest tests/unit/storage/test_supabase_adapter.py::test_get_vector_dimension_is_cached_after_first_call -v`
 Expected: FAIL — `chain.execute` is called a second time.
 
-- [ ] **Step 3: Add a `_cached_dimension` field and short-circuit logic**
+- [x] **Step 3: Add a `_cached_dimension` field and short-circuit logic**
 
 In `src/context_store/storage/supabase.py`, update `__init__` (around line 66) and `get_vector_dimension` (line 97):
 
@@ -310,17 +310,17 @@ In `src/context_store/storage/supabase.py`, update `__init__` (around line 66) a
         )
 ```
 
-- [ ] **Step 4: Re-run the test**
+- [x] **Step 4: Re-run the test**
 
 Run: `uv run pytest tests/unit/storage/test_supabase_adapter.py::test_get_vector_dimension_is_cached_after_first_call -v`
 Expected: PASS.
 
-- [ ] **Step 5: Run the full Supabase adapter and orchestrator tests to verify no regressions**
+- [x] **Step 5: Run the full Supabase adapter and orchestrator tests to verify no regressions**
 
 Run: `uv run pytest tests/unit/storage/test_supabase_adapter.py tests/unit/test_orchestrator.py -v`
 Expected: All PASS. (The existing `Orchestrator._check_vector_dimension` continues to call `get_vector_dimension`, but the cached value short-circuits the second round trip.)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/context_store/storage/supabase.py tests/unit/storage/test_supabase_adapter.py
@@ -336,7 +336,7 @@ git commit -m "perf(storage): cache Supabase vector dimension to avoid duplicate
 - Modify: `src/context_store/storage/supabase.py`
 - Modify: `tests/unit/storage/test_supabase_adapter.py`
 
-- [ ] **Step 1: Create the new migration**
+- [x] **Step 1: Create the new migration**
 
 Create `supabase/migrations/20260526000001_vector_search_brief.sql` with:
 
@@ -393,7 +393,7 @@ $$;
 GRANT EXECUTE ON FUNCTION vector_search_brief(vector, integer, text) TO service_role;
 ```
 
-- [ ] **Step 2: Add a failing test for the new RPC name**
+- [x] **Step 2: Add a failing test for the new RPC name**
 
 Append to `tests/unit/storage/test_supabase_adapter.py`:
 
@@ -437,12 +437,12 @@ async def test_vector_search_uses_brief_rpc_and_returns_empty_embedding():
     assert call_args[0][0] == "vector_search_brief"
 ```
 
-- [ ] **Step 3: Run the test and confirm it fails**
+- [x] **Step 3: Run the test and confirm it fails**
 
 Run: `uv run pytest tests/unit/storage/test_supabase_adapter.py::test_vector_search_uses_brief_rpc_and_returns_empty_embedding -v`
 Expected: FAIL — adapter still calls `vector_search`.
 
-- [ ] **Step 4: Update the adapter to call the brief RPC**
+- [x] **Step 4: Update the adapter to call the brief RPC**
 
 In `src/context_store/storage/supabase.py`, change `vector_search` (line 280):
 
@@ -453,7 +453,7 @@ In `src/context_store/storage/supabase.py`, change `vector_search` (line 280):
             raise self._map_to_storage_error(exc) from exc
 ```
 
-- [ ] **Step 5: Update the existing `test_vector_search_calls_rpc` test**
+- [x] **Step 5: Update the existing `test_vector_search_calls_rpc` test**
 
 In `tests/unit/storage/test_supabase_adapter.py`, find `test_vector_search_calls_rpc` (around line 472). Update the row builder to drop the `"embedding"` key (the brief RPC does not return it) and change the assertion:
 
@@ -465,12 +465,12 @@ In `tests/unit/storage/test_supabase_adapter.py`, find `test_vector_search_calls
 
 Also update the row dict in that test to remove `"embedding": embedding,` and assert `results[0].memory.embedding == []`.
 
-- [ ] **Step 6: Re-run the adapter tests**
+- [x] **Step 6: Re-run the adapter tests**
 
 Run: `uv run pytest tests/unit/storage/test_supabase_adapter.py -v`
 Expected: All PASS.
 
-- [ ] **Step 6.5: Add a SQL-level regression test for the new migration**
+- [x] **Step 6.5: Add a SQL-level regression test for the new migration**
 
 The existing `tests/unit/storage/test_supabase_migrations.py` pins the structure of migrations via `re.search` (see e.g. `test_vector_search_rpc_returns_embedding_column` which fixes the existing `vector_search` schema). Add a sibling test so the new RPC's brief contract cannot regress silently.
 
@@ -505,7 +505,7 @@ def test_vector_search_brief_rpc_omits_embedding_column() -> None:
 Run: `uv run pytest tests/unit/storage/test_supabase_migrations.py::test_vector_search_brief_rpc_omits_embedding_column -v`
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add supabase/migrations/20260526000001_vector_search_brief.sql \

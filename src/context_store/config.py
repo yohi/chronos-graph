@@ -100,6 +100,12 @@ class Settings(BaseSettings):
         default=SecretStr(""),
         description="Service Role Key または Anon Key",
     )
+    # --- Supabase request timeout (postgrest_client_timeout) ---
+    supabase_request_timeout_seconds: float = Field(
+        default=10.0,
+        gt=0.0,
+        description="Per-request timeout (seconds) for Supabase Data API calls.",
+    )
 
     # --- Neo4j (graph_enabled=true の場合) ---
     neo4j_uri: str = "bolt://localhost:7687"

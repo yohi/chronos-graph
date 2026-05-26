@@ -55,3 +55,33 @@ def test_default_embedding_dimension_is_768():
 def test_graph_backend_for_supabase_is_disabled():
     s = _make_supabase_settings()
     assert s.graph_backend == "disabled"
+
+
+def test_supabase_request_timeout_default(monkeypatch):
+    """Default request timeout should be 10.0 seconds."""
+    monkeypatch.setenv("STORAGE_BACKEND", "supabase")
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_KEY", "service-role-key")
+    monkeypatch.setenv("EMBEDDING_DIMENSION", "768")
+    monkeypatch.delenv("SUPABASE_REQUEST_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("ENV_FILE", "/dev/null")
+
+    from context_store.config import get_settings
+
+    settings = get_settings()
+    assert settings.supabase_request_timeout_seconds == 10.0
+
+
+def test_supabase_request_timeout_env_override(monkeypatch):
+    """SUPABASE_REQUEST_TIMEOUT_SECONDS should override the default."""
+    monkeypatch.setenv("STORAGE_BACKEND", "supabase")
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_KEY", "service-role-key")
+    monkeypatch.setenv("EMBEDDING_DIMENSION", "768")
+    monkeypatch.setenv("SUPABASE_REQUEST_TIMEOUT_SECONDS", "30")
+    monkeypatch.setenv("ENV_FILE", "/dev/null")
+
+    from context_store.config import get_settings
+
+    settings = get_settings()
+    assert settings.supabase_request_timeout_seconds == 30.0

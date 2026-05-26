@@ -1057,7 +1057,7 @@ git commit -m "perf(retrieval): batch access-count updates into a single bulk RP
 **Scope note:**
 The provider gains a `start()` method that can be called explicitly to preload the model in a worker thread, but `Orchestrator.create_orchestrator()` does **not** auto-invoke it. Reason: orchestrator init is performed lazily inside `_ensure_initialized()` on the first MCP tool call, so `await start()` there does not actually move the cold-start cost off the first-call critical path; the call still blocks for the same wall time. True cold-start avoidance requires preloading at the FastMCP `lifespan` startup (eager provider construction), which is tracked as a separate item in `SPEC.md` §16.5 and is out of scope for Phase 1. Phase 1's local-model win is the executor reuse alone (one shared `ThreadPoolExecutor` instead of one per `embed_batch` call) plus correct disposal.
 
-- [ ] **Step 1: Update the top-of-file imports in `tests/unit/test_embedding_local.py`**
+- [x] **Step 1: Update the top-of-file imports in `tests/unit/test_embedding_local.py`**
 
 The existing file already imports `MagicMock, patch` and `pytest` at the top. Add `ThreadPoolExecutor` to that import block so the new tests can perform `isinstance` checks without violating ruff E402 (module-level imports must precede class/function definitions).
 
@@ -1076,7 +1076,7 @@ import pytest
 from context_store.embedding.protocols import EmbeddingProvider
 ```
 
-- [ ] **Step 2: Append the new failing tests at the end of `tests/unit/test_embedding_local.py`**
+- [x] **Step 2: Append the new failing tests at the end of `tests/unit/test_embedding_local.py`**
 
 Use the existing project pattern for `encode().return_value` (a list of `MagicMock` instances each exposing `.tolist()`), matching `TestLocalModelEmbeddingProvider._make_mock_model` and `test_embed_batch` already in the file. A plain `[[0.1]*8, ...]` would break because the production code calls `emb.tolist()`.
 
@@ -1154,12 +1154,12 @@ async def test_close_shuts_down_executor() -> None:
         executor.submit(lambda: None)
 ```
 
-- [ ] **Step 3: Run the new tests and confirm they fail**
+- [x] **Step 3: Run the new tests and confirm they fail**
 
 Run: `uv run pytest tests/unit/test_embedding_local.py -k "reuses_single_executor or preloads_model or close_shuts_down" -v`
 Expected: FAIL — `provider._executor` does not exist and `start()` is not defined.
 
-- [ ] **Step 4: Replace per-call executor with a long-lived one**
+- [x] **Step 4: Replace per-call executor with a long-lived one**
 
 Rewrite `src/context_store/embedding/local_model.py`:
 
@@ -1289,12 +1289,12 @@ class LocalModelEmbeddingProvider:
         self._executor.shutdown(wait=True)
 ```
 
-- [ ] **Step 5: Re-run the local-model tests**
+- [x] **Step 5: Re-run the local-model tests**
 
 Run: `uv run pytest tests/unit/test_embedding_local.py -v`
 Expected: All PASS.
 
-- [ ] **Step 6: Wire `embedding_provider.close()` into `Orchestrator.dispose()`**
+- [x] **Step 6: Wire `embedding_provider.close()` into `Orchestrator.dispose()`**
 
 In `src/context_store/orchestrator.py`, extend `Orchestrator.dispose()` (lines 431-466). After the existing `self._cache.dispose()` try block (around line 464), add a fourth try block:
 
@@ -1309,7 +1309,7 @@ In `src/context_store/orchestrator.py`, extend `Orchestrator.dispose()` (lines 4
             logger.error("Failed to dispose embedding provider: %s", exc, exc_info=True)
 ```
 
-- [ ] **Step 7: Add a failing test for orchestrator-level disposal**
+- [x] **Step 7: Add a failing test for orchestrator-level disposal**
 
 Add the following to `tests/unit/test_orchestrator.py` (or to the existing dispose-coverage test file under `tests/unit/`; if there is no dispose test yet, append a new test function at the end of `tests/unit/test_orchestrator.py`):
 
@@ -1350,7 +1350,7 @@ async def test_orchestrator_dispose_closes_embedding_provider() -> None:
     embedding_provider.close.assert_awaited_once()
 ```
 
-- [ ] **Step 8: Wire `embedding_provider.close()` into the `create_orchestrator` failure path**
+- [x] **Step 8: Wire `embedding_provider.close()` into the `create_orchestrator` failure path**
 
 In `src/context_store/orchestrator.py`, locate the `except Exception:` block at the end of `create_orchestrator` (lines 605-611). Currently it disposes storage/graph/cache only. Replace the block with the version below so the executor is released even when ingestion/retrieval pipeline construction or `_check_vector_dimension` raises:
 
@@ -1375,12 +1375,12 @@ In `src/context_store/orchestrator.py`, locate the `except Exception:` block at 
         raise
 ```
 
-- [ ] **Step 9: Run the orchestrator tests**
+- [x] **Step 9: Run the orchestrator tests**
 
 Run: `uv run pytest tests/unit/test_orchestrator.py -v`
 Expected: All PASS, including the new dispose test from Step 7.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add src/context_store/embedding/local_model.py \
@@ -1401,7 +1401,7 @@ git commit -m "perf(embedding): reuse local-model executor and tie its lifecycle
 **Failure-mode note (intentional behavior change):**
 Before Phase 1, embedding errors were caught per-chunk inside the inner `try/except`, so a single bad chunk would not abort the whole batch. After this task, `embed_batch([all chunks])` is called once up-front, so an exception there aborts the entire `ingest()` call (no per-chunk granularity for embedding failures). This is acceptable for Phase 1 because every supported embedding provider (Local, OpenAI, LiteLLM, CustomAPI) fails at the batch granularity in practice (model crash / 429 / 5xx / OOM affect the entire request). Per-text fault isolation is deferred (a future provider with deterministic per-text failure modes can reintroduce it by falling back to per-chunk `embed()` on `embed_batch` failure). Step 6.5 below adds a regression test that pins this contract.
 
-- [ ] **Step 1: Add a failing test that asserts one embed_batch call regardless of chunk count**
+- [x] **Step 1: Add a failing test that asserts one embed_batch call regardless of chunk count**
 
 Append to `tests/unit/test_ingestion_pipeline.py`:
 
@@ -1470,12 +1470,12 @@ async def test_ingest_calls_embed_batch_once_for_all_chunks(
     embedding_provider.embed.assert_not_awaited()
 ```
 
-- [ ] **Step 2: Run the new test and confirm it fails**
+- [x] **Step 2: Run the new test and confirm it fails**
 
 Run: `uv run pytest tests/unit/test_ingestion_pipeline.py::test_ingest_calls_embed_batch_once_for_all_chunks -v`
 Expected: FAIL — `embed_batch` is never called; `embed` is called three times.
 
-- [ ] **Step 3: Refactor `IngestionPipeline.ingest` to pre-batch embeddings**
+- [x] **Step 3: Refactor `IngestionPipeline.ingest` to pre-batch embeddings**
 
 In `src/context_store/ingestion/pipeline.py`, change `ingest` (lines 191-263). Keep the locking and result construction logic intact; only extract embedding into a single up-front pass and pipe precomputed vectors through:
 
@@ -1556,7 +1556,7 @@ In `src/context_store/ingestion/pipeline.py`, change `ingest` (lines 191-263). K
         return results
 ```
 
-- [ ] **Step 4: Plumb `precomputed_embedding` through `_process_chunk` and `_process_chunk_core`**
+- [x] **Step 4: Plumb `precomputed_embedding` through `_process_chunk` and `_process_chunk_core`**
 
 In the same file, update the two methods to accept and forward `precomputed_embedding`:
 
@@ -1638,17 +1638,17 @@ And in `_process_chunk_core` (around line 327), replace the single embed call wi
         # ... rest of the method unchanged ...
 ```
 
-- [ ] **Step 5: Re-run the new ingestion test**
+- [x] **Step 5: Re-run the new ingestion test**
 
 Run: `uv run pytest tests/unit/test_ingestion_pipeline.py::test_ingest_calls_embed_batch_once_for_all_chunks -v`
 Expected: PASS.
 
-- [ ] **Step 6: Run the full ingestion test module**
+- [x] **Step 6: Run the full ingestion test module**
 
 Run: `uv run pytest tests/unit/test_ingestion_pipeline.py tests/unit/test_batch_processor.py -v`
 Expected: All PASS. (Existing tests that mocked `embed()` will still pass because the per-chunk fallback path is preserved when `precomputed_embedding is None`.)
 
-- [ ] **Step 6.5: Pin the all-or-nothing failure contract for embed_batch errors**
+- [x] **Step 6.5: Pin the all-or-nothing failure contract for embed_batch errors**
 
 Append to `tests/unit/test_ingestion_pipeline.py`:
 
@@ -1689,7 +1689,7 @@ async def test_ingest_propagates_embed_batch_failure() -> None:
 Run: `uv run pytest tests/unit/test_ingestion_pipeline.py::test_ingest_propagates_embed_batch_failure -v`
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/context_store/ingestion/pipeline.py tests/unit/test_ingestion_pipeline.py

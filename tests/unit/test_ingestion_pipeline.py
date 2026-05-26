@@ -524,3 +524,74 @@ async def test_pipeline_estimate_chunks_conversation_discrepancy() -> None:
     #    (もし Adapter なしで直接 Chunker に渡すと [t1,r1,t2] と
     #    [r2,t3,Assistant: r3] の 2 チャンクになる)
     assert count == 3
+
+
+@pytest.mark.asyncio
+async def test_ingest_calls_embed_batch_once_for_all_chunks(monkeypatch) -> None:
+    """IngestionPipeline.ingest must batch-embed all chunks in a single call."""
+    storage = MagicMock()
+    storage.vector_search = AsyncMock(return_value=[])
+    storage.save_memory = AsyncMock(return_value="550e8400-e29b-41d4-a716-446655440099")
+    storage.list_by_filter = AsyncMock(return_value=[])
+
+    embedding_provider = MagicMock()
+    embedding_provider.embed_batch = AsyncMock(return_value=[[0.1] * 8 for _ in range(3)])
+    embedding_provider.embed = AsyncMock(return_value=[0.1] * 8)
+    embedding_provider.dimension = 8
+    embedding_provider.close = AsyncMock()
+
+    pipeline = IngestionPipeline(
+        storage=storage,
+        graph=None,
+        embedding_provider=embedding_provider,
+        settings=None,
+    )
+
+    fake_chunks = [
+        RawContent(
+            content=f"c{i}",
+            source_type=SourceType.MANUAL,
+            metadata={"chunk_index": i, "chunk_count": 3},
+        )
+        for i in range(3)
+    ]
+
+    def fake_chunk(raw: RawContent):
+        yield from fake_chunks
+
+    monkeypatch.setattr(pipeline._chunker, "chunk", fake_chunk)
+
+    await pipeline.ingest("dummy", source_type=SourceType.MANUAL, metadata={})
+
+    embedding_provider.embed_batch.assert_awaited_once()
+    embed_call = embedding_provider.embed_batch.await_args
+    assert embed_call.args[0] == ["c0", "c1", "c2"]
+    embedding_provider.embed.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ingest_propagates_embed_batch_failure() -> None:
+    """When embed_batch raises, ingest() must abort instead of partially succeeding."""
+    storage = MagicMock()
+    storage.vector_search = AsyncMock(return_value=[])
+    storage.save_memory = AsyncMock()
+    storage.list_by_filter = AsyncMock(return_value=[])
+
+    embedding_provider = MagicMock()
+    embedding_provider.embed_batch = AsyncMock(side_effect=RuntimeError("embedding backend down"))
+    embedding_provider.embed = AsyncMock()
+    embedding_provider.dimension = 8
+    embedding_provider.close = AsyncMock()
+
+    pipeline = IngestionPipeline(
+        storage=storage,
+        graph=None,
+        embedding_provider=embedding_provider,
+        settings=None,
+    )
+
+    with pytest.raises(RuntimeError, match="embedding backend down"):
+        await pipeline.ingest("dummy", source_type=SourceType.MANUAL, metadata={})
+
+    storage.save_memory.assert_not_called()
+    embedding_provider.embed.assert_not_called()

@@ -195,68 +195,66 @@ class IngestionPipeline:
         source_type: SourceType = SourceType.MANUAL,
         metadata: dict[str, Any] | None = None,
     ) -> list[IngestionResult]:
-        """コンテンツを取り込んで永続化する。
-
-        Args:
-            source: コンテンツ本文または URL
-            source_type: ソースタイプ
-            metadata: 追加メタデータ（project, session_id など）
-
-        Returns:
-            List[IngestionResult]: 各チャンクの処理結果
-        """
+        """コンテンツを取り込んで永続化する。"""
         meta = metadata or {}
 
-        # ステップ1: ソースからコンテンツを取得
         raw_contents = await self._prepare_raw_contents(source, source_type, meta)
+
+        flattened: list[RawContent] = []
+        for raw in raw_contents:
+            flattened.extend(self._chunker.chunk(raw))
+
+        if not flattened:
+            return []
+
+        embeddings = await self._embedding_provider.embed_batch(
+            [chunk.content for chunk in flattened]
+        )
+        if len(embeddings) != len(flattened):
+            raise RuntimeError(
+                f"Embedding count mismatch: expected {len(flattened)}, got {len(embeddings)}"
+            )
 
         results: list[IngestionResult] = []
         document_memories: dict[str, list[Memory]] = {}
         failed_chunks: list[dict[str, Any]] = []
-        total_chunks = 0
 
-        for raw in raw_contents:
-            # ステップ2: チャンク分割
-            chunks = list(self._chunker.chunk(raw))
-            total_chunks += len(chunks)
+        for chunk, embedding in zip(flattened, embeddings, strict=True):
+            document_id = str(chunk.metadata.get("document_id", ""))
+            prior_document_memories = document_memories.get(document_id, [])
+            content_hash = self._compute_hash(chunk.content)
+            try:
+                result = await self._process_chunk(
+                    chunk,
+                    base_metadata=meta,
+                    prior_document_memories=prior_document_memories,
+                    precomputed_embedding=embedding,
+                )
+                if result:
+                    results.append(result)
+                    if document_id and result.persisted_memory is not None:
+                        document_memories.setdefault(document_id, []).append(
+                            result.persisted_memory
+                        )
+            except Exception as e:
+                logger.error(
+                    "Chunk 処理失敗 (content_hash=%s, doc_id=%s): %s",
+                    content_hash[:8],
+                    document_id,
+                    e,
+                    exc_info=True,
+                )
+                failed_chunks.append(
+                    {
+                        "content_hash": content_hash,
+                        "document_id": document_id,
+                        "error": str(e),
+                    }
+                )
 
-            # ステップ3: 各チャンクを処理
-            for chunk in chunks:
-                document_id = str(chunk.metadata.get("document_id", ""))
-                prior_document_memories = document_memories.get(document_id, [])
-                content_hash = self._compute_hash(chunk.content)
-                try:
-                    result = await self._process_chunk(
-                        chunk,
-                        base_metadata=meta,
-                        prior_document_memories=prior_document_memories,
-                    )
-                    if result:
-                        results.append(result)
-                        if document_id and result.persisted_memory is not None:
-                            document_memories.setdefault(document_id, []).append(
-                                result.persisted_memory
-                            )
-                except Exception as e:
-                    logger.error(
-                        "Chunk 処理失敗 (content_hash=%s, doc_id=%s): %s",
-                        content_hash[:8],
-                        document_id,
-                        e,
-                        exc_info=True,
-                    )
-                    failed_chunks.append(
-                        {
-                            "content_hash": content_hash,
-                            "document_id": document_id,
-                            "error": str(e),
-                        }
-                    )
-
-        # 全てのチャンクが失敗した場合は例外を投げる
-        if total_chunks > 0 and not results:
+        if flattened and not results:
             raise RuntimeError(
-                f"Ingestion 全件失敗 ({len(failed_chunks)}/{total_chunks} chunks). "
+                f"Ingestion 全件失敗 ({len(failed_chunks)}/{len(flattened)} chunks). "
                 f"Failures: {failed_chunks}"
             )
 
@@ -268,6 +266,7 @@ class IngestionPipeline:
         *,
         base_metadata: dict[str, Any],
         prior_document_memories: list[Memory],
+        precomputed_embedding: list[float] | None = None,
     ) -> IngestionResult | None:
         """単一チャンクの処理パイプラインを実行する。"""
         # コンテンツハッシュ + マージされたメタデータのハッシュでキーイング
@@ -294,6 +293,7 @@ class IngestionPipeline:
                         prior_document_memories=prior_document_memories,
                         memo_key=memo_key,
                         content_hash=content_hash,
+                        precomputed_embedding=precomputed_embedding,
                     )
                 )
                 self._content_results[memo_key] = target_task
@@ -309,6 +309,7 @@ class IngestionPipeline:
         prior_document_memories: list[Memory],
         memo_key: Any,
         content_hash: str,
+        precomputed_embedding: list[float] | None = None,
     ) -> IngestionResult | None:
         """処理を実行し、完了後に確実にクリーンアップを行うラッパー。"""
         try:
@@ -317,6 +318,7 @@ class IngestionPipeline:
                 base_metadata=base_metadata,
                 prior_document_memories=prior_document_memories,
                 content_hash=content_hash,
+                precomputed_embedding=precomputed_embedding,
             )
         finally:
             # タスク完了時のクリーンアップ
@@ -331,6 +333,7 @@ class IngestionPipeline:
         base_metadata: dict[str, Any],
         prior_document_memories: list[Memory],
         content_hash: str,
+        precomputed_embedding: list[float] | None = None,
     ) -> IngestionResult | None:
         """チャンクのコア処理（ロック範囲を最適化）。"""
         # ステップ3: 分類（LLM不使用のルールベース）
@@ -339,7 +342,10 @@ class IngestionPipeline:
         # ========================================================
         # 埋め込み生成はロック外で実施（並列性を高め SQLITE_BUSY 回避）
         # ========================================================
-        embedding = await self._embedding_provider.embed(chunk.content)
+        if precomputed_embedding is not None:
+            embedding = precomputed_embedding
+        else:
+            embedding = await self._embedding_provider.embed(chunk.content)
 
         # メタデータの整合
         merged_meta = {**base_metadata, **chunk.metadata}

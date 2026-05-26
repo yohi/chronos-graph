@@ -155,9 +155,7 @@ class IngestionPipeline:
     async def dispose(self) -> None:
         """保持しているクローズ可能リソースを解放する。"""
         if self._url_adapter is not None:
-            aclose = getattr(self._url_adapter, "aclose", None)
-            if callable(aclose):
-                await aclose()
+            await self._url_adapter.aclose()
 
         await self._embedding_provider.close()
 

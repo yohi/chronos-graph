@@ -8,25 +8,20 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Iterator
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Iterator, cast
+from typing import TYPE_CHECKING, Any, cast
 
 try:  # noqa: I001
-    from postgrest.exceptions import (  # type: ignore[import-not-found]
-        APIError as PostgrestAPIError,  # type: ignore[import-not-found]  # noqa: F401
-    )
-
     from supabase import (  # type: ignore[attr-defined]  # noqa: F401
-        AsyncClient,
         AsyncClientOptions,
         create_async_client,
     )
 
     _supabase_available = True
 except ImportError:
-    AsyncClient = Any  # type: ignore[misc,assignment]
-    AsyncClientOptions = Any  # type: ignore[misc,assignment]
-    PostgrestAPIError = Exception  # type: ignore[misc,assignment]
+    AsyncClientOptions = None  # type: ignore[assignment,misc]
+    create_async_client = None  # type: ignore[assignment]
     _supabase_available = False
 
 from context_store.models.memory import MemorySource, ScoredMemory
@@ -86,14 +81,14 @@ _MEMORY_BRIEF_COLUMNS = (
 class SupabaseStorageAdapter:
     """StorageAdapter implementation backed by Supabase Data API (HTTPS only)."""
 
-    def __init__(self, client: "AsyncClient") -> None:
-        self._client = client
+    def __init__(self, client: object) -> None:
+        self._client: Any = client
         self._cached_dimension: int | None = None
         self._dimension_lock = asyncio.Lock()
 
     @classmethod
     async def create(cls, settings: "Settings") -> "SupabaseStorageAdapter":
-        if not _supabase_available:
+        if not _supabase_available or create_async_client is None or AsyncClientOptions is None:
             raise ImportError(
                 "supabase is not installed. Install with: uv sync --extra storage-supabase"
             )

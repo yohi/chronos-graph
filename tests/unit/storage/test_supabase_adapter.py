@@ -112,6 +112,25 @@ async def test_get_vector_dimension_queries_schema_when_empty():
 
 
 @pytest.mark.asyncio
+async def test_get_vector_dimension_is_cached_after_first_call():
+    """Subsequent get_vector_dimension calls must not issue another HTTP request."""
+    client = make_mock_client()
+    vec_768 = "[" + ",".join(["0.1"] * 768) + "]"
+    chain = client.table.return_value.select.return_value.not_.is_.return_value.limit.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[{"embedding": vec_768}]))
+
+    adapter = SupabaseStorageAdapter(client)
+    assert await adapter.get_vector_dimension() == 768
+    # Reset the mock so any further call is observable.
+    chain.execute.reset_mock()
+    client.rpc.reset_mock()
+
+    assert await adapter.get_vector_dimension() == 768
+    chain.execute.assert_not_called()
+    client.rpc.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_create_succeeds_when_table_empty():
     client = make_mock_client()
     chain = client.table.return_value.select.return_value.not_.is_.return_value.limit.return_value
@@ -133,6 +152,45 @@ async def test_create_succeeds_when_table_empty():
     ):
         adapter = await SupabaseStorageAdapter.create(settings)
     assert isinstance(adapter, SupabaseStorageAdapter)
+
+
+@pytest.mark.asyncio
+async def test_create_passes_request_timeout_to_client(monkeypatch):
+    """SupabaseStorageAdapter.create should pass postgrest_client_timeout."""
+    captured = {}
+
+    async def fake_create_async_client(url, key, options=None):
+        captured["url"] = url
+        captured["key"] = key
+        captured["options"] = options
+        client = make_mock_client()
+        # The factory's internal dimension probe must succeed:
+        vec_768 = "[" + ",".join(["0.1"] * 768) + "]"
+        chain = (
+            client.table.return_value.select.return_value.not_.is_.return_value.limit.return_value
+        )
+        chain.execute = AsyncMock(return_value=make_mock_response(data=[{"embedding": vec_768}]))
+        return client
+
+    monkeypatch.setattr(
+        "context_store.storage.supabase.create_async_client",
+        fake_create_async_client,
+    )
+
+    settings = Settings(
+        storage_backend="supabase",
+        supabase_url="https://example.supabase.co",
+        supabase_key="srk",
+        embedding_dimension=768,
+        supabase_request_timeout_seconds=12.5,
+        _env_file=None,
+    )
+
+    adapter = await SupabaseStorageAdapter.create(settings)
+    await adapter.dispose()
+
+    assert captured["options"] is not None
+    assert captured["options"].postgrest_client_timeout == 12.5
 
 
 @pytest.mark.asyncio
@@ -472,7 +530,6 @@ async def test_increment_memory_access_count_invokes_rpc():
 async def test_vector_search_calls_rpc():
     client = make_mock_client()
     now = datetime.now(timezone.utc)
-    embedding = "[0.1,0.2,0.3]"
     rows: list[dict[str, Any]] = [
         {
             "id": "550e8400-e29b-41d4-a716-446655440001",
@@ -480,7 +537,6 @@ async def test_vector_search_calls_rpc():
             "memory_type": "semantic",
             "source_type": "manual",
             "source_metadata": {},
-            "embedding": embedding,
             "semantic_relevance": 0.5,
             "importance_score": 0.5,
             "access_count": 0,
@@ -501,13 +557,52 @@ async def test_vector_search_calls_rpc():
     assert len(results) == 1
     assert isinstance(results[0], ScoredMemory)
     assert results[0].score == 0.95
-    assert results[0].memory.embedding == [0.1, 0.2, 0.3]
+    assert results[0].memory.embedding == []
 
     call_args = client.rpc.call_args
-    assert call_args[0][0] == "vector_search"
+    assert call_args[0][0] == "vector_search_brief"
     assert call_args[0][1]["query_embedding"] == "[" + ",".join("0.1" for _ in range(768)) + "]"
     assert call_args[0][1]["match_count"] == 5
     assert call_args[0][1]["p_project"] == "p1"
+
+
+@pytest.mark.asyncio
+async def test_vector_search_uses_brief_rpc_and_returns_empty_embedding():
+    """vector_search should call vector_search_brief and return empty embeddings."""
+    client = make_mock_client()
+    rpc_chain = client.rpc.return_value
+    rpc_chain.execute = AsyncMock(
+        return_value=make_mock_response(
+            data=[
+                {
+                    "id": "550e8400-e29b-41d4-a716-446655440001",
+                    "content": "alpha",
+                    "memory_type": "episodic",
+                    "source_type": "manual",
+                    "source_metadata": {},
+                    "semantic_relevance": 0.5,
+                    "importance_score": 0.5,
+                    "access_count": 0,
+                    "last_accessed_at": "2026-05-26T00:00:00+00:00",
+                    "created_at": "2026-05-26T00:00:00+00:00",
+                    "updated_at": "2026-05-26T00:00:00+00:00",
+                    "archived_at": None,
+                    "tags": [],
+                    "project": "p1",
+                    "content_hash": "h",
+                    "score": 0.9,
+                }
+            ]
+        )
+    )
+
+    adapter = SupabaseStorageAdapter(client)
+    results = await adapter.vector_search([0.1] * 768, top_k=5, project="p1")
+
+    assert len(results) == 1
+    assert results[0].memory.embedding == []  # brief RPC returns no embedding
+    call_args = client.rpc.call_args
+    assert call_args[0][0] == "vector_search_brief"
 
 
 @pytest.mark.asyncio

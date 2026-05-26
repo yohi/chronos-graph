@@ -28,7 +28,7 @@ storage-postgres = [
     "redis>=5.0.0",
 ]
 storage-supabase = [
-    "supabase>=2.4.0",
+    "supabase>=2.30.0",
 ]
 embedding-local = [
     "sentence-transformers>=3.0.0",

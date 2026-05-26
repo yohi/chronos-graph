@@ -1705,12 +1705,12 @@ git commit -m "perf(ingestion): batch-embed all chunks in a single provider call
 
 **Execution environment:** Per `AGENTS.md` / `CLAUDE.md` §5, all backend verification commands below **MUST be run inside the project devcontainer** (`.devcontainer/`). Running them on the host risks toolchain drift (e.g. different `uv`, mismatched `ruff`/`mypy` versions, missing `aiosqlite` wheels for the host arch) and is not a supported configuration. Open the workspace in the devcontainer (`Reopen in Container` in VS Code, or `devcontainer up && devcontainer exec`) before proceeding.
 
-- [ ] **Step 1: Run the full unit suite**
+- [x] **Step 1: Run the full unit suite**
 
 Run: `uv run pytest tests/unit/ -v`
 Expected: All PASS.
 
-- [ ] **Step 2: Run the lint/type checks**
+- [x] **Step 2: Run the lint/type checks**
 
 Run: `uv run ruff check src/ tests/ && uv run mypy src/`
 Expected: No errors.

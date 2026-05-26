@@ -14,6 +14,13 @@ from context_store.models.memory import Memory, MemoryType, ScoredMemory, Source
 from context_store.storage.protocols import MemoryFilters, StorageError
 from context_store.storage.supabase import SupabaseStorageAdapter
 
+_BRIEF_COLUMNS = (
+    "id,content,memory_type,source_type,source_metadata,"
+    "semantic_relevance,importance_score,access_count,"
+    "last_accessed_at,created_at,updated_at,archived_at,"
+    "tags,project,content_hash"
+)
+
 
 def make_mock_response(data, count=None):
     resp = MagicMock()
@@ -372,6 +379,55 @@ async def test_get_memory_returns_record():
     mem = await adapter.get_memory("550e8400-e29b-41d4-a716-446655440000")
     assert mem is not None
     assert mem.content == "hello"
+
+
+@pytest.mark.asyncio
+async def test_keyword_search_does_not_select_embedding():
+    client = make_mock_client()
+    select_chain = client.table.return_value.select.return_value
+    chain = select_chain.ilike.return_value.is_.return_value.limit.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[]))
+
+    adapter = SupabaseStorageAdapter(client)
+    await adapter.keyword_search("hello", top_k=5)
+
+    client.table.return_value.select.assert_called_once_with(_BRIEF_COLUMNS)
+
+
+@pytest.mark.asyncio
+async def test_get_memory_does_not_select_embedding():
+    client = make_mock_client()
+    chain = client.table.return_value.select.return_value.eq.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[]))
+
+    adapter = SupabaseStorageAdapter(client)
+    await adapter.get_memory("550e8400-e29b-41d4-a716-446655440000")
+
+    client.table.return_value.select.assert_called_once_with(_BRIEF_COLUMNS)
+
+
+@pytest.mark.asyncio
+async def test_get_memories_batch_does_not_select_embedding():
+    client = make_mock_client()
+    chain = client.table.return_value.select.return_value.in_.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[]))
+
+    adapter = SupabaseStorageAdapter(client)
+    await adapter.get_memories_batch(["550e8400-e29b-41d4-a716-446655440000"])
+
+    client.table.return_value.select.assert_called_once_with(_BRIEF_COLUMNS)
+
+
+@pytest.mark.asyncio
+async def test_list_by_filter_does_not_select_embedding():
+    client = make_mock_client()
+    chain = client.table.return_value.select.return_value.is_.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[]))
+
+    adapter = SupabaseStorageAdapter(client)
+    await adapter.list_by_filter(MemoryFilters())
+
+    client.table.return_value.select.assert_called_once_with(_BRIEF_COLUMNS)
 
 
 @pytest.mark.asyncio

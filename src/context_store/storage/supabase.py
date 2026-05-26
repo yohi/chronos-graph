@@ -62,6 +62,26 @@ ALLOWED_UPDATE_COLUMNS: frozenset[str] = frozenset(
     }
 )
 
+_MEMORY_BRIEF_COLUMNS = (
+    # Read-path SELECT projection that intentionally omits the 768-dim `embedding`
+    # column to reduce per-row payload (~10KB) on retrieval. Write paths still
+    # fetch/insert the embedding via dedicated INSERT/UPDATE statements.
+    #
+    # Scope note (Phase 1): only the Supabase adapter applies this projection.
+    # Postgres/SQLite adapters still SELECT * because the SQLite-backed
+    # LifecycleManager (Consolidator at lifecycle/consolidator.py:113) reads
+    # `memory.embedding` from list_by_filter() results to feed vector_search().
+    # Current Supabase consumers of get_memory/get_memories_batch/list_by_filter
+    # (dashboard services, _resolve_graph_nodes, Consolidator._recompute_embedding)
+    # do not read `.embedding` from these results, so this change is safe today;
+    # future Supabase-side callers that need the embedding column MUST fetch it
+    # explicitly (e.g. through a future `get_memory_with_embedding` API).
+    "id,content,memory_type,source_type,source_metadata,"
+    "semantic_relevance,importance_score,access_count,"
+    "last_accessed_at,created_at,updated_at,archived_at,"
+    "tags,project,content_hash"
+)
+
 
 class SupabaseStorageAdapter:
     """StorageAdapter implementation backed by Supabase Data API (HTTPS only)."""
@@ -230,7 +250,7 @@ class SupabaseStorageAdapter:
         if not _is_valid_uuid(memory_id):
             return None
         try:
-            chain = self._client.table("memories").select("*").eq("id", memory_id)
+            chain = self._client.table("memories").select(_MEMORY_BRIEF_COLUMNS).eq("id", memory_id)
             response = await chain.execute()
         except Exception as exc:
             raise self._map_to_storage_error(exc) from exc
@@ -247,7 +267,10 @@ class SupabaseStorageAdapter:
                 continue
             try:
                 response = await (
-                    self._client.table("memories").select("*").in_("id", valid_ids).execute()
+                    self._client.table("memories")
+                    .select(_MEMORY_BRIEF_COLUMNS)
+                    .in_("id", valid_ids)
+                    .execute()
                 )
             except Exception as exc:
                 raise self._map_to_storage_error(exc) from exc
@@ -318,7 +341,7 @@ class SupabaseStorageAdapter:
         cleaned = query.strip()
         builder = (
             self._client.table("memories")
-            .select("*")
+            .select(_MEMORY_BRIEF_COLUMNS)
             .ilike("content", f"%{cleaned}%")
             .is_("archived_at", "null")
             .limit(effective_top_k)
@@ -337,7 +360,7 @@ class SupabaseStorageAdapter:
         return results
 
     async def list_by_filter(self, filters: MemoryFilters) -> list[Memory]:
-        builder = self._client.table("memories").select("*")
+        builder = self._client.table("memories").select(_MEMORY_BRIEF_COLUMNS)
         builder = _apply_common_filters(builder, filters)
 
         is_desc = True

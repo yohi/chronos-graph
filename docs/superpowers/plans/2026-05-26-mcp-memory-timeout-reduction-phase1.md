@@ -523,7 +523,7 @@ git commit -m "perf(storage): switch Supabase vector_search to brief RPC that om
 - Modify: `src/context_store/storage/supabase.py`
 - Modify: `tests/unit/storage/test_supabase_adapter.py`
 
-- [ ] **Step 1: Add a failing test that `keyword_search` does not request embedding**
+- [x] **Step 1: Add a failing test that `keyword_search` does not request embedding**
 
 Append to `tests/unit/storage/test_supabase_adapter.py`:
 
@@ -589,12 +589,12 @@ async def test_list_by_filter_does_not_select_embedding():
     client.table.return_value.select.assert_called_once_with(_BRIEF_COLUMNS)
 ```
 
-- [ ] **Step 2: Run the new tests and confirm failures**
+- [x] **Step 2: Run the new tests and confirm failures**
 
 Run: `uv run pytest tests/unit/storage/test_supabase_adapter.py -k "does_not_select_embedding" -v`
 Expected: FAIL — adapter still calls `select("*")`.
 
-- [ ] **Step 3: Add the column constant and replace `select("*")` on read paths**
+- [x] **Step 3: Add the column constant and replace `select("*")` on read paths**
 
 In `src/context_store/storage/supabase.py`, add a module-level constant (right after `ALLOWED_UPDATE_COLUMNS` around line 60):
 
@@ -631,17 +631,17 @@ Do **not** touch `count_by_filter` (line 372) — it uses `head=True` and needs 
 Do **not** touch `save_memory` (line 173) — INSERT must still write the embedding column.
 Do **not** touch `update_memory` (line 197) — UPDATE may need to write the embedding column.
 
-- [ ] **Step 4: Re-run the new tests**
+- [x] **Step 4: Re-run the new tests**
 
 Run: `uv run pytest tests/unit/storage/test_supabase_adapter.py -k "does_not_select_embedding" -v`
 Expected: PASS.
 
-- [ ] **Step 5: Run the full adapter suite to catch regressions**
+- [x] **Step 5: Run the full adapter suite to catch regressions**
 
 Run: `uv run pytest tests/unit/storage/test_supabase_adapter.py -v`
 Expected: All PASS. (Any existing test that asserted `select("*")` needs the same constant; if you see a failure, replace the literal in the assertion with `_BRIEF_COLUMNS` from the test file.)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/context_store/storage/supabase.py tests/unit/storage/test_supabase_adapter.py

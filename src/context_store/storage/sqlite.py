@@ -1023,6 +1023,30 @@ class SQLiteStorageAdapter:
                 _raise_if_locked(exc)
                 raise
 
+    async def increment_memory_access_counts(self, memory_ids: list[str]) -> int:
+        """Bulk variant: atomically bump access_count for many memories in one statement."""
+        if not memory_ids:
+            return 0
+        placeholders = ",".join("?" for _ in memory_ids)
+        where_clause = f"WHERE id IN ({placeholders})"
+        sql = (
+            "UPDATE memories "
+            "SET access_count = access_count + 1, "
+            "    last_accessed_at = ?, "
+            "    updated_at = ? " + where_clause
+        )  # noqa: S608 - IN placeholders are generated, values stay parameterized
+        async with self._db() as conn:
+            try:
+                now = datetime.now(timezone.utc).isoformat()
+                params: list[Any] = [now, now, *list(memory_ids)]
+                async with conn.execute(sql, params) as cursor:
+                    updated_count: int = max(cursor.rowcount, 0)
+                await conn.commit()
+                return updated_count
+            except aiosqlite.OperationalError as exc:
+                _raise_if_locked(exc)
+                raise
+
     # ------------------------------------------------------------------
     # StorageAdapter: get_vector_dimension
     # ------------------------------------------------------------------

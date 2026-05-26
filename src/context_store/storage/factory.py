@@ -114,6 +114,11 @@ class ReadOnlyNoOpStorageAdapter:
             "ReadOnlyNoOpStorageAdapter: increment_memory_access_count not implemented"
         )
 
+    async def increment_memory_access_counts(self, memory_ids: list[str]) -> int:
+        raise NotImplementedError(
+            "ReadOnlyNoOpStorageAdapter: increment_memory_access_counts not implemented"
+        )
+
     async def get_vector_dimension(self) -> int | None:
         raise NotImplementedError(
             "ReadOnlyNoOpStorageAdapter: get_vector_dimension not implemented (Phase 6)"

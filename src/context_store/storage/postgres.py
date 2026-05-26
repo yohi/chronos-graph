@@ -470,6 +470,33 @@ class PostgresStorageAdapter:
             status = await conn.execute(sql, memory_id)
         return str(status) == "UPDATE 1"
 
+    async def increment_memory_access_counts(self, memory_ids: list[str]) -> int:
+        """Bulk variant: atomically increment access counts for many memories."""
+        if not memory_ids:
+            return 0
+        cleaned: list[str] = []
+        for mid in memory_ids:
+            try:
+                cleaned.append(str(UUID(str(mid))))
+            except (TypeError, ValueError, AttributeError):
+                continue
+        if not cleaned:
+            return 0
+        sql = (
+            "UPDATE memories "
+            "SET access_count = access_count + 1, "
+            "    last_accessed_at = NOW(), "
+            "    updated_at = NOW() "
+            "WHERE id = ANY($1::uuid[])"
+        )
+        async with self._pool.acquire() as conn:
+            status = await conn.execute(sql, cleaned)
+        parts = str(status).split()
+        try:
+            return int(parts[-1])
+        except (ValueError, IndexError):
+            return 0
+
     async def get_vector_dimension(self) -> int | None:
         """Return the dimension of stored vectors."""
         sql = "SELECT vector_dims(embedding) FROM memories WHERE embedding IS NOT NULL LIMIT 1"

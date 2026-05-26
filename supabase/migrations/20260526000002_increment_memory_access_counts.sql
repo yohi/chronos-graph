@@ -30,4 +30,7 @@ BEGIN
 END;
 $$;
 
+REVOKE EXECUTE ON FUNCTION increment_memory_access_counts(uuid[]) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION increment_memory_access_counts(uuid[]) FROM anon;
+REVOKE EXECUTE ON FUNCTION increment_memory_access_counts(uuid[]) FROM authenticated;
 GRANT EXECUTE ON FUNCTION increment_memory_access_counts(uuid[]) TO service_role;

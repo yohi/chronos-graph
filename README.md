@@ -26,7 +26,7 @@ ChronosGraph は、AIエージェント（Claude Code / Gemini CLI / Cursor 等�
 > **人間は設定を打ち間違えることがあります。** このプロジェクトのインストールと設定は、AIエージェント（Claude Code / Gemini CLI / Cursor 等）に丸投げすることを強く推奨します。以下のプロンプトをコピーして貼り付けてください。
 > *※実際にファイルを変更せずに構成や手順だけを確認したい（デバッグしたい）場合は、プロンプトの最後に「デバッグモード（Dry-run）で実行してください」と書き添えてください。*
 
-```
+```text
 Install and configure ChronosGraph by following the instructions here:
 https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
 ```
@@ -133,7 +133,7 @@ MCP設定の場合は、いかなるツール呼び出しよりも前に、必�
 
 4. **設定追加例の出力**: 3で選択した AI エージェント向けの設定追加例を出力します。その際、環境変数やAPIキーなどは絶対に設定ファイル内に直書きせず、各クライアントの環境変数ロード機能や変数展開（例: OpenCode なら `{env:VARIABLE_NAME}`）を利用して動的にロードできるように構成します。
 5. **AGENTS.mdへの追記と重複確認 (BLOCKING STEP)**:
-   設定の提示後、AIエージェント（あなた）は対象クライアント用の `AGENTS.md`（またはそれに相当するエージェント指示ファイル）に対して、長期記憶運用のためのプロトコル（[docs/agent-prompts/memory-save-system-prompt.md](file:///home/y_ohi/program/private/chronos-graph/docs/agent-prompts/memory-save-system-prompt.md) の内容）を追記する提案を行ってください。
+   設定の提示後、AIエージェント（あなた）は対象クライアント用の `AGENTS.md`（またはそれに相当するエージェント指示ファイル）に対して、長期記憶運用のためのプロトコル（[docs/agent-prompts/memory-save-system-prompt.md](docs/agent-prompts/memory-save-system-prompt.md) の内容）を追記する提案を行ってください。
 
    > [!IMPORTANT]
    > **🚨 重複記載の確認 (DUPLICATION CHECK CONSTRAINT):**
@@ -265,13 +265,13 @@ echo '{"tool_name":"bash","tool_input":{"command":"ls"}}' | mcp_gateway evaluate
         "STORAGE_BACKEND": "sqlite",
         "GRAPH_ENABLED": "true",
         "CACHE_BACKEND": "inmemory",
-        "CHRONOS_EVALUATOR_API_KEY": "${CHRONOS_EVALUATOR_API_KEY}"
+        "CHRONOS_EVALUATOR_API_KEY": "YOUR_API_KEY_HERE"
       }
     }
   }
 }
 ```
-*💡 **環境変数について**: Claude Desktop などの一部の MCP クライアントは、システムに定義された環境変数を引き継ぐか、設定ファイルの `"env"` ブロック内に書き込まれた設定をロードします。APIキーなどを直接ハードコードせず、適宜環境の変数展開機能を利用してください（OpenCode の設定ファイル内では `{env:CHRONOS_EVALUATOR_API_KEY}` 構文を使用可能です）。*
+*💡 **環境変数について**: Claude Desktop は JSON 設定ファイル内の `${VAR}` 構文を展開しません。APIキーを渡す場合は、上記のように `"env"` ブロック内にキー名 `CHRONOS_EVALUATOR_API_KEY` を直接設定するか、環境変数をエクスポートしてから起動するラッパースクリプトを指定してください。一方、OpenCode の設定ファイル内では `{env:CHRONOS_EVALUATOR_API_KEY}` 構文が使用可能です。*
 
 ---
 
@@ -376,7 +376,7 @@ OpenCode では、フック機能を **「プラグイン」** として拡張�
   // OpenCodeの preToolUse フックコールバック
   async function preToolUseHook(toolCall) {
     return new Promise((resolve, reject) => {
-      // 環境変数からポリシーパスをロード（絶対パスの直書きを排除）
+      // 環境変数からポリシーパスをロード (プラグインはプロジェクト直下をデフォルトとする)
       const policyPath = process.env.CHRONOS_POLICY_PATH || './intents.yaml';
 
       // uvx を用いてオンザフライで evaluate コマンドを実行
@@ -457,6 +457,10 @@ CLI 実行ファイルのパスしか指定できない環境では、共通の�
 
 ##### 1. スクリプトの作成 (`chronos-evaluator-hook.sh`)
 
+💡 **ポリシーファイルの配置について**: 環境ごとに適切なデフォルト値が異なります。
+- **uvx / リモート実行**: ユーザー共通設定として `$HOME/.config/chronos/intents.yaml` を推奨。
+- **ローカル実行**: 開発用リポジトリ内の `$HOME/chronos-graph/src/mcp_gateway/policies/intents.yaml` を使用。
+
 * **📦 推奨：クローン不要版 (uvx を使用)**
   ```bash
   #!/usr/bin/env bash
@@ -471,9 +475,9 @@ CLI 実行ファイルのパスしか指定できない環境では、共通の�
   ```bash
   #!/usr/bin/env bash
   # chronos-evaluator-hook.sh (ローカル実行版)
-  uv --directory "${CHRONOS_REPO_PATH:-$HOME/program/private/chronos-graph}" run python -m mcp_gateway evaluate \
+  uv --directory "${CHRONOS_REPO_PATH:-$HOME/chronos-graph}" run python -m mcp_gateway evaluate \
     --json-io \
-    --policy-path "${CHRONOS_POLICY_PATH:-$HOME/program/private/chronos-graph/src/mcp_gateway/policies/intents.yaml}"
+    --policy-path "${CHRONOS_POLICY_PATH:-$HOME/chronos-graph/src/mcp_gateway/policies/intents.yaml}"
   ```
   *(※スクリプト作成後、`chmod +x chronos-evaluator-hook.sh` で実行権限を付与してください)*
 
@@ -548,7 +552,7 @@ ChronosGraph 本体およびセキュリティ判定エンジン（Universal Eva
 | 環境変数 | デフォルト | 推奨設定 | 説明 |
 |---|---|---|---|
 | `CHRONOS_EVALUATOR_API_KEY` | 未設定 | **LLM使用時必須** | 未設定なら LLM 評価をスキップ。LiteLLM 経由で任意プロバイダの API キーを設定 |
-| `CHRONOS_EVALUATOR_MODEL` | `anthropic/claude-haiku-4-5-20251001` | デフォルト可 | LiteLLM model identifier (例: `openai/gpt-4o-mini`, `anthropic/claude-haiku-4-5`) |
+| `CHRONOS_EVALUATOR_MODEL` | `anthropic/claude-haiku-4-5-20251001` | デフォルト可 | LiteLLM model identifier (例: `openai/gpt-4o-mini`, `anthropic/claude-3-5-haiku-20241022` のように完全な識別子を指定) |
 | `CHRONOS_EVALUATOR_MAX_TOKENS` | `1536` | デフォルト可 | 出力 token 上限。不正値・非正値は警告 + デフォルトへフォールバック (fail-soft) |
 | `CHRONOS_EVALUATOR_TIMEOUT_SECONDS` | `10.0` | デフォルト可 | LLM タイムアウト。不正値・非正値は警告 + デフォルトへフォールバック (fail-soft) |
 | `CHRONOS_EVALUATOR_FALLBACK` | `allow` | **`ask` を強く推奨** | LLM 未構成時の挙動。未設定時のリスク防止のため、本番環境では `ask` 推奨 |
@@ -570,14 +574,14 @@ ChronosGraph 本体およびセキュリティ判定エンジン（Universal Eva
 
 Universal Evaluator はバックエンドに [LiteLLM](https://github.com/BerriAI/litellm) を使用しています。そのため、専用の環境変数を追加しなくても、LiteLLM が標準でサポートする環境変数（`OPENAI_API_BASE` など）を利用してあらゆるカスタムエンドポイントにルーティングできます。
 
-> 🔗 **対応プロバイダー一覧:** AWS, Azure, Google Vertex AI, Huggingface などを含む100以上のサポート対象プロバイダーと、それぞれの詳細なプレフィックス・環境変数設定については、公式の [LiteLLM Providers ドキュメント](https://docs.litellm.ai/docs/providers) をご参照ください。
+> 🔗 **対応プロバイダー一覧:** AWS, Azure, Google Vertex AI, Huggingface などを含む140以上のサポート対象プロバイダーと、それぞれの詳細なプレフィックス・環境変数設定については、公式の [LiteLLM Providers ドキュメント](https://docs.litellm.ai/docs/providers) をご参照ください。
 
 **OpenAI 互換サーバー (vLLM, LM Studio など) の例:**
 ```bash
 # LiteLLMのOpenAIプロバイダ用エンドポイントを上書き
 OPENAI_API_BASE="http://localhost:8000/v1"
 
-# ※システムの必須チェックを通過するため、ダミーでもAPIキーの設定が必要です
+# ※LiteLLMがAuthorizationヘッダーを構築する際の内部チェックを通過するため、ダミーでもAPIキーの設定が必要です
 CHRONOS_EVALUATOR_API_KEY="sk-dummy"
 
 # openai/ プレフィックスをつけてモデルを指定
@@ -589,6 +593,7 @@ CHRONOS_EVALUATOR_MODEL="openai/meta-llama/Meta-Llama-3-8B-Instruct"
 # デフォルト (http://localhost:11434) 以外を使用する場合に指定
 OLLAMA_API_BASE="http://192.168.1.100:11434"
 
+# ※LiteLLM内部チェック用
 CHRONOS_EVALUATOR_API_KEY="sk-dummy"
 CHRONOS_EVALUATOR_MODEL="ollama/llama3"
 ```

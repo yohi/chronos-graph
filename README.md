@@ -593,7 +593,7 @@ CHRONOS_EVALUATOR_MODEL="openai/meta-llama/Meta-Llama-3-8B-Instruct"
 # デフォルト (http://localhost:11434) 以外を使用する場合に指定
 OLLAMA_API_BASE="http://192.168.1.100:11434"
 
-# ※LiteLLM内部チェック用
+# ※LiteLLMがAuthorizationヘッダーを構築する際の内部チェックを通過するため、ダミーでもAPIキーの設定が必要です
 CHRONOS_EVALUATOR_API_KEY="sk-dummy"
 CHRONOS_EVALUATOR_MODEL="ollama/llama3"
 ```

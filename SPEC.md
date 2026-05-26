@@ -1561,6 +1561,30 @@ Universal LLM Evaluatorとして設計され、LiteLLM経由で任意のプロ�
 | 大規模最適化 | 100k+ ノード規模での Cytoscape WebWorker 化・グラフレンダリング最適化 |
 | Neo4j フル統合 | Dashboard での Neo4j バックエンド接続と高度なグラフクエリ（Cypher）対応 |
 
+### 16.5 改善課題：MCP メモリ操作タイムアウト対策（Phase 2 以降）
+
+2026-05-26 のリモート DB（Supabase Data API）前提のボトルネック監査で抽出された改善候補のうち、Phase 1 計画 (`docs/superpowers/plans/2026-05-26-mcp-memory-timeout-reduction-phase1.md`) のスコープ外として後回しになった項目をここにトラッキングする。Phase 1 で対処済みの項目（A-1/A-2/A-3 前半/B-1/C-1/C-2）は本表からは除外している。
+
+#### D. MCP Gateway 層の改善（タイムアウト・評価レイテンシ）
+
+| ID | 改善項目 | 影響 | 優先度 | 主要箇所 |
+|----|---------|------|--------|---------|
+| D-1 | `UpstreamClient.call_tool` への明示タイムアウト導入 | `mcp.ClientSession.call_tool` を `asyncio.wait_for` でラップし、ツール単位のタイムアウト（既定 30s 程度、設定可能化）と `UpstreamError` への正規化を行う。現状はハング型タイムアウトをそのままクライアントへ伝播してしまう。 | High | `src/mcp_gateway/upstream/context_store_client.py:117-123` |
+| D-2 | Universal Evaluator (LiteLLM) のレイテンシ最適化 | `CHRONOS_EVALUATOR_API_KEY` 設定時、全ツール呼び出しに `acompletion()`（既定 10s）と `MemoryClient.retrieve()`（既定 3s）が直列で挟まる。read 系（`memory_search`/`memory_stats`/`list_projects`）の評価バイパス、評価結果の短 TTL キャッシュ、memory 取得と LLM 判定の並列化（`asyncio.gather`）を導入する。 | High | `src/mcp_gateway/policy/composite.py:109-117`, `src/mcp_gateway/policy/llm_evaluator.py:236, 275-284` |
+| D-3 | 承認モードのタイムアウト調整とバイパス分類 | Blocking 承認モードでは `approval_timeout_seconds=30.0` 固定。安全と判明している read-only ツール（`memory_search` 等）を承認バイパス対象として `intents.yaml` 側で分類し、または承認待ちを non-blocking flow（イベント駆動）へ移行することでクライアントから見たタイムアウト体感を改善する。 | Medium | `src/mcp_gateway/server.py:120, 448-518` |
+
+#### E. ストレージ・取り込みパイプライン層の追加改善（中〜低影響）
+
+| ID | 改善項目 | 影響 | 優先度 | 主要箇所 |
+|----|---------|------|--------|---------|
+| E-1 | `IngestionPipeline._process_chunk` の並列化 (A-3 後半) | Phase 1 で全チャンクの埋め込みは `embed_batch` で一括化したが、`_process_chunk` 自体は依然として逐次。`graph_enabled=false`（Supabase 等）の場合は CHUNK 系エッジ依存が無いので `asyncio.gather` + Semaphore でチャンク間を並列化できる。grand-enabled 構成では document_id 単位での順序保証が必要。 | High | `src/context_store/ingestion/pipeline.py:218-263` |
+| E-2 | OpenAI / LiteLLM 埋め込みプロバイダのリトライ調整 (B-2) | 現在は `stop_after_attempt(5)` × `wait_exponential(min=1, max=60)` で最悪 5×60s=300s。`max=10` 程度への縮小、per-attempt timeout の短縮（10s 程度）、`Retry-After` ヘッダ尊重を導入し、Embedding バックエンドの 429/5xx でクライアント側 MCP タイムアウトを大幅超過しないようにする。 | High | `src/context_store/embedding/openai.py:101-117`, `src/context_store/embedding/litellm.py:107-117` |
+| E-3 | Supabase `keyword_search` の検索戦略改善 (C-3) | 現状は `ilike("content", "%X%")` でトリグラム索引を前提。短いクエリ（CJK 1 文字など）では planner がシーケンシャルスキャンへフォールバックする。短すぎる query の早期 return、または `to_tsvector` + GIN(tsvector) ベースの全文検索 RPC へ移行することで大規模化に備える。 | Medium | `src/context_store/storage/supabase.py:291-316`, `supabase/migrations/20260518000001_initial_schema.sql:45-46` |
+| E-4 | `GraphLinker._build_semantic_edges` の `vector_search` 重複呼び出し解消 | `Postgres + Neo4j` 構成で 1 件保存ごとに dedup 用 `vector_search` と SEMANTICALLY_RELATED 用 `vector_search` が 2 回発行される。Deduplicator の結果（`similar_memories` リスト）を `GraphLinker.link()` にパススルーするか、`IngestionPipeline` 側でキャッシュして再利用する。Supabase バックエンドでは `graph_enabled=false` のため影響なし。 | Medium | `src/context_store/ingestion/graph_linker.py:106-131`, `src/context_store/ingestion/deduplicator.py:60-86`, `src/context_store/ingestion/pipeline.py:362-364` |
+| E-5 | `Orchestrator.stats()` の `count_by_filter` 2 本を 1 RPC に統合 | active/archived のカウントで HTTPS 2 本発生。Supabase に `count_active_and_archived(p_project text)` RPC を追加し 1 ラウンドトリップに集約する。`head=True` で軽いが、ダッシュボード等で頻繁に呼ばれるケースで効く。 | Low | `src/context_store/orchestrator.py:394-414`, `src/context_store/storage/supabase.py:371-382` |
+| E-6 | InMemoryCacheAdapter の再起動時コールドスタート解消 | `cache_backend=inmemory` だとプロセスごとに分離・再起動でキャッシュ消失。マルチプロセス・再起動耐性が必要な本番では `cache_backend=redis` を既定推奨に格上げ、または起動時の warm-up（よく使われる project の `memory_search` を 1 度実行）を導入する。 | Low | `src/context_store/storage/inmemory.py`, `src/context_store/storage/factory.py:251-269` |
+| E-7 | ローカル埋め込みモデルの eager preload（MCP lifespan 連携） | Phase 1 では `LocalModelEmbeddingProvider.start()` を追加したが、Orchestrator は lazy 初期化のため auto-invoke しても初回ツール呼び出しの cold-start を実質削減できない。FastMCP の `lifespan` 起動フックで `EmbeddingProvider` を eager 構築・`start()` し、`ChronosServer._do_initialize` が再構築せず既存インスタンスを再利用する設計に切り替えれば、初回呼び出しのレイテンシからモデルロード時間（ruri-v3-310m で 5-10 秒）を完全に外せる。 | Medium | `src/context_store/server.py`, `src/context_store/orchestrator.py:474-611`, `src/context_store/embedding/local_model.py` |
+
 ---
 
 ## 参考文献

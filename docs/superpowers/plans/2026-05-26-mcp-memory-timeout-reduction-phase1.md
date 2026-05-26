@@ -470,12 +470,48 @@ Also update the row dict in that test to remove `"embedding": embedding,` and as
 Run: `uv run pytest tests/unit/storage/test_supabase_adapter.py -v`
 Expected: All PASS.
 
+- [ ] **Step 6.5: Add a SQL-level regression test for the new migration**
+
+The existing `tests/unit/storage/test_supabase_migrations.py` pins the structure of migrations via `re.search` (see e.g. `test_vector_search_rpc_returns_embedding_column` which fixes the existing `vector_search` schema). Add a sibling test so the new RPC's brief contract cannot regress silently.
+
+Append to `tests/unit/storage/test_supabase_migrations.py`:
+
+```python
+def test_vector_search_brief_rpc_omits_embedding_column() -> None:
+    sql = Path("supabase/migrations/20260526000001_vector_search_brief.sql").read_text()
+
+    assert "CREATE OR REPLACE FUNCTION vector_search_brief(" in sql
+
+    match = re.search(r"RETURNS TABLE\s*\((?P<columns>.*?)\)\s*LANGUAGE", sql, re.S)
+    assert match is not None
+    returns_table = match.group("columns")
+    function_body = sql.split("AS $$", 1)[1].split("$$;", 1)[0]
+
+    # The brief RPC must NOT return the embedding column in its result rows.
+    assert re.search(r"\bembedding\s+vector\b", returns_table) is None
+    # Score must still be derived from cosine distance against the embedding.
+    assert "m.embedding <=>" in function_body
+    # Service role grant must be present.
+    assert (
+        re.search(
+            r"GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+vector_search_brief\(.*\)\s+TO\s+service_role",
+            sql,
+            re.I,
+        )
+        is not None
+    )
+```
+
+Run: `uv run pytest tests/unit/storage/test_supabase_migrations.py::test_vector_search_brief_rpc_omits_embedding_column -v`
+Expected: PASS.
+
 - [ ] **Step 7: Commit**
 
 ```bash
 git add supabase/migrations/20260526000001_vector_search_brief.sql \
         src/context_store/storage/supabase.py \
-        tests/unit/storage/test_supabase_adapter.py
+        tests/unit/storage/test_supabase_adapter.py \
+        tests/unit/storage/test_supabase_migrations.py
 git commit -m "perf(storage): switch Supabase vector_search to brief RPC that omits embedding column"
 ```
 
@@ -566,6 +602,16 @@ In `src/context_store/storage/supabase.py`, add a module-level constant (right a
 # Read-path SELECT projection that intentionally omits the 768-dim `embedding`
 # column to reduce per-row payload (~10KB) on retrieval. Write paths still
 # fetch/insert the embedding via dedicated INSERT/UPDATE statements.
+#
+# Scope note (Phase 1): only the Supabase adapter applies this projection.
+# Postgres/SQLite adapters still SELECT * because the SQLite-backed
+# LifecycleManager (Consolidator at lifecycle/consolidator.py:113) reads
+# `memory.embedding` from list_by_filter() results to feed vector_search().
+# Current Supabase consumers of get_memory/get_memories_batch/list_by_filter
+# (dashboard services, _resolve_graph_nodes, Consolidator._recompute_embedding)
+# do not read `.embedding` from these results, so this change is safe today;
+# future Supabase-side callers that need the embedding column MUST fetch it
+# explicitly (e.g. through a future `get_memory_with_embedding` API).
 _MEMORY_BRIEF_COLUMNS = (
     "id,content,memory_type,source_type,source_metadata,"
     "semantic_relevance,importance_score,access_count,"
@@ -790,32 +836,39 @@ In `src/context_store/storage/postgres.py`, add a method near `increment_memory_
 
 - [ ] **Step 8: Add the bulk method to the SQLite adapter**
 
-In `src/context_store/storage/sqlite.py`, locate `increment_memory_access_count` (line 1004) and add immediately after it:
+The SQLite adapter has no `_run_write` helper; all write paths use `async with self._db() as conn:` directly (see the existing `increment_memory_access_count` at `src/context_store/storage/sqlite.py:1004-1024` for the canonical pattern, including the `aiosqlite.OperationalError` → busy-lock translation).
+
+In `src/context_store/storage/sqlite.py`, add the following method immediately after `increment_memory_access_count` (line 1024):
 
 ```python
     async def increment_memory_access_counts(self, memory_ids: list[str]) -> int:
+        """Bulk variant: atomically bump access_count for many memories in one statement."""
         if not memory_ids:
             return 0
         placeholders = ",".join("?" for _ in memory_ids)
         sql = (
-            f"UPDATE memories "
-            f"SET access_count = access_count + 1, "
-            f"    last_accessed_at = CURRENT_TIMESTAMP, "
-            f"    updated_at = CURRENT_TIMESTAMP "
+            "UPDATE memories "
+            "SET access_count = access_count + 1, "
+            "    last_accessed_at = ?, "
+            "    updated_at = ? "
             f"WHERE id IN ({placeholders})"
         )
-
-        async def _run(conn):
-            cursor = await conn.execute(sql, list(memory_ids))
-            await conn.commit()
-            # DBAPI 2.0 allows rowcount == -1 (unknown). Clamp to >= 0 because
-            # the bulk API contract is "number of rows updated".
-            return max(cursor.rowcount, 0)
-
-        return await self._run_write(_run)
+        async with self._db() as conn:
+            try:
+                now = datetime.now(timezone.utc).isoformat()
+                params: list[Any] = [now, now, *list(memory_ids)]
+                async with conn.execute(sql, params) as cursor:
+                    # DBAPI 2.0 allows rowcount == -1 (unknown). Clamp to >= 0
+                    # because the bulk API contract is "number of rows updated".
+                    updated_count: int = max(cursor.rowcount, 0)
+                await conn.commit()
+                return updated_count
+            except aiosqlite.OperationalError as exc:
+                _raise_if_locked(exc)
+                raise
 ```
 
-(If `self._run_write` is not the correct write-connection helper in this adapter, follow the same pattern used by the existing `increment_memory_access_count` — pattern-match the surrounding code.)
+If `datetime`/`timezone`/`aiosqlite`/`_raise_if_locked`/`Any` are not already imported at the top of `sqlite.py`, they will already be available because the surrounding methods (`increment_memory_access_count`, `update_memory`, etc.) use the same symbols — verify the imports rather than re-adding them.
 
 - [ ] **Step 9: Add the bulk method to `ReadOnlyNoOpStorageAdapter`**
 
@@ -941,6 +994,41 @@ Expected: All PASS.
 Run: `uv run pytest tests/unit/storage/ tests/unit/test_post_processor.py tests/unit/test_retrieval_pipeline.py -v`
 Expected: All PASS.
 
+- [ ] **Step 14.5: Add a SQL-level regression test for the new bulk RPC migration**
+
+Append to `tests/unit/storage/test_supabase_migrations.py`:
+
+```python
+def test_increment_memory_access_counts_rpc_accepts_uuid_array_and_returns_integer() -> None:
+    sql = Path(
+        "supabase/migrations/20260526000002_increment_memory_access_counts.sql"
+    ).read_text()
+
+    assert "CREATE OR REPLACE FUNCTION increment_memory_access_counts(" in sql
+    # Argument signature: uuid[] (bulk variant).
+    assert re.search(r"p_memory_ids\s+uuid\[\]", sql, re.I) is not None
+    # Return type: integer (number of rows updated), not boolean (singular variant).
+    assert re.search(r"RETURNS\s+integer", sql, re.I) is not None
+    # The body must use ANY() to apply UPDATE in a single statement.
+    function_body = sql.split("AS $$", 1)[1].split("$$;", 1)[0]
+    assert re.search(r"=\s*ANY\(\s*p_memory_ids\s*\)", function_body, re.I) is not None
+    # NULL/empty arrays must short-circuit to 0.
+    assert re.search(r"array_length\(\s*p_memory_ids", function_body, re.I) is not None
+    # Service role grant must be present.
+    assert (
+        re.search(
+            r"GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+increment_memory_access_counts\(uuid\[\]\)"
+            r"\s+TO\s+service_role",
+            sql,
+            re.I,
+        )
+        is not None
+    )
+```
+
+Run: `uv run pytest tests/unit/storage/test_supabase_migrations.py::test_increment_memory_access_counts_rpc_accepts_uuid_array_and_returns_integer -v`
+Expected: PASS.
+
 - [ ] **Step 15: Commit**
 
 ```bash
@@ -952,44 +1040,71 @@ git add supabase/migrations/20260526000002_increment_memory_access_counts.sql \
         src/context_store/storage/factory.py \
         src/context_store/retrieval/post_processor.py \
         tests/unit/storage/test_supabase_adapter.py \
+        tests/unit/storage/test_supabase_migrations.py \
         tests/unit/test_post_processor.py
 git commit -m "perf(retrieval): batch access-count updates into a single bulk RPC"
 ```
 
 ---
 
-## Task 6: Reuse `LocalModelEmbeddingProvider` thread executor and preload model on start
+## Task 6: Reuse `LocalModelEmbeddingProvider` thread executor and wire its lifecycle into the Orchestrator
 
 **Files:**
 - Modify: `src/context_store/embedding/local_model.py`
+- Modify: `src/context_store/orchestrator.py`
 - Modify: `tests/unit/test_embedding_local.py`
 
-- [ ] **Step 1: Add a failing test that proves a single executor is reused**
+**Scope note:**
+The provider gains a `start()` method that can be called explicitly to preload the model in a worker thread, but `Orchestrator.create_orchestrator()` does **not** auto-invoke it. Reason: orchestrator init is performed lazily inside `_ensure_initialized()` on the first MCP tool call, so `await start()` there does not actually move the cold-start cost off the first-call critical path; the call still blocks for the same wall time. True cold-start avoidance requires preloading at the FastMCP `lifespan` startup (eager provider construction), which is tracked as a separate item in `SPEC.md` §16.5 and is out of scope for Phase 1. Phase 1's local-model win is the executor reuse alone (one shared `ThreadPoolExecutor` instead of one per `embed_batch` call) plus correct disposal.
 
-Append to `tests/unit/test_embedding_local.py`:
+- [ ] **Step 1: Update the top-of-file imports in `tests/unit/test_embedding_local.py`**
+
+The existing file already imports `MagicMock, patch` and `pytest` at the top. Add `ThreadPoolExecutor` to that import block so the new tests can perform `isinstance` checks without violating ruff E402 (module-level imports must precede class/function definitions).
+
+In `tests/unit/test_embedding_local.py`, replace the existing import block (lines 1-9):
 
 ```python
-import asyncio
+"""Tests for Local Model (sentence-transformers) Embedding Provider."""
+
+from __future__ import annotations
+
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from context_store.embedding.local_model import LocalModelEmbeddingProvider
+from context_store.embedding.protocols import EmbeddingProvider
+```
 
+- [ ] **Step 2: Append the new failing tests at the end of `tests/unit/test_embedding_local.py`**
 
-def _fake_model():
+Use the existing project pattern for `encode().return_value` (a list of `MagicMock` instances each exposing `.tolist()`), matching `TestLocalModelEmbeddingProvider._make_mock_model` and `test_embed_batch` already in the file. A plain `[[0.1]*8, ...]` would break because the production code calls `emb.tolist()`.
+
+Append at the end of `tests/unit/test_embedding_local.py`:
+
+```python
+def _make_executor_test_model(values: list[list[float]] | None = None) -> MagicMock:
+    """Mock model whose ``encode`` returns objects with ``.tolist()``."""
     model = MagicMock()
     model.get_sentence_embedding_dimension.return_value = 8
-    model.encode.return_value = [[0.1] * 8, [0.2] * 8]
+    vectors = values if values is not None else [[0.1] * 8, [0.2] * 8]
+    mock_embeddings = []
+    for vec in vectors:
+        emb = MagicMock()
+        emb.tolist.return_value = vec
+        mock_embeddings.append(emb)
+    model.encode.return_value = mock_embeddings
     return model
 
 
 @pytest.mark.asyncio
-async def test_embed_batch_reuses_single_executor():
+async def test_embed_batch_reuses_single_executor() -> None:
+    """A single ThreadPoolExecutor must be reused across calls."""
+    from context_store.embedding.local_model import LocalModelEmbeddingProvider
+
     with patch(
         "context_store.embedding.local_model.SentenceTransformer",
-        return_value=_fake_model(),
+        return_value=_make_executor_test_model(),
     ):
         provider = LocalModelEmbeddingProvider(model_name="fake", dimension=8)
         await provider.embed_batch(["a", "b"])
@@ -1002,8 +1117,11 @@ async def test_embed_batch_reuses_single_executor():
 
 
 @pytest.mark.asyncio
-async def test_start_preloads_model_off_event_loop():
-    fake = _fake_model()
+async def test_start_preloads_model_off_event_loop() -> None:
+    """Explicit start() must load the model before the first embed_batch."""
+    from context_store.embedding.local_model import LocalModelEmbeddingProvider
+
+    fake = _make_executor_test_model()
     with patch(
         "context_store.embedding.local_model.SentenceTransformer",
         return_value=fake,
@@ -1012,34 +1130,36 @@ async def test_start_preloads_model_off_event_loop():
         assert provider._model is None
         await provider.start()
         assert provider._model is fake
-        # Subsequent embed_batch must NOT reload.
+        # Subsequent embed_batch must NOT trigger a second model construction.
         await provider.embed_batch(["a"])
         assert ctor.call_count == 1
 
 
 @pytest.mark.asyncio
-async def test_close_shuts_down_executor():
+async def test_close_shuts_down_executor() -> None:
+    """close() must shut down the shared executor."""
+    from context_store.embedding.local_model import LocalModelEmbeddingProvider
+
     with patch(
         "context_store.embedding.local_model.SentenceTransformer",
-        return_value=_fake_model(),
+        return_value=_make_executor_test_model(),
     ):
         provider = LocalModelEmbeddingProvider(model_name="fake", dimension=8)
         await provider.embed_batch(["a"])
         executor = provider._executor
         await provider.close()
 
-    # After close, the executor must be shut down and a new embed_batch should fail
-    # fast rather than silently allocate a new pool.
+    # Submitting to a shut-down ThreadPoolExecutor raises RuntimeError.
     with pytest.raises(RuntimeError):
         executor.submit(lambda: None)
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [ ] **Step 3: Run the new tests and confirm they fail**
 
 Run: `uv run pytest tests/unit/test_embedding_local.py -k "reuses_single_executor or preloads_model or close_shuts_down" -v`
-Expected: FAIL — `provider._executor` does not exist; no `start()` method.
+Expected: FAIL — `provider._executor` does not exist and `start()` is not defined.
 
-- [ ] **Step 3: Replace per-call executor with a long-lived one**
+- [ ] **Step 4: Replace per-call executor with a long-lived one**
 
 Rewrite `src/context_store/embedding/local_model.py`:
 
@@ -1075,9 +1195,13 @@ def SentenceTransformer(model_name: str) -> Any:  # noqa: N802
 class LocalModelEmbeddingProvider:
     """sentence-transformers backed embedding provider.
 
-    Uses a single long-lived ThreadPoolExecutor so per-call overhead is bounded.
-    ``start()`` preloads the model off the event loop so the first MCP tool call
-    does not pay the cold-start cost (which can be several seconds for ruri-v3).
+    Uses a single long-lived ``ThreadPoolExecutor`` so per-call thread-pool
+    construction overhead is eliminated. ``start()`` is provided so an
+    external caller (e.g. a FastMCP lifespan handler) can preload the model
+    off the event loop; it is NOT auto-called by ``create_orchestrator``
+    because orchestrator init is itself lazy and would not actually move the
+    cold-start cost off the first-call critical path. ``close()`` must be
+    called by the owner (Orchestrator) to shut down the worker thread pool.
     """
 
     def __init__(
@@ -1100,6 +1224,7 @@ class LocalModelEmbeddingProvider:
             max_workers=max_workers,
             thread_name_prefix="local-embedding",
         )
+        self._closed = False
 
     def _get_model(self) -> Any:
         if self._model is None:
@@ -1131,7 +1256,12 @@ class LocalModelEmbeddingProvider:
         return self._dimension
 
     async def start(self) -> None:
-        """Preload the model on a worker thread before serving requests."""
+        """Optionally preload the model on a worker thread.
+
+        Not called automatically by the orchestrator; intended for callers
+        that own MCP server startup (e.g. FastMCP ``lifespan`` hook) and can
+        afford to pay the cold-start cost before the first client request.
+        """
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(self._executor, self._get_model)
 
@@ -1152,39 +1282,112 @@ class LocalModelEmbeddingProvider:
         return await loop.run_in_executor(self._executor, _encode)
 
     async def close(self) -> None:
-        """Shut down the worker thread pool."""
+        """Shut down the worker thread pool (idempotent)."""
+        if self._closed:
+            return
+        self._closed = True
         self._executor.shutdown(wait=True)
 ```
 
-- [ ] **Step 4: Re-run the local-model tests**
+- [ ] **Step 5: Re-run the local-model tests**
 
 Run: `uv run pytest tests/unit/test_embedding_local.py -v`
 Expected: All PASS.
 
-- [ ] **Step 5: Have the orchestrator preload the model during initialization**
+- [ ] **Step 6: Wire `embedding_provider.close()` into `Orchestrator.dispose()`**
 
-In `src/context_store/orchestrator.py`, find `create_orchestrator` (line 474). Right after `embedding_provider = create_embedding_provider(settings)` (around line 516), add:
+In `src/context_store/orchestrator.py`, extend `Orchestrator.dispose()` (lines 431-466). After the existing `self._cache.dispose()` try block (around line 464), add a fourth try block:
 
 ```python
-        # Preload the local model off the event loop so the first MCP tool
-        # call does not pay the cold-start cost.
-        start = getattr(embedding_provider, "start", None)
-        if callable(start):
-            await start()
+        # 4. Embedding provider (added in Phase 1: required to release the
+        # long-lived ThreadPoolExecutor owned by LocalModelEmbeddingProvider).
+        try:
+            close = getattr(self._embedding_provider, "close", None)
+            if callable(close):
+                await close()
+        except Exception as exc:
+            logger.error("Failed to dispose embedding provider: %s", exc, exc_info=True)
 ```
 
-- [ ] **Step 6: Run the orchestrator tests**
+- [ ] **Step 7: Add a failing test for orchestrator-level disposal**
+
+Add the following to `tests/unit/test_orchestrator.py` (or to the existing dispose-coverage test file under `tests/unit/`; if there is no dispose test yet, append a new test function at the end of `tests/unit/test_orchestrator.py`):
+
+```python
+@pytest.mark.asyncio
+async def test_orchestrator_dispose_closes_embedding_provider() -> None:
+    """Orchestrator.dispose() must call embedding_provider.close()."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from context_store.orchestrator import Orchestrator
+
+    embedding_provider = MagicMock()
+    embedding_provider.close = AsyncMock()
+
+    storage = MagicMock()
+    storage.dispose = AsyncMock()
+    cache = MagicMock()
+    cache.dispose = AsyncMock()
+    lifecycle_manager = MagicMock()
+    lifecycle_manager.graceful_shutdown = AsyncMock()
+    task_registry = MagicMock()
+    task_registry.cancel_all = AsyncMock()
+    task_registry.__len__ = MagicMock(return_value=0)
+
+    orchestrator = Orchestrator(
+        storage=storage,
+        graph=None,
+        cache=cache,
+        embedding_provider=embedding_provider,
+        ingestion_pipeline=MagicMock(),
+        retrieval_pipeline=MagicMock(),
+        lifecycle_manager=lifecycle_manager,
+        task_registry=task_registry,
+    )
+
+    await orchestrator.dispose()
+
+    embedding_provider.close.assert_awaited_once()
+```
+
+- [ ] **Step 8: Wire `embedding_provider.close()` into the `create_orchestrator` failure path**
+
+In `src/context_store/orchestrator.py`, locate the `except Exception:` block at the end of `create_orchestrator` (lines 605-611). Currently it disposes storage/graph/cache only. Replace the block with the version below so the executor is released even when ingestion/retrieval pipeline construction or `_check_vector_dimension` raises:
+
+```python
+    except Exception:
+        # 初期化失敗時は全アダプターのリソースを解放して再送
+        await storage.dispose()
+        if graph is not None:
+            await graph.dispose()
+        await cache.dispose()
+        # `embedding_provider` may have been created (Task 6 adds an executor
+        # in its __init__); release it if so. Guarded against the early-fail
+        # path where create_embedding_provider() itself raised.
+        provider = locals().get("embedding_provider")
+        if provider is not None:
+            try:
+                close = getattr(provider, "close", None)
+                if callable(close):
+                    await close()
+            except Exception:
+                logger.exception("Failed to close embedding provider during init cleanup")
+        raise
+```
+
+- [ ] **Step 9: Run the orchestrator tests**
 
 Run: `uv run pytest tests/unit/test_orchestrator.py -v`
-Expected: All PASS. (The new hook is gated by `getattr` so providers without `start()` are unaffected.)
+Expected: All PASS, including the new dispose test from Step 7.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add src/context_store/embedding/local_model.py \
         src/context_store/orchestrator.py \
-        tests/unit/test_embedding_local.py
-git commit -m "perf(embedding): reuse local-model executor and preload model on orchestrator start"
+        tests/unit/test_embedding_local.py \
+        tests/unit/test_orchestrator.py
+git commit -m "perf(embedding): reuse local-model executor and tie its lifecycle to Orchestrator"
 ```
 
 ---
@@ -1194,6 +1397,9 @@ git commit -m "perf(embedding): reuse local-model executor and preload model on 
 **Files:**
 - Modify: `src/context_store/ingestion/pipeline.py`
 - Modify: `tests/unit/test_ingestion_pipeline.py`
+
+**Failure-mode note (intentional behavior change):**
+Before Phase 1, embedding errors were caught per-chunk inside the inner `try/except`, so a single bad chunk would not abort the whole batch. After this task, `embed_batch([all chunks])` is called once up-front, so an exception there aborts the entire `ingest()` call (no per-chunk granularity for embedding failures). This is acceptable for Phase 1 because every supported embedding provider (Local, OpenAI, LiteLLM, CustomAPI) fails at the batch granularity in practice (model crash / 429 / 5xx / OOM affect the entire request). Per-text fault isolation is deferred (a future provider with deterministic per-text failure modes can reintroduce it by falling back to per-chunk `embed()` on `embed_batch` failure). Step 6.5 below adds a regression test that pins this contract.
 
 - [ ] **Step 1: Add a failing test that asserts one embed_batch call regardless of chunk count**
 
@@ -1442,6 +1648,47 @@ Expected: PASS.
 Run: `uv run pytest tests/unit/test_ingestion_pipeline.py tests/unit/test_batch_processor.py -v`
 Expected: All PASS. (Existing tests that mocked `embed()` will still pass because the per-chunk fallback path is preserved when `precomputed_embedding is None`.)
 
+- [ ] **Step 6.5: Pin the all-or-nothing failure contract for embed_batch errors**
+
+Append to `tests/unit/test_ingestion_pipeline.py`:
+
+```python
+@pytest.mark.asyncio
+async def test_ingest_propagates_embed_batch_failure() -> None:
+    """When embed_batch raises, ingest() must abort instead of silently partially succeeding."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from context_store.ingestion.pipeline import IngestionPipeline
+    from context_store.models.memory import SourceType
+
+    storage = MagicMock()
+    storage.vector_search = AsyncMock(return_value=[])
+    storage.save_memory = AsyncMock()  # must NOT be called
+    storage.list_by_filter = AsyncMock(return_value=[])
+
+    embedding_provider = MagicMock()
+    embedding_provider.embed_batch = AsyncMock(side_effect=RuntimeError("embedding backend down"))
+    embedding_provider.embed = AsyncMock()  # must NOT be called either
+    embedding_provider.dimension = 8
+    embedding_provider.close = AsyncMock()
+
+    pipeline = IngestionPipeline(
+        storage=storage,
+        graph=None,
+        embedding_provider=embedding_provider,
+        settings=None,
+    )
+
+    with pytest.raises(RuntimeError, match="embedding backend down"):
+        await pipeline.ingest("dummy", source_type=SourceType.MANUAL, metadata={})
+
+    storage.save_memory.assert_not_called()
+    embedding_provider.embed.assert_not_called()
+```
+
+Run: `uv run pytest tests/unit/test_ingestion_pipeline.py::test_ingest_propagates_embed_batch_failure -v`
+Expected: PASS.
+
 - [ ] **Step 7: Commit**
 
 ```bash
@@ -1452,6 +1699,8 @@ git commit -m "perf(ingestion): batch-embed all chunks in a single provider call
 ---
 
 ## Final Verification
+
+**Execution environment:** Per `AGENTS.md` / `CLAUDE.md` §5, all backend verification commands below **MUST be run inside the project devcontainer** (`.devcontainer/`). Running them on the host risks toolchain drift (e.g. different `uv`, mismatched `ruff`/`mypy` versions, missing `aiosqlite` wheels for the host arch) and is not a supported configuration. Open the workspace in the devcontainer (`Reopen in Container` in VS Code, or `devcontainer up && devcontainer exec`) before proceeding.
 
 - [ ] **Step 1: Run the full unit suite**
 

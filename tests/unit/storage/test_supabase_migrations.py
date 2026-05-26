@@ -58,3 +58,28 @@ def test_get_embedding_dimension_rpc_grants_service_role() -> None:
         )
         is not None
     )
+
+
+def test_vector_search_brief_rpc_omits_embedding_column() -> None:
+    sql = Path("supabase/migrations/20260526000001_vector_search_brief.sql").read_text()
+
+    assert "CREATE OR REPLACE FUNCTION vector_search_brief(" in sql
+
+    match = re.search(r"RETURNS TABLE\s*\((?P<columns>.*?)\)\s*LANGUAGE", sql, re.S)
+    assert match is not None
+    returns_table = match.group("columns")
+    function_body = sql.split("AS $$", 1)[1].split("$$;", 1)[0]
+
+    # The brief RPC must NOT return the embedding column in its result rows.
+    assert re.search(r"\bembedding\s+vector\b", returns_table) is None
+    # Score must still be derived from cosine distance against the embedding.
+    assert "m.embedding <=>" in function_body
+    # Service role grant must be present.
+    assert (
+        re.search(
+            r"GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+vector_search_brief\(.*\)\s+TO\s+service_role",
+            sql,
+            re.I,
+        )
+        is not None
+    )

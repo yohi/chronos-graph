@@ -17,12 +17,14 @@ try:  # noqa: I001
 
     from supabase import (  # type: ignore[attr-defined]  # noqa: F401
         AsyncClient,
+        AsyncClientOptions,
         create_async_client,
     )
 
     _supabase_available = True
 except ImportError:
     AsyncClient = Any  # type: ignore[misc,assignment]
+    AsyncClientOptions = Any  # type: ignore[misc,assignment]
     PostgrestAPIError = Exception  # type: ignore[misc,assignment]
     _supabase_available = False
 
@@ -65,6 +67,7 @@ class SupabaseStorageAdapter:
 
     def __init__(self, client: "AsyncClient") -> None:
         self._client = client
+        self._cached_dimension: int | None = None
 
     @classmethod
     async def create(cls, settings: "Settings") -> "SupabaseStorageAdapter":
@@ -75,6 +78,9 @@ class SupabaseStorageAdapter:
         client = await create_async_client(
             settings.supabase_url,
             settings.supabase_key.get_secret_value(),
+            options=AsyncClientOptions(
+                postgrest_client_timeout=settings.supabase_request_timeout_seconds,
+            ),
         )
         adapter = cls(client)
         try:
@@ -95,6 +101,9 @@ class SupabaseStorageAdapter:
         return adapter
 
     async def get_vector_dimension(self) -> int | None:
+        if self._cached_dimension is not None:
+            return self._cached_dimension
+
         chain = (
             self._client.table("memories")
             .select("embedding")
@@ -106,7 +115,8 @@ class SupabaseStorageAdapter:
         if rows:
             embedding = _parse_embedding(rows[0].get("embedding"))
             if embedding:
-                return len(embedding)
+                self._cached_dimension = len(embedding)
+                return self._cached_dimension
         # Empty table: query schema dimension via RPC
         try:
             rpc_response = await self._client.rpc("get_embedding_dimension", {}).execute()
@@ -120,7 +130,8 @@ class SupabaseStorageAdapter:
         else:
             dim = None
         if isinstance(dim, int) and dim > 0:
-            return dim
+            self._cached_dimension = dim
+            return self._cached_dimension
         raise StorageError(
             "Could not determine memories.embedding dimension from schema. "
             "Ensure pgvector extension is installed and the memories table exists.",
@@ -277,7 +288,7 @@ class SupabaseStorageAdapter:
             "p_project": project,
         }
         try:
-            response = await self._client.rpc("vector_search", params).execute()
+            response = await self._client.rpc("vector_search_brief", params).execute()
         except Exception as exc:
             raise self._map_to_storage_error(exc) from exc
 

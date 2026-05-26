@@ -663,7 +663,7 @@ git commit -m "perf(storage): omit embedding column from Supabase read-path SELE
 - Modify: `tests/unit/storage/test_supabase_adapter.py`
 - Create: `tests/unit/test_post_processor.py`
 
-- [ ] **Step 1: Create the bulk RPC migration**
+- [x] **Step 1: Create the bulk RPC migration**
 
 Create `supabase/migrations/20260526000002_increment_memory_access_counts.sql`:
 
@@ -703,7 +703,7 @@ $$;
 GRANT EXECUTE ON FUNCTION increment_memory_access_counts(uuid[]) TO service_role;
 ```
 
-- [ ] **Step 2: Add the method to the StorageAdapter protocol**
+- [x] **Step 2: Add the method to the StorageAdapter protocol**
 
 In `src/context_store/storage/protocols.py`, add to the `StorageAdapter` protocol (right after `increment_memory_access_count` around line 118):
 
@@ -717,7 +717,7 @@ In `src/context_store/storage/protocols.py`, add to the `StorageAdapter` protoco
         ...
 ```
 
-- [ ] **Step 3: Add a failing test that the Supabase adapter calls the bulk RPC once**
+- [x] **Step 3: Add a failing test that the Supabase adapter calls the bulk RPC once**
 
 Append to `tests/unit/storage/test_supabase_adapter.py`:
 
@@ -768,12 +768,12 @@ async def test_increment_memory_access_counts_empty_list_skips_call():
     client.rpc.assert_not_called()
 ```
 
-- [ ] **Step 4: Run the new tests and confirm failures**
+- [x] **Step 4: Run the new tests and confirm failures**
 
 Run: `uv run pytest tests/unit/storage/test_supabase_adapter.py -k "increment_memory_access_counts" -v`
 Expected: FAIL — method does not exist on the adapter.
 
-- [ ] **Step 5: Implement the bulk method on the Supabase adapter**
+- [x] **Step 5: Implement the bulk method on the Supabase adapter**
 
 In `src/context_store/storage/supabase.py`, add after `increment_memory_access_count` (line 392):
 
@@ -796,12 +796,12 @@ In `src/context_store/storage/supabase.py`, add after `increment_memory_access_c
         return 0
 ```
 
-- [ ] **Step 6: Re-run the Supabase bulk tests**
+- [x] **Step 6: Re-run the Supabase bulk tests**
 
 Run: `uv run pytest tests/unit/storage/test_supabase_adapter.py -k "increment_memory_access_counts" -v`
 Expected: PASS.
 
-- [ ] **Step 7: Add the bulk method to the Postgres adapter**
+- [x] **Step 7: Add the bulk method to the Postgres adapter**
 
 In `src/context_store/storage/postgres.py`, add a method near `increment_memory_access_count` (around line 460):
 
@@ -834,7 +834,7 @@ In `src/context_store/storage/postgres.py`, add a method near `increment_memory_
             return 0
 ```
 
-- [ ] **Step 8: Add the bulk method to the SQLite adapter**
+- [x] **Step 8: Add the bulk method to the SQLite adapter**
 
 The SQLite adapter has no `_run_write` helper; all write paths use `async with self._db() as conn:` directly (see the existing `increment_memory_access_count` at `src/context_store/storage/sqlite.py:1004-1024` for the canonical pattern, including the `aiosqlite.OperationalError` → busy-lock translation).
 
@@ -870,7 +870,7 @@ In `src/context_store/storage/sqlite.py`, add the following method immediately a
 
 If `datetime`/`timezone`/`aiosqlite`/`_raise_if_locked`/`Any` are not already imported at the top of `sqlite.py`, they will already be available because the surrounding methods (`increment_memory_access_count`, `update_memory`, etc.) use the same symbols — verify the imports rather than re-adding them.
 
-- [ ] **Step 9: Add the bulk method to `ReadOnlyNoOpStorageAdapter`**
+- [x] **Step 9: Add the bulk method to `ReadOnlyNoOpStorageAdapter`**
 
 In `src/context_store/storage/factory.py`, after the existing `increment_memory_access_count` (line 112):
 
@@ -881,7 +881,7 @@ In `src/context_store/storage/factory.py`, after the existing `increment_memory_
         )
 ```
 
-- [ ] **Step 10: Add a failing test that `PostProcessor.process` makes only one update call**
+- [x] **Step 10: Add a failing test that `PostProcessor.process` makes only one update call**
 
 Create `tests/unit/test_post_processor.py` (the project currently has no dedicated unit tests for `PostProcessor`; coverage in `test_retrieval_pipeline.py` mocks it wholesale):
 
@@ -945,12 +945,12 @@ async def test_post_processor_empty_results_skips_bulk_call():
     storage.increment_memory_access_counts.assert_not_awaited()
 ```
 
-- [ ] **Step 11: Run the new PostProcessor tests and confirm failure**
+- [x] **Step 11: Run the new PostProcessor tests and confirm failure**
 
 Run: `uv run pytest tests/unit/test_post_processor.py -k "bulk_increment" -v`
 Expected: FAIL — `PostProcessor.process` still calls the per-result API.
 
-- [ ] **Step 12: Update `PostProcessor.process` to call the bulk API**
+- [x] **Step 12: Update `PostProcessor.process` to call the bulk API**
 
 In `src/context_store/retrieval/post_processor.py`, replace the `process` method's step 3 (lines 58-62) and delete `_update_access_record` (lines 137-152):
 
@@ -984,17 +984,17 @@ In `src/context_store/retrieval/post_processor.py`, replace the `process` method
 
 Remove the now-unused `_update_access_record` method and the unused `asyncio` import if nothing else needs it (keep `import logging`, `import math`).
 
-- [ ] **Step 13: Re-run the PostProcessor tests**
+- [x] **Step 13: Re-run the PostProcessor tests**
 
 Run: `uv run pytest tests/unit/test_post_processor.py -v`
 Expected: All PASS.
 
-- [ ] **Step 14: Run the full adapter and retrieval suites**
+- [x] **Step 14: Run the full adapter and retrieval suites**
 
 Run: `uv run pytest tests/unit/storage/ tests/unit/test_post_processor.py tests/unit/test_retrieval_pipeline.py -v`
 Expected: All PASS.
 
-- [ ] **Step 14.5: Add a SQL-level regression test for the new bulk RPC migration**
+- [x] **Step 14.5: Add a SQL-level regression test for the new bulk RPC migration**
 
 Append to `tests/unit/storage/test_supabase_migrations.py`:
 
@@ -1029,7 +1029,7 @@ def test_increment_memory_access_counts_rpc_accepts_uuid_array_and_returns_integ
 Run: `uv run pytest tests/unit/storage/test_supabase_migrations.py::test_increment_memory_access_counts_rpc_accepts_uuid_array_and_returns_integer -v`
 Expected: PASS.
 
-- [ ] **Step 15: Commit**
+- [x] **Step 15: Commit**
 
 ```bash
 git add supabase/migrations/20260526000002_increment_memory_access_counts.sql \

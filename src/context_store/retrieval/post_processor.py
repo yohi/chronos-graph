@@ -1,6 +1,5 @@
 """Post Processor - フィルタ・トークン制限・アクセス記録"""
 
-import asyncio
 import logging
 import math
 
@@ -55,11 +54,17 @@ class PostProcessor:
         if max_tokens is not None:
             filtered = self._apply_token_limit(filtered, max_tokens)
 
-        # ステップ 3: アクセス記録を更新（非同期）
-        await asyncio.gather(
-            *(self._update_access_record(result) for result in filtered),
-            return_exceptions=True,
-        )
+        # ステップ 3: アクセス記録を一括更新
+        if filtered:
+            memory_ids = [str(r.memory.id) for r in filtered]
+            try:
+                await self.storage_adapter.increment_memory_access_counts(memory_ids)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to bulk-update access records for %d memories: %s",
+                    len(memory_ids),
+                    exc,
+                )
 
         return filtered
 
@@ -133,20 +138,3 @@ class PostProcessor:
                 break
 
         return limited_results
-
-    async def _update_access_record(self, result: ScoredMemory) -> None:
-        """
-        アクセス記録をアトミックに更新
-
-        Args:
-            result: 検索結果
-        """
-        try:
-            # アトミックなインクリメント API を使用して、競合による更新消失を防ぐ
-            memory_id = str(result.memory.id)
-            await self.storage_adapter.increment_memory_access_count(memory_id)
-        except Exception as e:
-            # 更新失敗は警告に留める（検索機能自体は継続）
-            logger.warning(
-                f"Failed to update access record for memory {result.memory.id}: {str(e)}"
-            )

@@ -808,7 +808,9 @@ In `src/context_store/storage/sqlite.py`, locate `increment_memory_access_count`
         async def _run(conn):
             cursor = await conn.execute(sql, list(memory_ids))
             await conn.commit()
-            return int(cursor.rowcount or 0)
+            # DBAPI 2.0 allows rowcount == -1 (unknown). Clamp to >= 0 because
+            # the bulk API contract is "number of rows updated".
+            return max(cursor.rowcount, 0)
 
         return await self._run_write(_run)
 ```

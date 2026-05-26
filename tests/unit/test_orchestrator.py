@@ -561,15 +561,15 @@ class TestDisposeOperation:
         task_registry.cancel_all.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_dispose_closes_embedding_provider(self):
-        """dispose() が embedding_provider.close() を呼び出す。"""
-        embedding = _make_mock_embedding()
-        embedding.close = AsyncMock()
-        orch, *_ = await _build_orchestrator(embedding=embedding)
+    async def test_dispose_disposes_ingestion_pipeline(self):
+        """dispose() が ingestion_pipeline.dispose() を呼び出す。"""
+        ingestion_pipeline = _make_mock_ingestion_pipeline()
+        ingestion_pipeline.dispose = AsyncMock()
+        orch, *_ = await _build_orchestrator(ingestion_pipeline=ingestion_pipeline)
 
         await orch.dispose()
 
-        embedding.close.assert_awaited_once()
+        ingestion_pipeline.dispose.assert_awaited_once()
 
 
 class TestSessionFlush:

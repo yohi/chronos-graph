@@ -119,4 +119,5 @@ class LocalModelEmbeddingProvider:
         if self._closed:
             return
         self._closed = True
-        self._executor.shutdown(wait=True)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._executor.shutdown, True)

@@ -205,22 +205,37 @@ class IngestionPipeline:
         if not flattened:
             return []
 
-        embeddings = await self._embedding_provider.embed_batch(
-            [chunk.content for chunk in flattened]
-        )
-        if len(embeddings) != len(flattened):
-            raise RuntimeError(
-                f"Embedding count mismatch: expected {len(flattened)}, got {len(embeddings)}"
-            )
+        # memo_key で重複排除したユニークなチャンクを特定して埋め込みを生成
+        unique_chunks: dict[tuple[str, str, str], RawContent] = {}
+        for chunk in flattened:
+            key = self._compute_memo_key(chunk, meta)
+            if key not in unique_chunks:
+                unique_chunks[key] = chunk
+
+        unique_keys = list(unique_chunks.keys())
+        unique_contents = [unique_chunks[k].content for k in unique_keys]
+
+        if unique_contents:
+            unique_embeddings = await self._embedding_provider.embed_batch(unique_contents)
+            if len(unique_embeddings) != len(unique_contents):
+                raise RuntimeError(
+                    f"Embedding count mismatch: "
+                    f"expected {len(unique_contents)}, got {len(unique_embeddings)}"
+                )
+            embedding_map = dict(zip(unique_keys, unique_embeddings, strict=True))
+        else:
+            embedding_map = {}
 
         results: list[IngestionResult] = []
         document_memories: dict[str, list[Memory]] = {}
         failed_chunks: list[dict[str, Any]] = []
 
-        for chunk, embedding in zip(flattened, embeddings, strict=True):
+        for chunk in flattened:
             document_id = str(chunk.metadata.get("document_id", ""))
             prior_document_memories = document_memories.get(document_id, [])
             content_hash = self._compute_hash(chunk.content)
+            key = self._compute_memo_key(chunk, meta)
+            embedding = embedding_map[key]
             try:
                 result = await self._process_chunk(
                     chunk,
@@ -258,6 +273,16 @@ class IngestionPipeline:
 
         return results
 
+    def _compute_memo_key(
+        self, chunk: RawContent, base_metadata: dict[str, Any]
+    ) -> tuple[str, str, str]:
+        """チャンクのメモ化キーを計算する。"""
+        content_hash = self._compute_hash(chunk.content)
+        merged_meta = {**base_metadata, **chunk.metadata}
+        meta_json = json.dumps(merged_meta, sort_keys=True, default=self._serialize_meta)
+        meta_hash = hashlib.sha256(meta_json.encode("utf-8")).hexdigest()
+        return (content_hash, meta_hash, chunk.source_type.value)
+
     async def _process_chunk(
         self,
         chunk: RawContent,
@@ -267,15 +292,8 @@ class IngestionPipeline:
         precomputed_embedding: list[float] | None = None,
     ) -> IngestionResult | None:
         """単一チャンクの処理パイプラインを実行する。"""
-        # コンテンツハッシュ + マージされたメタデータのハッシュでキーイング
         content_hash = self._compute_hash(chunk.content)
-        merged_meta = {**base_metadata, **chunk.metadata}
-
-        # 決定論的なメタデータのハッシュを作成
-        meta_json = json.dumps(merged_meta, sort_keys=True, default=self._serialize_meta)
-        meta_hash = hashlib.sha256(meta_json.encode("utf-8")).hexdigest()
-
-        memo_key = (content_hash, meta_hash, chunk.source_type.value)
+        memo_key = self._compute_memo_key(chunk, base_metadata)
 
         # 1. ロックを取得して同一 memo_key のタスクをアトミックにチェック・登録する
 

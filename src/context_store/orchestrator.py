@@ -466,15 +466,15 @@ class Orchestrator:
         except Exception as exc:
             logger.error("Failed to dispose cache: %s", exc, exc_info=True)
 
-        # 4. Embedding provider (LocalModelEmbeddingProvider owns a long-lived executor).
+        # 4. Ingestion pipeline (which disposes url_adapter and embedding_provider)
         try:
-            close = getattr(self._embedding_provider, "close", None)
-            if callable(close):
-                result = close()
+            dispose = getattr(self._ingestion_pipeline, "dispose", None)
+            if callable(dispose):
+                result = dispose()
                 if inspect.isawaitable(result):
                     await result
         except Exception as exc:
-            logger.error("Failed to dispose embedding provider: %s", exc, exc_info=True)
+            logger.error("Failed to dispose ingestion pipeline: %s", exc, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -608,17 +608,36 @@ async def create_orchestrator(
             settings=settings,
         )
 
+        # モデルの事前ロード（もし start メソッドがあれば非同期で事前ロードする）
+        start = getattr(embedding_provider, "start", None)
+        if callable(start):
+            result = start()
+            if inspect.isawaitable(result):
+                await result
+
         # フェイルファストチェック
         await orchestrator._check_vector_dimension()
 
         return orchestrator
 
-    except Exception:
-        # 初期化失敗時は全アダプターのリソースを解放して再送
-        await storage.dispose()
+    except Exception as orig_exc:
+        # 初期化失敗時は全アダプターのリソースをベストエフォートで解放して再送
+        try:
+            await storage.dispose()
+        except Exception as exc:
+            logger.error("Failed to dispose storage during cleanup: %s", exc, exc_info=True)
+
         if graph is not None:
-            await graph.dispose()
-        await cache.dispose()
+            try:
+                await graph.dispose()
+            except Exception as exc:
+                logger.error("Failed to dispose graph during cleanup: %s", exc, exc_info=True)
+
+        try:
+            await cache.dispose()
+        except Exception as exc:
+            logger.error("Failed to dispose cache during cleanup: %s", exc, exc_info=True)
+
         provider = locals().get("embedding_provider")
         if provider is not None:
             try:
@@ -627,9 +646,14 @@ async def create_orchestrator(
                     result = close()
                     if inspect.isawaitable(result):
                         await result
-            except Exception:
-                logger.exception("Failed to close embedding provider during init cleanup")
-        raise
+            except Exception as exc:
+                logger.error(
+                    "Failed to close embedding provider during cleanup: %s",
+                    exc,
+                    exc_info=True,
+                )
+
+        raise orig_exc
 
 
 __all__ = ["ConfigurationError", "Orchestrator", "create_orchestrator"]

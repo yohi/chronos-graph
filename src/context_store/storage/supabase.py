@@ -74,7 +74,7 @@ _MEMORY_BRIEF_COLUMNS = (
     "id,content,memory_type,source_type,source_metadata,"
     "semantic_relevance,importance_score,access_count,"
     "last_accessed_at,created_at,updated_at,archived_at,"
-    "tags,project,content_hash"
+    "tags,project"
 )
 
 

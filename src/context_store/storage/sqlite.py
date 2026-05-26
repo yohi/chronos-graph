@@ -1027,22 +1027,32 @@ class SQLiteStorageAdapter:
         """Bulk variant: atomically bump access_count for many memories in one statement."""
         if not memory_ids:
             return 0
-        placeholders = ",".join("?" for _ in memory_ids)
-        where_clause = f"WHERE id IN ({placeholders})"
-        sql = (
-            "UPDATE memories "
-            "SET access_count = access_count + 1, "
-            "    last_accessed_at = ?, "
-            "    updated_at = ? " + where_clause
-        )  # noqa: S608 - IN placeholders are generated, values stay parameterized
+
+        # SQLite has a host parameter limit (historically 999).
+        # We chunk memory_ids to avoid "too many SQL variables" errors.
+        # Max variables limit is 999, minus 2 for the timestamp params.
+        chunk_size = 997
+        total_updated = 0
+
         async with self._db() as conn:
             try:
                 now = datetime.now(timezone.utc).isoformat()
-                params: list[Any] = [now, now, *list(memory_ids)]
-                async with conn.execute(sql, params) as cursor:
-                    updated_count: int = max(cursor.rowcount, 0)
+                for i in range(0, len(memory_ids), chunk_size):
+                    chunk = memory_ids[i : i + chunk_size]
+                    placeholders = ",".join("?" for _ in chunk)
+                    where_clause = f"WHERE id IN ({placeholders})"
+                    sql = (
+                        "UPDATE memories "
+                        "SET access_count = access_count + 1, "
+                        "    last_accessed_at = ?, "
+                        "    updated_at = ? " + where_clause
+                    )  # noqa: S608 - IN placeholders are generated, values stay parameterized
+                    params: list[Any] = [now, now, *list(chunk)]
+                    async with conn.execute(sql, params) as cursor:
+                        updated_count: int = max(cursor.rowcount, 0)
+                        total_updated += updated_count
                 await conn.commit()
-                return updated_count
+                return total_updated
             except aiosqlite.OperationalError as exc:
                 _raise_if_locked(exc)
                 raise

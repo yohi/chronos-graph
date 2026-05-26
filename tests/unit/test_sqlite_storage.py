@@ -1393,3 +1393,23 @@ class TestIncrementMemoryAccessCounts:
     @pytest.mark.asyncio
     async def test_bulk_increment_empty_list_skips_update(self, adapter):
         assert await adapter.increment_memory_access_counts([]) == 0
+
+    @pytest.mark.asyncio
+    async def test_bulk_increment_chunks_large_inputs(self, adapter):
+        memories = [_make_memory(content=f"bulk access large {i}") for i in range(3)]
+        for memory in memories:
+            await adapter.save_memory(memory)
+
+        large_ids = [str(uuid4()) for _ in range(1997)]
+        large_ids.extend([str(memories[0].id), str(memories[1].id), str(memories[2].id)])
+
+        affected = await adapter.increment_memory_access_counts(large_ids)
+        assert affected == 3
+
+        first = await adapter.get_memory(str(memories[0].id))
+        second = await adapter.get_memory(str(memories[1].id))
+        third = await adapter.get_memory(str(memories[2].id))
+        assert first is not None and second is not None and third is not None
+        assert first.access_count == 1
+        assert second.access_count == 1
+        assert third.access_count == 1

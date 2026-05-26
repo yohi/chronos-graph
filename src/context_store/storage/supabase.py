@@ -116,8 +116,12 @@ class SupabaseStorageAdapter:
                 .not_.is_("embedding", "null")
                 .limit(1)
             )
-            response = await chain.execute()
-            rows = response.data or []
+            try:
+                response = await chain.execute()
+                rows = response.data or []
+            except Exception as exc:
+                raise self._map_to_storage_error(exc) from exc
+
             if rows:
                 embedding = _parse_embedding(rows[0].get("embedding"))
                 if embedding:

@@ -1698,7 +1698,10 @@ git commit -m "perf(ingestion): batch-embed all chunks in a single provider call
 
 ---
 
-## Final Verification
+## Final Verification (Perform after completing Tasks 1–7)
+
+> [!IMPORTANT]
+> Perform this Final Verification only after completing all Tasks 1–7 (including the second migration in Task 5). This is the final check following the second migration, rather than a step-by-step verification after Tasks 1–3. Specifically, Step 4 below requires the migrations from Task 5 to be fully applied.
 
 **Execution environment:** Per `AGENTS.md` / `CLAUDE.md` §5, all backend verification commands below **MUST be run inside the project devcontainer** (`.devcontainer/`). Running them on the host risks toolchain drift (e.g. different `uv`, mismatched `ruff`/`mypy` versions, missing `aiosqlite` wheels for the host arch) and is not a supported configuration. Open the workspace in the devcontainer (`Reopen in Container` in VS Code, or `devcontainer up && devcontainer exec`) before proceeding.
 

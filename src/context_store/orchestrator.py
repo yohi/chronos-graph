@@ -7,6 +7,7 @@ RL 拡張フックを受け取り、None の場合は NoOp 実装を使用する
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -465,6 +466,16 @@ class Orchestrator:
         except Exception as exc:
             logger.error("Failed to dispose cache: %s", exc, exc_info=True)
 
+        # 4. Embedding provider (LocalModelEmbeddingProvider owns a long-lived executor).
+        try:
+            close = getattr(self._embedding_provider, "close", None)
+            if callable(close):
+                result = close()
+                if inspect.isawaitable(result):
+                    await result
+        except Exception as exc:
+            logger.error("Failed to dispose embedding provider: %s", exc, exc_info=True)
+
 
 # ---------------------------------------------------------------------------
 # ファクトリ関数
@@ -608,6 +619,16 @@ async def create_orchestrator(
         if graph is not None:
             await graph.dispose()
         await cache.dispose()
+        provider = locals().get("embedding_provider")
+        if provider is not None:
+            try:
+                close = getattr(provider, "close", None)
+                if callable(close):
+                    result = close()
+                    if inspect.isawaitable(result):
+                        await result
+            except Exception:
+                logger.exception("Failed to close embedding provider during init cleanup")
         raise
 
 

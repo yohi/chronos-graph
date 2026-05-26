@@ -560,6 +560,17 @@ class TestDisposeOperation:
 
         task_registry.cancel_all.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_dispose_closes_embedding_provider(self):
+        """dispose() が embedding_provider.close() を呼び出す。"""
+        embedding = _make_mock_embedding()
+        embedding.close = AsyncMock()
+        orch, *_ = await _build_orchestrator(embedding=embedding)
+
+        await orch.dispose()
+
+        embedding.close.assert_awaited_once()
+
 
 class TestSessionFlush:
     """session_flush() のテスト。"""

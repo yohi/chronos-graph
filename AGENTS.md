@@ -1,32 +1,37 @@
 # ChronosGraph Agent Guidelines
 
-## 1. Project Overview
+## 1. Project Overview & Purpose (WHY & WHAT)
 **ChronosGraph** is an MCP server providing persistent, multi-layered long-term memory for AI agents via a temporal knowledge graph.
+- **Goal**: Maintain semantic, procedural, and episodic memories dynamically to support stateful agent interactions.
+- **Architecture**: FastMCP Gateway (Tier 1 deterministic rules + Tier 2 Universal LLM Evaluator via LiteLLM) bridging dynamic Memory Clients and persistent context adapters.
 
-## 2. Tech Stack & Tools
-- **Backend**: Python 3.12+, FastAPI, FastMCP (`uv` for package management)
-- **Frontend**: React 18, Vite, Tailwind CSS (`npm` for package management)
-- **Data**: PostgreSQL (pgvector), SQLite (sqlite-vec), Neo4j, Redis, Supabase
+## 2. Technology Stack
+- **Backend**: Python 3.12+ (managed via `uv`), FastAPI, FastMCP, LiteLLM
+- **Frontend**: React 18, Vite, Tailwind CSS (managed via `npm` in `frontend/`)
+- **Storage Layer**: SQLite (`sqlite-vec`), PostgreSQL (`pgvector`), Neo4j, Redis, Supabase
 
-## 3. Workflow Commands
-Always run verification commands before claiming success. Delegate style rules to linters.
+## 3. Workflow Commands (HOW to Verify)
+Always verify changes using deterministic linters/formatters. Never guess or let LLM perform manual linting.
 
-**Backend** (Run inside Devcontainer):
-- Install: `uv sync --all-extras`
-- Test: `uv run pytest tests/unit/ -v`
-- Lint: `uv run ruff check src/ tests/` & `uv run mypy src/`
+### Backend (Execute inside Devcontainer):
+- **Dependency sync**: `uv sync --all-extras`
+- **Unit Testing**: `uv run pytest tests/unit/ -v`
+- **Specific Evaluator Test**: `uv run pytest tests/unit/test_mcp_gateway_llm_evaluator.py -v`
+- **Integration Test**: `uv run pytest tests/integration/ -v`
+- **Linting & Formatting**: `uv run ruff check src/ tests/` and `uv run mypy src/`
 
-**Frontend** (Run in `frontend/`):
-- Test & Lint: `npm run lint` & `npx tsc --noEmit` & `npx playwright test`
+### Frontend (Execute inside `frontend/`):
+- **Linting & Typecheck**: `npm run lint` & `npx tsc --noEmit`
+- **E2E Testing**: `npx playwright test`
 
-## 4. Progressive Disclosure
-Do not guess implementation details. Read these files when working on specific domains:
-- **Architecture, Models & Gateway**: `SPEC.md`
-- **Setup & Constraints**: `README.md`
-- **Memory Formats**: `docs/agent-prompts/memory-save-system-prompt.md`
+## 4. Progressive Disclosure (Read ONLY when needed)
+Do not guess implementation details. Consult the following specialized specs:
+- **Core Architecture & Model Gateway**: `SPEC.md`
+- **Environment & Deploy Details**: `README.md`
+- **Memory Ingestion Prompting**: `docs/agent-prompts/memory-save-system-prompt.md`
 
-## 5. Essential Rules
-- **Migrations**: NEVER hardcode DDL. Use `.sql` in `src/context_store/storage/migrations/{backend}/` or `supabase/migrations/`.
-- **Supabase**: Prefer Postgres RPC (`client.rpc()`) for complex logic to avoid race conditions.
-- **Memory**: Prefix inputs with `[📜 Episodic]`, `[🧠 Semantic]`, or `[🕒 Procedural]`.
-- **Errors**: If setup fails, stop and ask the user. Do not attempt blind fixes.
+## 5. High-Leverage Rules (Guiding Principles)
+- **Migrations**: NEVER hardcode DDL. Place `.sql` files in `src/context_store/storage/migrations/{backend}/` or `supabase/migrations/`.
+- **Supabase Operations**: Always prefer Postgres RPC (`client.rpc()`) for complex logic to prevent concurrency race conditions.
+- **Memory Formats**: Inputs must be prefixed strictly with `[📜 Episodic]`, `[🧠 Semantic]`, or `[🕒 Procedural]`.
+- **Fail-Soft Evaluator**: Universal Evaluator settings like `max_tokens` or `timeout_seconds` maintain fail-soft logic (invalid values default automatically with warnings).

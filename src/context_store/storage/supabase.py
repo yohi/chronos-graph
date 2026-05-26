@@ -444,6 +444,23 @@ class SupabaseStorageAdapter:
             raise self._map_to_storage_error(exc) from exc
         return bool(response.data)
 
+    async def increment_memory_access_counts(self, memory_ids: list[str]) -> int:
+        valid_ids = [mid for mid in memory_ids if _is_valid_uuid(mid)]
+        if not valid_ids:
+            return 0
+        try:
+            response = await self._client.rpc(
+                "increment_memory_access_counts", {"p_memory_ids": valid_ids}
+            ).execute()
+        except Exception as exc:
+            raise self._map_to_storage_error(exc) from exc
+        data = response.data
+        if isinstance(data, int):
+            return data
+        if isinstance(data, list) and data and isinstance(data[0], int):
+            return data[0]
+        return 0
+
 
 def _format_pg_datetime(dt: "datetime") -> str:
     # +00:00 を Z に置換することで PostgREST の or_() フィルター文字列内で

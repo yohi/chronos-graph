@@ -583,6 +583,50 @@ async def test_increment_memory_access_count_invokes_rpc():
 
 
 @pytest.mark.asyncio
+async def test_increment_memory_access_counts_invokes_bulk_rpc():
+    client = make_mock_client()
+    rpc_chain = client.rpc.return_value
+    rpc_chain.execute = AsyncMock(return_value=make_mock_response(data=3))
+
+    adapter = SupabaseStorageAdapter(client)
+    ids = [
+        "550e8400-e29b-41d4-a716-446655440001",
+        "550e8400-e29b-41d4-a716-446655440002",
+        "550e8400-e29b-41d4-a716-446655440003",
+    ]
+    affected = await adapter.increment_memory_access_counts(ids)
+
+    assert affected == 3
+    client.rpc.assert_called_once_with("increment_memory_access_counts", {"p_memory_ids": ids})
+
+
+@pytest.mark.asyncio
+async def test_increment_memory_access_counts_filters_invalid_uuids():
+    client = make_mock_client()
+    rpc_chain = client.rpc.return_value
+    rpc_chain.execute = AsyncMock(return_value=make_mock_response(data=1))
+
+    adapter = SupabaseStorageAdapter(client)
+    ids = ["not-a-uuid", "550e8400-e29b-41d4-a716-446655440002"]
+    affected = await adapter.increment_memory_access_counts(ids)
+
+    assert affected == 1
+    client.rpc.assert_called_once_with(
+        "increment_memory_access_counts",
+        {"p_memory_ids": ["550e8400-e29b-41d4-a716-446655440002"]},
+    )
+
+
+@pytest.mark.asyncio
+async def test_increment_memory_access_counts_empty_list_skips_call():
+    client = make_mock_client()
+    adapter = SupabaseStorageAdapter(client)
+    affected = await adapter.increment_memory_access_counts([])
+    assert affected == 0
+    client.rpc.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_vector_search_calls_rpc():
     client = make_mock_client()
     now = datetime.now(timezone.utc)

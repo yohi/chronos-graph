@@ -234,7 +234,7 @@ EOF
 - Create: `tests/unit/test_chronos_shared_ingestion_mode.py`
 - Modify: `pyproject.toml` (行 167-168 周辺、`[tool.hatch.build.targets.wheel].packages`)
 
-- [ ] **Step 1: ブランチ作成と派生元検証 (Devcontainer 内で実行)**
+- [x] **Step 1: ブランチ作成と派生元検証 (Devcontainer 内で実行)**
 
 ```bash
 git fetch origin master
@@ -245,7 +245,7 @@ CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 git merge-base --is-ancestor "$EXPECTED_BASE" "$CURRENT_BRANCH" || { echo "ERROR: 派生元ブランチが $EXPECTED_BASE ではありません。スタック構造が壊れています。"; exit 1; }
 ```
 
-- [ ] **Step 2: 失敗するテストを先に書く** (`tests/unit/test_chronos_shared_ingestion_mode.py` 新規)
+- [x] **Step 2: 失敗するテストを先に書く** (`tests/unit/test_chronos_shared_ingestion_mode.py` 新規)
 
 ```python
 """chronos_shared.ingestion_mode の SSOT 契約検証。"""
@@ -288,7 +288,7 @@ def test_module_exposes_only_three_public_symbols() -> None:
     assert extras == set(), f"unexpected public symbols: {extras}"
 ```
 
-- [ ] **Step 3: 失敗を確認 (モジュール未作成のため import エラーになるはず)**
+- [x] **Step 3: 失敗を確認 (モジュール未作成のため import エラーになるはず)**
 
 ```bash
 uv run pytest tests/unit/test_chronos_shared_ingestion_mode.py -v
@@ -296,14 +296,14 @@ uv run pytest tests/unit/test_chronos_shared_ingestion_mode.py -v
 
 期待出力: `ModuleNotFoundError: No module named 'chronos_shared'` で 4 件すべて FAIL。
 
-- [ ] **Step 4: パッケージ初期化ファイルを作成** (`src/chronos_shared/__init__.py` 新規、空ファイル)
+- [x] **Step 4: パッケージ初期化ファイルを作成** (`src/chronos_shared/__init__.py` 新規、空ファイル)
 
 ```python
 ```
 
 (完全に空のファイルにする。`Write` で空文字列の content を渡す。)
 
-- [ ] **Step 5: SSOT モジュールを作成** (`src/chronos_shared/ingestion_mode.py` 新規)
+- [x] **Step 5: SSOT モジュールを作成** (`src/chronos_shared/ingestion_mode.py` 新規)
 
 ```python
 """SSOT for the ``CHRONOS_INGESTION_MODE`` environment variable.
@@ -345,7 +345,7 @@ packages = ["src/context_store", "src/mcp_gateway"]
 packages = ["src/context_store", "src/mcp_gateway", "src/chronos_shared"]
 ```
 
-- [ ] **Step 7: 依存関係再同期 (新パッケージを editable install に反映)**
+- [x] **Step 7: 依存関係再同期 (新パッケージを editable install に反映)**
 
 ```bash
 uv sync --all-extras
@@ -353,7 +353,7 @@ uv sync --all-extras
 
 期待出力: `chronos_shared` を含む editable install が成功。
 
-- [ ] **Step 8: テストが緑になることを確認**
+- [x] **Step 8: テストが緑になることを確認**
 
 ```bash
 uv run pytest tests/unit/test_chronos_shared_ingestion_mode.py -v
@@ -361,7 +361,7 @@ uv run pytest tests/unit/test_chronos_shared_ingestion_mode.py -v
 
 期待出力: 4 件すべて PASS。
 
-- [ ] **Step 9: 静的解析 (ruff + mypy strict) をパスすることを確認**
+- [x] **Step 9: 静的解析 (ruff + mypy strict) をパスすることを確認**
 
 ```bash
 uv run ruff check src/chronos_shared/ tests/unit/test_chronos_shared_ingestion_mode.py
@@ -371,7 +371,7 @@ uv run mypy src/chronos_shared/
 
 期待出力: いずれもエラー 0。`mypy` は strict 構成で `Literal` / `Final` の使用を含めて pass。
 
-- [ ] **Step 10: 既存 unit test が壊れていないことを再確認**
+- [x] **Step 10: 既存 unit test が壊れていないことを再確認**
 
 ```bash
 uv run pytest tests/unit -v
@@ -379,7 +379,7 @@ uv run pytest tests/unit -v
 
 期待出力: 既存テストはすべて緑、追加 4 件も緑。失敗 0。
 
-- [ ] **Step 11: コミット作成**
+- [x] **Step 11: コミット作成**
 
 ```bash
 git add src/chronos_shared/ tests/unit/test_chronos_shared_ingestion_mode.py pyproject.toml
@@ -396,7 +396,7 @@ EOF
 )"
 ```
 
-- [ ] **Step 12: Draft PR 作成と URL 記録**
+- [x] **Step 12: Draft PR 作成と URL 記録**
 
 ```bash
 git push -u origin feat/chronos-shared-ingestion-mode
@@ -420,7 +420,7 @@ PR URL を **「Draft PR URL 記録欄」の Task 1.1 行** に追記する。
 
 ---
 
-## Phase 2: Settings 拡張
+## Phase 1: Settings 拡張
 
 ### Task 2.1: `Settings` と `GatewaySettings` への `ingestion_mode` 追加 (+ env passthrough)
 
@@ -749,7 +749,7 @@ PR URL を **「Draft PR URL 記録欄」の Task 2.1 行** に追記する。
 
 ---
 
-## Phase 3: ツール隠蔽
+## Phase 2: ツール隠蔽
 
 ### Task 3.1: `ToolRegistry.hidden_tools` の追加
 
@@ -760,7 +760,7 @@ PR URL を **「Draft PR URL 記録欄」の Task 2.1 行** に追記する。
 - Modify: `src/mcp_gateway/tools/registry.py`
 - Create: `tests/unit/test_tool_registry_hidden.py`
 
-- [ ] **Step 1: ブランチ作成と派生元検証 (Devcontainer 内で実行)**
+- [x] **Step 1: ブランチ作成と派生元検証 (Devcontainer 内で実行)**
 
 ```bash
 git fetch origin master
@@ -771,7 +771,7 @@ CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 git merge-base --is-ancestor "$EXPECTED_BASE" "$CURRENT_BRANCH" || { echo "ERROR: 派生元ブランチが $EXPECTED_BASE ではありません。スタック構造が壊れています。"; exit 1; }
 ```
 
-- [ ] **Step 2: 失敗するテストを先に書く** (`tests/unit/test_tool_registry_hidden.py` 新規)
+- [x] **Step 2: 失敗するテストを先に書く** (`tests/unit/test_tool_registry_hidden.py` 新規)
 
 ```python
 """ToolRegistry.hidden_tools のフィルタ挙動検証。"""
@@ -840,7 +840,7 @@ def test_hidden_tools_keyword_only_argument() -> None:
         ToolRegistry(tools, frozenset({"memory_save"}))  # type: ignore[misc]
 ```
 
-- [ ] **Step 3: 失敗を確認 (`hidden_tools` 引数が未実装のため TypeError 等で FAIL)**
+- [x] **Step 3: 失敗を確認 (`hidden_tools` 引数が未実装のため TypeError 等で FAIL)**
 
 ```bash
 uv run pytest tests/unit/test_tool_registry_hidden.py -v
@@ -848,7 +848,7 @@ uv run pytest tests/unit/test_tool_registry_hidden.py -v
 
 期待出力: `test_default_hidden_tools_is_empty_and_preserves_all_tools` は既存実装で偶然 PASS する可能性あり (引数を渡していないため)。他 5 件は FAIL (`TypeError: __init__() got an unexpected keyword argument 'hidden_tools'` 等)。
 
-- [ ] **Step 4: `src/mcp_gateway/tools/registry.py` に `hidden_tools` を実装**
+- [x] **Step 4: `src/mcp_gateway/tools/registry.py` に `hidden_tools` を実装**
 
 ファイル全体を以下に書き換える (現状 22 行のため、`Write` で完全置換が安全。`Read` で現状を確認してから `Write`):
 
@@ -886,7 +886,7 @@ class ToolRegistry:
         self._all = copy.deepcopy(all_tools)
 ```
 
-- [ ] **Step 5: テストが緑になることを確認**
+- [x] **Step 5: テストが緑になることを確認**
 
 ```bash
 uv run pytest tests/unit/test_tool_registry_hidden.py -v
@@ -894,7 +894,7 @@ uv run pytest tests/unit/test_tool_registry_hidden.py -v
 
 期待出力: 全 6 件 PASS。
 
-- [ ] **Step 6: 静的解析パス確認**
+- [x] **Step 6: 静的解析パス確認**
 
 ```bash
 uv run ruff check src/mcp_gateway/tools/registry.py tests/unit/test_tool_registry_hidden.py
@@ -904,7 +904,7 @@ uv run mypy src/mcp_gateway/tools/registry.py
 
 期待出力: いずれもエラー 0。
 
-- [ ] **Step 7: 既存テストの regression 確認 (特に既存の registry / gateway 経路)**
+- [x] **Step 7: 既存テストの regression 確認 (特に既存の registry / gateway 経路)**
 
 ```bash
 uv run pytest tests/unit -v -k "registry or gateway"
@@ -912,7 +912,7 @@ uv run pytest tests/unit -v -k "registry or gateway"
 
 期待出力: 既存テストすべて緑、追加 6 件も緑。`replace_tools` を使うテストが既にあれば後方互換性を確認。
 
-- [ ] **Step 8: コミット**
+- [x] **Step 8: コミット**
 
 ```bash
 git add src/mcp_gateway/tools/registry.py tests/unit/test_tool_registry_hidden.py
@@ -929,7 +929,7 @@ EOF
 )"
 ```
 
-- [ ] **Step 9: Draft PR 作成 (派生元: `master`) と URL 記録**
+- [x] **Step 9: Draft PR 作成 (派生元: `master`) と URL 記録**
 
 ```bash
 git push -u origin feat/tool-registry-hidden-tools
@@ -1149,7 +1149,7 @@ PR URL を **「Draft PR URL 記録欄」の Task 3.2 行** に追記する。
 - Create: `scripts/agent_turn_hook.py`
 - Create: `tests/unit/test_agent_turn_hook_truncate.py`
 
-- [ ] **Step 1: ブランチ作成と派生元検証 (Devcontainer 内で実行)**
+- [x] **Step 1: ブランチ作成と派生元検証 (Devcontainer 内で実行)**
 
 ```bash
 git fetch origin master
@@ -1160,7 +1160,7 @@ CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 git merge-base --is-ancestor "$EXPECTED_BASE" "$CURRENT_BRANCH" || { echo "ERROR: 派生元ブランチが $EXPECTED_BASE ではありません。スタック構造が壊れています。"; exit 1; }
 ```
 
-- [ ] **Step 2: 失敗するテストを先に書く** (`tests/unit/test_agent_turn_hook_truncate.py` 新規)
+- [x] **Step 2: 失敗するテストを先に書く** (`tests/unit/test_agent_turn_hook_truncate.py` 新規)
 
 ```python
 """scripts/agent_turn_hook.py の pure helpers (truncate_log / _extract_session_id) の検証。"""
@@ -1282,7 +1282,7 @@ def test_extract_session_id_returns_none_when_param_missing() -> None:
     assert mod._extract_session_id("data: /messages?foo=bar") is None
 ```
 
-- [ ] **Step 3: 失敗を確認 (`scripts/agent_turn_hook.py` 未作成のため import エラー)**
+- [x] **Step 3: 失敗を確認 (`scripts/agent_turn_hook.py` 未作成のため import エラー)**
 
 ```bash
 uv run pytest tests/unit/test_agent_turn_hook_truncate.py -v
@@ -1290,7 +1290,7 @@ uv run pytest tests/unit/test_agent_turn_hook_truncate.py -v
 
 期待出力: 全 10 件 FAIL (主に `FileNotFoundError` または `AssertionError` で `spec is not None` が false)。
 
-- [ ] **Step 4: `scripts/agent_turn_hook.py` を実装** (新規)
+- [x] **Step 4: `scripts/agent_turn_hook.py` を実装** (新規)
 
 ```python
 """ターン終了時に会話ログを MCP Gateway へ fire-and-forget で送信するフック。
@@ -1541,7 +1541,7 @@ if __name__ == "__main__":
 - `scripts/*.py` は `pyproject.toml` で `T201` (print) を許可されているが、本スクリプトは `logging` のみ使用 (print 不要)。
 - `Exception` の broad catch は `# noqa: BLE001` で ruff の警告を抑制。
 
-- [ ] **Step 5: テストが緑になることを確認**
+- [x] **Step 5: テストが緑になることを確認**
 
 ```bash
 uv run pytest tests/unit/test_agent_turn_hook_truncate.py -v
@@ -1549,7 +1549,7 @@ uv run pytest tests/unit/test_agent_turn_hook_truncate.py -v
 
 期待出力: 全 10 件 PASS。
 
-- [ ] **Step 6: 静的解析パス確認**
+- [x] **Step 6: 静的解析パス確認**
 
 ```bash
 uv run ruff check scripts/agent_turn_hook.py tests/unit/test_agent_turn_hook_truncate.py
@@ -1559,7 +1559,7 @@ uv run mypy scripts/agent_turn_hook.py
 
 期待出力: いずれもエラー 0。
 
-- [ ] **Step 7: フェイルソフト挙動の手動 smoke test**
+- [x] **Step 7: フェイルソフト挙動の手動 smoke test**
 
 Gateway が起動していない状態でも exit 0 で終わることを確認:
 
@@ -1573,7 +1573,7 @@ echo "exit code: $?"
 
 期待出力: `exit code: 0`。stderr に WARNING ログが 1 行表示される (`turn hook failed (HTTP error): ...` 等)。
 
-- [ ] **Step 8: 既存 test の regression 確認**
+- [x] **Step 8: 既存 test の regression 確認**
 
 ```bash
 uv run pytest tests/unit -v
@@ -1581,7 +1581,7 @@ uv run pytest tests/unit -v
 
 期待出力: 既存テストすべて緑、追加 10 件も緑。
 
-- [ ] **Step 9: コミット**
+- [x] **Step 9: コミット**
 
 ```bash
 git add scripts/agent_turn_hook.py tests/unit/test_agent_turn_hook_truncate.py
@@ -1604,7 +1604,7 @@ EOF
 )"
 ```
 
-- [ ] **Step 10: Draft PR 作成 (派生元: `master`) と URL 記録**
+- [x] **Step 10: Draft PR 作成 (派生元: `master`) と URL 記録**
 
 ```bash
 git push -u origin feat/agent-turn-hook-script

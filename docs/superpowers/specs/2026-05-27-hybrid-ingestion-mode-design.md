@@ -60,10 +60,10 @@ ChronosGraph に「全量保存モード（`all`）」と「従来判定モー�
 | `src/mcp_gateway/config.py` | `GatewaySettings` に同フィールドを追加（同じく `chronos_shared.ingestion_mode` から import）。さらに `upstream_env_passthrough` のデフォルトに `"CHRONOS_INGESTION_MODE"` を追加し subprocess へ伝達 | +7行 |
 | `src/mcp_gateway/tools/registry.py` | `ToolRegistry.__init__` に `hidden_tools: AbstractSet[str] = frozenset()` を追加。`all_tools` / `filter_by_caps` は `hidden_tools` を差し引いて返す | +8行 |
 | `src/mcp_gateway/app.py` | `build_app()` で `settings.ingestion_mode == "all"` のとき `hidden_tools={"memory_save"}` を渡す | +4行 |
-| `scripts/agent_turn_hook.py` | 新規。stdin から会話ログを受け取り、上限サイズで切り詰めたうえで Gateway HTTP に fire-and-forget で `memory_save` を呼ぶ。切り詰めロジックは pure 関数として切り出し単体テスト可能にする | ~140行 |
+| `scripts/agent_turn_hook.py` | 新規。stdin から会話ログを受け取り、上限サイズで切り詰めたうえで Gateway HTTP に fire-and-forget で `memory_save` を呼ぶ。切り詰めと session_id 抽出は pure 関数 (`truncate_log` / `_extract_session_id`) として切り出し単体テスト可能にする。タイムアウトは SSE 個別 (`MCP_HOOK_SSE_TIMEOUT_SECONDS`) + 全体ハードリミット (`MCP_HOOK_TIMEOUT_SECONDS`) の 2 段構え | ~170行 |
 | `tests/unit/test_tool_registry_hidden.py` | 新規。`hidden_tools` の挙動を検証 | ~40行 |
 | `tests/unit/test_settings_ingestion_mode.py` | 新規。両 Settings の env 解決と共通モジュールの型一致、`upstream_env_passthrough` への `"CHRONOS_INGESTION_MODE"` 含有を検証 | ~50行 |
-| `tests/unit/test_agent_turn_hook_truncate.py` | 新規。フックの切り詰め pure 関数を検証（HTTP I/O は対象外） | ~30行 |
+| `tests/unit/test_agent_turn_hook_truncate.py` | 新規。フックの pure 関数 (`truncate_log` / `_extract_session_id`) を検証（HTTP I/O は対象外） | ~60行 |
 
 ## 4. コンポーネント設計
 
@@ -144,7 +144,8 @@ registry = ToolRegistry(initial_tools or [], hidden_tools=hidden)
   - `MCP_GATEWAY_URL` (default `http://127.0.0.1:9100`)
   - `MCP_GATEWAY_API_KEY` （必須、未設定なら ERROR ログ + exit 0）
   - `MCP_INTENT` (default `memory.ingest`)
-  - `MCP_HOOK_TIMEOUT_SECONDS` (default `2.0`、全体タイムアウト)
+  - `MCP_HOOK_TIMEOUT_SECONDS` (default `2.0`、**全体ハードリミット**。SSE handshake + POST の合計が必ずこの値以下で終わる)
+  - `MCP_HOOK_SSE_TIMEOUT_SECONDS` (default `1.0`、**SSE handshake 単独の上限**。SSE が全予算を消費して `POST /messages` 呼び出しに時間が残らない事態を防ぐ。`MCP_HOOK_TIMEOUT_SECONDS` の半分を既定値として、handshake と POST に概ね均等に予算を割り当てる)
   - `MCP_HOOK_MAX_LOG_BYTES` (default `8388608` = 8 MiB、UTF-8 エンコード後の最大送信サイズ。Gateway の `max_request_body_size_bytes` 既定 10 MiB に対し JSON 包装オーバーヘッドを見込んだ 2 MiB のマージン)
   - `LOG_LEVEL` (default `INFO`)
 - **送信前の切り詰め (truncation)**:
@@ -157,8 +158,8 @@ registry = ToolRegistry(initial_tools or [], hidden_tools=hidden)
   1. `--content` 指定時はその値、未指定時は stdin から `raw` を取得。空なら DEBUG ログ + exit 0。
   2. `payload, was_truncated = truncate_log(raw, MCP_HOOK_MAX_LOG_BYTES)`。
   3. `httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=1.0))` を開く。
-  4. `GET /sse` を `stream=True` で叩き、最初の `data: /messages?session_id=XXX` を取得して切断。
-  5. `POST /messages?session_id=XXX` に JSON-RPC `tools/call memory_save` を `arguments.content=payload` で投げる。
+  4. `GET /sse` を `stream=True` で叩き、最初の `data: /messages?session_id=XXX&...` 行を取得して切断。**この SSE handshake 全体は `asyncio.wait_for(..., timeout=MCP_HOOK_SSE_TIMEOUT_SECONDS)` で個別にラップする** (POST に最低限の予算を残すため)。`session_id` の抽出は **`urllib.parse.urlparse` + `parse_qs` でクエリパラメータとして解析する**。これにより、Gateway が将来 `?session_id=XXX&trace_id=YYY` のように追加クエリパラメータを返した場合でも値が破損しない。
+  5. `POST /messages?session_id=XXX` に JSON-RPC `tools/call memory_save` を `arguments.content=payload` で投げる。POST 自体の上限は (a) `httpx.AsyncClient` の `timeout` (= `MCP_HOOK_TIMEOUT_SECONDS`)、(b) 外側の `asyncio.wait_for(..., timeout=MCP_HOOK_TIMEOUT_SECONDS)` による全体ハードリミットの 2 重で守られる。
   6. レスポンスは body を読まず close。
 - **fire-and-forget 運用**: 呼び出し側のシェルで `&` を付ける（`echo "$LOG" | python scripts/agent_turn_hook.py &`）。スクリプト自体は同期完結し、`os.fork()` 等の自己デタッチは行わない。
 - **常に exit 0**: いかなる例外も握りつぶし、メインプロセスに影響しない。
@@ -237,6 +238,7 @@ JSON-RPC result.tools = [...memory_save_url, memory_search, ...]
 ### 6.3 トラフィック増大対策（`all` モード）
 
 - フック側 `httpx.AsyncClient(timeout=httpx.Timeout(2.0, connect=1.0))` で打ち切り、滞留させない。
+- **2 段階タイムアウト**: SSE handshake には独立した `MCP_HOOK_SSE_TIMEOUT_SECONDS`（既定 1.0 秒）を `asyncio.wait_for` で適用し、POST フェーズに必ず予算を残す。全体予算 `MCP_HOOK_TIMEOUT_SECONDS`（既定 2.0 秒）は引き続き滞留防止のハードリミットとして機能し、いかなる経路でもフックがこの時間を超えて生存することはない。これにより「SSE が遅延して `memory_save` が呼ばれずに終わる」事故を構造的に防ぐ。
 - フックは 1 ターンに 1 プロセス起動 / 1 リクエスト送信。並列度はシェル `&` に任せる。
 - Gateway 側のレート制限・キューイングは今回スコープ外。タイムアウト到達でフックは諦め、後続ターンに影響を出さない。
 

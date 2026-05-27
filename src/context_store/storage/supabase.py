@@ -8,25 +8,20 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Iterator
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Iterator, cast
+from typing import TYPE_CHECKING, Any, cast
 
 try:  # noqa: I001
-    from postgrest.exceptions import (  # type: ignore[import-not-found]
-        APIError as PostgrestAPIError,  # type: ignore[import-not-found]  # noqa: F401
-    )
-
     from supabase import (  # type: ignore[attr-defined]  # noqa: F401
-        AsyncClient,
         AsyncClientOptions,
         create_async_client,
     )
 
     _supabase_available = True
 except ImportError:
-    AsyncClient = Any  # type: ignore[misc,assignment]
-    AsyncClientOptions = Any  # type: ignore[misc,assignment]
-    PostgrestAPIError = Exception  # type: ignore[misc,assignment]
+    AsyncClientOptions = None  # type: ignore[assignment,misc]
+    create_async_client = None  # type: ignore[assignment]
     _supabase_available = False
 
 from context_store.models.memory import MemorySource, ScoredMemory
@@ -62,18 +57,38 @@ ALLOWED_UPDATE_COLUMNS: frozenset[str] = frozenset(
     }
 )
 
+_MEMORY_BRIEF_COLUMNS = (
+    # Read-path SELECT projection that intentionally omits the 768-dim `embedding`
+    # column to reduce per-row payload (~10KB) on retrieval. Write paths still
+    # fetch/insert the embedding via dedicated INSERT/UPDATE statements.
+    #
+    # Scope note (Phase 1): only the Supabase adapter applies this projection.
+    # Postgres/SQLite adapters still SELECT * because the SQLite-backed
+    # LifecycleManager (Consolidator at lifecycle/consolidator.py:113) reads
+    # `memory.embedding` from list_by_filter() results to feed vector_search().
+    # Current Supabase consumers of get_memory/get_memories_batch/list_by_filter
+    # (dashboard services, _resolve_graph_nodes, Consolidator._recompute_embedding)
+    # do not read `.embedding` from these results, so this change is safe today;
+    # future Supabase-side callers that need the embedding column MUST fetch it
+    # explicitly (e.g. through a future `get_memory_with_embedding` API).
+    "id,content,memory_type,source_type,source_metadata,"
+    "semantic_relevance,importance_score,access_count,"
+    "last_accessed_at,created_at,updated_at,archived_at,"
+    "tags,project"
+)
+
 
 class SupabaseStorageAdapter:
     """StorageAdapter implementation backed by Supabase Data API (HTTPS only)."""
 
-    def __init__(self, client: "AsyncClient") -> None:
-        self._client = client
+    def __init__(self, client: object) -> None:
+        self._client: Any = client
         self._cached_dimension: int | None = None
         self._dimension_lock = asyncio.Lock()
 
     @classmethod
     async def create(cls, settings: "Settings") -> "SupabaseStorageAdapter":
-        if not _supabase_available:
+        if not _supabase_available or create_async_client is None or AsyncClientOptions is None:
             raise ImportError(
                 "supabase is not installed. Install with: uv sync --extra storage-supabase"
             )
@@ -230,7 +245,7 @@ class SupabaseStorageAdapter:
         if not _is_valid_uuid(memory_id):
             return None
         try:
-            chain = self._client.table("memories").select("*").eq("id", memory_id)
+            chain = self._client.table("memories").select(_MEMORY_BRIEF_COLUMNS).eq("id", memory_id)
             response = await chain.execute()
         except Exception as exc:
             raise self._map_to_storage_error(exc) from exc
@@ -247,7 +262,10 @@ class SupabaseStorageAdapter:
                 continue
             try:
                 response = await (
-                    self._client.table("memories").select("*").in_("id", valid_ids).execute()
+                    self._client.table("memories")
+                    .select(_MEMORY_BRIEF_COLUMNS)
+                    .in_("id", valid_ids)
+                    .execute()
                 )
             except Exception as exc:
                 raise self._map_to_storage_error(exc) from exc
@@ -318,7 +336,7 @@ class SupabaseStorageAdapter:
         cleaned = query.strip()
         builder = (
             self._client.table("memories")
-            .select("*")
+            .select(_MEMORY_BRIEF_COLUMNS)
             .ilike("content", f"%{cleaned}%")
             .is_("archived_at", "null")
             .limit(effective_top_k)
@@ -337,7 +355,7 @@ class SupabaseStorageAdapter:
         return results
 
     async def list_by_filter(self, filters: MemoryFilters) -> list[Memory]:
-        builder = self._client.table("memories").select("*")
+        builder = self._client.table("memories").select(_MEMORY_BRIEF_COLUMNS)
         builder = _apply_common_filters(builder, filters)
 
         is_desc = True
@@ -420,6 +438,23 @@ class SupabaseStorageAdapter:
         except Exception as exc:
             raise self._map_to_storage_error(exc) from exc
         return bool(response.data)
+
+    async def increment_memory_access_counts(self, memory_ids: list[str]) -> int:
+        valid_ids = [mid for mid in memory_ids if _is_valid_uuid(mid)]
+        if not valid_ids:
+            return 0
+        try:
+            response = await self._client.rpc(
+                "increment_memory_access_counts", {"p_memory_ids": valid_ids}
+            ).execute()
+        except Exception as exc:
+            raise self._map_to_storage_error(exc) from exc
+        data = response.data
+        if isinstance(data, int):
+            return data
+        if isinstance(data, list) and data and isinstance(data[0], int):
+            return data[0]
+        return 0
 
 
 def _format_pg_datetime(dt: "datetime") -> str:

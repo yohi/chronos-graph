@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -142,3 +143,75 @@ class TestLocalModelEmbeddingProvider:
 
         with pytest.raises(ValueError, match="dimension must be a positive integer"):
             LocalModelEmbeddingProvider(dimension="768")  # type: ignore
+
+
+def _make_executor_test_model(values: list[list[float]] | None = None) -> MagicMock:
+    """Mock model whose ``encode`` returns objects with ``.tolist()``."""
+    model = MagicMock()
+    model.get_sentence_embedding_dimension.return_value = 8
+    vectors = values if values is not None else [[0.1] * 8, [0.2] * 8]
+    mock_embeddings = []
+    for vec in vectors:
+        emb = MagicMock()
+        emb.tolist.return_value = vec
+        mock_embeddings.append(emb)
+    model.encode.return_value = mock_embeddings
+    return model
+
+
+@pytest.mark.asyncio
+async def test_embed_batch_reuses_single_executor() -> None:
+    """A single ThreadPoolExecutor must be reused across calls."""
+    from context_store.embedding.local_model import LocalModelEmbeddingProvider
+
+    with patch(
+        "context_store.embedding.local_model.SentenceTransformer",
+        return_value=_make_executor_test_model(),
+    ):
+        provider = LocalModelEmbeddingProvider(model_name="fake", dimension=8)
+        await provider.embed_batch(["a", "b"])
+        first_executor = provider._executor
+        await provider.embed_batch(["c", "d"])
+        second_executor = provider._executor
+
+    assert first_executor is second_executor
+    assert isinstance(first_executor, ThreadPoolExecutor)
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_start_preloads_model_off_event_loop() -> None:
+    """Explicit start() must load the model before the first embed_batch."""
+    from context_store.embedding.local_model import LocalModelEmbeddingProvider
+
+    fake = _make_executor_test_model()
+    with patch(
+        "context_store.embedding.local_model.SentenceTransformer",
+        return_value=fake,
+    ) as ctor:
+        provider = LocalModelEmbeddingProvider(model_name="fake", dimension=8)
+        assert provider._model is None
+        await provider.start()
+        assert provider._model is fake
+        await provider.embed_batch(["a"])
+        assert ctor.call_count == 1
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_close_shuts_down_executor() -> None:
+    """close() must shut down the shared executor."""
+    from context_store.embedding.local_model import LocalModelEmbeddingProvider
+
+    with patch(
+        "context_store.embedding.local_model.SentenceTransformer",
+        return_value=_make_executor_test_model(),
+    ):
+        provider = LocalModelEmbeddingProvider(model_name="fake", dimension=8)
+        await provider.embed_batch(["a"])
+        executor = provider._executor
+        await provider.close()
+        await provider.close()
+
+    with pytest.raises(RuntimeError):
+        executor.submit(lambda: None)

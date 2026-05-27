@@ -581,3 +581,35 @@ class TestDispose:
         await adp.dispose()
 
         adp._pool.close.assert_called_once()
+
+
+class TestIncrementMemoryAccessCounts:
+    @pytest.mark.asyncio
+    async def test_updates_many_ids_in_one_statement(self, adapter):
+        adp, conn = adapter
+        ids = [str(uuid4()), str(uuid4())]
+        conn.execute = AsyncMock(return_value="UPDATE 2")
+
+        result = await adp.increment_memory_access_counts(ids)
+
+        assert result == 2
+        conn.execute.assert_awaited_once()
+        sql = conn.execute.call_args.args[0]
+        params = conn.execute.call_args.args[1]
+        assert "WHERE id = ANY($1::uuid[])" in sql
+        assert params == ids
+
+    @pytest.mark.asyncio
+    async def test_filters_invalid_ids_and_skips_empty_call(self, adapter):
+        adp, conn = adapter
+        valid_id = str(uuid4())
+        conn.execute = AsyncMock(return_value="UPDATE 1")
+
+        result = await adp.increment_memory_access_counts(["not-a-uuid", valid_id])
+
+        assert result == 1
+        assert conn.execute.call_args.args[1] == [valid_id]
+
+        conn.execute.reset_mock()
+        assert await adp.increment_memory_access_counts(["not-a-uuid"]) == 0
+        conn.execute.assert_not_called()

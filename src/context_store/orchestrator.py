@@ -7,9 +7,10 @@ RL 拡張フックを受け取り、None の場合は NoOp 実装を使用する
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 from context_store.config import Settings
 from context_store.extensions.noop import NoOpActionLogger, NoOpPolicyHook, NoOpRewardSignal
@@ -42,7 +43,7 @@ class Orchestrator:
 
     Args:
         storage: ストレージアダプター。
-        graph: グラフアダプター（None の場合はグラフ機能無効）。
+        graph: グラフアダプター(None の場合はグラフ機能無効)。
         cache: キャッシュアダプター。
         embedding_provider: 埋め込みプロバイダー。
         ingestion_pipeline: 取り込みパイプライン。
@@ -50,9 +51,9 @@ class Orchestrator:
         lifecycle_manager: ライフサイクルマネージャー。
         task_registry: タスクレジストリ。
         batch_processor: バッチ処理ラッパー。
-        action_logger: RL 拡張: アクションロガー（None の場合は NoOp）。
-        reward_signal: RL 拡張: 報酬シグナル（None の場合は NoOp）。
-        policy_hook: RL 拡張: 検索戦略フック（None の場合は NoOp）。
+        action_logger: RL 拡張: アクションロガー(None の場合は NoOp)。
+        reward_signal: RL 拡張: 報酬シグナル(None の場合は NoOp)。
+        policy_hook: RL 拡張: 検索戦略フック(None の場合は NoOp)。
         settings: アプリケーション設定。
     """
 
@@ -84,7 +85,7 @@ class Orchestrator:
         self._settings = settings
         self._flush_lock = asyncio.Lock()
 
-        # RL 拡張フック（None の場合は NoOp）
+        # RL 拡張フック(None の場合は NoOp)
         self.action_logger: "ActionLogger" = (
             action_logger if action_logger is not None else NoOpActionLogger()
         )
@@ -270,7 +271,7 @@ class Orchestrator:
         Args:
             query: 検索クエリ。
             project: プロジェクトフィルタ。
-            memory_type: 記憶種別フィルタ（"episodic", "semantic", "procedural"）。
+            memory_type: 記憶種別フィルタ("episodic", "semantic", "procedural")。
                 現時点では RetrievalPipeline がこのパラメータをサポートしていないため
                 WARNING ログを出して無視する。将来の拡張のために受け取る。
             top_k: 返す最大件数。
@@ -309,8 +310,8 @@ class Orchestrator:
         """グラフトラバーサル検索を実行する。
 
         Args:
-            query: 起点となるクエリ（ベクトル検索で起点ノードを特定）。
-            edge_types: フィルタするエッジ種別（None で全種別）。
+            query: 起点となるクエリ(ベクトル検索で起点ノードを特定)。
+            edge_types: フィルタするエッジ種別(None で全種別)。
             depth: トラバーサル深さ。
             project: プロジェクトフィルタ。
 
@@ -364,7 +365,7 @@ class Orchestrator:
     ) -> int:
         """古い記憶を削除する。
 
-        SQLite バックエンド以外（Postgres, Redis, In-Memory等）では
+        SQLite バックエンド以外(Postgres, Redis, In-Memory等)では
         ライフサイクル状態ストアが永続化されないため、クリーンアップをスキップする。
 
         Args:
@@ -372,7 +373,7 @@ class Orchestrator:
             dry_run: True の場合は削除せず対象件数のみを返す。
 
         Returns:
-            削除した（または削除対象の）件数。
+            削除した(または削除対象の)件数。
         """
         if self._settings is None:
             raise RuntimeError("Orchestrator settings must be initialized before running prune.")
@@ -395,7 +396,7 @@ class Orchestrator:
         """ストレージの統計情報を返す。
 
         Args:
-            project: プロジェクトフィルタ（None の場合は全体）。
+            project: プロジェクトフィルタ(None の場合は全体)。
 
         Returns:
             統計情報の dict。
@@ -464,6 +465,16 @@ class Orchestrator:
             await self._cache.dispose()
         except Exception as exc:
             logger.error("Failed to dispose cache: %s", exc, exc_info=True)
+
+        # 4. Ingestion pipeline (which disposes url_adapter and embedding_provider)
+        try:
+            dispose = getattr(self._ingestion_pipeline, "dispose", None)
+            if callable(dispose):
+                result = dispose()
+                if inspect.isawaitable(result):
+                    await result
+        except Exception as exc:
+            logger.error("Failed to dispose ingestion pipeline: %s", exc, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -597,18 +608,52 @@ async def create_orchestrator(
             settings=settings,
         )
 
+        # モデルの事前ロード(もし start メソッドがあれば非同期で事前ロードする)
+        start_method = getattr(embedding_provider, "start", None)
+        if callable(start_method):
+            result = cast(Callable[[], Any], start_method)()
+            if inspect.isawaitable(result):
+                await result
+
         # フェイルファストチェック
         await orchestrator._check_vector_dimension()
 
         return orchestrator
 
-    except Exception:
-        # 初期化失敗時は全アダプターのリソースを解放して再送
-        await storage.dispose()
+    except Exception as orig_exc:
+        # 初期化失敗時は全アダプターのリソースをベストエフォートで解放して再送
+        try:
+            await storage.dispose()
+        except Exception as exc:
+            logger.error("Failed to dispose storage during cleanup: %s", exc, exc_info=True)
+
         if graph is not None:
-            await graph.dispose()
-        await cache.dispose()
-        raise
+            try:
+                await graph.dispose()
+            except Exception as exc:
+                logger.error("Failed to dispose graph during cleanup: %s", exc, exc_info=True)
+
+        try:
+            await cache.dispose()
+        except Exception as exc:
+            logger.error("Failed to dispose cache during cleanup: %s", exc, exc_info=True)
+
+        provider = locals().get("embedding_provider")
+        if provider is not None:
+            try:
+                close = getattr(provider, "close", None)
+                if callable(close):
+                    result = close()
+                    if inspect.isawaitable(result):
+                        await result
+            except Exception as exc:
+                logger.error(
+                    "Failed to close embedding provider during cleanup: %s",
+                    exc,
+                    exc_info=True,
+                )
+
+        raise orig_exc
 
 
 __all__ = ["ConfigurationError", "Orchestrator", "create_orchestrator"]

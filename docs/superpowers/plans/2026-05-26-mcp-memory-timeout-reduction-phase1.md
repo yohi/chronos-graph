@@ -523,7 +523,7 @@ git commit -m "perf(storage): switch Supabase vector_search to brief RPC that om
 - Modify: `src/context_store/storage/supabase.py`
 - Modify: `tests/unit/storage/test_supabase_adapter.py`
 
-- [ ] **Step 1: Add a failing test that `keyword_search` does not request embedding**
+- [x] **Step 1: Add a failing test that `keyword_search` does not request embedding**
 
 Append to `tests/unit/storage/test_supabase_adapter.py`:
 
@@ -589,12 +589,12 @@ async def test_list_by_filter_does_not_select_embedding():
     client.table.return_value.select.assert_called_once_with(_BRIEF_COLUMNS)
 ```
 
-- [ ] **Step 2: Run the new tests and confirm failures**
+- [x] **Step 2: Run the new tests and confirm failures**
 
 Run: `uv run pytest tests/unit/storage/test_supabase_adapter.py -k "does_not_select_embedding" -v`
 Expected: FAIL — adapter still calls `select("*")`.
 
-- [ ] **Step 3: Add the column constant and replace `select("*")` on read paths**
+- [x] **Step 3: Add the column constant and replace `select("*")` on read paths**
 
 In `src/context_store/storage/supabase.py`, add a module-level constant (right after `ALLOWED_UPDATE_COLUMNS` around line 60):
 
@@ -631,17 +631,17 @@ Do **not** touch `count_by_filter` (line 372) — it uses `head=True` and needs 
 Do **not** touch `save_memory` (line 173) — INSERT must still write the embedding column.
 Do **not** touch `update_memory` (line 197) — UPDATE may need to write the embedding column.
 
-- [ ] **Step 4: Re-run the new tests**
+- [x] **Step 4: Re-run the new tests**
 
 Run: `uv run pytest tests/unit/storage/test_supabase_adapter.py -k "does_not_select_embedding" -v`
 Expected: PASS.
 
-- [ ] **Step 5: Run the full adapter suite to catch regressions**
+- [x] **Step 5: Run the full adapter suite to catch regressions**
 
 Run: `uv run pytest tests/unit/storage/test_supabase_adapter.py -v`
 Expected: All PASS. (Any existing test that asserted `select("*")` needs the same constant; if you see a failure, replace the literal in the assertion with `_BRIEF_COLUMNS` from the test file.)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/context_store/storage/supabase.py tests/unit/storage/test_supabase_adapter.py
@@ -663,7 +663,7 @@ git commit -m "perf(storage): omit embedding column from Supabase read-path SELE
 - Modify: `tests/unit/storage/test_supabase_adapter.py`
 - Create: `tests/unit/test_post_processor.py`
 
-- [ ] **Step 1: Create the bulk RPC migration**
+- [x] **Step 1: Create the bulk RPC migration**
 
 Create `supabase/migrations/20260526000002_increment_memory_access_counts.sql`:
 
@@ -703,7 +703,7 @@ $$;
 GRANT EXECUTE ON FUNCTION increment_memory_access_counts(uuid[]) TO service_role;
 ```
 
-- [ ] **Step 2: Add the method to the StorageAdapter protocol**
+- [x] **Step 2: Add the method to the StorageAdapter protocol**
 
 In `src/context_store/storage/protocols.py`, add to the `StorageAdapter` protocol (right after `increment_memory_access_count` around line 118):
 
@@ -717,7 +717,7 @@ In `src/context_store/storage/protocols.py`, add to the `StorageAdapter` protoco
         ...
 ```
 
-- [ ] **Step 3: Add a failing test that the Supabase adapter calls the bulk RPC once**
+- [x] **Step 3: Add a failing test that the Supabase adapter calls the bulk RPC once**
 
 Append to `tests/unit/storage/test_supabase_adapter.py`:
 
@@ -768,12 +768,12 @@ async def test_increment_memory_access_counts_empty_list_skips_call():
     client.rpc.assert_not_called()
 ```
 
-- [ ] **Step 4: Run the new tests and confirm failures**
+- [x] **Step 4: Run the new tests and confirm failures**
 
 Run: `uv run pytest tests/unit/storage/test_supabase_adapter.py -k "increment_memory_access_counts" -v`
 Expected: FAIL — method does not exist on the adapter.
 
-- [ ] **Step 5: Implement the bulk method on the Supabase adapter**
+- [x] **Step 5: Implement the bulk method on the Supabase adapter**
 
 In `src/context_store/storage/supabase.py`, add after `increment_memory_access_count` (line 392):
 
@@ -796,12 +796,12 @@ In `src/context_store/storage/supabase.py`, add after `increment_memory_access_c
         return 0
 ```
 
-- [ ] **Step 6: Re-run the Supabase bulk tests**
+- [x] **Step 6: Re-run the Supabase bulk tests**
 
 Run: `uv run pytest tests/unit/storage/test_supabase_adapter.py -k "increment_memory_access_counts" -v`
 Expected: PASS.
 
-- [ ] **Step 7: Add the bulk method to the Postgres adapter**
+- [x] **Step 7: Add the bulk method to the Postgres adapter**
 
 In `src/context_store/storage/postgres.py`, add a method near `increment_memory_access_count` (around line 460):
 
@@ -834,7 +834,7 @@ In `src/context_store/storage/postgres.py`, add a method near `increment_memory_
             return 0
 ```
 
-- [ ] **Step 8: Add the bulk method to the SQLite adapter**
+- [x] **Step 8: Add the bulk method to the SQLite adapter**
 
 The SQLite adapter has no `_run_write` helper; all write paths use `async with self._db() as conn:` directly (see the existing `increment_memory_access_count` at `src/context_store/storage/sqlite.py:1004-1024` for the canonical pattern, including the `aiosqlite.OperationalError` → busy-lock translation).
 
@@ -870,7 +870,7 @@ In `src/context_store/storage/sqlite.py`, add the following method immediately a
 
 If `datetime`/`timezone`/`aiosqlite`/`_raise_if_locked`/`Any` are not already imported at the top of `sqlite.py`, they will already be available because the surrounding methods (`increment_memory_access_count`, `update_memory`, etc.) use the same symbols — verify the imports rather than re-adding them.
 
-- [ ] **Step 9: Add the bulk method to `ReadOnlyNoOpStorageAdapter`**
+- [x] **Step 9: Add the bulk method to `ReadOnlyNoOpStorageAdapter`**
 
 In `src/context_store/storage/factory.py`, after the existing `increment_memory_access_count` (line 112):
 
@@ -881,7 +881,7 @@ In `src/context_store/storage/factory.py`, after the existing `increment_memory_
         )
 ```
 
-- [ ] **Step 10: Add a failing test that `PostProcessor.process` makes only one update call**
+- [x] **Step 10: Add a failing test that `PostProcessor.process` makes only one update call**
 
 Create `tests/unit/test_post_processor.py` (the project currently has no dedicated unit tests for `PostProcessor`; coverage in `test_retrieval_pipeline.py` mocks it wholesale):
 
@@ -945,12 +945,12 @@ async def test_post_processor_empty_results_skips_bulk_call():
     storage.increment_memory_access_counts.assert_not_awaited()
 ```
 
-- [ ] **Step 11: Run the new PostProcessor tests and confirm failure**
+- [x] **Step 11: Run the new PostProcessor tests and confirm failure**
 
 Run: `uv run pytest tests/unit/test_post_processor.py -k "bulk_increment" -v`
 Expected: FAIL — `PostProcessor.process` still calls the per-result API.
 
-- [ ] **Step 12: Update `PostProcessor.process` to call the bulk API**
+- [x] **Step 12: Update `PostProcessor.process` to call the bulk API**
 
 In `src/context_store/retrieval/post_processor.py`, replace the `process` method's step 3 (lines 58-62) and delete `_update_access_record` (lines 137-152):
 
@@ -984,17 +984,17 @@ In `src/context_store/retrieval/post_processor.py`, replace the `process` method
 
 Remove the now-unused `_update_access_record` method and the unused `asyncio` import if nothing else needs it (keep `import logging`, `import math`).
 
-- [ ] **Step 13: Re-run the PostProcessor tests**
+- [x] **Step 13: Re-run the PostProcessor tests**
 
 Run: `uv run pytest tests/unit/test_post_processor.py -v`
 Expected: All PASS.
 
-- [ ] **Step 14: Run the full adapter and retrieval suites**
+- [x] **Step 14: Run the full adapter and retrieval suites**
 
 Run: `uv run pytest tests/unit/storage/ tests/unit/test_post_processor.py tests/unit/test_retrieval_pipeline.py -v`
 Expected: All PASS.
 
-- [ ] **Step 14.5: Add a SQL-level regression test for the new bulk RPC migration**
+- [x] **Step 14.5: Add a SQL-level regression test for the new bulk RPC migration**
 
 Append to `tests/unit/storage/test_supabase_migrations.py`:
 
@@ -1029,7 +1029,7 @@ def test_increment_memory_access_counts_rpc_accepts_uuid_array_and_returns_integ
 Run: `uv run pytest tests/unit/storage/test_supabase_migrations.py::test_increment_memory_access_counts_rpc_accepts_uuid_array_and_returns_integer -v`
 Expected: PASS.
 
-- [ ] **Step 15: Commit**
+- [x] **Step 15: Commit**
 
 ```bash
 git add supabase/migrations/20260526000002_increment_memory_access_counts.sql \
@@ -1057,7 +1057,7 @@ git commit -m "perf(retrieval): batch access-count updates into a single bulk RP
 **Scope note:**
 The provider gains a `start()` method that can be called explicitly to preload the model in a worker thread, but `Orchestrator.create_orchestrator()` does **not** auto-invoke it. Reason: orchestrator init is performed lazily inside `_ensure_initialized()` on the first MCP tool call, so `await start()` there does not actually move the cold-start cost off the first-call critical path; the call still blocks for the same wall time. True cold-start avoidance requires preloading at the FastMCP `lifespan` startup (eager provider construction), which is tracked as a separate item in `SPEC.md` §16.5 and is out of scope for Phase 1. Phase 1's local-model win is the executor reuse alone (one shared `ThreadPoolExecutor` instead of one per `embed_batch` call) plus correct disposal.
 
-- [ ] **Step 1: Update the top-of-file imports in `tests/unit/test_embedding_local.py`**
+- [x] **Step 1: Update the top-of-file imports in `tests/unit/test_embedding_local.py`**
 
 The existing file already imports `MagicMock, patch` and `pytest` at the top. Add `ThreadPoolExecutor` to that import block so the new tests can perform `isinstance` checks without violating ruff E402 (module-level imports must precede class/function definitions).
 
@@ -1076,7 +1076,7 @@ import pytest
 from context_store.embedding.protocols import EmbeddingProvider
 ```
 
-- [ ] **Step 2: Append the new failing tests at the end of `tests/unit/test_embedding_local.py`**
+- [x] **Step 2: Append the new failing tests at the end of `tests/unit/test_embedding_local.py`**
 
 Use the existing project pattern for `encode().return_value` (a list of `MagicMock` instances each exposing `.tolist()`), matching `TestLocalModelEmbeddingProvider._make_mock_model` and `test_embed_batch` already in the file. A plain `[[0.1]*8, ...]` would break because the production code calls `emb.tolist()`.
 
@@ -1154,12 +1154,12 @@ async def test_close_shuts_down_executor() -> None:
         executor.submit(lambda: None)
 ```
 
-- [ ] **Step 3: Run the new tests and confirm they fail**
+- [x] **Step 3: Run the new tests and confirm they fail**
 
 Run: `uv run pytest tests/unit/test_embedding_local.py -k "reuses_single_executor or preloads_model or close_shuts_down" -v`
 Expected: FAIL — `provider._executor` does not exist and `start()` is not defined.
 
-- [ ] **Step 4: Replace per-call executor with a long-lived one**
+- [x] **Step 4: Replace per-call executor with a long-lived one**
 
 Rewrite `src/context_store/embedding/local_model.py`:
 
@@ -1289,12 +1289,12 @@ class LocalModelEmbeddingProvider:
         self._executor.shutdown(wait=True)
 ```
 
-- [ ] **Step 5: Re-run the local-model tests**
+- [x] **Step 5: Re-run the local-model tests**
 
 Run: `uv run pytest tests/unit/test_embedding_local.py -v`
 Expected: All PASS.
 
-- [ ] **Step 6: Wire `embedding_provider.close()` into `Orchestrator.dispose()`**
+- [x] **Step 6: Wire `embedding_provider.close()` into `Orchestrator.dispose()`**
 
 In `src/context_store/orchestrator.py`, extend `Orchestrator.dispose()` (lines 431-466). After the existing `self._cache.dispose()` try block (around line 464), add a fourth try block:
 
@@ -1309,7 +1309,7 @@ In `src/context_store/orchestrator.py`, extend `Orchestrator.dispose()` (lines 4
             logger.error("Failed to dispose embedding provider: %s", exc, exc_info=True)
 ```
 
-- [ ] **Step 7: Add a failing test for orchestrator-level disposal**
+- [x] **Step 7: Add a failing test for orchestrator-level disposal**
 
 Add the following to `tests/unit/test_orchestrator.py` (or to the existing dispose-coverage test file under `tests/unit/`; if there is no dispose test yet, append a new test function at the end of `tests/unit/test_orchestrator.py`):
 
@@ -1350,7 +1350,7 @@ async def test_orchestrator_dispose_closes_embedding_provider() -> None:
     embedding_provider.close.assert_awaited_once()
 ```
 
-- [ ] **Step 8: Wire `embedding_provider.close()` into the `create_orchestrator` failure path**
+- [x] **Step 8: Wire `embedding_provider.close()` into the `create_orchestrator` failure path**
 
 In `src/context_store/orchestrator.py`, locate the `except Exception:` block at the end of `create_orchestrator` (lines 605-611). Currently it disposes storage/graph/cache only. Replace the block with the version below so the executor is released even when ingestion/retrieval pipeline construction or `_check_vector_dimension` raises:
 
@@ -1375,12 +1375,12 @@ In `src/context_store/orchestrator.py`, locate the `except Exception:` block at 
         raise
 ```
 
-- [ ] **Step 9: Run the orchestrator tests**
+- [x] **Step 9: Run the orchestrator tests**
 
 Run: `uv run pytest tests/unit/test_orchestrator.py -v`
 Expected: All PASS, including the new dispose test from Step 7.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add src/context_store/embedding/local_model.py \
@@ -1401,7 +1401,7 @@ git commit -m "perf(embedding): reuse local-model executor and tie its lifecycle
 **Failure-mode note (intentional behavior change):**
 Before Phase 1, embedding errors were caught per-chunk inside the inner `try/except`, so a single bad chunk would not abort the whole batch. After this task, `embed_batch([all chunks])` is called once up-front, so an exception there aborts the entire `ingest()` call (no per-chunk granularity for embedding failures). This is acceptable for Phase 1 because every supported embedding provider (Local, OpenAI, LiteLLM, CustomAPI) fails at the batch granularity in practice (model crash / 429 / 5xx / OOM affect the entire request). Per-text fault isolation is deferred (a future provider with deterministic per-text failure modes can reintroduce it by falling back to per-chunk `embed()` on `embed_batch` failure). Step 6.5 below adds a regression test that pins this contract.
 
-- [ ] **Step 1: Add a failing test that asserts one embed_batch call regardless of chunk count**
+- [x] **Step 1: Add a failing test that asserts one embed_batch call regardless of chunk count**
 
 Append to `tests/unit/test_ingestion_pipeline.py`:
 
@@ -1470,12 +1470,12 @@ async def test_ingest_calls_embed_batch_once_for_all_chunks(
     embedding_provider.embed.assert_not_awaited()
 ```
 
-- [ ] **Step 2: Run the new test and confirm it fails**
+- [x] **Step 2: Run the new test and confirm it fails**
 
 Run: `uv run pytest tests/unit/test_ingestion_pipeline.py::test_ingest_calls_embed_batch_once_for_all_chunks -v`
 Expected: FAIL — `embed_batch` is never called; `embed` is called three times.
 
-- [ ] **Step 3: Refactor `IngestionPipeline.ingest` to pre-batch embeddings**
+- [x] **Step 3: Refactor `IngestionPipeline.ingest` to pre-batch embeddings**
 
 In `src/context_store/ingestion/pipeline.py`, change `ingest` (lines 191-263). Keep the locking and result construction logic intact; only extract embedding into a single up-front pass and pipe precomputed vectors through:
 
@@ -1556,7 +1556,7 @@ In `src/context_store/ingestion/pipeline.py`, change `ingest` (lines 191-263). K
         return results
 ```
 
-- [ ] **Step 4: Plumb `precomputed_embedding` through `_process_chunk` and `_process_chunk_core`**
+- [x] **Step 4: Plumb `precomputed_embedding` through `_process_chunk` and `_process_chunk_core`**
 
 In the same file, update the two methods to accept and forward `precomputed_embedding`:
 
@@ -1638,17 +1638,17 @@ And in `_process_chunk_core` (around line 327), replace the single embed call wi
         # ... rest of the method unchanged ...
 ```
 
-- [ ] **Step 5: Re-run the new ingestion test**
+- [x] **Step 5: Re-run the new ingestion test**
 
 Run: `uv run pytest tests/unit/test_ingestion_pipeline.py::test_ingest_calls_embed_batch_once_for_all_chunks -v`
 Expected: PASS.
 
-- [ ] **Step 6: Run the full ingestion test module**
+- [x] **Step 6: Run the full ingestion test module**
 
 Run: `uv run pytest tests/unit/test_ingestion_pipeline.py tests/unit/test_batch_processor.py -v`
 Expected: All PASS. (Existing tests that mocked `embed()` will still pass because the per-chunk fallback path is preserved when `precomputed_embedding is None`.)
 
-- [ ] **Step 6.5: Pin the all-or-nothing failure contract for embed_batch errors**
+- [x] **Step 6.5: Pin the all-or-nothing failure contract for embed_batch errors**
 
 Append to `tests/unit/test_ingestion_pipeline.py`:
 
@@ -1689,7 +1689,7 @@ async def test_ingest_propagates_embed_batch_failure() -> None:
 Run: `uv run pytest tests/unit/test_ingestion_pipeline.py::test_ingest_propagates_embed_batch_failure -v`
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/context_store/ingestion/pipeline.py tests/unit/test_ingestion_pipeline.py
@@ -1705,12 +1705,12 @@ git commit -m "perf(ingestion): batch-embed all chunks in a single provider call
 
 **Execution environment:** Per `AGENTS.md` / `CLAUDE.md` §5, all backend verification commands below **MUST be run inside the project devcontainer** (`.devcontainer/`). Running them on the host risks toolchain drift (e.g. different `uv`, mismatched `ruff`/`mypy` versions, missing `aiosqlite` wheels for the host arch) and is not a supported configuration. Open the workspace in the devcontainer (`Reopen in Container` in VS Code, or `devcontainer up && devcontainer exec`) before proceeding.
 
-- [ ] **Step 1: Run the full unit suite**
+- [x] **Step 1: Run the full unit suite**
 
 Run: `uv run pytest tests/unit/ -v`
 Expected: All PASS.
 
-- [ ] **Step 2: Run the lint/type checks**
+- [x] **Step 2: Run the lint/type checks**
 
 Run: `uv run ruff check src/ tests/ && uv run mypy src/`
 Expected: No errors.

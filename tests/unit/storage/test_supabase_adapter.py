@@ -14,6 +14,13 @@ from context_store.models.memory import Memory, MemoryType, ScoredMemory, Source
 from context_store.storage.protocols import MemoryFilters, StorageError
 from context_store.storage.supabase import SupabaseStorageAdapter
 
+_BRIEF_COLUMNS = (
+    "id,content,memory_type,source_type,source_metadata,"
+    "semantic_relevance,importance_score,access_count,"
+    "last_accessed_at,created_at,updated_at,archived_at,"
+    "tags,project"
+)
+
 
 def make_mock_response(data, count=None):
     resp = MagicMock()
@@ -375,6 +382,55 @@ async def test_get_memory_returns_record():
 
 
 @pytest.mark.asyncio
+async def test_keyword_search_does_not_select_embedding():
+    client = make_mock_client()
+    select_chain = client.table.return_value.select.return_value
+    chain = select_chain.ilike.return_value.is_.return_value.limit.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[]))
+
+    adapter = SupabaseStorageAdapter(client)
+    await adapter.keyword_search("hello", top_k=5)
+
+    client.table.return_value.select.assert_called_once_with(_BRIEF_COLUMNS)
+
+
+@pytest.mark.asyncio
+async def test_get_memory_does_not_select_embedding():
+    client = make_mock_client()
+    chain = client.table.return_value.select.return_value.eq.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[]))
+
+    adapter = SupabaseStorageAdapter(client)
+    await adapter.get_memory("550e8400-e29b-41d4-a716-446655440000")
+
+    client.table.return_value.select.assert_called_once_with(_BRIEF_COLUMNS)
+
+
+@pytest.mark.asyncio
+async def test_get_memories_batch_does_not_select_embedding():
+    client = make_mock_client()
+    chain = client.table.return_value.select.return_value.in_.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[]))
+
+    adapter = SupabaseStorageAdapter(client)
+    await adapter.get_memories_batch(["550e8400-e29b-41d4-a716-446655440000"])
+
+    client.table.return_value.select.assert_called_once_with(_BRIEF_COLUMNS)
+
+
+@pytest.mark.asyncio
+async def test_list_by_filter_does_not_select_embedding():
+    client = make_mock_client()
+    chain = client.table.return_value.select.return_value.is_.return_value
+    chain.execute = AsyncMock(return_value=make_mock_response(data=[]))
+
+    adapter = SupabaseStorageAdapter(client)
+    await adapter.list_by_filter(MemoryFilters())
+
+    client.table.return_value.select.assert_called_once_with(_BRIEF_COLUMNS)
+
+
+@pytest.mark.asyncio
 async def test_get_memories_batch_preserves_input_order():
     client = make_mock_client()
     now = datetime.now(timezone.utc).isoformat()
@@ -524,6 +580,50 @@ async def test_increment_memory_access_count_invokes_rpc():
     client.rpc.assert_called_once_with(
         "increment_memory_access_count", {"p_memory_id": "550e8400-e29b-41d4-a716-446655440000"}
     )
+
+
+@pytest.mark.asyncio
+async def test_increment_memory_access_counts_invokes_bulk_rpc():
+    client = make_mock_client()
+    rpc_chain = client.rpc.return_value
+    rpc_chain.execute = AsyncMock(return_value=make_mock_response(data=3))
+
+    adapter = SupabaseStorageAdapter(client)
+    ids = [
+        "550e8400-e29b-41d4-a716-446655440001",
+        "550e8400-e29b-41d4-a716-446655440002",
+        "550e8400-e29b-41d4-a716-446655440003",
+    ]
+    affected = await adapter.increment_memory_access_counts(ids)
+
+    assert affected == 3
+    client.rpc.assert_called_once_with("increment_memory_access_counts", {"p_memory_ids": ids})
+
+
+@pytest.mark.asyncio
+async def test_increment_memory_access_counts_filters_invalid_uuids():
+    client = make_mock_client()
+    rpc_chain = client.rpc.return_value
+    rpc_chain.execute = AsyncMock(return_value=make_mock_response(data=1))
+
+    adapter = SupabaseStorageAdapter(client)
+    ids = ["not-a-uuid", "550e8400-e29b-41d4-a716-446655440002"]
+    affected = await adapter.increment_memory_access_counts(ids)
+
+    assert affected == 1
+    client.rpc.assert_called_once_with(
+        "increment_memory_access_counts",
+        {"p_memory_ids": ["550e8400-e29b-41d4-a716-446655440002"]},
+    )
+
+
+@pytest.mark.asyncio
+async def test_increment_memory_access_counts_empty_list_skips_call():
+    client = make_mock_client()
+    adapter = SupabaseStorageAdapter(client)
+    affected = await adapter.increment_memory_access_counts([])
+    assert affected == 0
+    client.rpc.assert_not_called()
 
 
 @pytest.mark.asyncio

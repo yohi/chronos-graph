@@ -83,3 +83,32 @@ def test_vector_search_brief_rpc_omits_embedding_column() -> None:
         )
         is not None
     )
+
+
+def test_increment_memory_access_counts_rpc_accepts_uuid_array_and_returns_integer() -> None:
+    sql = Path("supabase/migrations/20260526000002_increment_memory_access_counts.sql").read_text()
+
+    assert "CREATE OR REPLACE FUNCTION increment_memory_access_counts(" in sql
+    assert re.search(r"p_memory_ids\s+uuid\[\]", sql, re.I) is not None
+    assert re.search(r"RETURNS\s+integer", sql, re.I) is not None
+    function_body = sql.split("AS $$", 1)[1].split("$$;", 1)[0]
+    assert re.search(r"=\s*ANY\(\s*p_memory_ids\s*\)", function_body, re.I) is not None
+    assert re.search(r"array_length\(\s*p_memory_ids", function_body, re.I) is not None
+    signature = r"increment_memory_access_counts\(uuid\[\]\)"
+    for role in ("PUBLIC", "anon", "authenticated"):
+        assert (
+            re.search(
+                rf"REVOKE\s+EXECUTE\s+ON\s+FUNCTION\s+{signature}\s+FROM\s+{role}",
+                sql,
+                re.I,
+            )
+            is not None
+        )
+    assert (
+        re.search(
+            rf"GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+{signature}\s+TO\s+service_role",
+            sql,
+            re.I,
+        )
+        is not None
+    )

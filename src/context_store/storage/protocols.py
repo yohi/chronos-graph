@@ -122,6 +122,14 @@ class StorageAdapter(Protocol):
         """
         ...
 
+    async def increment_memory_access_counts(self, memory_ids: list[str]) -> int:
+        """Bulk variant: increment access_count for many memories in one call.
+
+        Returns the number of rows actually updated.
+        Implementations MUST issue at most one storage round trip.
+        """
+        ...
+
     async def get_vector_dimension(self) -> int | None:
         """Return the dimension of stored vectors.
 

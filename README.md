@@ -225,7 +225,8 @@ Hook設定の場合は、いかなるツール呼び出しよりも前に、必�
    * リモートゲートウェイ用の API キー等がある場合はユーザーから取得します。
    * **【必須プロセス】** ツール安全判定にどの **LLMモデル**（例: `anthropic/claude-3-5-haiku-20241022` 等）を使用するかを合意し、対応するプロバイダの **API キー（`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` 等）** の準備・入力をユーザーに依頼（または `.env` へのシミュレーション追記を案内）してください。
 2. **フック設定・スクリプトの出力と配置**:
-   * 選択した方式、およびOS自動判定ルールに基づき、現在の環境に適した **フック設定ブロック（JSON等）およびスクリプトファイル（Linuxなら `.sh`、Windowsなら `.cmd` 等）** を生成して提示します。
+   * 選択した方式、およびOS自動判定ルールに基づき、後述の **「[💡 AIエージェントへの Hook 設定方法 (Configuration)](#-aiエージェントへの-hook-設定方法-configuration)」** セクションにある具体的な **設定パターン（A〜E）** を必ず参照し、現在の環境に適した **フック設定ブロック（JSON等）およびスクリプトファイル（Linuxなら `.sh`、Windowsなら `.cmd` 等）** を生成して提示します。
+   * **【構成提示の厳格ルール】**: AIエージェント（あなた）は勝手に設定形式を捏造せず、必ず上記セクションの構成例をテンプレートとして正確に使用してください。
    * 本番モードの場合、スクリプトファイルを実際に書き込み、実行権限を与えます。**書き込み後は必ず `view_file` 等の読込ツールを用いて正しく書き込まれたか確認し、かつ `ls -la` などのコマンドで実在を確認・出力してください。**
    * **【絶対出力要件】** この提示の際、**必ず「使用する LLM モデルの設定環境変数（`CHRONOS_EVALUATOR_MODEL`）」および「対応する API キー環境変数」の設定例（※環境変数は直書きせず、各クライアントの環境変数ロード機能や変数展開を用いること）をシミュレーションや解説の中に明記し、一切省略してはいけません。**
 3. **【絶対制約】** ユーザーから「設定ファイルや環境変数等に反映した」という報告を受けるまで、次のステップへ進んではいけません。
@@ -347,45 +348,42 @@ Universal Evaluator は、ツール実行前フック（`PreToolUse` Hook）を�
 
 #### 📌 設定パターン A：MCP フックによる直接連携（推奨・最もシンプル）
 
-Claude Code などの MCP フックをサポートする先進的なエージェントでは、**ラッパースクリプトを一切作成することなく**、すでにマウントされている MCP サーバー（例: `chronos-graph`）の `evaluate` ツールを直接指定できます。
+Claude Code や Antigravity CLI などの MCP フックをサポートする先進的なエージェントでは、**ラッパースクリプトを一切作成することなく**、すでにマウントされている MCP サーバー（例: `chronos-graph`）の `evaluate` ツールを直接指定できます。
 
-エージェントの設定ファイル（例: `~/.claudecode.json`）に以下のように記述します。
+エージェントの設定ファイル（例: `~/.claude/settings.json` や `.agents/hooks.json`）に以下のように記述します。
 
 ```json
 {
   "hooks": {
-    "preToolUse": {
-      "mcp": {
-        "server": "chronos-graph",
-        "tool": "evaluate"
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "mcp",
+            "server": "chronos-graph",
+            "tool": "evaluate"
+          }
+        ]
       }
-    }
+    ]
   }
 }
 ```
+
+> [!TIP]
+> **簡略表記について**: Antigravity CLI などの一部のエージェントでは、上記をさらに簡略化したオブジェクト形式（`"PreToolUse": { "mcp": { ... } }`）をサポートしている場合があります。環境のドキュメントに合わせて調整してください。
+
+> [!NOTE]
+> **独自のイベント名が必要なエージェント**:
+> * **Cursor**: イベント名が `PreToolUse` ではなく **`beforeMCPExecution`** となります。設定ファイル（`~/.cursor/hooks.json`）内で適切なイベント名に読み替えて構成してください。
+> * **OpenCode**: JSON設定ファイル（`opencode.json`）での `hooks` キーは未サポートです。フックを実装するには、後述の **「[📌 設定パターン C：OpenCode プラグイン形式](#-設定パターン-copencod-プラグイン形式による連携)」** を参照して TypeScript/JavaScript プラグインを作成してください。
 
 ---
 
 #### 📌 設定パターン B：HTTP フックによるリモート連携
 
 リモートサーバー側で `mcp_gateway` を稼働させている場合、**HTTP フック** 経由で一元管理されているリモートエンジンに直接リクエストを飛ばせます。APIキーやホストURLなどの認証情報・接続情報は、環境変数から動的にロードできるように構成します。
-
-* **OpenCode 設定例 (`oh-my-opencode.jsonc` など):**
-  OpenCode では `{env:VARIABLE_NAME}` 構文を使用することで、設定ファイル内に直接秘密鍵やエンドポイントを書き込むことなく、システムの環境変数から安全に動的ロードできます。
-  ```json
-  {
-    "hooks": {
-      "preToolUse": {
-        "http": {
-          "url": "{env:CHRONOS_GATEWAY_URL}",
-          "headers": {
-            "Authorization": "Bearer {env:CHRONOS_GATEWAY_API_KEY}"
-          }
-        }
-      }
-    }
-  }
-  ```
 
 ---
 
@@ -394,16 +392,22 @@ Claude Code などの MCP フックをサポートする先進的なエージェ
 OpenCode では、フック機能を **「プラグイン」** として拡張・ロードします。 Node.js プラグインを構成し、ツール実行前イベントにフックさせて `uvx` からオンザフライに `evaluate` を実行させます。環境パスやポリシーファイルの絶対パスは、すべて環境変数から動的に解決します。
 
 * **プラグインの JavaScript 実装例:**
+  OpenCode では TypeScript/JavaScript プラグインとしてフックを実装します。
+
   ```javascript
   const { spawn } = require('child_process');
 
-  // OpenCodeの preToolUse フックコールバック
-  async function preToolUseHook(toolCall) {
+  /**
+   * OpenCode ツール実行前フック (tool.execute.before)
+   * Universal Evaluator を呼び出し、実行の可否を判定します。
+   */
+  async function OnBeforeToolExecute(toolCall) {
     return new Promise((resolve, reject) => {
-      // 環境変数からポリシーパスをロード (プラグインはプロジェクト直下をデフォルトとする)
+      // 環境変数からポリシーパスをロード (デフォルトはプロジェクト直下)
       const policyPath = process.env.CHRONOS_POLICY_PATH || './intents.yaml';
 
       // uvx を用いてオンザフライで evaluate コマンドを実行
+      // リモートエンジンを使用する場合は、ここで HTTP リクエストに置き換えることも可能です
       const proc = spawn('uvx', [
         '--quiet',
         '--from', 'context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git',
@@ -431,12 +435,16 @@ OpenCode では、フック機能を **「プラグイン」** として拡張�
   }
   ```
 
-* **設定ファイル (`oh-my-opencode.jsonc` または `opencode.jsonc`) への登録:**
-  プラグインの配置場所も環境変数から動的に解決可能です。
+* **設定ファイル (`opencode.json`) への登録:**
+  作成したプラグインファイルをプロジェクト内の適切な場所に配置し、登録します。
   ```json
   {
     "plugins": [
-      "{env:CHRONOS_PLUGIN_PATH}/opencode-chronos-plugin"
+      {
+        "name": "chronos-safety-gate",
+        "path": "./.opencode/plugins/chronos-gate.js",
+        "enabled": true
+      }
     ]
   }
   ```
@@ -451,12 +459,18 @@ Antigravity CLI（本エージェント）の `hooks` セクションに記述�
 ```json
 {
   "hooks": {
-    "preToolUse": {
-      "mcp": {
-        "server": "chronos-graph",
-        "tool": "evaluate"
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "mcp",
+            "server": "chronos-graph",
+            "tool": "evaluate"
+          }
+        ]
       }
-    }
+    ]
   }
 }
 ```
@@ -466,9 +480,17 @@ Antigravity CLI（本エージェント）の `hooks` セクションに記述�
 ```json
 {
   "hooks": {
-    "preToolUse": {
-      "command": "uvx --quiet --from \"context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git\" chronos-mcp-gateway evaluate --json-io --policy-path \"$CHRONOS_POLICY_PATH\""
-    }
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uvx --quiet --from \"context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git\" chronos-mcp-gateway evaluate --json-io --policy-path \"$CHRONOS_POLICY_PATH\""
+          }
+        ]
+      }
+    ]
   }
 }
 ```
@@ -510,7 +532,17 @@ OpenCode 等の設定で、ラッパースクリプトへの絶対パスを環�
 ```json
 {
   "hooks": {
-    "preToolUse": "{env:CHRONOS_HOOK_PATH}/chronos-evaluator-hook.sh"
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{env:CHRONOS_HOOK_PATH}/chronos-evaluator-hook.sh"
+          }
+        ]
+      }
+    ]
   }
 }
 ```

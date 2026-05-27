@@ -165,7 +165,7 @@ module = "yaml.*"
 ignore_missing_imports = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/context_store", "src/mcp_gateway"]
+packages = ["src/context_store", "src/mcp_gateway", "src/chronos_shared"]
 
 [dependency-groups]
 dev = [

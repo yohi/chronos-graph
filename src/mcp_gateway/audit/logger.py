@@ -91,7 +91,7 @@ class AuditLogger:
             return {str(k): self._sanitize_value(v, key_name=str(k)) for k, v in value.items()}
 
         if isinstance(value, (list, tuple)):
-            return [self._sanitize_value(item) for item in value]
+            return [self._sanitize_value(item, key_name=key_name) for item in value]
 
         if isinstance(value, (int, float, bool)) or value is None:
             return value

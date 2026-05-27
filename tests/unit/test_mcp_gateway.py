@@ -504,6 +504,30 @@ class TestAuditLogger:
         assert rec["tags"][0] == "normal"
         assert rec["tags"][1] == "**********"
 
+    def test_list_stacktrace_preserves_context_while_redacting_secrets(self, capsys):
+        from mcp_gateway.audit.logger import AuditLogger
+
+        log = AuditLogger()
+        log.log(
+            ev="startup_failure",
+            level="ERROR",
+            stacktrace=[
+                "Traceback (most recent call last):",
+                "  File \"app.py\", line 1, in <module>",
+                "RuntimeError: failed with sk-1234567890abcdef",
+            ],
+        )
+        captured = capsys.readouterr()
+        import json
+
+        rec = json.loads(captured.err)
+        assert rec["stacktrace"] == [
+            "Traceback (most recent call last):",
+            "  File \"app.py\", line 1, in <module>",
+            "RuntimeError: failed with **********",
+        ]
+        assert "sk-1234567890abcdef" not in captured.err
+
     def test_level_validation(self):
         from mcp_gateway.audit.logger import AuditLogger
 

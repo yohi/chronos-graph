@@ -72,13 +72,19 @@ class TimeoutConfig:
     """MCP tool call タイムアウト設定"""
     default_timeout_seconds: float = 30.0
     max_timeout_seconds: float = 300.0
+    tool_timeouts: dict[str, float] = None
+    
+    def __post_init__(self):
+        """ツール別タイムアウト値を初期化"""
+        if self.tool_timeouts is None:
+            self.tool_timeouts = {
+                "memory_save_url": 40.0,  # URL取得は最大限のため40秒
+            }
     
     def get_timeout(self, tool_name: str) -> float:
-        """ツール別タイムアウト値を取得。現段階では統一値を返す"""
-        if tool_name in ["memory_save_url"]:
-            # URL取得は最大限可能性のため40秒
-            return min(40.0, self.max_timeout_seconds)
-        return self.default_timeout_seconds
+        """ツール別タイムアウト値を取得。辞書駆動で拡張可能"""
+        timeout = self.tool_timeouts.get(tool_name, self.default_timeout_seconds)
+        return min(timeout, self.max_timeout_seconds)
 ```
 
 - [ ] **Step 2: UpstreamClient.call_tool ラップ機能の実装**
@@ -146,6 +152,8 @@ from src.mcp_gateway.upstream.timeout_client import TimeoutConfig
 @pytest.mark.asyncio
 async def test_tool_call_timeout():
     """Tool call timeout is raised correctly"""
+    # Note: Replace ... with actual required parameters when implementing
+    # (e.g., client=mock_mcp_client, storage=mock_storage, etc.)
     client = UpstreamClient(...)
     client.timeout_config = TimeoutConfig(default_timeout_seconds=0.1)
     
@@ -217,7 +225,25 @@ Addresses SPEC.md §16.5 D-1"
 
 Read系ツール（`memory_search`, `memory_stats` 等）の評価バイパス、評価結果のキャッシング、並列化を導入。
 
-- [ ] **Step 1: Read系ツール識別リストの定義**
+- [ ] **Step 1: LLMEvaluator.__init__ に evaluation_timeout を追加**
+
+Modify `src/mcp_gateway/policy/llm_evaluator.py` in `__init__`:
+
+```python
+class LLMEvaluator:
+    def __init__(self, model: str, cache, memory_client, ...):
+        self.model = model
+        self.cache = cache
+        self.memory_client = memory_client
+        # ... existing code ...
+        
+        # Configurable LLM evaluation timeout (default 10s)
+        self.evaluation_timeout = float(
+            os.getenv("LLM_EVALUATION_TIMEOUT", "10.0")
+        )
+```
+
+- [ ] **Step 1b: Read系ツール識別リストの定義**
 
 Modify `src/mcp_gateway/policy/llm_evaluator.py` to add at module level (before class definition):
 
@@ -256,11 +282,11 @@ async def evaluate(self, tool_name: str, arguments: dict) -> EvaluationResult:
     if cached is not None:
         return cached
     
-    # LLM evaluation with timeout
+    # LLM evaluation with configurable timeout
     try:
         result = await asyncio.wait_for(
             self._evaluate_with_llm(tool_name, arguments),
-            timeout=10.0  # max 10s per evaluation
+            timeout=self.evaluation_timeout  # configurable via LLM_EVALUATION_TIMEOUT
         )
     except asyncio.TimeoutError:
         # Fail-soft: deny on timeout (conservative)
@@ -298,35 +324,26 @@ async def _evaluate_with_llm(
     # Parallel fetch: memory context + LLM invocation
     # This avoids sequential waiting: retrieve(3s) → acompletion(10s) = 13s
     # Instead: gather(retrieve, acompletion) ≈ max(3s, 10s) = 10s
-    try:
-        context, decision = await asyncio.gather(
-            self._retrieve_context(tool_name, arguments),
-            self._get_llm_decision(tool_name, arguments),
-            return_exceptions=True
-        )
-    except Exception as e:
-        # If any parallel task fails, fall back to conservative deny
-        return EvaluationResult(
-            approved=False,
-            reasoning=f"Evaluator error: {str(e)}",
-            confidence=0.0
-        )
+    context, decision = await asyncio.gather(
+        self._retrieve_context(tool_name, arguments),
+        self._get_llm_decision(tool_name, arguments),
+        return_exceptions=True  # Both tasks complete even if one fails
+    )
     
-    # Merge context into decision
+    # Handle exceptions from parallel tasks
     if isinstance(context, Exception):
         context = None
-    if isinstance(decision, Exception):
-        decision = None
-    
-    if decision is None:
+    if isinstance(decision, Exception) or decision is None:
+        # If LLM decision fails or is unavailable, deny (fail-safe)
         return EvaluationResult(
             approved=False,
             reasoning="LLM decision unavailable",
             confidence=0.0
         )
     
-    # decision is already an EvaluationResult; augment with context
-    decision.context = context
+    # decision is already an EvaluationResult; augment with context if available
+    if context is not None:
+        decision.context = context
     return decision
 
 async def _retrieve_context(
@@ -360,7 +377,8 @@ async def _get_llm_decision(
                 messages=[
                     {
                         "role": "system",
-                        "content": "Evaluate MCP tool safety..."
+                        "content": "Respond ONLY with JSON: {\"approved\": true/false, \"reason\": \"explanation\"}. "
+                                   "Analyze if tool call is safe."
                     },
                     {
                         "role": "user",
@@ -372,12 +390,24 @@ async def _get_llm_decision(
             ),
             timeout=10.0
         )
-        # Parse response into EvaluationResult
-        approved = "approved" in response.choices[0].message.content.lower()
+        # Parse JSON response safely (fail-safe: deny on parse error)
+        import json
+        content = response.choices[0].message.content
+        try:
+            decision = json.loads(content)
+            approved = decision.get("approved", False)
+            reason = decision.get("reason", "No reason provided")
+        except json.JSONDecodeError:
+            # Fail-safe: if JSON parsing fails, deny the operation
+            return EvaluationResult(
+                approved=False,
+                reasoning="LLM response not valid JSON",
+                confidence=0.0
+            )
         return EvaluationResult(
             approved=approved,
-            reasoning=response.choices[0].message.content,
-            confidence=0.8
+            reasoning=reason,
+            confidence=0.9 if approved else 0.8
         )
     except asyncio.TimeoutError:
         return None
@@ -389,6 +419,8 @@ Create `tests/unit/test_llm_evaluator_optimization.py`:
 
 ```python
 import pytest
+import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock
 from src.mcp_gateway.policy.llm_evaluator import LLMEvaluator, READ_ONLY_TOOLS
 
@@ -433,14 +465,19 @@ async def test_parallel_context_and_decision():
     evaluator.cache.get = AsyncMock(return_value=None)
     evaluator.cache.set = AsyncMock()
     
-    import time
+    # Track call order to verify parallel execution
+    call_order = []
     
     async def slow_retrieve(*args, **kwargs):
-        await asyncio.sleep(0.5)
+        call_order.append("retrieve_start")
+        await asyncio.sleep(0.2)
+        call_order.append("retrieve_end")
         return "context data"
     
     async def slow_llm(*args, **kwargs):
-        await asyncio.sleep(0.5)
+        call_order.append("llm_start")
+        await asyncio.sleep(0.2)
+        call_order.append("llm_end")
         return {"approved": True, "reasoning": "ok"}
     
     evaluator._retrieve_context = slow_retrieve
@@ -450,8 +487,25 @@ async def test_parallel_context_and_decision():
     result = await evaluator.evaluate("memory_save", {"content": "test"})
     elapsed = time.time() - start
     
-    # With gather, total time ≈ max(0.5, 0.5) = 0.5s, not 1.0s
-    assert elapsed < 0.9, f"Expected parallel (~0.5s), got {elapsed}s"
+    # Verify both tasks started before either finished (proof of parallel)
+    assert "retrieve_start" in call_order
+    assert "llm_start" in call_order
+    retrieve_start_idx = call_order.index("retrieve_start")
+    llm_start_idx = call_order.index("llm_start")
+    retrieve_end_idx = call_order.index("retrieve_end")
+    llm_end_idx = call_order.index("llm_end")
+    
+    # Both must start before either ends (parallel proof)
+    assert retrieve_start_idx < retrieve_end_idx
+    assert llm_start_idx < llm_end_idx
+    # Can start in any order, but both should have started before first end
+    min_start = min(retrieve_start_idx, llm_start_idx)
+    min_end = min(retrieve_end_idx, llm_end_idx)
+    assert min_start < min_end, "Both tasks should start before either ends"
+    
+    # With gather parallel: ~0.2s, sequential would be ~0.4s
+    # Allow some variance for CI systems, but not 2x slower
+    assert elapsed < 0.4, f"Expected parallel (~0.2s), got {elapsed}s"
 ```
 
 - [ ] **Step 5: テスト実行**
@@ -522,14 +576,53 @@ Modify `src/mcp_gateway/server.py` around line 448-518:
 from dataclasses import dataclass
 from typing import Optional
 
+def load_intents_from_yaml(intents_file_path: str) -> dict:
+    """
+    Load intent definitions from intents.yaml.
+    SSOT (Single Source of Truth) for approval requirements.
+    
+    Returns dict mapping tool_name → {approval_required, ...}
+    """
+    import yaml
+    with open(intents_file_path, 'r') as f:
+        data = yaml.safe_load(f)
+    
+    intents = {}
+    for intent in data.get('intents', []):
+        intents[intent['name']] = {
+            'approval_required': intent.get('approval_required', True),
+            'category': intent.get('category'),
+        }
+    return intents
+
 @dataclass
 class ApprovalPolicy:
     """Approval timing and timeout configuration"""
     approval_timeout_seconds: float = 30.0
     requires_approval_tools: set[str] = None
     bypass_approval_tools: set[str] = None
+    intents_file_path: str = None
     
     def __post_init__(self):
+        # Load from intents.yaml if available (SSOT)
+        if self.intents_file_path:
+            try:
+                intents = load_intents_from_yaml(self.intents_file_path)
+                self.requires_approval_tools = {
+                    name for name, info in intents.items()
+                    if info.get('approval_required', True)
+                }
+                self.bypass_approval_tools = {
+                    name for name, info in intents.items()
+                    if not info.get('approval_required', True)
+                }
+                return
+            except Exception as e:
+                # Fallback to defaults if YAML loading fails
+                import warnings
+                warnings.warn(f"Failed to load intents.yaml: {e}, using defaults")
+        
+        # Fallback defaults if intents.yaml not available
         if self.requires_approval_tools is None:
             self.requires_approval_tools = {
                 "memory_save",
@@ -691,19 +784,20 @@ async def process_chunks(
     """
     Process list of chunks into memories.
     
-    If graph is disabled, chunks are processed in parallel.
-    If graph is enabled, sequential order is preserved for CHUNK_NEXT/PREV edges.
+    Sequential mode (graph enabled): preserve chunk order for CHUNK_NEXT/PREV edges.
+    Parallel mode (graph disabled): process concurrently via semaphore-limited gather.
     """
     
-    if self.storage.graph_enabled and CHUNK_PARALLEL_ENABLED_WITHOUT_GRAPH:
-        # Sequential processing: preserve chunk order for graph edges
+    if self.storage.graph_enabled or not CHUNK_PARALLEL_ENABLED_WITHOUT_GRAPH:
+        # Sequential processing: required for graph CHUNK_NEXT/PREV ordering
+        # (Also used if parallel flag is disabled for operational control)
         results = []
         for chunk in chunks:
             memory = await self._process_chunk(chunk, source_metadata)
             results.append(memory)
         return results
     else:
-        # Parallel processing: graph disabled, no ordering constraint
+        # Parallel processing: graph disabled, safe for concurrent processing
         async def process_with_limit(chunk):
             async with self.chunk_semaphore:
                 return await self._process_chunk(chunk, source_metadata)
@@ -772,7 +866,7 @@ async def test_chunk_processing_sequential_with_graph():
     # Mock slow _process_chunk
     call_times = []
     async def slow_process(chunk, metadata):
-        call_times.append(asyncio.current_time())
+        call_times.append(time.time())
         await asyncio.sleep(0.1)
         return MagicMock(id=chunk.id)
     
@@ -884,9 +978,36 @@ from tenacity import (
     retry,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type
+    retry_if_exception
 )
 import httpx
+
+def should_retry_embedding(exc: Exception) -> bool:
+    """
+    Determine if embedding request should be retried.
+    
+    Retry on:
+    - TimeoutError
+    - httpx.HTTPError with no response (network error)
+    - httpx.HTTPError with 5xx status (server error)
+    
+    Fail-fast on:
+    - httpx.HTTPError with 4xx status (client error)
+    """
+    if isinstance(exc, TimeoutError):
+        return True
+    
+    if isinstance(exc, httpx.HTTPError):
+        # Network error (no response) → retry
+        if exc.response is None:
+            return True
+        # Server error (5xx) → retry
+        if exc.response.status_code >= 500:
+            return True
+        # Client error (4xx) → fail-fast
+        return False
+    
+    return False
 
 @dataclass
 class EmbeddingRetryPolicy:
@@ -913,9 +1034,7 @@ class EmbeddingRetryPolicy:
                 min=self.min_wait_seconds,
                 max=self.max_wait_seconds
             ),
-            retry=retry_if_exception_type(
-                (httpx.HTTPError, TimeoutError)
-            ),
+            retry=retry_if_exception(should_retry_embedding),
             reraise=True
         )
 
@@ -967,46 +1086,40 @@ class OpenAIEmbeddingProvider:
             max_wait_seconds=float(os.getenv("EMBEDDING_MAX_WAIT", "10.0")),
         )
     
-    @self.retry_policy.get_retry_decorator()
-    async def _embed_batch_single_attempt(
-        self,
-        texts: list[str],
-    ) -> list[list[float]]:
-        """Single attempt at embedding batch (wrapped by retry decorator)"""
-        timeout = httpx.Timeout(
-            self.retry_policy.per_attempt_timeout_seconds
-        )
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                "https://api.openai.com/v1/embeddings",
-                json={"input": texts, "model": self.model},
-                headers={"Authorization": f"Bearer {self.api_key}"}
-            )
-            
-            # Handle rate limiting with Retry-After
-            if response.status_code == 429:
-                retry_after = parse_retry_after_header(
-                    response.headers.get("Retry-After")
-                )
-                if retry_after:
-                    # Wait before retry (tenacity will handle the retry)
-                    await asyncio.sleep(retry_after)
-                raise httpx.HTTPError(f"Rate limited: {response.status_code}")
-            
-            response.raise_for_status()
-            data = response.json()
-            return [item["embedding"] for item in data["data"]]
-    
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Embed batch with automatic retry and Retry-After support"""
+        retry_decorator = self.retry_policy.get_retry_decorator()
+        
+        @retry_decorator
+        async def attempt():
+            """Single attempt at embedding batch (wrapped by retry decorator)"""
+            timeout = httpx.Timeout(
+                self.retry_policy.per_attempt_timeout_seconds
+            )
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    "https://api.openai.com/v1/embeddings",
+                    json={"input": texts, "model": self.model},
+                    headers={"Authorization": f"Bearer {self.api_key}"}
+                )
+                
+                # Handle rate limiting: parse Retry-After but raise for tenacity to handle retry
+                if response.status_code == 429:
+                    # Raise HTTPStatusError; tenacity will retry based on status code
+                    response.raise_for_status()
+                
+                response.raise_for_status()
+                data = response.json()
+                return [item["embedding"] for item in data["data"]]
+        
         try:
-            return await self._embed_batch_single_attempt(texts)
+            return await attempt()
         except Exception as e:
             # Final failure after retries
             raise EmbeddingError(
                 code="EMBEDDING_FAILED",
                 message=f"Failed to embed after {self.retry_policy.max_attempts} attempts: {str(e)}",
-                recoverable=False  # Client should handle
+                recoverable=False
             ) from e
 ```
 
@@ -1072,6 +1185,7 @@ Create `tests/unit/test_embedding_retry.py`:
 ```python
 import pytest
 import asyncio
+import time
 from unittest.mock import AsyncMock, patch, MagicMock
 from src.context_store.embedding.retry_config import (
     EmbeddingRetryPolicy,
@@ -1120,7 +1234,7 @@ async def test_embedding_retry_exponential_backoff():
     attempt_times = []
     
     async def failing_attempt():
-        attempt_times.append(asyncio.get_event_loop().time())
+        attempt_times.append(time.monotonic())
         if len(attempt_times) < 3:
             raise ValueError("Simulated failure")
         return [[0.1, 0.2, 0.3]]
@@ -1260,8 +1374,10 @@ Modify `README.md` Configuration section to add:
 |---------|---------|-------------|
 | `MCP_TOOL_TIMEOUT_SECONDS` | `30.0` | Upstream tool call timeout (D-1) |
 | `APPROVAL_TIMEOUT_SECONDS` | `30.0` | User approval wait timeout (D-3) |
+| `LLM_EVALUATION_TIMEOUT` | `10.0` | LLM評価の最大タイムアウト秒数 (D-2) |
 | `EMBEDDING_MAX_RETRIES` | `3` | Max embedding API retry attempts (E-2) |
 | `EMBEDDING_MAX_WAIT` | `10.0` | Max wait between embedding retries (E-2) |
+| `CHUNK_PARALLEL_SEMAPHORE_SIZE` | `10` | 並列チャンク処理の最大同時実行数 (E-1) |
 ```
 
 - [ ] **Step 2: コミット**

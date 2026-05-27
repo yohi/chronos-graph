@@ -26,11 +26,21 @@ class RedisCacheAdapter:
     # ------------------------------------------------------------------
 
     @classmethod
-    async def create(cls, url: str, ssl: bool = False) -> "RedisCacheAdapter":
+    async def create(
+        cls,
+        url: str,
+        ssl: bool = False,
+        socket_connect_timeout: float = 5.0,
+        socket_timeout: float = 5.0,
+    ) -> "RedisCacheAdapter":
         """Create a new adapter connected to Redis."""
         import redis.asyncio as aioredis
 
-        kwargs: dict[str, Any] = {"decode_responses": False}
+        kwargs: dict[str, Any] = {
+            "decode_responses": False,
+            "socket_connect_timeout": socket_connect_timeout,
+            "socket_timeout": socket_timeout,
+        }
         # If url starts with rediss://, SSL is already enabled by from_url.
         # Adding ssl=True explicitly can cause errors in some redis-py versions.
         if ssl and not url.startswith("rediss://"):

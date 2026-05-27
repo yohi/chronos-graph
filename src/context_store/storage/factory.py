@@ -375,6 +375,11 @@ async def _create_cache_adapter(settings: "Settings") -> "CacheAdapter":
     if settings.cache_backend == "redis":
         from context_store.storage.redis import RedisCacheAdapter
 
-        return await RedisCacheAdapter.create(settings.redis_url, ssl=settings.redis_ssl)
+        return await RedisCacheAdapter.create(
+            settings.redis_url,
+            ssl=settings.redis_ssl,
+            socket_connect_timeout=settings.redis_socket_connect_timeout,
+            socket_timeout=settings.redis_socket_timeout,
+        )
 
     raise ValueError(f"Unsupported cache_backend: {settings.cache_backend!r}")

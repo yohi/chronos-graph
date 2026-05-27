@@ -115,6 +115,8 @@ class Settings(BaseSettings):
     # --- Redis (cache_backend=redis の場合) ---
     redis_url: str = DEFAULT_REDIS_URL
     redis_ssl: bool = False
+    redis_socket_connect_timeout: float = Field(default=5.0, gt=0.0)
+    redis_socket_timeout: float = Field(default=5.0, gt=0.0)
 
     # --- Embedding ---
     embedding_provider: Literal["openai", "local-model", "litellm", "custom-api"] = "local-model"

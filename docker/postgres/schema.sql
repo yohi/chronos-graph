@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS memories (
     archived_at        TIMESTAMPTZ,
     tags               TEXT[]       DEFAULT '{}',
     project            TEXT,
-    content_hash       TEXT         NOT NULL UNIQUE
+    content_hash       TEXT         NOT NULL
 );
 
 -- lifecycle_state table
@@ -55,3 +55,8 @@ CREATE INDEX IF NOT EXISTS idx_memories_embedding_hnsw
 -- Full-text search index with pg_bigm (requires pg_bigm extension)
 CREATE INDEX IF NOT EXISTS idx_memories_content_fts
     ON memories USING gin (content gin_bigm_ops);
+
+-- アクティブレコード (archived_at IS NULL) のみ content_hash の一意性を保証
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_content_hash_active
+    ON memories (content_hash)
+    WHERE archived_at IS NULL;

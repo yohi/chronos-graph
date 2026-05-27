@@ -1183,6 +1183,11 @@ POSTGRES_SSL=false
 POSTGRES_SSL_NO_VERIFY=false   # true で証明書検証をスキップ (Supabase 等)
 POSTGRES_STATEMENT_CACHE_SIZE=256  # 0 で prepared statement キャッシュ無効化 (pgBouncer)
 
+# === Supabase (STORAGE_BACKEND=supabase の場合) ===
+SUPABASE_URL=https://xxxxx.supabase.co
+SUPABASE_KEY=<secret>
+SUPABASE_REQUEST_TIMEOUT_SECONDS=10.0   # Supabase Data API呼び出しのタイムアウト秒数
+
 # === Neo4j (GRAPH_ENABLED=true の場合) ===
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
@@ -1227,6 +1232,32 @@ SQLITE_ACQUIRE_TIMEOUT=2.0           # seconds (セマフォ取得待ちタイ�
 | 記憶保存レイテンシ | < 1,000 ms |
 | MCP サーバー起動（ハンドシェイク） | < 500 ms |
 | 対応記憶数 | 100,000+ |
+
+### 13.1 パフォーマンス最適化仕様 (Phase 1 実装完了)
+
+リモートDB（Supabase Data API）使用時のp95レイテンシおよびタイムアウト頻度を大幅に削減するため、以下の最適化が実装されています。
+
+1. **Supabase 射影最適化（ペイロード削減）**
+   - **`vector_search_brief` RPC の導入**: ベクトル検索（`vector_search`）時、768次元の `embedding` カラム（1レコードあたり約10KBのJSON表現）の転送コストを排除するため、`embedding` カラムを除外した結果を返す専用RPC `vector_search_brief` を呼び出す。
+   - **SELECT 射影の制限**: `get_memory`, `get_memories_batch`, `keyword_search`, `list_by_filter` の読込系クエリについて、`select("*")` を廃止し、`embedding` カラムを除外した `_MEMORY_BRIEF_COLUMNS` 射影を強制。これにより、検索結果返却時のHTTPS通信ペイロードが劇的に削減されます。
+
+2. **N+1クエリ問題の解消（アクセス数の一括更新）**
+   - **`increment_memory_access_counts` RPC / メソッド of StorageAdapter の追加**: 検索結果として返された複数のメモリに対するアクセスカウント更新（N回のHTTPS呼び出し）を廃止し、UUIDの配列を受け取って1回のクエリで一括更新するバルクAPIを新設。
+   - Postgresアダプターは `WHERE id = ANY($1::uuid[])`、SQLiteアダプターはプレースホルダー上限を考慮した `chunk_size = 997` でのバッチ処理により一括更新を保証。後処理層 `PostProcessor` では本バルクAPIへ一本化。
+
+3. **インジェストパイプラインの事前バッチ埋め込み化**
+   - **ユニークチャンクの重複排除と事前一括埋め込み**: インジェスト対象のテキストをチャンク分割した後、`_compute_memo_key` に基づいてユニークなチャンクを特定（重複排除）。これらを1回の `embed_batch` で一括して埋め込みベクトルに変換し、各チャンクコア処理（`_process_chunk`）にパイプライン伝播させる。
+   - トランザクション開始前の一括埋め込み生成を徹底し、SQLite等のロック競合を防ぐとともに、無駄な個別 HTTP/推論レイテンシを削減。
+
+4. **ローカル埋め込みスレッドプールの長寿命化とライフサイクル統合**
+   - **ThreadPoolExecutor の再利用**: `LocalModelEmbeddingProvider` の `ThreadPoolExecutor` を `__init__` で一度だけ生成して使い回す。これにより、呼び出しのたびに発生していたスレッドプール生成のオーバーヘッドをゼロに抑える。
+   - **Orchestrator の `dispose` カスケード**: プロセス終了時やエラー時のスレッドリークを防止するため、Orchestrator のシャットダウンシーケンスで `IngestionPipeline` および `EmbeddingProvider.close()` が確実に呼ばれ、スレッドプールが `shutdown` されるライフサイクル管理を実装。
+
+5. **二重スタートアッププローブのキャッシュ排除**
+   - **get_vector_dimension の結果キャッシュ**: 起動時に Orchestrator が行うベクトル次元チェック時の二重のデータベース問い合わせを防止するため、`SupabaseStorageAdapter.get_vector_dimension()` の初回実行結果をメンバ変数にキャッシュし、2回目以降のHTTPSラウンドトリップを即座にショートサーキットする。
+
+6. **クライアントレベルのタイムアウト制御**
+   - **`supabase_request_timeout_seconds` 設定の追加**: Supabase AsyncClientOptions に対して `postgrest_client_timeout` を明示的に設定可能とし、接続ハング時の速やかなフェイルファストと Exponential Backoff リトライを保証。
 
 ---
 
@@ -1563,7 +1594,7 @@ Universal LLM Evaluatorとして設計され、LiteLLM経由で任意のプロ�
 
 ### 16.5 改善課題：MCP メモリ操作タイムアウト対策（Phase 2 以降）
 
-2026-05-26 のリモート DB（Supabase Data API）前提のボトルネック監査で抽出された改善候補のうち、Phase 1 計画 (`docs/superpowers/plans/2026-05-26-mcp-memory-timeout-reduction-phase1.md`) のスコープ外として後回しになった項目をここにトラッキングする。Phase 1 で対処済みの項目（A-1/A-2/A-3 前半/B-1/C-1/C-2）は本表からは除外している。
+2026-05-26 のリモート DB（Supabase Data API）前提のボトルネック監査で抽出された改善候補のうち、Phase 1 最適化（実装完了）のスコープ外として後回しになった項目をここにトラッキングする。Phase 1 で対処済みの項目（A-1/A-2/A-3 前半/B-1/C-1/C-2/C-4）は本表からは除外している。
 
 #### D. MCP Gateway 層の改善（タイムアウト・評価レイテンシ）
 

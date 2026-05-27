@@ -64,7 +64,7 @@
 Create `src/mcp_gateway/upstream/timeout_client.py`:
 
 ```python
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 @dataclass
@@ -72,14 +72,13 @@ class TimeoutConfig:
     """MCP tool call タイムアウト設定"""
     default_timeout_seconds: float = 30.0
     max_timeout_seconds: float = 300.0
-    tool_timeouts: dict[str, float] = None
+    tool_timeouts: dict[str, float] = field(default_factory=dict)
     
     def __post_init__(self):
-        """ツール別タイムアウト値を初期化"""
-        if self.tool_timeouts is None:
-            self.tool_timeouts = {
-                "memory_save_url": 40.0,  # URL取得は最大限のため40秒
-            }
+        """ツール別タイムアウト値を初期化（デフォルト値が未設定の場合のみ）"""
+        # デフォルト値が未設定の場合のみ追加（呼び出し元で上書き可能）
+        if "memory_save_url" not in self.tool_timeouts:
+            self.tool_timeouts["memory_save_url"] = 40.0  # URL取得は最大限のため40秒
     
     def get_timeout(self, tool_name: str) -> float:
         """ツール別タイムアウト値を取得。辞書駆動で拡張可能"""
@@ -133,8 +132,19 @@ class UpstreamClient:
         tool_name: str,
         arguments: dict[str, Any],
     ) -> Any:
-        """既存の call_tool ロジックをここに移動"""
-        # ... existing implementation ...
+        """
+        Original call_tool implementation (DO NOT call recursively).
+        
+        Contains the existing MCP client invocation logic.
+        Replace with actual MCP session method when implementing
+        (e.g., self.mcp_session.call_tool or the concrete method used in existing code).
+        """
+        # IMPLEMENTATION NOTE: Determine the actual MCP client call from the existing
+        # implementation. Common patterns:
+        #   - self.mcp_session.call_tool(tool_name, arguments)
+        #   - self.client.call_tool(tool_name, arguments)
+        #   - await self.transport.call_tool(...)
+        # DO NOT call self.call_tool() here to avoid infinite recursion.
         return await self.client.call_tool(tool_name, arguments)
 ```
 

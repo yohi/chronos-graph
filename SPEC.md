@@ -1254,7 +1254,7 @@ SQLITE_ACQUIRE_TIMEOUT=2.0           # seconds (セマフォ取得待ちタイ�
    - **Orchestrator の `dispose` カスケード**: プロセス終了時やエラー時のスレッドリークを防止するため、Orchestrator のシャットダウンシーケンスで `IngestionPipeline` および `EmbeddingProvider.close()` が確実に呼ばれ、スレッドプールが `shutdown` されるライフサイクル管理を実装。
 
 5. **二重スタートアッププローブのキャッシュ排除**
-   - **get_vector_dimension の結果キャッシュ**: 起動時に Orhcestrator が行うベクトル次元チェック時の二重のデータベース問い合わせを防止するため、`SupabaseStorageAdapter.get_vector_dimension()` の初回実行結果をメンバ変数にキャッシュし、2回目以降のHTTPSラウンドトリップを即座にショートサーキットする。
+   - **get_vector_dimension の結果キャッシュ**: 起動時に Orchestrator が行うベクトル次元チェック時の二重のデータベース問い合わせを防止するため、`SupabaseStorageAdapter.get_vector_dimension()` の初回実行結果をメンバ変数にキャッシュし、2回目以降のHTTPSラウンドトリップを即座にショートサーキットする。
 
 6. **クライアントレベルのタイムアウト制御**
    - **`supabase_request_timeout_seconds` 設定の追加**: Supabase AsyncClientOptions に対して `postgrest_client_timeout` を明示的に設定可能とし、接続ハング時の速やかなフェイルファストと Exponential Backoff リトライを保証。

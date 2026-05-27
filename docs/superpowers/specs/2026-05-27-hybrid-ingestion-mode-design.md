@@ -44,24 +44,39 @@ ChronosGraph に「全量保存モード（`all`）」と「従来判定モー�
 
 ### 設計の核
 
-- フラグ `CHRONOS_INGESTION_MODE` は `Settings`（context_store）と `GatewaySettings`（gateway）の**両方**に独立に追加し、それぞれが env エイリアス経由で同じ環境変数を読む（`MCP_GATEWAY_` プレフィックスは付かない）。
+- フラグ `CHRONOS_INGESTION_MODE` の**型・デフォルト値・env 変数名は単一モジュール `src/context_store/ingestion/mode.py` に集約**し、`Settings`（context_store）と `GatewaySettings`（gateway）の両方がそこから import して使用する（Single Source of Truth）。Gateway は context_store を subprocess として起動する（`build_app()` の `python -m context_store`）独立プロセスのため、ランタイムの値伝達経路は「同じ env 変数を各プロセスが独立に読む」形を取る。重複するのは Pydantic フィールド宣言 1 行のみで、型・デフォルト・env 名は単一モジュールに一元化される。
 - Gateway 側は `ToolRegistry` で `memory_save` を `tools/list` から落とす。`tools/call` 経路は無修正のため、フック経由の呼び出しは引き続き成立する（「人が叩く裏口は残し、エージェントの目には見せない」）。
 - 既存の `Classifier`（`FALLBACK_PENALTY=0.5`）は無変更のまま、`all` モード下の低品質コンテンツのノイズ抑制を担う。
-- フックは独立した「ターン終了」プロセスとして起動され、メインのエージェント実行を一切ブロックしない。
+- フックは独立した「ターン終了」プロセスとして起動され、メインのエージェント実行を一切ブロックしない。Gateway の `MaxBodySizeMiddleware`（既定 10 MiB、`mcp_gateway/config.py:81`）に抵触しないよう、フック側で送信前に上限サイズで切り詰める。
 
 ## 3. 変更ファイル一覧
 
 | ファイル | 変更内容 | 行数目安 |
 |---|---|---|
-| `src/context_store/config.py` | `Settings` に `ingestion_mode: Literal["all", "selective"]` を追加（env エイリアス `CHRONOS_INGESTION_MODE`、デフォルト `"selective"`） | +6行 |
-| `src/mcp_gateway/config.py` | `GatewaySettings` に同フィールドを追加（同じ env エイリアス、`MCP_GATEWAY_` プレフィックス無視） | +6行 |
+| `src/context_store/ingestion/mode.py` | **新規**。共通モジュール。`IngestionMode = Literal["all", "selective"]` 型、`DEFAULT_INGESTION_MODE: IngestionMode = "selective"`、`CHRONOS_INGESTION_MODE_ENV = "CHRONOS_INGESTION_MODE"` の 3 シンボルのみ公開 | ~10行 |
+| `src/context_store/config.py` | `Settings` に `ingestion_mode: IngestionMode` を追加。型・デフォルト・env エイリアスは `mode.py` から import した定数を参照 | +6行 |
+| `src/mcp_gateway/config.py` | `GatewaySettings` に同フィールドを追加。同じく `mode.py` から型・デフォルト・env 名を import（`MCP_GATEWAY_` プレフィックスはこのフィールドのみバイパス） | +6行 |
 | `src/mcp_gateway/tools/registry.py` | `ToolRegistry.__init__` に `hidden_tools: AbstractSet[str] = frozenset()` を追加。`all_tools` / `filter_by_caps` は `hidden_tools` を差し引いて返す | +8行 |
 | `src/mcp_gateway/app.py` | `build_app()` で `settings.ingestion_mode == "all"` のとき `hidden_tools={"memory_save"}` を渡す | +4行 |
-| `scripts/agent_turn_hook.py` | 新規。stdin から会話ログを受け取り、Gateway HTTP に fire-and-forget で `memory_save` を呼ぶ | ~120行 |
+| `scripts/agent_turn_hook.py` | 新規。stdin から会話ログを受け取り、上限サイズで切り詰めたうえで Gateway HTTP に fire-and-forget で `memory_save` を呼ぶ。切り詰めロジックは pure 関数として切り出し単体テスト可能にする | ~140行 |
 | `tests/unit/test_tool_registry_hidden.py` | 新規。`hidden_tools` の挙動を検証 | ~40行 |
-| `tests/unit/test_settings_ingestion_mode.py` | 新規。両 Settings の env エイリアス解決を検証 | ~30行 |
+| `tests/unit/test_settings_ingestion_mode.py` | 新規。両 Settings の env 解決と共通モジュールの型一致を検証 | ~40行 |
+| `tests/unit/test_agent_turn_hook_truncate.py` | 新規。フックの切り詰め pure 関数を検証（HTTP I/O は対象外） | ~30行 |
 
 ## 4. コンポーネント設計
+
+### 4.0 共通モジュール `src/context_store/ingestion/mode.py`（新規）
+
+- 役割: `CHRONOS_INGESTION_MODE` の型・デフォルト値・env 変数名の **Single Source of Truth**。`Settings` と `GatewaySettings` の両方からこのモジュールのみを import する。
+- 公開シンボル（これ以外は公開しない）:
+  ```python
+  from typing import Final, Literal
+
+  IngestionMode = Literal["all", "selective"]
+  DEFAULT_INGESTION_MODE: Final[IngestionMode] = "selective"
+  CHRONOS_INGESTION_MODE_ENV: Final[str] = "CHRONOS_INGESTION_MODE"
+  ```
+- 配置理由: 既存パッケージ構成は `src/context_store/` と `src/mcp_gateway/` の 2 パッケージのみ。新規 top-level package を作るのは過剰なため、ロジックの主体である `context_store/ingestion/` 配下に置き、`mcp_gateway` から import する形を取る。Gateway は Python の import としては同一環境にあり、ランタイムの subprocess 分離とは独立に import 可能。
 
 ### 4.1 `Settings.ingestion_mode`（context_store）
 
@@ -69,9 +84,15 @@ ChronosGraph に「全量保存モード（`all`）」と「従来判定モー�
 - 配置: `src/context_store/config.py` の `Settings` クラス内、`# --- Ingestion ---` セクション。
 - フィールド定義（イメージ）:
   ```python
-  ingestion_mode: Literal["all", "selective"] = Field(
-      default="selective",
-      validation_alias="CHRONOS_INGESTION_MODE",
+  from context_store.ingestion.mode import (
+      CHRONOS_INGESTION_MODE_ENV,
+      DEFAULT_INGESTION_MODE,
+      IngestionMode,
+  )
+
+  ingestion_mode: IngestionMode = Field(
+      default=DEFAULT_INGESTION_MODE,
+      validation_alias=CHRONOS_INGESTION_MODE_ENV,
       description="記憶保存の挙動。'all' は全量保存（ツール隠蔽併用）、'selective' は従来判定。",
   )
   ```
@@ -80,7 +101,7 @@ ChronosGraph に「全量保存モード（`all`）」と「従来判定モー�
 
 - 役割: ツール隠蔽の判定ソース。`build_app()` 起動時に 1 度だけ参照され、ホットリロードは非対応。
 - 配置: `src/mcp_gateway/config.py` の `GatewaySettings` クラス内。
-- env エイリアスにより `MCP_GATEWAY_` プレフィックスをバイパスし、context_store 側と同じ環境変数を共有する。
+- 共通モジュール（`4.0`）から型・デフォルト・env 名を import。`MCP_GATEWAY_` プレフィックスはこのフィールドのみ `validation_alias` でバイパスし、`Settings` と同じ環境変数を読む。
 
 ### 4.3 `ToolRegistry.hidden_tools`
 
@@ -117,12 +138,21 @@ registry = ToolRegistry(initial_tools or [], hidden_tools=hidden)
   - `MCP_GATEWAY_API_KEY` （必須、未設定なら ERROR ログ + exit 0）
   - `MCP_INTENT` (default `memory.ingest`)
   - `MCP_HOOK_TIMEOUT_SECONDS` (default `2.0`、全体タイムアウト)
+  - `MCP_HOOK_MAX_LOG_BYTES` (default `8388608` = 8 MiB、UTF-8 エンコード後の最大送信サイズ。Gateway の `max_request_body_size_bytes` 既定 10 MiB に対し JSON 包装オーバーヘッドを見込んだ 2 MiB のマージン)
   - `LOG_LEVEL` (default `INFO`)
+- **送信前の切り詰め (truncation)**:
+  - 純関数 `def truncate_log(content: str, max_bytes: int) -> tuple[str, bool]` をモジュールトップレベルに定義し、`(切り詰め後の文字列, was_truncated)` を返す。
+  - 切り詰めポリシーは**末尾保持**（先頭側を捨てる）。会話ログでは末尾（最新発話・最終決定）の方が再利用価値が高いため。
+  - 切り詰め発生時は冒頭に `"[truncated to last %d bytes]\n"` のマーカー行を付加。マーカー込みでも `max_bytes` を超えない範囲で末尾を切り出す。
+  - UTF-8 マルチバイト境界を破壊しないため、`content.encode("utf-8")` のバイト列から末尾 N バイトをスライスしたあと `bytes.decode("utf-8", errors="ignore")` でデコードする。
+  - `was_truncated=True` の場合、`logger.warning("payload truncated: original=%d bytes, sent=%d bytes", ...)` を出力。
 - **シーケンス**:
-  1. `httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=1.0))` を開く。
-  2. `GET /sse` を `stream=True` で叩き、最初の `data: /messages?session_id=XXX` を取得して切断。
-  3. `POST /messages?session_id=XXX` に JSON-RPC `tools/call memory_save` を投げる。
-  4. レスポンスは body を読まず close。
+  1. stdin / `--content` から `raw` を取得。空なら DEBUG ログ + exit 0。
+  2. `payload, was_truncated = truncate_log(raw, MCP_HOOK_MAX_LOG_BYTES)`。
+  3. `httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=1.0))` を開く。
+  4. `GET /sse` を `stream=True` で叩き、最初の `data: /messages?session_id=XXX` を取得して切断。
+  5. `POST /messages?session_id=XXX` に JSON-RPC `tools/call memory_save` を `arguments.content=payload` で投げる。
+  6. レスポンスは body を読まず close。
 - **fire-and-forget 運用**: 呼び出し側のシェルで `&` を付ける（`echo "$LOG" | python scripts/agent_turn_hook.py &`）。スクリプト自体は同期完結し、`os.fork()` 等の自己デタッチは行わない。
 - **常に exit 0**: いかなる例外も握りつぶし、メインプロセスに影響しない。
 
@@ -180,13 +210,15 @@ JSON-RPC result.tools = [...memory_save_url, memory_search, ...]
 
 すべての例外を握りつぶし、exit code は常に 0。メインのエージェントプロセスは絶対にクラッシュさせない。
 
-| 例外 | ログレベル | exit code |
+| 例外 / 条件 | ログレベル | exit code |
 |---|---|---|
 | `asyncio.TimeoutError`（2秒超過） | INFO | 0 |
 | `httpx.ConnectError` / `httpx.HTTPError` | WARNING | 0 |
 | `httpx.HTTPStatusError` (4xx/5xx) | WARNING（status のみ、body は出さず） | 0 |
+| Gateway から `413 Payload Too Large`（切り詰め後でも超過した場合） | WARNING（`MCP_HOOK_MAX_LOG_BYTES` 調整を促すメッセージ含む） | 0 |
 | SSE で `session_id` が取得できない | WARNING | 0 |
 | `MCP_GATEWAY_API_KEY` 未設定 | ERROR | 0 |
+| 入力ログが `MCP_HOOK_MAX_LOG_BYTES` を超過し切り詰め発生 | WARNING（送信は継続） | 0 |
 | stdin 空 / 内容 0 バイト | DEBUG（呼び出しスキップ） | 0 |
 | 想定外の `Exception`（broad catch） | WARNING with traceback | 0 |
 
@@ -214,12 +246,18 @@ JSON-RPC result.tools = [...memory_save_url, memory_search, ...]
    - デフォルト引数（`hidden_tools` 未指定）で既存挙動が壊れないこと
 2. `tests/unit/test_settings_ingestion_mode.py`
    - `CHRONOS_INGESTION_MODE=all` → `Settings().ingestion_mode == "all"` および `GatewaySettings(policy_path=...).ingestion_mode == "all"`
-   - 未設定時のデフォルト `"selective"`
+   - 未設定時のデフォルト `"selective"`（共通モジュールの `DEFAULT_INGESTION_MODE` と一致）
    - 不正値で `ValidationError` 発生
+   - 共通モジュール `context_store.ingestion.mode` から両 Settings が同じ型・定数を import していること（import パスを比較）
+3. `tests/unit/test_agent_turn_hook_truncate.py`
+   - `truncate_log(short_text, max=1024)` → `(short_text, False)`（無切り詰め）
+   - `truncate_log("a" * 5000, max=1024)` → 結果が `max_bytes` 以下かつ末尾の `"a"` を含み、`was_truncated == True`
+   - マルチバイト UTF-8 入力（日本語）でバイト境界が破壊されないこと（`decode("utf-8", errors="ignore")` でも文字化けが起きない範囲）
+   - 切り詰め時に `"[truncated to last %d bytes]"` マーカーが冒頭に付くこと
 
 ### 7.2 単体テスト対象外
 
-- `scripts/agent_turn_hook.py` は外部 I/O 依存・E2E カバー想定。型注釈と `ruff/mypy` パスのみ保証する。
+- `scripts/agent_turn_hook.py` の HTTP I/O 部分（handshake・POST）は外部 I/O 依存・E2E カバー想定。型注釈と `ruff/mypy` パスのみ保証する。pure 関数の `truncate_log` のみ単体テスト対象。
 
 ## 8. 検証手順（Devcontainer 内で必ず実行）
 
@@ -231,16 +269,19 @@ JSON-RPC result.tools = [...memory_save_url, memory_search, ...]
 uv sync --all-extras
 
 # 2. Lint と Format チェック
-uv run ruff check src/context_store/config.py \
+uv run ruff check src/context_store/ingestion/mode.py \
+                  src/context_store/config.py \
                   src/mcp_gateway/config.py \
                   src/mcp_gateway/tools/registry.py \
                   src/mcp_gateway/app.py \
                   scripts/agent_turn_hook.py \
                   tests/unit/test_tool_registry_hidden.py \
-                  tests/unit/test_settings_ingestion_mode.py
+                  tests/unit/test_settings_ingestion_mode.py \
+                  tests/unit/test_agent_turn_hook_truncate.py
 
 # 3. 静的型チェック
-uv run mypy src/context_store/config.py \
+uv run mypy src/context_store/ingestion/mode.py \
+            src/context_store/config.py \
             src/mcp_gateway/config.py \
             src/mcp_gateway/tools/registry.py \
             src/mcp_gateway/app.py \
@@ -249,6 +290,7 @@ uv run mypy src/context_store/config.py \
 # 4. 新規ユニットテスト
 uv run pytest tests/unit/test_tool_registry_hidden.py -v
 uv run pytest tests/unit/test_settings_ingestion_mode.py -v
+uv run pytest tests/unit/test_agent_turn_hook_truncate.py -v
 
 # 5. 既存テストのリグレッション確認
 uv run pytest tests/unit/ -k "registry or settings or gateway" -v
@@ -275,6 +317,8 @@ curl -s -X POST "http://127.0.0.1:9100/messages?session_id=XXX" \
 - [ ] **AC-5**: `agent_turn_hook.py` が Gateway 到達不可・タイムアウト・認証失敗のいずれにおいても exit 0 で終了し、stderr に WARNING または INFO ログを出す。
 - [ ] **AC-6**: `uv run ruff check` と `uv run mypy` が変更ファイル全てでパスする。
 - [ ] **AC-7**: `Classifier` / `Pipeline` のコードに差分がない（git diff で確認）。
+- [ ] **AC-8**: `agent_turn_hook.py` が `MCP_HOOK_MAX_LOG_BYTES`（既定 8 MiB）を超える入力を受けたとき、末尾保持で切り詰めて送信し、Gateway 側で 413 を発生させない。切り詰め時に `[truncated to last %d bytes]` マーカーが冒頭に付き、WARNING ログが出る。
+- [ ] **AC-9**: `CHRONOS_INGESTION_MODE` の型・デフォルト値・env 名は `src/context_store/ingestion/mode.py` のみで定義され、`Settings` と `GatewaySettings` の両方が同モジュールから import している（grep で確認）。
 
 ## 10. 非ゴール（YAGNI）
 
@@ -288,8 +332,10 @@ curl -s -X POST "http://127.0.0.1:9100/messages?session_id=XXX" \
 
 ## 11. 関連ファイル参照
 
+- `src/context_store/ingestion/mode.py` — **新規**。共通モジュール（型・デフォルト・env 名の SSOT）
 - `src/context_store/config.py:139-148` — Ingestion セクション（追加場所）
 - `src/mcp_gateway/config.py:32-86` — GatewaySettings
+- `src/mcp_gateway/config.py:81` — `max_request_body_size_bytes`（既定 10 MiB、フックの切り詰め上限の根拠）
 - `src/mcp_gateway/tools/registry.py:1-21` — ToolRegistry（拡張対象）
 - `src/mcp_gateway/app.py:110-124` — ToolRegistry 構築箇所
 - `src/mcp_gateway/server.py:207-209` — tools/list ハンドラ

@@ -9,6 +9,8 @@ import sys
 
 def _load_hook_module():
     """scripts/agent_turn_hook.py を tests から動的に import するヘルパ。"""
+    if "agent_turn_hook" in sys.modules:
+        return sys.modules["agent_turn_hook"]
     repo_root = pathlib.Path(__file__).resolve().parents[2]
     script_path = repo_root / "scripts" / "agent_turn_hook.py"
     spec = importlib.util.spec_from_file_location("agent_turn_hook", script_path)
@@ -98,3 +100,19 @@ def test_extract_session_id_returns_none_for_non_data_line() -> None:
 def test_extract_session_id_returns_none_when_param_missing() -> None:
     mod = _load_hook_module()
     assert mod._extract_session_id("data: /messages?foo=bar") is None
+
+
+def test_truncate_log_max_bytes_non_positive_returns_empty_and_truncated() -> None:
+    """max_bytes が 0 または負の値の場合、空文字列と True を返すこと。"""
+    mod = _load_hook_module()
+    text = "hello world"
+
+    # 0 の場合
+    out, was_truncated = mod.truncate_log(text, max_bytes=0)
+    assert out == ""
+    assert was_truncated is True
+
+    # 負の値の場合
+    out, was_truncated = mod.truncate_log(text, max_bytes=-5)
+    assert out == ""
+    assert was_truncated is True

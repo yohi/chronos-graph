@@ -32,6 +32,9 @@ TRUNCATION_MARKER_TEMPLATE: Final[str] = "[truncated to last {n} bytes]\n"
 
 def truncate_log(content: str, max_bytes: int) -> tuple[str, bool]:
     """会話ログを送信前に末尾保持で切り詰める純関数。"""
+    if max_bytes <= 0:
+        return "", True
+
     encoded = content.encode("utf-8")
     if len(encoded) <= max_bytes:
         return content, False
@@ -172,7 +175,9 @@ async def _main_async(payload: str) -> None:
 
 
 def main() -> int:
-    log_level = os.environ.get("LOG_LEVEL", "INFO")
+    log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+    if log_level not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+        log_level = "INFO"
     logging.basicConfig(level=log_level, format=LOG_FORMAT, stream=sys.stderr)
 
     parser = _build_parser()

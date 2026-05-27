@@ -513,7 +513,7 @@ class TestAuditLogger:
             level="ERROR",
             stacktrace=[
                 "Traceback (most recent call last):",
-                "  File \"app.py\", line 1, in <module>",
+                '  File "app.py", line 1, in <module>',
                 "RuntimeError: failed with sk-1234567890abcdef",
             ],
         )
@@ -523,7 +523,7 @@ class TestAuditLogger:
         rec = json.loads(captured.err)
         assert rec["stacktrace"] == [
             "Traceback (most recent call last):",
-            "  File \"app.py\", line 1, in <module>",
+            '  File "app.py", line 1, in <module>',
             "RuntimeError: failed with **********",
         ]
         assert "sk-1234567890abcdef" not in captured.err

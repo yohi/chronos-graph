@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from mcp_gateway.tools.registry import ToolRegistry
 
 
@@ -57,8 +59,6 @@ def test_replace_tools_does_not_clear_hidden_tools() -> None:
 
 def test_hidden_tools_keyword_only_argument() -> None:
     """hidden_tools は keyword-only argument として渡される (誤って positional で渡せない)。"""
-    import pytest
-
     tools = [_make_tool("memory_save")]
     with pytest.raises(TypeError):
         ToolRegistry(tools, frozenset({"memory_save"}))  # type: ignore[misc]

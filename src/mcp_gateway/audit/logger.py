@@ -80,6 +80,8 @@ class AuditLogger:
                 return "**********"
 
         if isinstance(value, str):
+            if key_name and key_name.lower() in {"stacktrace", "traceback"}:
+                return _SENSITIVE_VALUE_RE.sub("**********", value)
             # 値の内容によるチェック
             if _SENSITIVE_VALUE_RE.search(value):
                 return "**********"

@@ -28,20 +28,25 @@
 
 ### ブランチ依存図
 
+すべての Task は最終的に `master` へマージされる。Task 3.2 と Task 5.1 は **`master` 派生** だが、それぞれ「先行 Task が master にマージ済みであること」を前提条件として持つ (派生元 ≠ 前提条件)。
+
 ```text
 master
-├── feat/devcontainer-ci-baseline-check   (Task 0.1, 並列, 独立)
-├── feat/chronos-shared-ingestion-mode    (Task 1.1, 並列, 独立)
-│       └── feat/settings-ingestion-mode  (Task 2.1, 直列: Task 1.1 必須)
-├── feat/tool-registry-hidden-tools       (Task 3.1, 並列, 独立)
-├── feat/agent-turn-hook-script           (Task 4.1, 並列, 独立)
+├── feat/devcontainer-ci-baseline-check                (Task 0.1, master派生, 並列, 前提なし)
 │
-│ (Task 2.1 と Task 3.1 が master へマージされてから)
-└── feat/build-app-hide-memory-save       (Task 3.2, 直列: Task 2.1 + Task 3.1 のマージ必須)
-        │
-        │ (Task 0.1 / 1.1 / 2.1 / 3.1 / 3.2 / 4.1 が全て master へマージされてから)
-        └── feat/hybrid-ingestion-integration-verify  (Task 5.1, 直列: 全 Task マージ必須)
+├── feat/chronos-shared-ingestion-mode                 (Task 1.1, master派生, 並列, 前提なし)
+│   └── feat/settings-ingestion-mode                   (Task 2.1, Task 1.1 派生, 直列, 前提: Task 1.1 が origin に push 済み)
+│
+├── feat/tool-registry-hidden-tools                    (Task 3.1, master派生, 並列, 前提なし)
+│
+├── feat/agent-turn-hook-script                        (Task 4.1, master派生, 並列, 前提なし)
+│
+├── feat/build-app-hide-memory-save                    (Task 3.2, master派生, 直列, 前提: Task 2.1 + Task 3.1 が master にマージ済み)
+│
+└── feat/hybrid-ingestion-integration-verify           (Task 5.1, master派生, 直列, 前提: 全 Task が master にマージ済み)
 ```
+
+**読み方の注意:** Task 3.2 と Task 5.1 は `feat/settings-ingestion-mode` の子ではない。`master` から直接派生するが、本文の前提条件で示すマージ済み状態を待ってから checkout する。
 
 ### Draft PR URL 記録欄 (実装時に追記)
 
@@ -72,7 +77,7 @@ master
 | 新規 | `tests/unit/test_chronos_shared_ingestion_mode.py` | SSOT モジュールのシンボル存在・値検証 |
 | 新規 | `tests/unit/test_settings_ingestion_mode.py` | 両 Settings の env 解決 / `upstream_env_passthrough` 検証 / `build_upstream_env` 経由の env 伝達検証 |
 | 新規 | `tests/unit/test_tool_registry_hidden.py` | `hidden_tools` 引数の挙動検証 |
-| 新規 | `tests/unit/test_agent_turn_hook_truncate.py` | `truncate_log` 純関数の挙動検証 |
+| 新規 | `tests/unit/test_agent_turn_hook_truncate.py` | `truncate_log` および `_extract_session_id` など pure helpers の挙動検証 |
 
 ---
 
@@ -117,13 +122,34 @@ grep -q '"workspaceFolder"' .devcontainer/devcontainer.json && echo "OK: workspa
 
 - [ ] **Step 3: CI ワークフローの master トリガーと ubuntu-slim ランナーを検証**
 
+`grep` は YAML の許容書式 (`branches: ["master"]` / `branches: [master]` / 複数行 `- master` 等) を網羅できないため、`pyyaml`（本リポジトリのコア依存）で正規に解析する:
+
 ```bash
 test -f .github/workflows/ci.yml && echo "OK: ci.yml exists"
-grep -E '^\s*branches:\s*\["master"\]' .github/workflows/ci.yml && echo "OK: master trigger"
-grep -E '^\s*runs-on:\s*ubuntu-slim' .github/workflows/ci.yml && echo "OK: ubuntu-slim runner"
+
+uv run python - <<'PY'
+import sys
+import yaml
+
+with open(".github/workflows/ci.yml", encoding="utf-8") as f:
+    wf = yaml.safe_load(f)
+
+# YAML 仕様上 "on" キーは Python 側で True にパースされる場合があるため両対応
+triggers = wf.get("on") or wf.get(True) or {}
+push_branches = (triggers.get("push") or {}).get("branches") or []
+if isinstance(push_branches, str):
+    push_branches = [push_branches]
+assert "master" in push_branches, f"master trigger missing: {push_branches}"
+print("OK: master trigger")
+
+jobs = wf.get("jobs", {})
+runners = {name: job.get("runs-on") for name, job in jobs.items()}
+assert all(r == "ubuntu-slim" for r in runners.values()), f"runs-on mismatch: {runners}"
+print("OK: ubuntu-slim runner")
+PY
 ```
 
-期待出力: 3 行とも "OK: ..." を表示。
+期待出力: 3 行とも "OK: ..." を表示。assertion 失敗時は `AssertionError` の詳細メッセージで何が不足/不一致かが分かる。
 
 - [ ] **Step 4: Devcontainer 内で uv 依存関係を同期しベースラインテストが緑であることを確認**
 
@@ -1137,7 +1163,7 @@ git merge-base --is-ancestor "$EXPECTED_BASE" "$CURRENT_BRANCH" || { echo "ERROR
 - [ ] **Step 2: 失敗するテストを先に書く** (`tests/unit/test_agent_turn_hook_truncate.py` 新規)
 
 ```python
-"""scripts/agent_turn_hook.py の truncate_log 純関数の検証。"""
+"""scripts/agent_turn_hook.py の pure helpers (truncate_log / _extract_session_id) の検証。"""
 
 from __future__ import annotations
 
@@ -1207,6 +1233,53 @@ def test_truncate_log_exactly_at_limit_is_not_truncated() -> None:
     out, was_truncated = mod.truncate_log(text, max_bytes=100)
     assert was_truncated is False
     assert out == text
+
+
+def test_truncate_log_max_bytes_smaller_than_marker_returns_truncated_marker() -> None:
+    """max_bytes がマーカー長より小さい異常ケース。バイト境界で切り詰めて返す。"""
+    mod = _load_hook_module()
+    text = "z" * 1000
+    # マーカー "[truncated to last 5 bytes]\n" は約 28 バイト → max_bytes=5 はそれより遥かに小さい
+    out, was_truncated = mod.truncate_log(text, max_bytes=5)
+    assert was_truncated is True
+    # バイト数で上限以下に収まること (これが文字数スライスだと max_bytes=5 でも
+    # ASCII 5 文字 = 5 バイトでギリギリ満たすが、非 ASCII 混入時に破綻する)
+    assert len(out.encode("utf-8")) <= 5
+    # 妥当な UTF-8 のままであること
+    out.encode("utf-8").decode("utf-8")
+
+
+# --- _extract_session_id (Issue 1 対応: urllib.parse による堅牢な抽出) ---
+
+
+def test_extract_session_id_simple_data_line() -> None:
+    """典型的な SSE 1 行から session_id を取り出せること。"""
+    mod = _load_hook_module()
+    sid = mod._extract_session_id("data: /messages?session_id=abc123")
+    assert sid == "abc123"
+
+
+def test_extract_session_id_ignores_additional_query_params() -> None:
+    """Issue 1: 追加クエリパラメータが付いても session_id だけが返ること。
+
+    naive な split("session_id=", 1)[1] 実装だと "abc123&trace_id=xyz" が返ってしまう。
+    """
+    mod = _load_hook_module()
+    sid = mod._extract_session_id(
+        "data: /messages?session_id=abc123&trace_id=xyz&foo=bar"
+    )
+    assert sid == "abc123"
+
+
+def test_extract_session_id_returns_none_for_non_data_line() -> None:
+    mod = _load_hook_module()
+    assert mod._extract_session_id("event: ping") is None
+    assert mod._extract_session_id("") is None
+
+
+def test_extract_session_id_returns_none_when_param_missing() -> None:
+    mod = _load_hook_module()
+    assert mod._extract_session_id("data: /messages?foo=bar") is None
 ```
 
 - [ ] **Step 3: 失敗を確認 (`scripts/agent_turn_hook.py` 未作成のため import エラー)**
@@ -1215,7 +1288,7 @@ def test_truncate_log_exactly_at_limit_is_not_truncated() -> None:
 uv run pytest tests/unit/test_agent_turn_hook_truncate.py -v
 ```
 
-期待出力: 全 5 件 FAIL (主に `FileNotFoundError` または `AssertionError` で `spec is not None` が false)。
+期待出力: 全 10 件 FAIL (主に `FileNotFoundError` または `AssertionError` で `spec is not None` が false)。
 
 - [ ] **Step 4: `scripts/agent_turn_hook.py` を実装** (新規)
 
@@ -1238,6 +1311,7 @@ import logging
 import os
 import sys
 from typing import Final
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 
@@ -1246,6 +1320,7 @@ LOG_FORMAT: Final[str] = "%(asctime)s [%(levelname)s] agent_turn_hook: %(message
 DEFAULT_GATEWAY_URL: Final[str] = "http://127.0.0.1:9100"
 DEFAULT_INTENT: Final[str] = "memory.ingest"
 DEFAULT_TIMEOUT_SECONDS: Final[float] = 2.0
+DEFAULT_SSE_TIMEOUT_SECONDS: Final[float] = 1.0
 DEFAULT_MAX_LOG_BYTES: Final[int] = 8 * 1024 * 1024  # 8 MiB
 TRUNCATION_MARKER_TEMPLATE: Final[str] = "[truncated to last {n} bytes]\n"
 
@@ -1268,8 +1343,10 @@ def truncate_log(content: str, max_bytes: int) -> tuple[str, bool]:
     # 末尾から (max_bytes - marker_bytes) バイト分を残す
     tail_budget = max_bytes - len(marker_bytes)
     if tail_budget <= 0:
-        # max_bytes がマーカー自体より小さい異常ケース: マーカーのみ返す
-        return marker[:max_bytes], True
+        # max_bytes がマーカー自体より小さい異常ケース: マーカーをバイト境界で
+        # 切り詰めて返す (現状マーカーは純 ASCII だが、将来非 ASCII 文字が
+        # 含まれても安全になるようバイト単位で扱う)。
+        return marker_bytes[:max_bytes].decode("utf-8", errors="ignore"), True
 
     tail_bytes = encoded[-tail_budget:]
     tail = tail_bytes.decode("utf-8", errors="ignore")
@@ -1293,77 +1370,129 @@ def _read_input(args: argparse.Namespace) -> str:
     return sys.stdin.read()
 
 
+def _extract_session_id(data_line: str) -> str | None:
+    """SSE の "data: /messages?session_id=XXX&..." 行から session_id を取り出す。
+
+    `urllib.parse` でクエリパラメータとして解析するため、Gateway が将来
+    追加クエリパラメータ (例: `&trace_id=YYY`) を返した場合でも値が破損しない。
+    """
+    if not data_line.startswith("data: "):
+        return None
+    payload = data_line[len("data: ") :].strip()
+    parsed = urlparse(payload)
+    qs = parse_qs(parsed.query)
+    values = qs.get("session_id") or []
+    return values[0] if values else None
+
+
+async def _sse_handshake(
+    client: httpx.AsyncClient, gateway_url: str, headers: dict[str, str]
+) -> str | None:
+    """SSE エンドポイントから最初の session_id を取得して切断する。"""
+    async with client.stream("GET", f"{gateway_url}/sse", headers=headers) as resp:
+        resp.raise_for_status()
+        async for line in resp.aiter_lines():
+            if line.startswith("data: ") and "session_id=" in line:
+                return _extract_session_id(line)
+    return None
+
+
+async def _post_tools_call(
+    client: httpx.AsyncClient,
+    gateway_url: str,
+    session_id: str,
+    payload: str,
+    headers: dict[str, str],
+) -> None:
+    body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "memory_save",
+            "arguments": {"content": payload},
+        },
+    }
+    post_resp = await client.post(
+        f"{gateway_url}/messages",
+        params={"session_id": session_id},
+        json=body,
+        headers={"content-type": "application/json", **headers},
+    )
+    if post_resp.status_code == 413:
+        logging.warning(
+            "Gateway returned 413 Payload Too Large; "
+            "consider lowering MCP_HOOK_MAX_LOG_BYTES (currently %d)",
+            int(os.environ.get("MCP_HOOK_MAX_LOG_BYTES", DEFAULT_MAX_LOG_BYTES)),
+        )
+    elif post_resp.status_code >= 400:
+        logging.warning("Gateway returned HTTP %d", post_resp.status_code)
+    # body は読まず close (fire-and-forget)
+
+
 async def _send(
     gateway_url: str,
     api_key: str,
     intent: str,
     payload: str,
-    timeout: float,
+    total_timeout: float,
+    sse_timeout: float,
 ) -> None:
-    """SSE handshake → tools/call memory_save。例外は呼び出し側で握りつぶす。"""
+    """SSE handshake → tools/call memory_save。
+
+    設計書 §6.3 の 2 段階タイムアウト:
+    - SSE handshake は ``sse_timeout`` で個別に上限を設け、POST フェーズに必ず予算を残す。
+    - 全体は呼び出し側 (``_main_async``) の ``asyncio.wait_for(..., timeout=total_timeout)``
+      で再度上限を被せる (滞留防止のハードリミット)。
+
+    例外は呼び出し側で握りつぶす。
+    """
     headers = {
         "authorization": f"Bearer {api_key}",
         "x-mcp-intent": intent,
     }
-    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=1.0)) as client:
-        # SSE で session_id を取得
-        session_id: str | None = None
-        async with client.stream("GET", f"{gateway_url}/sse", headers=headers) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if line.startswith("data: ") and "/messages?session_id=" in line:
-                    # 例: "data: /messages?session_id=abc123"
-                    fragment = line.split("session_id=", 1)[1].strip()
-                    session_id = fragment
-                    break
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(total_timeout, connect=1.0)
+    ) as client:
+        try:
+            session_id = await asyncio.wait_for(
+                _sse_handshake(client, gateway_url, headers),
+                timeout=sse_timeout,
+            )
+        except TimeoutError:
+            logging.info("SSE handshake timed out after %.2fs", sse_timeout)
+            return
+
         if session_id is None:
             logging.warning("SSE handshake did not yield a session_id")
             return
 
-        # tools/call memory_save
-        body = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": "memory_save",
-                "arguments": {"content": payload},
-            },
-        }
-        post_resp = await client.post(
-            f"{gateway_url}/messages",
-            params={"session_id": session_id},
-            json=body,
-            headers={"content-type": "application/json", **headers},
-        )
-        if post_resp.status_code == 413:
-            logging.warning(
-                "Gateway returned 413 Payload Too Large; "
-                "consider lowering MCP_HOOK_MAX_LOG_BYTES (currently %d)",
-                int(os.environ.get("MCP_HOOK_MAX_LOG_BYTES", DEFAULT_MAX_LOG_BYTES)),
-            )
-        elif post_resp.status_code >= 400:
-            logging.warning("Gateway returned HTTP %d", post_resp.status_code)
-        # body は読まず close (fire-and-forget)
+        await _post_tools_call(client, gateway_url, session_id, payload, headers)
 
 
 async def _main_async(payload: str) -> None:
     gateway_url = os.environ.get("MCP_GATEWAY_URL", DEFAULT_GATEWAY_URL)
     api_key = os.environ.get("MCP_GATEWAY_API_KEY")
     intent = os.environ.get("MCP_INTENT", DEFAULT_INTENT)
-    timeout = float(os.environ.get("MCP_HOOK_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS))
+    total_timeout = float(
+        os.environ.get("MCP_HOOK_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)
+    )
+    sse_timeout = float(
+        os.environ.get("MCP_HOOK_SSE_TIMEOUT_SECONDS", DEFAULT_SSE_TIMEOUT_SECONDS)
+    )
 
     if not api_key:
         logging.error("MCP_GATEWAY_API_KEY is not set; aborting hook (no-op)")
         return
 
+    # 全体ハードリミット: SSE + POST の合計が必ず total_timeout 以下で終わる
     try:
         await asyncio.wait_for(
-            _send(gateway_url, api_key, intent, payload, timeout),
-            timeout=timeout,
+            _send(gateway_url, api_key, intent, payload, total_timeout, sse_timeout),
+            timeout=total_timeout,
         )
     except TimeoutError as exc:
-        logging.info("turn hook timed out: %s", exc)
+        logging.info("turn hook timed out (total budget exhausted): %s", exc)
     except httpx.HTTPError as exc:
         logging.warning("turn hook failed (HTTP error): %s", exc)
     except Exception as exc:  # broad: fire-and-forget; must never raise
@@ -1418,7 +1547,7 @@ if __name__ == "__main__":
 uv run pytest tests/unit/test_agent_turn_hook_truncate.py -v
 ```
 
-期待出力: 全 5 件 PASS。
+期待出力: 全 10 件 PASS。
 
 - [ ] **Step 6: 静的解析パス確認**
 
@@ -1450,7 +1579,7 @@ echo "exit code: $?"
 uv run pytest tests/unit -v
 ```
 
-期待出力: 既存テストすべて緑、追加 5 件も緑。
+期待出力: 既存テストすべて緑、追加 10 件も緑。
 
 - [ ] **Step 9: コミット**
 
@@ -1461,8 +1590,13 @@ feat(scripts): ターン終了フック agent_turn_hook.py を新設
 
 - stdin または --content から会話ログを受け取り、末尾保持で切り詰めて
   MCP Gateway HTTP に fire-and-forget で memory_save を呼ぶ独立スクリプト。
-- 切り詰めは pure 関数 truncate_log として単体テスト可能に分離。
+- 切り詰め (truncate_log) と session_id 抽出 (_extract_session_id) を
+  pure 関数として単体テスト可能に分離。
+- session_id は urllib.parse でクエリパラメータとして解析し、Gateway が
+  追加クエリパラメータを返した場合でも値が破損しない。
 - UTF-8 境界は errors="ignore" で破棄し、不完全マルチバイトを残さない。
+- 2 段階タイムアウト: SSE handshake は MCP_HOOK_SSE_TIMEOUT_SECONDS で
+  個別上限、全体は MCP_HOOK_TIMEOUT_SECONDS でハードリミット。
 - 全例外を握りつぶし常に exit 0。メインエージェントをクラッシュさせない。
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
@@ -1477,11 +1611,13 @@ git push -u origin feat/agent-turn-hook-script
 gh pr create --draft --base master --title "feat(scripts): ターン終了フック agent_turn_hook.py を新設" --body "$(cat <<'EOF'
 ## Summary
 - 会話ログを末尾保持で切り詰めて MCP Gateway HTTP に fire-and-forget で送信する独立スクリプト。
-- `truncate_log` は pure 関数として切り出し、単体テスト可能。
+- `truncate_log` / `_extract_session_id` は pure 関数として切り出し、単体テスト可能。
+- session_id は `urllib.parse` で正規解析 (追加クエリパラメータが付いても堅牢)。
+- 2 段階タイムアウト (SSE 個別 + 全体ハードリミット) で「SSE が予算を食い尽くして memory_save が呼ばれない」事故を防止 (設計書 §6.3 準拠)。
 - AC-5 (Gateway 到達不可・タイムアウト・認証失敗のいずれでも exit 0) / AC-8 (切り詰め + 413 グレースフル) を満たす。
 
 ## Test plan
-- [ ] `uv run pytest tests/unit/test_agent_turn_hook_truncate.py -v` が緑
+- [ ] `uv run pytest tests/unit/test_agent_turn_hook_truncate.py -v` が緑 (truncate 6 件 + session_id 4 件)
 - [ ] Gateway 到達不可の手動 smoke test で exit code 0
 - [ ] `uv run mypy scripts/agent_turn_hook.py` が pass
 
@@ -1561,7 +1697,7 @@ uv run pytest tests/unit/test_agent_turn_hook_truncate.py -v
 uv run pytest tests/unit/test_build_app_hidden_tools.py -v
 ```
 
-期待出力: 全タスクのテストが緑 (合計 27 件)。
+期待出力: 全タスクのテストが緑 (合計 32 件)。
 
 - [ ] **Step 5: 既存テストのリグレッション確認 (設計書 §8 Step 5)**
 
@@ -1699,7 +1835,7 @@ PR URL を **「Draft PR URL 記録欄」の Task 5.1 行** に追記する。
 | AC-5 | フック exit 0 | Task 4.1 | Task 4.1 Step 7 smoke test |
 | AC-6 | ruff + mypy パス | 全 Task | 各 Task の Step 6 / Step 9 |
 | AC-7 | Classifier / Pipeline 差分 0 | Task 3.2 | Task 3.2 Step 9 |
-| AC-8 | 切り詰め + 413 グレースフル | Task 4.1 | `test_agent_turn_hook_truncate.py` 全 5 件 |
+| AC-8 | 切り詰め + 413 グレースフル | Task 4.1 | `test_agent_turn_hook_truncate.py` の `test_truncate_log_*` 全 6 件 |
 | AC-9 | SSOT 一元化 + cross-pkg import 0 | Task 1.1 + Task 2.1 | `test_settings_ingestion_mode.py::test_both_settings_use_same_ssot_type` + Task 2.1 Step 10 grep |
 | AC-10 | env passthrough 伝達 | Task 2.1 | `test_settings_ingestion_mode.py::test_gateway_upstream_passthrough_includes_ingestion_mode` + `test_build_upstream_env_propagates_ingestion_mode` |
 
@@ -1725,6 +1861,6 @@ Day 2 後半 (全 PR マージ済み):
 ```
 
 並列実行不可な依存:
-- Task 2.1 は Task 1.1 の **ブランチ存在** が必須 (派生元として)
+- Task 2.1 は Task 1.1 のブランチが **リモート (origin) に push されており、`git fetch` 後に `origin/feat/chronos-shared-ingestion-mode` を派生元として `git checkout -b` できること** が必須 (Task 2.1 Step 1 の手順を成立させるため。単なるローカル存在では不十分)
 - Task 3.2 は Task 2.1 + Task 3.1 の **master マージ済み** が必須
 - Task 5.1 は全 Task の **master マージ済み** が必須

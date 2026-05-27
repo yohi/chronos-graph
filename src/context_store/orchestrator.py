@@ -10,7 +10,7 @@ import asyncio
 import inspect
 import logging
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 from context_store.config import Settings
 from context_store.extensions.noop import NoOpActionLogger, NoOpPolicyHook, NoOpRewardSignal
@@ -43,7 +43,7 @@ class Orchestrator:
 
     Args:
         storage: ストレージアダプター。
-        graph: グラフアダプター（None の場合はグラフ機能無効）。
+        graph: グラフアダプター(None の場合はグラフ機能無効)。
         cache: キャッシュアダプター。
         embedding_provider: 埋め込みプロバイダー。
         ingestion_pipeline: 取り込みパイプライン。
@@ -51,9 +51,9 @@ class Orchestrator:
         lifecycle_manager: ライフサイクルマネージャー。
         task_registry: タスクレジストリ。
         batch_processor: バッチ処理ラッパー。
-        action_logger: RL 拡張: アクションロガー（None の場合は NoOp）。
-        reward_signal: RL 拡張: 報酬シグナル（None の場合は NoOp）。
-        policy_hook: RL 拡張: 検索戦略フック（None の場合は NoOp）。
+        action_logger: RL 拡張: アクションロガー(None の場合は NoOp)。
+        reward_signal: RL 拡張: 報酬シグナル(None の場合は NoOp)。
+        policy_hook: RL 拡張: 検索戦略フック(None の場合は NoOp)。
         settings: アプリケーション設定。
     """
 
@@ -85,7 +85,7 @@ class Orchestrator:
         self._settings = settings
         self._flush_lock = asyncio.Lock()
 
-        # RL 拡張フック（None の場合は NoOp）
+        # RL 拡張フック(None の場合は NoOp)
         self.action_logger: "ActionLogger" = (
             action_logger if action_logger is not None else NoOpActionLogger()
         )
@@ -271,7 +271,7 @@ class Orchestrator:
         Args:
             query: 検索クエリ。
             project: プロジェクトフィルタ。
-            memory_type: 記憶種別フィルタ（"episodic", "semantic", "procedural"）。
+            memory_type: 記憶種別フィルタ("episodic", "semantic", "procedural")。
                 現時点では RetrievalPipeline がこのパラメータをサポートしていないため
                 WARNING ログを出して無視する。将来の拡張のために受け取る。
             top_k: 返す最大件数。
@@ -310,8 +310,8 @@ class Orchestrator:
         """グラフトラバーサル検索を実行する。
 
         Args:
-            query: 起点となるクエリ（ベクトル検索で起点ノードを特定）。
-            edge_types: フィルタするエッジ種別（None で全種別）。
+            query: 起点となるクエリ(ベクトル検索で起点ノードを特定)。
+            edge_types: フィルタするエッジ種別(None で全種別)。
             depth: トラバーサル深さ。
             project: プロジェクトフィルタ。
 
@@ -365,7 +365,7 @@ class Orchestrator:
     ) -> int:
         """古い記憶を削除する。
 
-        SQLite バックエンド以外（Postgres, Redis, In-Memory等）では
+        SQLite バックエンド以外(Postgres, Redis, In-Memory等)では
         ライフサイクル状態ストアが永続化されないため、クリーンアップをスキップする。
 
         Args:
@@ -373,7 +373,7 @@ class Orchestrator:
             dry_run: True の場合は削除せず対象件数のみを返す。
 
         Returns:
-            削除した（または削除対象の）件数。
+            削除した(または削除対象の)件数。
         """
         if self._settings is None:
             raise RuntimeError("Orchestrator settings must be initialized before running prune.")
@@ -396,7 +396,7 @@ class Orchestrator:
         """ストレージの統計情報を返す。
 
         Args:
-            project: プロジェクトフィルタ（None の場合は全体）。
+            project: プロジェクトフィルタ(None の場合は全体)。
 
         Returns:
             統計情報の dict。
@@ -608,10 +608,10 @@ async def create_orchestrator(
             settings=settings,
         )
 
-        # モデルの事前ロード（もし start メソッドがあれば非同期で事前ロードする）
-        start = getattr(embedding_provider, "start", None)
-        if callable(start):
-            result = start()
+        # モデルの事前ロード(もし start メソッドがあれば非同期で事前ロードする)
+        start_method = getattr(embedding_provider, "start", None)
+        if callable(start_method):
+            result = cast(Callable[[], Any], start_method)()
             if inspect.isawaitable(result):
                 await result
 

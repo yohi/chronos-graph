@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Final, Literal
 
-__all__ = ["IngestionMode", "DEFAULT_INGESTION_MODE", "CHRONOS_INGESTION_MODE_ENV"]
+__all__ = ["CHRONOS_INGESTION_MODE_ENV", "DEFAULT_INGESTION_MODE", "IngestionMode"]
 
 IngestionMode = Literal["all", "selective"]
 DEFAULT_INGESTION_MODE: Final[IngestionMode] = "selective"

@@ -58,7 +58,7 @@ master
 | Task 3.1 | <https://github.com/yohi/chronos-graph/pull/279> |
 | Task 3.2 | <https://github.com/yohi/chronos-graph/pull/283> |
 | Task 4.1 | <https://github.com/yohi/chronos-graph/pull/278> |
-| Task 5.1 | _未作成_ |
+| Task 5.1 | <https://github.com/yohi/chronos-graph/pull/284> |
 
 ---
 
@@ -1793,7 +1793,7 @@ wait "$GATEWAY_PID" 2>/dev/null || true
 | AC-10 | env passthrough 伝達 | PASS | test_build_upstream_env_propagates_ingestion_mode |
 ```
 
-- [ ] **Step 9: コミット**
+- [x] **Step 9: コミット**
 
 ```bash
 git add docs/superpowers/specs/2026-05-27-hybrid-ingestion-mode-verification.md 2>/dev/null || true
@@ -1808,7 +1808,7 @@ EOF
 )"
 ```
 
-- [ ] **Step 10: Draft PR 作成と URL 記録**
+- [x] **Step 10: Draft PR 作成と URL 記録**
 
 ```bash
 git push -u origin feat/hybrid-ingestion-integration-verify

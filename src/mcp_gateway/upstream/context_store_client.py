@@ -10,6 +10,7 @@ are propagated into the subprocess (allowlist) so secrets cannot leak via
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import logging
@@ -19,6 +20,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from mcp_gateway.errors import UpstreamError
+from mcp_gateway.upstream.timeout_client import TimeoutConfig
 
 _BASE_PASSTHROUGH = ("PATH", "HOME", "LANG", "LC_ALL", "TZ")
 
@@ -32,9 +34,15 @@ def build_upstream_env(*, passthrough: list[str], base_env: dict[str, str]) -> d
 class UpstreamClient:
     """Thin async wrapper around an mcp.ClientSession over stdio."""
 
-    def __init__(self, command: list[str], env: dict[str, str]) -> None:
-        self._command = command
-        self._env = env
+    def __init__(
+        self,
+        command: list[str],
+        env: dict[str, str],
+        timeout_config: TimeoutConfig | None = None,
+    ) -> None:
+        self._command: list[str] = command
+        self._env: dict[str, str] = env
+        self.timeout_config: TimeoutConfig = timeout_config or TimeoutConfig.from_env()
         self._session: ClientSession | None = None
         self._stdio_ctx: Any = None
         self._tools_cache: list[dict[str, Any]] | None = None
@@ -115,6 +123,20 @@ class UpstreamClient:
         return copy.deepcopy(tools)
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        timeout = getattr(self, "timeout_config", TimeoutConfig.from_env()).get_timeout(name)
+        try:
+            return await asyncio.wait_for(
+                self._call_tool_internal(name, arguments),
+                timeout=timeout,
+            )
+        except TimeoutError as exc:
+            raise UpstreamError(
+                f"upstream tool call {name!r} timed out after {timeout}s",
+                code="UPSTREAM_TIMEOUT",
+                recoverable=True,
+            ) from exc
+
+    async def _call_tool_internal(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if self._session is None:
             raise UpstreamError("upstream session not started")
         try:

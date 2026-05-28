@@ -20,7 +20,7 @@ class PolicyError(GatewayError):
 
     def __init__(self, message: str, reason: str | None = None) -> None:
         super().__init__(message)
-        self.reason = reason
+        self.reason: str | None = reason
 
 
 class SessionError(GatewayError):
@@ -29,3 +29,14 @@ class SessionError(GatewayError):
 
 class UpstreamError(GatewayError):
     """Upstream context_store subprocess failure or protocol error."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        recoverable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.code: str | None = code
+        self.recoverable: bool = recoverable

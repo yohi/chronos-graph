@@ -45,6 +45,8 @@ intents:
     allowed_tools: [memory_search, memory_save, memory_delete, memory_prune]
     output_filter: curator_full
     guardrails:
+      memory_save:
+        requires_approval: true
       memory_delete:
         requires_approval: true
       memory_prune:
@@ -56,6 +58,7 @@ intents:
     output_filter: url_ingestion
     guardrails:
       memory_save_url:
+        requires_approval: true
         params:
           url:
             type: string

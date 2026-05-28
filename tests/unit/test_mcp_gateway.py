@@ -3468,6 +3468,56 @@ class TestSamplePolicy:
         assert "summarizer-bot" in policy.agents
         assert "read_only_recall" in policy.intents
 
+    def test_sample_policy_classifies_read_tools_without_approval(self):
+        from importlib.resources import files
+
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.loader import load_policy
+
+        path = files("mcp_gateway").joinpath("policies/intents.example.yaml")
+        policy = load_policy(path)  # type: ignore[arg-type]
+        engine = PolicyEngine(policy)
+        grant = engine.evaluate_grant(
+            agent_id="summarizer-bot",
+            intent="read_only_recall",
+            requested_tools=None,
+        )
+
+        for tool_name in ("memory_search", "memory_search_graph", "memory_stats"):
+            result = engine.evaluate_call(grant=grant, tool_name=tool_name, arguments={})
+            assert result.status == "ALLOW"
+
+    def test_sample_policy_requires_approval_for_write_tools(self):
+        from importlib.resources import files
+
+        from mcp_gateway.policy.engine import PolicyEngine
+        from mcp_gateway.policy.loader import load_policy
+
+        path = files("mcp_gateway").joinpath("policies/intents.example.yaml")
+        policy = load_policy(path)  # type: ignore[arg-type]
+        engine = PolicyEngine(policy)
+
+        curate_grant = engine.evaluate_grant(
+            agent_id="curator-bot",
+            intent="curate_memories",
+            requested_tools=frozenset({"memory_save", "memory_delete", "memory_prune"}),
+        )
+        for tool_name in ("memory_save", "memory_delete", "memory_prune"):
+            result = engine.evaluate_call(grant=curate_grant, tool_name=tool_name, arguments={})
+            assert result.status == "REQUIRES_APPROVAL"
+
+        ingest_grant = engine.evaluate_grant(
+            agent_id="ingestion-bot",
+            intent="ingest_external_url",
+            requested_tools=None,
+        )
+        result = engine.evaluate_call(
+            grant=ingest_grant,
+            tool_name="memory_save_url",
+            arguments={"url": "https://example.com"},
+        )
+        assert result.status == "REQUIRES_APPROVAL"
+
 
 class TestSecretIsolation:
     def test_upstream_env_filters_unlisted_keys(self):

@@ -161,12 +161,11 @@ MCP設定の場合は、いかなるツール呼び出しよりも前に、必�
    > **🚨 OpenCode 設定ファイルに関する制約 (STRICT OPENCODE CONSTRAINT):**
    > 対象エージェントが **OpenCode** の場合、あなたは絶対に **`oh-my-opencode.json(c)`** または **`oh-my-openagent.json(c)`** を作成・修正してはいけません。これらは「Oh-My-Openagent」等の外部拡張用設定ファイルであり、本プロジェクトのフック（Hook）設定とは無関係です。
    > また、**新規に `opencode.json(c)` を作成するのではなく、必ず `~/.config/opencode/opencode.json(c)` を読み込み、その内容を更新してください。**
-   > さらに、**`opencode.json(c)` は `hooks` キーをサポートしていません。** したがって、**絶対に `hooks` キーを含む設定 JSON を OpenCode 向けに提案しないでください。** 設定の追加や変更は、必ず標準の `opencode.json(c)` に対して有効なキーのみで行うか、後述のプラグイン形式を案内してください。
-
+   > さらに、**`opencode.json(c)` は `hooks` キーをサポートしていません。** したがって、**絶対に `hooks` キーを含む設定 JSON を OpenCode 向けに提案しないでください。** 設定の追加や変更は、必ず標準 of `opencode.json(c)` に対して有効なキーのみで行うか、後述のプラグイン形式を案内してください。
    > [!IMPORTANT]
-> **🚨 デバッグモード（Dry-run）時の独善的バイパスの厳格な禁止:**
-> あなた（AIエージェント）がデバッグモードで実行されている場合であっても、「シミュレーションだから」と自己判断して本ステップをスキップしたり、特定のクライアント（例: Claude Desktop 等）を想定した出力を勝手に自己完結させて提示してはいけません。
-> デバッグモードであっても、**必ず本ツールの呼び出しを強制**し、ユーザーが選んだクライアントに対する設定シミュレーションのみを出力してください。
+   > **🚨 デバッグモード（Dry-run）時の独善的バイパスの厳格な禁止:**
+   > あなた（AIエージェント）がデバッグモードで実行されている場合であっても、「シミュレーションだから」と自己判断して本ステップをスキップしたり、特定のクライアント（例: Claude Desktop 等）を想定した出力を勝手に自己完結させて提示してはいけません。
+   > デバッグモードであっても、**必ず本ツールの呼び出しを強制**し、ユーザーが選んだクライアントに対する設定シミュレーションのみを出力してください。
 
 4. **設定追加例の出力**: 3で選択した AI エージェント向けの設定追加例を出力します。その際、環境変数やAPIキーなどは絶対に設定ファイル内に直書きせず、各クライアントの環境変数ロード機能や変数展開（例: OpenCode なら `{env:VARIABLE_NAME}`）を利用して動的にロードできるように構成してください。
    **ポリシーファイル (`intents.yaml`) について**: 各エージェントの設定ファイルと同じディレクトリに自動生成し、そのパスを環境変数（`CHRONOS_EVALUATOR_POLICY_PATH`）にセットしてください。
@@ -240,10 +239,10 @@ Hook設定の場合は、いかなるツール呼び出しよりも前に、必�
    * **【絶対出力要件】** この提示の際、**必ず「使用する LLM モデルの設定環境変数（`CHRONOS_EVALUATOR_MODEL`）」および「対応する API キー環境変数」の設定例（※環境変数は直書きせず、各クライアントの環境変数ロード機能や変数展開を用いること）をシミュレーションや解説の中に明記してください。**
 3. **【絶対制約】** ユーザーから「設定ファイルや環境変数等への機密情報の反映が完了した」という報告を受けるまで待機してください。報告を受けてから次のステップへ進んでください。
 
-3. **動作確認テストの実行（必須）**
+4. **動作確認テストの実行（必須）**
 ユーザーから設定完了の報告を受けた後、必ず実際に以下のテストコマンドを実行し、評価器が正常に判定（`allow`/`deny`）を返却するログを出力・検証してください。
 ```bash
-echo '{"tool_name":"bash","tool_input":{"command":"ls"}}' | mcp_gateway evaluate --json-io --policy-path /path/to/intents.yaml
+echo '{"tool_name":"bash","tool_input":{"command":"ls"}}' | mcp_gateway evaluate --json-io --policy-path "${CHRONOS_EVALUATOR_POLICY_PATH:-$HOME/.config/opencode/intents.yaml}"
 ```
 *(※フック方式に応じて、`uvx chronos-mcp-gateway` や `python -m mcp_gateway` 等、適切なコマンドを構築して実行してください)*
 
@@ -420,7 +419,7 @@ OpenCode では、フック機能を **「プラグイン」** として拡張�
     return new Promise((resolve, reject) => {
       // ポリシーファイル (intents.yaml) は設定ファイルと同じディレクトリを優先的に参照
       const defaultConfigDir = path.join(process.env.HOME || process.env.USERPROFILE, '.config', 'opencode');
-      const policyPath = process.env.CHRONOS_POLICY_PATH || path.join(defaultConfigDir, 'intents.yaml');
+      const policyPath = process.env.CHRONOS_EVALUATOR_POLICY_PATH || path.join(defaultConfigDir, 'intents.yaml');
 
       const proc = spawn('uvx', [
         '--quiet',
@@ -520,9 +519,9 @@ CLI 実行ファイルのパスしか指定できない環境では、共通の�
 
 ##### 1. スクリプトの作成 (`chronos-evaluator-hook.sh`)
 
-💡 **ポリシーファイルの配置について**: 環境ごとに適切なデフォルト値が異なります。
-- **uvx / リモート実行**: ユーザー共通設定として `$HOME/.config/chronos/intents.yaml` を推奨。
-- **ローカル実行**: 開発用リポジトリ内の `$HOME/chronos-graph/src/mcp_gateway/policies/intents.yaml` を使用。
+💡 **ポリシーファイル (`intents.yaml`) の配置ルール**:
+- **原則（エージェント個別）**: 各エージェントの設定ファイル（例: `~/.config/opencode/`）と同じディレクトリに配置することを推奨します。
+- **例外（グローバル/共有）**: `uvx` やリモート実行等で共通のポリシーを使用したい場合は、`$HOME/.config/chronos/intents.yaml` を共有の場所として使用してください。
 
 * **📦 推奨：クローン不要版 (uvx を使用)**
   ```bash
@@ -531,7 +530,7 @@ CLI 実行ファイルのパスしか指定できない環境では、共通の�
   uvx --quiet --from "context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git" \
     chronos-mcp-gateway evaluate \
     --json-io \
-    --policy-path "${CHRONOS_POLICY_PATH:-$HOME/.config/chronos/intents.yaml}"
+    --policy-path "${CHRONOS_EVALUATOR_POLICY_PATH:-$HOME/.config/chronos/intents.yaml}"
   ```
 
 * **📁 ローカル実行版 (クローン済みリポジトリを使用)**
@@ -540,7 +539,7 @@ CLI 実行ファイルのパスしか指定できない環境では、共通の�
   # chronos-evaluator-hook.sh (ローカル実行版)
   uv --directory "${CHRONOS_REPO_PATH:-$HOME/chronos-graph}" run python -m mcp_gateway evaluate \
     --json-io \
-    --policy-path "${CHRONOS_POLICY_PATH:-$HOME/chronos-graph/src/mcp_gateway/policies/intents.yaml}"
+    --policy-path "${CHRONOS_EVALUATOR_POLICY_PATH:-$HOME/chronos-graph/src/mcp_gateway/policies/intents.yaml}"
   ```
   *(※スクリプト作成後、`chmod +x chronos-evaluator-hook.sh` で実行権限を付与してください)*
 

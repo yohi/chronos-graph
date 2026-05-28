@@ -643,6 +643,22 @@ ChronosGraph 本体およびセキュリティ判定エンジン（Universal Eva
 > - `CHRONOS_EVALUATOR_THINKING_BUDGET` は削除されました。Anthropic Extended Thinking を使いたい場合は LiteLLM `extra_body` 経由で再構成してください（本リファクタのスコープ外）。
 > - `CHRONOS_EVALUATOR_MAX_TOKENS` / `CHRONOS_EVALUATOR_TIMEOUT_SECONDS` の解釈 (不正値・非正値は警告 + デフォルト) は **v2.x と同一** です。設定バリデーション厳格化は別 PR で予定。
 
+### 3. Ingestion & フック (Hybrid Ingestion Mode) 設定
+
+| 環境変数 | デフォルト | 推奨設定 | 説明 |
+|---|---|---|---|
+| `CHRONOS_INGESTION_MODE` | `selective` | 運用次第 | `selective`: エージェント自律のツール呼び出しベース。<br>`all`: ターン毎の全量保存（`memory_save` ツールが隠蔽され見えなくなります） |
+| `MCP_HOOK_TIMEOUT_SECONDS` | `2.0` | デフォルト可 | `agent_turn_hook.py` の全体ハードリミットタイムアウト（秒） |
+| `MCP_HOOK_SSE_TIMEOUT_SECONDS` | `1.0` | デフォルト可 | `agent_turn_hook.py` の SSE ハンドシェイクタイムアウト（秒） |
+| `MCP_HOOK_MAX_LOG_BYTES` | `8388608` (8MB) | デフォルト可 | フック経由送信の最大ログサイズ（超過時は末尾保持で切り詰め） |
+
+**ターン終了フック (`agent_turn_hook.py`)**
+`CHRONOS_INGESTION_MODE=all` 設定下において、エージェントのターン終了時に会話ログをバックグラウンドで（Fire-and-forget）保存するためのスクリプトです。いかなるエラー（タイムアウト・認証失敗・Gateway到達不可）が発生しても `exit 0` で終了し、メインのエージェントプロセスをクラッシュさせないフェイルソフト設計となっています。
+
+```bash
+echo "$CONVERSATION_LOG" | python scripts/agent_turn_hook.py &
+```
+
 ### 💡 カスタムエンドポイント (ローカルLLM / vLLM / Azure 等) の設定
 
 Universal Evaluator はバックエンドに [LiteLLM](https://github.com/BerriAI/litellm) を使用しています。そのため、専用の環境変数を追加しなくても、LiteLLM が標準でサポートする環境変数（`OPENAI_API_BASE` など）を利用してあらゆるカスタムエンドポイントにルーティングできます。

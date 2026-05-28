@@ -492,7 +492,7 @@ Antigravity CLI（本エージェント）の `hooks` セクションに記述�
 ```
 
 ##### 2. コマンド直接指定による設定 (クローン不要・uvx 使用)
-絶対パスの代わりに、シェル環境変数 `$CHRONOS_POLICY_PATH` から動的にポリシーをロードします。
+絶対パスの代わりに、シェル環境変数 `$CHRONOS_EVALUATOR_POLICY_PATH` から動的にポリシーをロードします。
 ```json
 {
   "hooks": {
@@ -502,7 +502,7 @@ Antigravity CLI（本エージェント）の `hooks` セクションに記述�
         "hooks": [
           {
             "type": "command",
-            "command": "uvx --quiet --from \"context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git\" chronos-mcp-gateway evaluate --json-io --policy-path \"$CHRONOS_POLICY_PATH\""
+            "command": "uvx --quiet --from \"context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git\" chronos-mcp-gateway evaluate --json-io --policy-path \"$CHRONOS_EVALUATOR_POLICY_PATH\""
           }
         ]
       }

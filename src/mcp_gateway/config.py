@@ -75,7 +75,7 @@ class GatewaySettings(BaseSettings):
         "CONTEXT_STORE_DB_PATH",
         "GRAPH_ENABLED",
         "EMBEDDING_PROVIDER",
-        "CHRONOS_INGESTION_MODE",
+        CHRONOS_INGESTION_MODE_ENV,
     ]
 
     # ── ingestion ─────────────────────────────────────────────────

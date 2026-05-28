@@ -22,6 +22,7 @@ logger = logging.getLogger("chronos_evaluator.llm")
 __all__ = [
     "LlmEvaluator",
     "LlmUnavailableError",
+    "READ_ONLY_TOOLS",
     "ResponseParseError",
     "SYSTEM_PROMPT",
     "_build_user_prompt",
@@ -30,6 +31,7 @@ __all__ = [
 
 _REASON_MAX = 200
 _ASK_MESSAGE_MAX = 300
+READ_ONLY_TOOLS = frozenset({"memory_search", "memory_search_graph", "memory_stats"})
 
 
 class LlmUnavailableError(Exception):

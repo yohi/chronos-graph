@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
 import logging
+import time
 from typing import Literal
 
 from ..errors import PolicyError
 from .engine import Grant, PolicyEngine
 from .llm_evaluator import (
+    READ_ONLY_TOOLS,
     LlmEvaluator,
     LlmUnavailableError,
     ResponseParseError,
@@ -35,6 +40,8 @@ class CompositeEvaluator:
         default_intent: str = "default",
         default_agent_id: str = "claude-code",
         fallback_when_llm_not_configured: Literal["allow", "ask"] = "allow",
+        evaluation_cache_ttl_seconds: float = 300.0,
+        memory_timeout_seconds: float = 3.0,
     ) -> None:
         self._engine: PolicyEngine = engine
         self._memory: MemoryClient | None = memory_client
@@ -42,11 +49,14 @@ class CompositeEvaluator:
         self._default_intent: str = default_intent
         self._default_agent_id: str = default_agent_id
         if fallback_when_llm_not_configured not in {"allow", "ask"}:
+            invalid_fallback = fallback_when_llm_not_configured
             raise ValueError(
-                "fallback_when_llm_not_configured must be 'allow' or 'ask',"
-                f" got {fallback_when_llm_not_configured!r}"
+                f"fallback_when_llm_not_configured must be allow/ask, got {invalid_fallback!r}"
             )
         self._fallback: Literal["allow", "ask"] = fallback_when_llm_not_configured
+        self._evaluation_cache_ttl_seconds: float = evaluation_cache_ttl_seconds
+        self._memory_timeout_seconds: float = memory_timeout_seconds
+        self._decision_cache: dict[str, tuple[float, Decision]] = {}
 
         logger.warning(
             "evaluator config: llm=%s memory=%s fallback_when_llm_not_configured=%s",
@@ -98,6 +108,9 @@ class CompositeEvaluator:
             )
             return Decision(decision="deny", reason="unexpected_evaluation_status")
 
+        if input_.tool_name in READ_ONLY_TOOLS:
+            return Decision(decision="allow")
+
         if self._llm is None:
             if self._fallback == "ask":
                 return Decision(
@@ -106,10 +119,15 @@ class CompositeEvaluator:
                 )
             return Decision(decision="allow")
 
+        cache_key = self._make_decision_cache_key(input_, intent, agent_id)
+        cached = self._get_cached_decision(cache_key)
+        if cached is not None:
+            return cached
+
         memories = await self._fetch_memories_safely(input_)
         rules = self._render_rules_for_prompt(grant, input_.tool_name)
         try:
-            return await self._llm.judge(
+            decision = await self._llm.judge(
                 input_=input_,
                 rules=rules,
                 memories=memories,
@@ -118,6 +136,8 @@ class CompositeEvaluator:
         except (LlmUnavailableError, ResponseParseError) as exc:
             logger.warning("Tier-2 fallback to ask: %s", exc)
             return Decision(decision="ask", ask_message=_FALLBACK_ASK_MESSAGE)
+        self._store_cached_decision(cache_key, decision)
+        return decision
 
     async def _fetch_memories_safely(self, input_: ToolCallInput) -> list[MemoryItem]:
         if self._memory is None:
@@ -126,10 +146,45 @@ class CompositeEvaluator:
         query = f"tool:{input_.tool_name} " + summarize_tool_input(input_.tool_input)
         project = str(input_.context.get("project") or "")
         try:
-            return await self._memory.retrieve(query=query, project=project or None)
-        except MemoryFetchError as exc:
+            return await asyncio.wait_for(
+                self._memory.retrieve(query=query, project=project or None),
+                timeout=self._memory_timeout_seconds,
+            )
+        except (asyncio.TimeoutError, MemoryFetchError) as exc:
             logger.warning("memory fetch failed (continuing without memory): %s", exc)
             return []
+
+    def _get_cached_decision(self, cache_key: str) -> Decision | None:
+        cached = self._decision_cache.get(cache_key)
+        if cached is None:
+            return None
+        expires_at, decision = cached
+        if expires_at <= time.monotonic():
+            _ = self._decision_cache.pop(cache_key, None)
+            return None
+        return decision
+
+    def _store_cached_decision(self, cache_key: str, decision: Decision) -> None:
+        if self._evaluation_cache_ttl_seconds <= 0:
+            return
+        expires_at = time.monotonic() + self._evaluation_cache_ttl_seconds
+        self._decision_cache[cache_key] = (expires_at, decision)
+
+    def _make_decision_cache_key(
+        self,
+        input_: ToolCallInput,
+        intent: str,
+        agent_id: str,
+    ) -> str:
+        payload = {
+            "agent_id": agent_id,
+            "intent": intent,
+            "llm_model": getattr(self._llm, "_model", None),
+            "tool_input": input_.tool_input,
+            "tool_name": input_.tool_name,
+        }
+        raw = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _render_rules_for_prompt(grant: Grant, tool_name: str) -> str:

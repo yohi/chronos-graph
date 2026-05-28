@@ -12,6 +12,12 @@ from typing import Any, Literal
 from pydantic import Field, SecretStr, SerializationInfo, field_validator, model_serializer
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from chronos_shared.ingestion_mode import (
+    CHRONOS_INGESTION_MODE_ENV,
+    DEFAULT_INGESTION_MODE,
+    IngestionMode,
+)
+
 
 def _mask_secret_fields(instance: Any, handler: Any, info: SerializationInfo) -> dict[str, Any]:
     """Pydantic モデルの SecretStr フィールドを '**********' にマスクする共通ヘルパー。"""
@@ -69,7 +75,18 @@ class GatewaySettings(BaseSettings):
         "CONTEXT_STORE_DB_PATH",
         "GRAPH_ENABLED",
         "EMBEDDING_PROVIDER",
+        CHRONOS_INGESTION_MODE_ENV,
     ]
+
+    # ── ingestion ─────────────────────────────────────────────────
+    ingestion_mode: IngestionMode = Field(
+        default=DEFAULT_INGESTION_MODE,
+        validation_alias=CHRONOS_INGESTION_MODE_ENV,
+        description=(
+            "Memory ingestion behavior. 'all' stores full turn logs with tool hiding; "
+            "'selective' keeps the existing evaluator-driven behavior."
+        ),
+    )
 
     # ── audit ────────────────────────────────────────────────────
     audit_log_level: Literal["INFO", "DEBUG"] = "INFO"

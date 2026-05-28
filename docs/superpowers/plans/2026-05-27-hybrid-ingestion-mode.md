@@ -54,7 +54,7 @@ master
 |---|---|
 | Task 0.1 | <https://github.com/yohi/chronos-graph/pull/276> |
 | Task 1.1 | <https://github.com/yohi/chronos-graph/pull/277> |
-| Task 2.1 | _未作成_ |
+| Task 2.1 | <https://github.com/yohi/chronos-graph/pull/282> |
 | Task 3.1 | <https://github.com/yohi/chronos-graph/pull/279> |
 | Task 3.2 | _未作成_ |
 | Task 4.1 | <https://github.com/yohi/chronos-graph/pull/278> |
@@ -432,7 +432,7 @@ PR URL を **「Draft PR URL 記録欄」の Task 1.1 行** に追記する。
 - Modify: `src/mcp_gateway/config.py` (`GatewaySettings`、行 32-86 / `upstream_env_passthrough` は行 67-72)
 - Create: `tests/unit/test_settings_ingestion_mode.py`
 
-- [ ] **Step 1: ブランチ作成と派生元検証 (Devcontainer 内で実行)**
+- [x] **Step 1: ブランチ作成と派生元検証 (Devcontainer 内で実行)**
 
 ```bash
 git fetch origin
@@ -443,11 +443,11 @@ CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 git merge-base --is-ancestor "$EXPECTED_BASE" "$CURRENT_BRANCH" || { echo "ERROR: 派生元ブランチが $EXPECTED_BASE ではありません。スタック構造が壊れています。"; exit 1; }
 ```
 
-- [ ] **Step 2: 既存の `src/context_store/config.py` の Ingestion セクション位置を確認**
+- [x] **Step 2: 既存の `src/context_store/config.py` の Ingestion セクション位置を確認**
 
 `Read` で `src/context_store/config.py` を読み、「`# --- Ingestion ---`」コメント (設計書 §4.1 参照、行 139-148 付近) の正確な位置を確認する。設計書記載の行番号は時間と共にずれる可能性があるため、必ず最新コードで確認する。
 
-- [ ] **Step 3: 既存の `src/mcp_gateway/config.py` の `GatewaySettings` 位置と `upstream_env_passthrough` の定義を確認**
+- [x] **Step 3: 既存の `src/mcp_gateway/config.py` の `GatewaySettings` 位置と `upstream_env_passthrough` の定義を確認**
 
 `Read` で `src/mcp_gateway/config.py` を読み、`upstream_env_passthrough: list[str] = [...]` の現在の値が以下であることを確認する:
 
@@ -462,7 +462,7 @@ upstream_env_passthrough: list[str] = [
 
 差異があれば計画と整合させてから Step 4 に進む。
 
-- [ ] **Step 4: 失敗するテストを先に書く** (`tests/unit/test_settings_ingestion_mode.py` 新規)
+- [x] **Step 4: 失敗するテストを先に書く** (`tests/unit/test_settings_ingestion_mode.py` 新規)
 
 ```python
 """Settings / GatewaySettings の ingestion_mode フィールドと env 伝達の検証。"""
@@ -576,7 +576,7 @@ def test_both_settings_use_same_ssot_type(
     assert value_ctx == value_gw == "all"
 ```
 
-- [ ] **Step 5: 失敗を確認 (`ingestion_mode` フィールド未追加のため AttributeError 等で FAIL)**
+- [x] **Step 5: 失敗を確認 (`ingestion_mode` フィールド未追加のため AttributeError 等で FAIL)**
 
 ```bash
 uv run pytest tests/unit/test_settings_ingestion_mode.py -v
@@ -584,7 +584,7 @@ uv run pytest tests/unit/test_settings_ingestion_mode.py -v
 
 期待出力: 全 9 件 FAIL (主に `AttributeError: 'Settings' object has no attribute 'ingestion_mode'` または `ValidationError` のメッセージで)。
 
-- [ ] **Step 6: `src/context_store/config.py` の Ingestion セクションに `ingestion_mode` フィールドを追加**
+- [x] **Step 6: `src/context_store/config.py` の Ingestion セクションに `ingestion_mode` フィールドを追加**
 
 `Read` で見つけた既存の `# --- Ingestion ---` セクション内に以下を `Edit` で追加する (具体的な前後コンテキストは Step 2 で確認した内容を使う):
 
@@ -612,7 +612,7 @@ class Settings(BaseSettings):
 
 注意: `pydantic.Field` の import が既に存在することを確認。無ければ追加。
 
-- [ ] **Step 7: `src/mcp_gateway/config.py` の `GatewaySettings` に `ingestion_mode` を追加 + `upstream_env_passthrough` を拡張**
+- [x] **Step 7: `src/mcp_gateway/config.py` の `GatewaySettings` に `ingestion_mode` を追加 + `upstream_env_passthrough` を拡張**
 
 `Edit` で 2 箇所変更する。
 
@@ -673,7 +673,7 @@ from chronos_shared.ingestion_mode import (
     )
 ```
 
-- [ ] **Step 8: テストが緑になることを確認**
+- [x] **Step 8: テストが緑になることを確認**
 
 ```bash
 uv run pytest tests/unit/test_settings_ingestion_mode.py -v
@@ -681,7 +681,7 @@ uv run pytest tests/unit/test_settings_ingestion_mode.py -v
 
 期待出力: 全 9 件 PASS。
 
-- [ ] **Step 9: 静的解析パス確認**
+- [x] **Step 9: 静的解析パス確認**
 
 ```bash
 uv run ruff check src/context_store/config.py src/mcp_gateway/config.py tests/unit/test_settings_ingestion_mode.py
@@ -691,7 +691,7 @@ uv run mypy src/context_store/config.py src/mcp_gateway/config.py
 
 期待出力: いずれもエラー 0。
 
-- [ ] **Step 10: アーキテクチャ原則の物理的確認 (AC-9 補足: mcp_gateway → context_store の import が増えていないこと)**
+- [x] **Step 10: アーキテクチャ原則の物理的確認 (AC-9 補足: mcp_gateway → context_store の import が増えていないこと)**
 
 ```bash
 grep -rn "from context_store" src/mcp_gateway/ || echo "OK: no cross-package import"
@@ -699,7 +699,7 @@ grep -rn "from context_store" src/mcp_gateway/ || echo "OK: no cross-package imp
 
 期待出力: `OK: no cross-package import` が表示される (1 件もマッチしない)。マッチがあれば設計違反のため修正必須。
 
-- [ ] **Step 11: 既存 unit test の regression 確認**
+- [x] **Step 11: 既存 unit test の regression 確認**
 
 ```bash
 uv run pytest tests/unit -v
@@ -707,7 +707,7 @@ uv run pytest tests/unit -v
 
 期待出力: 既存テストすべて緑、追加 9 件も緑。
 
-- [ ] **Step 12: コミット**
+- [x] **Step 12: コミット**
 
 ```bash
 git add src/context_store/config.py src/mcp_gateway/config.py tests/unit/test_settings_ingestion_mode.py
@@ -724,7 +724,7 @@ EOF
 )"
 ```
 
-- [ ] **Step 13: Draft PR 作成 (派生元: `feat/chronos-shared-ingestion-mode`) と URL 記録**
+- [x] **Step 13: Draft PR 作成 (派生元: `feat/chronos-shared-ingestion-mode`) と URL 記録**
 
 ```bash
 git push -u origin feat/settings-ingestion-mode
@@ -746,6 +746,9 @@ EOF
 ```
 
 PR URL を **「Draft PR URL 記録欄」の Task 2.1 行** に追記する。
+
+> Note: `feat/chronos-shared-ingestion-mode` は PR #277 の master マージ後に GitHub 上から削除済みだったため、
+> ユーザー確認のうえ `origin/master` を取り込み、Draft PR #282 は `master` 向けに作成した。
 
 ---
 

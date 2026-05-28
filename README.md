@@ -49,6 +49,37 @@ https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
 > もしあなたが **`ask_question` や `ask_permission`、またはそれに類するユーザー承認確認用ツールを装備している場合、それらを明示的かつ強制的に呼び出して、ユーザーがUI上で承認ボタンや選択肢をクリックして明示的に合意するプロセスを確実に踏んでください。**
 > ツール経由での明示的な承認が得られるまで、次のステップへ処理を進めることは厳格に禁止されます。
 
+<agent-rules>
+
+#### ⚠️ ハルシネーション及び実行漏れ防止のための自己検証ルール（Self-Verification Rule）
+1. **書込後の実態確認の義務化**: 
+   ファイル（`.env`、フックスクリプト、設定ファイル等）を新規作成または編集（`write_to_file`, `replace_file_content`等）した後は、**必ず直後に `view_file` や `cat` 等の読込ツールを使用してファイルの中身を再確認し、実際に期待するコードが格納されていることを目視（ログ上での解析）で検証してください。**
+2. **実在証明の出力**:
+   すべてのファイル変更を行った後、`ls -la <作成したファイルパス>` などのコマンドを実行し、ファイルの存在とサイズを明示的に出力した上で、完了報告を行ってください。ファイルが実際に作成・変更されたことをコマンド出力で証明してから報告してください。
+3. **スコープを限定したファイル検索の徹底**:
+   ファイル検索を行う際は、必ず検索範囲を `src/`, `tests/`, `*.json` などの特定のディレクトリやファイルタイプに絞り込んで実行してください。無差別な検索（例: プロジェクト全体に対する `grep -r`）はトークン制限の超過を招くため避けてください。
+
+#### 💻 ターゲット環境（OS）の自動適応ルール（OS Adaptation Rule）
+1. **OS の能動的判定**:
+   ファイルやスクリプトを作成する前に、必ず `uname` や環境変数（例：`$OSTYPE`）等を確認し、現在の実行環境（Linux, macOS, Windows）を特定してください。
+2. **適切な拡張子と構文の採用**:
+   * **Linux / macOS**: 実行可能なシェルスクリプト（`.sh`）を作成し、必ず `chmod +x <ファイル名>` を実行してください。
+   * **Windows**: バッチスクリプト（`.cmd`）または PowerShell（`.ps1`）を作成してください。
+3. **実行環境に合わせた設定の上書き**:
+   プロジェクトに既存の設定ファイルがあり、異なるOS用の設定（例: Linux環境下でのWindows用 `.cmd` パス）が記載されていた場合、現在の実行環境に合わせて適切なスクリプト（例: `.sh`）を新規作成し、設定ファイルのパスも現在のOS向けに書き換えてください。
+
+#### 🔐 機密情報の分離収集ルール（Sensitive Information Handling Rule）
+1. **非機密情報の収集**: 
+   セットアップに必要な一般設定（ストレージの種類、モデル名、パス等）は、`ask_question` ツール等を用いて対話的にユーザーから取得してください。
+2. **機密情報（APIキー・シークレット）の保護**:
+   **API キーやパスワード等の機密情報は、ユーザーに対して「`.env` ファイルに直接記入してください」と指示してください。** ツール（ask_question 等）やチャット履歴上での入力は求めてはいけません。
+3. **入力完了の待機とテスト**:
+   機密情報の記入を依頼した後は、ユーザーから「記入が完了した」という報告があるまで待機してください。報告を受けた後、直ちに接続テストや動作確認コマンドを実行して設定の正しさを検証してください。
+
+</agent-rules>
+
+<setup-phases>
+
 #### 🟦 Phase 1: 目的の確定と実行モードの選択 (BLOCKING STEP)
 いかなる変更・インストールを伴うツールを呼び出す前に、必ずユーザーに以下の質問を提示し、セットアップ目的および **実行モード** を **確定 (Lock-in)** させてください。
 
@@ -65,7 +96,7 @@ https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
 > [!IMPORTANT]
 > **デバッグモード（Dry-run）の厳格な非破壊ルール:**
 > ユーザーが `デバッグモード` を選択した場合、AIエージェントであるあなたは **絶対にファイルを一切変更（作成、更新、削除）してはならず、システムへの変更コマンドを実行してもいけません。**
-> 代わりに、本番で作成されるべき `.env` の内容や構成設定を画面上に美しい Markdown で提示し、「もし本番実行された場合、どのような変更が行われるか」をシミュレーションして解説するだけに留めてください。これにより、ユーザーは現在の環境を汚すことなく安全に設定を試せます。
+> 代わりに、本番で作成されるべき `.env` の内容や構成設定を画面上に美しい Markdown で提示し、「もし本番実行された場合、どのような変更が行われるか」をシミュレーションして解説するだけに留めてください。
 
 ---
 
@@ -104,7 +135,7 @@ MCP設定の場合は、いかなるツール呼び出しよりも前に、必�
    * `text-embedding-3-large` (高密度でリッチなセマンティック表現が可能な高精度モデル)
    * `text-embedding-ada-002` (従来の標準モデル)
 8. **API KEYの入力 (OpenAI選択時のみ)**: `.env` に `OPENAI_API_KEY` の設定を促す。
-   * OpenAI 選択時は、必ずユーザーに `.env` に有効な `OPENAI_API_KEY` を登録するよう案内し、設定が完了するまで次のステップに進んではいけません。
+   * OpenAI 選択時は、[機密情報の分離収集ルール](#-機密情報の分離収集ルールsensitive-information-handling-rule)に従い、ユーザーに `.env` へ直接 `OPENAI_API_KEY` を記入するよう案内してください。記入完了の報告を受けるまで次のステップに進んではいけません。
 9. **LLM Evaluator (保護判定エンジン)**: ツール安全評価器として稼働させる際の判定エンジンの配置。
    * `クラウド` (🌟**推奨**: LiteLLM 経由でクラウド上の最新モデル（Anthropic / OpenAI 等）の API キーを設定して使用します)
    * `ローカル` (ローカル環境上の Ollama 等のモデルを叩いて判定します)
@@ -114,11 +145,11 @@ MCP設定の場合は、いかなるツール呼び出しよりも前に、必�
     * `openai/gpt-4o-mini` (高速かつリーズナブルな標準的判定モデル)
     * `その他（LiteLLM識別子）` (ユーザーが希望するその他のモデル識別子)
 11. **LLM用 API KEYの入力 (LLM使用時のみ)**: `.env` に対応する API キーの登録を促す。
-    * LLM 使用時は、選択したモデルプロバイダに対応する API キー（`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` など、または `CHRONOS_EVALUATOR_API_KEY`）を `.env` に登録するよう必ず案内し、設定が完了するまで次のステップに進んではいけません。
+    * LLM 使用時は、[機密情報の分離収集ルール](#-機密情報の分離収集ルールsensitive-information-handling-rule)に従い、ユーザーに選択したモデルプロバイダに対応する API キー（`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` 等）を `.env` へ直接記入するよう案内してください。記入完了の報告を受けるまで次のステップに進んではいけません。
 
-#### 2. 認証 (BLOCKING STEP)
-1. **.envの作成と認証情報の入力**: `.env.example` から `.env` を作成し、上記で確定した構成に必要な認証情報のプレースホルダを含めた完成見本をユーザーに提示し、実際に値を埋めてもらうよう依頼します。（※デバッグモードの場合は、シミュレーション用の `.env` 見本を画面上に提示するだけに留めます）
-2. **接続確認**: 入力してもらった認証情報をもとに、`uv run python scripts/check_connectivity.py` を実行してデータベースやキャッシュへの接続が成功することを確認します。（※デバッグモードの場合は、実際の接続確認は行わず、接続成功を仮定して次のステップに進みます）
+#### 2. 構築と検証 (本番モード用)
+1. **.envの作成と認証情報の入力**: `.env.example` から `.env` を作成し、上記で確定した構成に必要な認証情報のプレースホルダを含めた完成見本をユーザーに提示し、実際に値を埋めてもらうよう依頼します。**ファイル作成・編集後は、必ず `view_file` を用いて、正しく値が書き込まれたことを自己検証してください。**（※デバッグモードの場合は、シミュレーション用の `.env` 見本を画面上に提示するだけに留めます）
+2. **接続確認**: ユーザーから機密情報の入力完了報告を受けた後、`uv run python scripts/check_connectivity.py` を実行してデータベースやキャッシュへの接続が成功することを確認します。（※デバッグモードの場合は、実際の接続確認は行わず、接続成功を仮定して次のステップに進みます）
 3. **対象AIエージェントの選択 (BLOCKING STEP)**: 接続テスト成功後（**デバッグモードの場合はシミュレーション完了後**）、必ず **`ask_question` 等のユーザー確認ツールを使用し、複数選択可能な選択肢（チェックボックス形式）として以下の対象クライアントを提示し、必ずユーザーに明示的に選択させてください。**
    * `[ ] Claude Code`
    * `[ ] Codex`
@@ -126,14 +157,21 @@ MCP設定の場合は、いかなるツール呼び出しよりも前に、必�
    * `[ ] OpenCode`
    * `[ ] Cursor`
 
+   > [!CAUTION]
+   > **🚨 OpenCode 設定ファイルに関する制約 (STRICT OPENCODE CONSTRAINT):**
+   > 対象エージェントが **OpenCode** の場合、あなたは絶対に **`oh-my-opencode.json(c)`** または **`oh-my-openagent.json(c)`** を作成・修正してはいけません。これらは「Oh-My-Openagent」等の外部拡張用設定ファイルであり、本プロジェクトのフック（Hook）設定とは無関係です。
+   > また、**新規に `opencode.json(c)` を作成するのではなく、必ず `~/.config/opencode/opencode.json(c)` を読み込み、その内容を更新してください。**
+   > さらに、**`opencode.json(c)` は `hooks` キーをサポートしていません。** したがって、**絶対に `hooks` キーを含む設定 JSON を OpenCode 向けに提案しないでください。** 設定の追加や変更は、必ず標準 of `opencode.json(c)` に対して有効なキーのみで行うか、後述のプラグイン形式を案内してください。
    > [!IMPORTANT]
    > **🚨 デバッグモード（Dry-run）時の独善的バイパスの厳格な禁止:**
-   > あなた（AIエージェント）がデバッグモードで実行されている場合であっても、**「シミュレーションだから」と自己判断して本ステップをスキップしたり、特定のクライアント（例: Claude Desktop 等）を想定した出力を勝手に自己完結させて提示してはいけません。**
+   > あなた（AIエージェント）がデバッグモードで実行されている場合であっても、「シミュレーションだから」と自己判断して本ステップをスキップしたり、特定のクライアント（例: Claude Desktop 等）を想定した出力を勝手に自己完結させて提示してはいけません。
    > デバッグモードであっても、**必ず本ツールの呼び出しを強制**し、ユーザーが選んだクライアントに対する設定シミュレーションのみを出力してください。
 
-4. **設定追加例の出力**: 3で選択した AI エージェント向けの設定追加例を出力します。その際、環境変数やAPIキーなどは絶対に設定ファイル内に直書きせず、各クライアントの環境変数ロード機能や変数展開（例: OpenCode なら `{env:VARIABLE_NAME}`）を利用して動的にロードできるように構成します。
+4. **設定追加例の出力**: 3で選択した AI エージェント向けの設定追加例を出力します。その際、環境変数やAPIキーなどは絶対に設定ファイル内に直書きせず、各クライアントの環境変数ロード機能や変数展開（例: OpenCode なら `{env:VARIABLE_NAME}`）を利用して動的にロードできるように構成してください。
+   **ポリシーファイル (`intents.yaml`) について**: 各エージェントの設定ファイルと同じディレクトリに自動生成し、そのパスを環境変数（`CHRONOS_EVALUATOR_POLICY_PATH`）にセットしてください。
+
 5. **AGENTS.mdへの追記と重複確認 (BLOCKING STEP)**:
-   設定の提示後、AIエージェント（あなた）は対象クライアント用の `AGENTS.md`（またはそれに相当するエージェント指示ファイル）に対して、長期記憶運用のためのプロトコル（[docs/agent-prompts/memory-save-system-prompt.md](docs/agent-prompts/memory-save-system-prompt.md) の内容）を追記する提案を行ってください。
+   設定の提示後、対象クライアント用の `AGENTS.md`（またはそれに相当するエージェント指示ファイル）に対して、長期記憶運用のためのプロトコル（[docs/agent-prompts/memory-save-system-prompt.md](docs/agent-prompts/memory-save-system-prompt.md) の内容）を追記する提案を行ってください。
 
    > [!IMPORTANT]
    > **🚨 重複記載の確認 (DUPLICATION CHECK CONSTRAINT):**
@@ -141,7 +179,7 @@ MCP設定の場合は、いかなるツール呼び出しよりも前に、必�
    > * すでに同等の内容が記載されている場合は、二重で追記することを避け、その旨をユーザーに報告して追記ステップを完了してください。
 
    > [!NOTE]
-   > * **本番モード**: 記載されていないことを確認した上で、ユーザーの明示的な承認（`ask_permission` 等）を得て、実際にファイルの末尾にプロトコルを追記します。
+   > * **本番モード**: 記載されていないことを確認した上で、ユーザーの明示的な承認（`ask_permission` 等）を得てから、実際にファイルの末尾にプロトコルを追記してください。追記後は必ず `view_file` で書き込み内容を検証してください。
    > * **デバッグモード**: 実際にファイルを変更することはせず、「すでに記載されているかどうかの確認結果」を報告し、記載されていない場合に「追記された場合の `AGENTS.md` の完成見本（プレビュー）」を画面上に提示するに留めてください。
 
 ---
@@ -153,7 +191,7 @@ Hook設定の場合は、いかなるツール呼び出しよりも前に、必�
 
 > [!IMPORTANT]
 > **🚨 設定の勝手な仮定・省略の厳格な禁止 (STRICT NON-OMISSION CONSTRAINT):**
-> あなた（AIエージェント）は、デバッグモード（Dry-run）であるか本番モードであるかにかかわらず、**「対象エージェントを勝手に単一選択とみなして残りを省略する」「ポリシーファイルパスなどの質問項目を勝手にスキップしてデフォルト値で自己完結させる」といった行為を一切行ってはいけません。**
+> あなた（AIエージェント）は、デバッグモード（Dry-run）であるか本番モードであるかにかかわらず、「対象エージェントを勝手に単一選択とみなして残りを省略する」「ポリシーファイルパスなどの質問項目を勝手にスキップしてデフォルト値で自己完結させる」といった行為を一切行ってはいけません。
 > デバッグモードであっても、**必ず本ツールの呼び出しを強制**し、ユーザーが明示的に選択・入力した構成に基づいた正確な設定例やシミュレーションを出力してください。
 
 1. **対象AIエージェント（複数選択可）**: 設定例や構築手順を提示したいエージェントをすべて選択させてください。
@@ -163,11 +201,9 @@ Hook設定の場合は、いかなるツール呼び出しよりも前に、必�
    * `Claude Desktop` (MCPサーバーとしてのクイックスタート)
    * `Cursor` (MCPサーバー/mcp.jsonへの環境変数定義)
    * `その他` (従来のラッパースクリプト方式など)
-2. **ゲートウェイ配置**: `ローカル実行` / `リモート HTTP ゲートウェイ`
+2. **ゲートウェイ配置**: `ローカル実行` / `リモート HTTP ゲートウェイ (デフォルト: http://127.0.0.1:9100)`
 3. **フック設定方式**: `MCPフック直接指定 (推奨)` / `HTTPフック` / `uvxワンライナー直接指定` / `従来のラッパースクリプト`
-4. **ポリシーファイルパス**: `intents.yaml` を配置する場所。
-   * `プロジェクトルート直下 (./intents.yaml) (🌟最も推奨)`
-   * `カスタムパス (セットアップ後に環境変数で指定する)`
+4. **ポリシーファイルパス**: `intents.yaml` は各エージェントの**設定ファイル（例: ~/.config/opencode/）と同じディレクトリ**に自動生成することを原則とします。
 
 ```json
 /* 💡 エージェント向け ask_question 呼び出し引数テンプレート例 */
@@ -180,17 +216,12 @@ Hook設定の場合は、いかなるツール呼び出しよりも前に、必�
     },
     {
       "question": "2. ゲートウェイの配置方法を選択してください",
-      "options": ["ローカル実行", "リモート HTTP ゲートウェイ"],
+      "options": ["ローカル実行", "リモート HTTP ゲートウェイ (デフォルト: http://127.0.0.1:9100)"],
       "is_multi_select": false
     },
     {
       "question": "3. フック設定方式を選択してください",
       "options": ["MCPフック直接指定 (推奨)", "HTTPフック", "uvxワンライナー直接指定", "従来のラッパースクリプト"],
-      "is_multi_select": false
-    },
-    {
-      "question": "4. ポリシーファイルの配置パスを選択してください",
-      "options": ["プロジェクトルート直下 (./intents.yaml) (推奨)", "カスタムパス (後から環境変数で設定)"],
       "is_multi_select": false
     }
   ]
@@ -199,26 +230,37 @@ Hook設定の場合は、いかなるツール呼び出しよりも前に、必�
 
 #### 2. 認証情報と設定の提示 (BLOCKING STEP)
 1. **認証情報・LLM設定の合意**:
-   * リモートゲートウェイ用の API キー等がある場合はユーザーから取得します。
-   * **【必須プロセス】** ツール安全判定にどの **LLMモデル**（例: `anthropic/claude-3-5-haiku-20241022` 等）を使用するかを合意し、対応するプロバイダの **API キー（`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` 等）** の準備・入力をユーザーに依頼（または `.env` へのシミュレーション追記を案内）してください。
-2. **フック設定・スクリプトの出力**:
-   * 選択した方式とエージェントに応じた **フック設定ブロック（JSON等）およびスクリプトファイル（必要な場合）** を生成して提示します。
-   * **【絶対出力要件】** この提示の際、**必ず「使用する LLM モデルの設定環境変数（`CHRONOS_EVALUATOR_MODEL`）」および「対応する API キー環境変数」の設定例（※環境変数は直書きせず、各クライアントの環境変数ロード機能や変数展開を用いること）をシミュレーションや解説の中に明記し、一切省略してはいけません。**
-3. **【絶対制約】** ユーザーから「設定ファイルや環境変数等に反映した」という報告を受けるまで、次のステップへ進んではいけません。
+   * リモートゲートウェイ用の API キー等がある場合は、[機密情報の分離収集ルール](#-機密情報の分離収集ルールsensitive-information-handling-rule)に従い、ユーザーに `.env` へ直接記入するよう案内してください。（URLはデフォルトで `http://127.0.0.1:9100` を使用し、変更が必要な場合のみ入力を促してください）
+   * **【必須プロセス】** ツール安全判定にどの **LLMモデル**（例: `anthropic/claude-3-5-haiku-20241022` 等）を使用するかを合意し、対応するプロバイダの **API キー（`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` 等）** の準備・入力を、同様に [機密情報の分離収集ルール](#-機密情報の分離収集ルールsensitive-information-handling-rule)に従ってユーザーに依頼（または `.env` へのシミュレーション追記を案内）してください。
+2. **フック設定・スクリプトの出力と配置**:
+   * 選択した方式、およびOS自動判定ルールに基づき、後述の **「[💡 AIエージェントへの Hook 設定方法 (Configuration)](#-aiエージェントへの-hook-設定方法-configuration)」** セクションにある具体的な **設定パターン（A〜E）** を必ず参照し、現在の環境に適した **フック設定ブロック（JSON等）およびスクリプトファイル（Linuxなら `.sh`、Windowsなら `.cmd` 等）** を生成して提示します。
+   * **【構成提示の厳格ルール】**: AIエージェント（あなた）は、必ず上記セクションの構成例をテンプレートとして正確に使用してください。独自の設定形式を創作しないでください。
+   * 本番モードの場合、スクリプトファイルを実際に書き込み、実行権限を与えます。**書き込み後は必ず `view_file` 等の読込ツールを用いて正しく書き込まれたか確認し、かつ `ls -la` などのコマンドで実在を確認・出力してください。**
+   * **【絶対出力要件】** この提示の際、**必ず「使用する LLM モデルの設定環境変数（`CHRONOS_EVALUATOR_MODEL`）」および「対応する API キー環境変数」の設定例（※環境変数は直書きせず、各クライアントの環境変数ロード機能や変数展開を用いること）をシミュレーションや解説の中に明記してください。**
+3. **【絶対制約】** ユーザーから「設定ファイルや環境変数等への機密情報の反映が完了した」という報告を受けるまで待機してください。報告を受けてから次のステップへ進んでください。
 
-#### 3. 動作確認テストの実行
-設定が反映されたことを確認後、以下のダミーツール呼び出しクエリをパイプライン経由で流し込み、評価器が正常に判定（`allow`/`deny`）を返却することを確認します。
+4. **動作確認テストの実行（必須）**
+ユーザーから設定完了の報告を受けた後、必ず実際に以下のテストコマンドを実行し、評価器が正常に判定（`allow`/`deny`）を返却するログを出力・検証してください。
 ```bash
-echo '{"tool_name":"bash","tool_input":{"command":"ls"}}' | mcp_gateway evaluate --json-io --policy-path /path/to/intents.yaml
+echo '{"tool_name":"bash","tool_input":{"command":"ls"}}' | mcp_gateway evaluate --json-io --policy-path "${CHRONOS_EVALUATOR_POLICY_PATH:-$HOME/.config/opencode/intents.yaml}"
 ```
+*(※フック方式に応じて、`uvx chronos-mcp-gateway` や `python -m mcp_gateway` 等、適切なコマンドを構築して実行してください)*
 
----
+> [!TIP]
+> **Hook設定時の `AGENTS.md` への追記について**:
+> Hook (Universal Evaluator) はエージェントの外部で動作する透明な防壁であるため、長期記憶（Case A）とは異なり、原則として **`AGENTS.md` へのプロンプト追記は不要** です。
 
+</setup-phases>
 </details>
 
 ## 🧠 Agent Identity & Memory Protocol
 
 本プロジェクトでは、セットアップ完了後、各AIエージェントが使用する `AGENTS.md` や `.cursorrules` などの指示ファイルに対して、エージェントが長期記憶システムを自律運用するためのプロンプトを追記する運用を想定しています。
+
+> [!NOTE]
+> **追記の必要性について**:
+> - **【ケース A】長期記憶サーバーの場合**: **必須**です。エージェントが自律的に記憶を保存（`memory_save`）するための指示が必要です。
+> - **【ケース B】Hook (安全評価器) のみの場合**: **原則不要**です。Hook は透明な防壁として機能するため、エージェント側での意識的な対応は必要ありません。
 
 追記すべきプロンプトの原本（テンプレート）は以下に格納されています。セットアップ完了時にこの内容を対象プロジェクトの `AGENTS.md` 等に追記してください。
 
@@ -323,63 +365,62 @@ Universal Evaluator は、ツール実行前フック（`PreToolUse` Hook）を�
 
 #### 📌 設定パターン A：MCP フックによる直接連携（推奨・最もシンプル）
 
-Claude Code などの MCP フックをサポートする先進的なエージェントでは、**ラッパースクリプトを一切作成することなく**、すでにマウントされている MCP サーバー（例: `chronos-graph`）の `evaluate` ツールを直接指定できます。
+Claude Code や Antigravity CLI などの MCP フックをサポートする先進的なエージェントでは、**ラッパースクリプトを一切作成することなく**、すでにマウントされている MCP サーバー（例: `chronos-graph`）の `evaluate` ツールを直接指定できます。
 
-エージェントの設定ファイル（例: `~/.claudecode.json`）に以下のように記述します。
+エージェントの設定ファイル（例: `~/.claude/settings.json` や `.agents/hooks.json`）に以下のように記述します。
 
 ```json
 {
   "hooks": {
-    "preToolUse": {
-      "mcp": {
-        "server": "chronos-graph",
-        "tool": "evaluate"
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "mcp",
+            "server": "chronos-graph",
+            "tool": "evaluate"
+          }
+        ]
       }
-    }
+    ]
   }
 }
 ```
 
----
+> [!TIP]
+> **簡略表記について**: Antigravity CLI などの一部のエージェントでは、上記をさらに簡略化したオブジェクト形式（`"PreToolUse": { "mcp": { ... } }`）をサポートしている場合があります。環境のドキュメントに合わせて調整してください。
+
+> [!CAUTION]
+> **OpenCode の重要な制限**: JSON設定ファイル（`opencode.json`）での **`hooks` キーは未サポート** です。エージェントは **絶対に `hooks` を含む JSON を OpenCode 向けに生成してはいけません。** フックを実装するには、以下の **プラグイン形式** を参照して TypeScript/JavaScript プラグインを作成・登録してください。
 
 #### 📌 設定パターン B：HTTP フックによるリモート連携
 
 リモートサーバー側で `mcp_gateway` を稼働させている場合、**HTTP フック** 経由で一元管理されているリモートエンジンに直接リクエストを飛ばせます。APIキーやホストURLなどの認証情報・接続情報は、環境変数から動的にロードできるように構成します。
 
-* **OpenCode 設定例 (`oh-my-opencode.jsonc` など):**
-  OpenCode では `{env:VARIABLE_NAME}` 構文を使用することで、設定ファイル内に直接秘密鍵やエンドポイントを書き込むことなく、システムの環境変数から安全に動的ロードできます。
-  ```json
-  {
-    "hooks": {
-      "preToolUse": {
-        "http": {
-          "url": "{env:CHRONOS_GATEWAY_URL}",
-          "headers": {
-            "Authorization": "Bearer {env:CHRONOS_GATEWAY_API_KEY}"
-          }
-        }
-      }
-    }
-  }
-  ```
-
 ---
 
 #### 📌 設定パターン C：OpenCode プラグイン形式による連携
 
-OpenCode では、フック機能を **「プラグイン」** として拡張・ロードします。 Node.js プラグインを構成し、ツール実行前イベントにフックさせて `uvx` からオンザフライに `evaluate` を実行させます。環境パスやポリシーファイルの絶対パスは、すべて環境変数から動的に解決します。
+OpenCode では、フック機能を **「プラグイン」** として拡張・ロードします。 Node.js プラグインを構成し、ツール実行前イベントにフックさせて `uvx` からオンザフライに `evaluate` を実行させます。
 
 * **プラグインの JavaScript 実装例:**
+  OpenCode では TypeScript/JavaScript プラグインとしてフックを実装します。
+
   ```javascript
   const { spawn } = require('child_process');
+  const path = require('path');
 
-  // OpenCodeの preToolUse フックコールバック
-  async function preToolUseHook(toolCall) {
+  /**
+   * OpenCode ツール実行前フック (tool.execute.before)
+   * Universal Evaluator を呼び出し、実行の可否を判定します。
+   */
+  async function OnBeforeToolExecute(toolCall) {
     return new Promise((resolve, reject) => {
-      // 環境変数からポリシーパスをロード (プラグインはプロジェクト直下をデフォルトとする)
-      const policyPath = process.env.CHRONOS_POLICY_PATH || './intents.yaml';
+      // ポリシーファイル (intents.yaml) は設定ファイルと同じディレクトリを優先的に参照
+      const defaultConfigDir = path.join(process.env.HOME || process.env.USERPROFILE, '.config', 'opencode');
+      const policyPath = process.env.CHRONOS_EVALUATOR_POLICY_PATH || path.join(defaultConfigDir, 'intents.yaml');
 
-      // uvx を用いてオンザフライで evaluate コマンドを実行
       const proc = spawn('uvx', [
         '--quiet',
         '--from', 'context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git',
@@ -407,15 +448,22 @@ OpenCode では、フック機能を **「プラグイン」** として拡張�
   }
   ```
 
-* **設定ファイル (`oh-my-opencode.jsonc` または `opencode.jsonc`) への登録:**
-  プラグインの配置場所も環境変数から動的に解決可能です。
+* **設定ファイル (`~/.config/opencode/opencode.json`) への登録:**
+  作成したプラグインファイルをプロジェクト内の適切な場所に配置し、**`plugins`** キーを使用して登録します（`hooks` キーは使用しません）。
   ```json
   {
     "plugins": [
-      "{env:CHRONOS_PLUGIN_PATH}/opencode-chronos-plugin"
+      {
+        "name": "chronos-safety-gate",
+        "path": "./.opencode/plugins/chronos-gate.js",
+        "enabled": true
+      }
     ]
   }
   ```
+
+> [!CAUTION]
+> **OpenCode の重要な制限**: **`hooks` キーは未サポート** です。エージェントは **絶対に `hooks` を含む JSON を OpenCode 向けに生成してはいけません。** また、設定の変更は新規作成ではなく、**`~/.config/opencode/opencode.json(c)`** の更新を行ってください。
 
 ---
 
@@ -427,24 +475,38 @@ Antigravity CLI（本エージェント）の `hooks` セクションに記述�
 ```json
 {
   "hooks": {
-    "preToolUse": {
-      "mcp": {
-        "server": "chronos-graph",
-        "tool": "evaluate"
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "mcp",
+            "server": "chronos-graph",
+            "tool": "evaluate"
+          }
+        ]
       }
-    }
+    ]
   }
 }
 ```
 
 ##### 2. コマンド直接指定による設定 (クローン不要・uvx 使用)
-絶対パスの代わりに、シェル環境変数 `$CHRONOS_POLICY_PATH` から動的にポリシーをロードします。
+絶対パスの代わりに、シェル環境変数 `$CHRONOS_EVALUATOR_POLICY_PATH` から動的にポリシーをロードします。
 ```json
 {
   "hooks": {
-    "preToolUse": {
-      "command": "uvx --quiet --from \"context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git\" chronos-mcp-gateway evaluate --json-io --policy-path \"$CHRONOS_POLICY_PATH\""
-    }
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uvx --quiet --from \"context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git\" chronos-mcp-gateway evaluate --json-io --policy-path \"$CHRONOS_EVALUATOR_POLICY_PATH\""
+          }
+        ]
+      }
+    ]
   }
 }
 ```
@@ -457,9 +519,9 @@ CLI 実行ファイルのパスしか指定できない環境では、共通の�
 
 ##### 1. スクリプトの作成 (`chronos-evaluator-hook.sh`)
 
-💡 **ポリシーファイルの配置について**: 環境ごとに適切なデフォルト値が異なります。
-- **uvx / リモート実行**: ユーザー共通設定として `$HOME/.config/chronos/intents.yaml` を推奨。
-- **ローカル実行**: 開発用リポジトリ内の `$HOME/chronos-graph/src/mcp_gateway/policies/intents.yaml` を使用。
+💡 **ポリシーファイル (`intents.yaml`) の配置ルール**:
+- **原則（エージェント個別）**: 各エージェントの設定ファイル（例: `~/.config/opencode/`）と同じディレクトリに配置することを推奨します。
+- **例外（グローバル/共有）**: `uvx` やリモート実行等で共通のポリシーを使用したい場合は、`$HOME/.config/chronos/intents.yaml` を共有の場所として使用してください。
 
 * **📦 推奨：クローン不要版 (uvx を使用)**
   ```bash
@@ -468,7 +530,7 @@ CLI 実行ファイルのパスしか指定できない環境では、共通の�
   uvx --quiet --from "context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git" \
     chronos-mcp-gateway evaluate \
     --json-io \
-    --policy-path "${CHRONOS_POLICY_PATH:-$HOME/.config/chronos/intents.yaml}"
+    --policy-path "${CHRONOS_EVALUATOR_POLICY_PATH:-$HOME/.config/chronos/intents.yaml}"
   ```
 
 * **📁 ローカル実行版 (クローン済みリポジトリを使用)**
@@ -477,7 +539,7 @@ CLI 実行ファイルのパスしか指定できない環境では、共通の�
   # chronos-evaluator-hook.sh (ローカル実行版)
   uv --directory "${CHRONOS_REPO_PATH:-$HOME/chronos-graph}" run python -m mcp_gateway evaluate \
     --json-io \
-    --policy-path "${CHRONOS_POLICY_PATH:-$HOME/chronos-graph/src/mcp_gateway/policies/intents.yaml}"
+    --policy-path "${CHRONOS_EVALUATOR_POLICY_PATH:-$HOME/chronos-graph/src/mcp_gateway/policies/intents.yaml}"
   ```
   *(※スクリプト作成後、`chmod +x chronos-evaluator-hook.sh` で実行権限を付与してください)*
 
@@ -486,7 +548,17 @@ OpenCode 等の設定で、ラッパースクリプトへの絶対パスを環�
 ```json
 {
   "hooks": {
-    "preToolUse": "{env:CHRONOS_HOOK_PATH}/chronos-evaluator-hook.sh"
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{env:CHRONOS_HOOK_PATH}/chronos-evaluator-hook.sh"
+          }
+        ]
+      }
+    ]
   }
 }
 ```

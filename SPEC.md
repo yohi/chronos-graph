@@ -208,6 +208,17 @@ LLM は使用しない（トークン消費ゼロの原則）。
 SQLite の `busy_timeout=5000` は強力ですが、トランザクション内でネットワークI/Oを待機すると、他のエージェント（プロセス）からの書き込みを長時間ブロックし、`SQLITE_BUSY` エラーを引き起こす原因となります。
 この制約は実装コードおよびテスト内で明示的に保証する必要があります（例: モックを用いて、`EmbeddingProvider.embed_batch` の完了前に `StorageAdapter.save_memory` などのトランザクションメソッドが呼び出されるとテストが失敗するような呼び出し順序検証を実装すること）。
 
+### 4.1.1 Hybrid Ingestion Mode
+
+記憶の保存運用として、エージェントの自主性に任せる「Selective モード」と、ターンごとに全ログを自動保存する「All モード」を切り替える機能を備える。
+- **Selective モード**（デフォルト）: 従来通り、エージェントが自律的に `memory_save` ツールを呼び出す。
+- **All モード**: `mcp_gateway` のツールリストから `memory_save` を物理的に隠蔽し、エージェントには見せない。代わりにクライアント側のフック（`scripts/agent_turn_hook.py`）等からバックグラウンドで `tools/call memory_save` を直接叩いてターン終了時にログを保存する。
+
+**アーキテクチャ上の主要な設計:**
+1. **設定のSSOT (Single Source of Truth) 化と伝播**: `CHRONOS_INGESTION_MODE` の型・デフォルト値・変数名は、クロスパッケージ参照を防ぐため独立した `src/chronos_shared/ingestion_mode.py` に集約する。Gateway 起動時、`GatewaySettings.upstream_env_passthrough` を経由してサブプロセスである context_store にこの環境変数を確実に継承させる。
+2. **フックの切り詰めとフェイルソフト設計**: `agent_turn_hook.py` は送信前にログを **末尾保持 (最新情報優先)** で切り詰める（UTF-8 境界での不完全なシーケンスは破棄）。SSE ハンドシェイクと POST リクエスト全体に対して2段階の厳密なタイムアウトを適用し、いかなる通信障害時もエラーを握りつぶして `exit 0` で終了することで、メインプロセス（エージェント）をクラッシュさせない。
+3. **ノイズ抑制 (Classifier 連携)**: `All` モードにおける低品質コンテンツの流入に対しては、既存の `Classifier` によるフォールバックペナルティ（`FALLBACK_PENALTY=0.5`）が適用され、検索結果のノイズ化を防ぐ。
+
 ### 4.2 Source Adapter
 
 入力ソースごとにアダプターを実装する:
@@ -1209,6 +1220,12 @@ ARCHIVE_THRESHOLD=0.05
 CONSOLIDATION_THRESHOLD=0.85
 PURGE_RETENTION_DAYS=90
 STALE_LOCK_TIMEOUT_SECONDS=600  # 10 minutes; stale filelock auto-recovery threshold
+
+# === Ingestion & Hook ===
+CHRONOS_INGESTION_MODE=selective    # selective | all
+MCP_HOOK_TIMEOUT_SECONDS=2.0
+MCP_HOOK_SSE_TIMEOUT_SECONDS=1.0
+MCP_HOOK_MAX_LOG_BYTES=8388608
 
 # === Search ===
 DEFAULT_TOP_K=10

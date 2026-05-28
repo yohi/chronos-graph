@@ -29,3 +29,7 @@ Execute all backend commands **inside the Devcontainer**. Use deterministic tool
 ## Critical Rules
 - **Database Migrations:** Never hardcode DDL. Use `.sql` files in `src/context_store/storage/migrations/{backend}/` or `supabase/migrations/`.
 - **Memory Format:** All stored memory content MUST be prefixed strictly with `[📜 Episodic]`, `[🧠 Semantic]`, or `[🕒 Procedural]`.
+
+## High-Leverage Rules
+- **Supabase Operations:** Prioritize `client.rpc()` to prevent race conditions in concurrent operations.
+- **Fail-Soft Evaluator:** Automatically fallback to default values with a warning for invalid `max_tokens` or `timeout_seconds`.

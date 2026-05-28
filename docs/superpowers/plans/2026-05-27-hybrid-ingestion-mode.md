@@ -1139,7 +1139,7 @@ EOF
 
 PR URL を **「Draft PR URL 記録欄」の Task 3.2 行** に追記する。
 
-> Note: Git 操作はユーザー指示に従って host 側で実行した。Devcontainer 内の `uv run` は既存 `.venv` 権限で失敗したため、検証は `PYTHONPATH=src /home/vscode/.venv/bin/python`、`RUFF_CACHE_DIR=/tmp/chronos-ruff-cache`、`MYPY_CACHE_DIR=/tmp/chronos-mypy-cache` を使って実行した。
+> Note: Git 操作はユーザー指示に従って host 側で実行した。Devcontainer 内の `uv run` は既存 `.venv` 権限で失敗したため、検証は `PYTHONPATH=src /home/vscode/.venv/bin/python`、`RUFF_CACHE_DIR=/tmp/chronos-ruff-cache`、`MYPY_CACHE_DIR=/tmp/chronos-mypy-cache` を使って実行した。これらの失敗は既知の環境固有の制約によるもので、本PRの変更とは無関係です。
 > Full unit は workspace 直下実行では `.lifecycle.lock` 権限で lifecycle 系 13 件が失敗し、`/tmp` 実行では相対パス前提の Supabase migration 系 5 件が失敗した。Task 3.2 関連の新規テスト、関連 regression、ruff、mypy、AC-7 差分確認は通過済み。
 
 ---

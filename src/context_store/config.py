@@ -7,6 +7,12 @@ from urllib.parse import quote
 from pydantic import Field, SecretStr, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
+from chronos_shared.ingestion_mode import (
+    CHRONOS_INGESTION_MODE_ENV,
+    DEFAULT_INGESTION_MODE,
+    IngestionMode,
+)
+
 SUPABASE_VECTOR_DIM = 768
 
 
@@ -137,6 +143,14 @@ class Settings(BaseSettings):
     cleanup_interval_hours: int = Field(default=24, ge=1)
 
     # --- Ingestion ---
+    ingestion_mode: IngestionMode = Field(
+        default=DEFAULT_INGESTION_MODE,
+        validation_alias=CHRONOS_INGESTION_MODE_ENV,
+        description=(
+            "Memory ingestion behavior. 'all' stores full turn logs with tool hiding; "
+            "'selective' keeps the existing evaluator-driven behavior."
+        ),
+    )
     conversation_chunk_size: int = Field(default=5, ge=1)
     chars_per_token: int = Field(default=3, ge=1)
     max_tokens_per_chunk: int = Field(default=1000, ge=1)

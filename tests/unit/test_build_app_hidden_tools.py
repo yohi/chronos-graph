@@ -21,7 +21,10 @@ def test_selective_mode_does_not_hide_memory_save(
 
     from mcp_gateway.app import build_app
 
-    app = build_app(initial_tools=[{"name": "memory_save", "description": "x"}])
+    app = build_app(
+        initial_tools=[{"name": "memory_save", "description": "x"}],
+        upstream_override=object(),
+    )
     registry = app.state.tool_registry
 
     names = [tool["name"] for tool in registry.all_tools]
@@ -41,7 +44,8 @@ def test_all_mode_hides_memory_save(
         initial_tools=[
             {"name": "memory_save", "description": "x"},
             {"name": "memory_save_url", "description": "y"},
-        ]
+        ],
+        upstream_override=object(),
     )
     registry = app.state.tool_registry
 

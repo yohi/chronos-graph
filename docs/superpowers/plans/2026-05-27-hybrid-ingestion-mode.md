@@ -58,7 +58,7 @@ master
 | Task 3.1 | <https://github.com/yohi/chronos-graph/pull/279> |
 | Task 3.2 | <https://github.com/yohi/chronos-graph/pull/283> |
 | Task 4.1 | <https://github.com/yohi/chronos-graph/pull/278> |
-| Task 5.1 | _未作成_ |
+| Task 5.1 | <https://github.com/yohi/chronos-graph/pull/284> |
 
 ---
 
@@ -1647,7 +1647,7 @@ PR URL を **「Draft PR URL 記録欄」の Task 4.1 行** に追記する。
 - なし (検証スクリプト実行 + 結果記録のみ)
 - (任意) Create: `docs/superpowers/specs/2026-05-27-hybrid-ingestion-mode-verification.md` (検証結果サマリ)
 
-- [ ] **Step 1: ブランチ作成と派生元検証 (Devcontainer 内で実行)**
+- [x] **Step 1: ブランチ作成と派生元検証 (Devcontainer 内で実行)**
 
 ```bash
 git fetch origin master
@@ -1658,7 +1658,7 @@ CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 git merge-base --is-ancestor "$EXPECTED_BASE" "$CURRENT_BRANCH" || { echo "ERROR: 派生元ブランチが $EXPECTED_BASE ではありません。スタック構造が壊れています。"; exit 1; }
 ```
 
-- [ ] **Step 2: master に必要な全変更が取り込まれていることを物理確認**
+- [x] **Step 2: master に必要な全変更が取り込まれていることを物理確認**
 
 ```bash
 test -f src/chronos_shared/ingestion_mode.py && echo "OK: Task 1.1"
@@ -1670,7 +1670,7 @@ test -f scripts/agent_turn_hook.py && echo "OK: Task 4.1"
 
 期待出力: 5 行とも "OK: ..."。
 
-- [ ] **Step 3: 静的解析・型チェック (設計書 §8 Step 2/3)**
+- [x] **Step 3: 静的解析・型チェック (設計書 §8 Step 2/3)**
 
 ```bash
 uv run ruff check src/chronos_shared/ingestion_mode.py \
@@ -1693,7 +1693,7 @@ uv run mypy src/chronos_shared/ingestion_mode.py \
 
 期待出力: いずれもエラー 0 (AC-6)。
 
-- [ ] **Step 4: 追加ユニットテスト (設計書 §8 Step 4)**
+- [x] **Step 4: 追加ユニットテスト (設計書 §8 Step 4)**
 
 ```bash
 uv run pytest tests/unit/test_chronos_shared_ingestion_mode.py -v
@@ -1703,9 +1703,17 @@ uv run pytest tests/unit/test_agent_turn_hook_truncate.py -v
 uv run pytest tests/unit/test_build_app_hidden_tools.py -v
 ```
 
-期待出力: 全タスクのテストが緑 (合計 32 件)。
+期待出力: 全タスクのテストが緑 (合計 33 件)。
+<!--
+内訳:
+- test_chronos_shared_ingestion_mode.py: 4
+- test_tool_registry_hidden.py: 6
+- test_settings_ingestion_mode.py: 9
+- test_agent_turn_hook_truncate.py: 11
+- test_build_app_hidden_tools.py: 3
+-->
 
-- [ ] **Step 5: 既存テストのリグレッション確認 (設計書 §8 Step 5)**
+- [x] **Step 5: 既存テストのリグレッション確認 (設計書 §8 Step 5)**
 
 ```bash
 uv run pytest tests/unit/ -k "registry or settings or gateway" -v
@@ -1714,7 +1722,7 @@ uv run pytest tests/unit/ -v
 
 期待出力: 失敗 0。
 
-- [ ] **Step 6: 手動 E2E (設計書 §8 Step 6 を Devcontainer 内で実行)**
+- [x] **Step 6: 手動 E2E (設計書 §8 Step 6 を Devcontainer 内で実行)**
 
 ```bash
 # 必要環境変数を準備 (TEST_API_KEY は事前にエージェントが知っている dummy 値で OK)
@@ -1748,7 +1756,7 @@ wait "$GATEWAY_PID" 2>/dev/null || true
 
 期待出力: `tools[].name` 一覧に `"memory_save"` が **含まれず**、`"memory_save_url"` が **含まれる** (AC-2)。`MCP_GATEWAY_POLICY_PATH` のパスはリポジトリ実体に合わせて調整。
 
-- [ ] **Step 7: フック経由の `tools/call memory_save` が成立することを確認 (AC-3)**
+- [x] **Step 7: フック経由の `tools/call memory_save` が成立することを確認 (AC-3)**
 
 Step 6 で起動した Gateway に対して以下を実行 (Step 6 をもう一度起動し直しても OK):
 
@@ -1770,7 +1778,7 @@ wait "$GATEWAY_PID" 2>/dev/null || true
 
 期待出力: `hook exit code: 0`、stderr に ERROR ログ無し (WARNING はネットワーク状況により出る可能性あり)。
 
-- [ ] **Step 8: AC チェックリストの照合**
+- [x] **Step 8: AC チェックリストの照合**
 
 設計書 §9 の AC-1 〜 AC-10 を一つずつ確認し、本ブランチに「検証結果サマリ」コミット (空コミットでも可) を残す。
 
@@ -1793,7 +1801,7 @@ wait "$GATEWAY_PID" 2>/dev/null || true
 | AC-10 | env passthrough 伝達 | PASS | test_build_upstream_env_propagates_ingestion_mode |
 ```
 
-- [ ] **Step 9: コミット**
+- [x] **Step 9: コミット**
 
 ```bash
 git add docs/superpowers/specs/2026-05-27-hybrid-ingestion-mode-verification.md 2>/dev/null || true
@@ -1808,7 +1816,7 @@ EOF
 )"
 ```
 
-- [ ] **Step 10: Draft PR 作成と URL 記録**
+- [x] **Step 10: Draft PR 作成と URL 記録**
 
 ```bash
 git push -u origin feat/hybrid-ingestion-integration-verify

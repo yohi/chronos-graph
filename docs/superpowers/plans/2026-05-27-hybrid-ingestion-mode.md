@@ -1703,7 +1703,15 @@ uv run pytest tests/unit/test_agent_turn_hook_truncate.py -v
 uv run pytest tests/unit/test_build_app_hidden_tools.py -v
 ```
 
-期待出力: 全タスクのテストが緑 (合計 32 件)。
+期待出力: 全タスクのテストが緑 (合計 33 件)。
+<!--
+内訳:
+- test_chronos_shared_ingestion_mode.py: 4
+- test_tool_registry_hidden.py: 6
+- test_settings_ingestion_mode.py: 9
+- test_agent_turn_hook_truncate.py: 11
+- test_build_app_hidden_tools.py: 3
+-->
 
 - [x] **Step 5: 既存テストのリグレッション確認 (設計書 §8 Step 5)**
 

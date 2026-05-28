@@ -59,7 +59,7 @@
 
 タイムアウト機構を専用モジュールで定義し、`UpstreamClient.call_tool` を `asyncio.wait_for` でラップする。
 
-- [ ] **Step 1: タイムアウト設定モジュール作成**
+- [x] **Step 1: タイムアウト設定モジュール作成**
 
 Create `src/mcp_gateway/upstream/timeout_client.py`:
 
@@ -86,7 +86,7 @@ class TimeoutConfig:
         return min(timeout, self.max_timeout_seconds)
 ```
 
-- [ ] **Step 2: UpstreamClient.call_tool ラップ機能の実装**
+- [x] **Step 2: UpstreamClient.call_tool ラップ機能の実装**
 
 Modify `src/mcp_gateway/upstream/context_store_client.py` around line 117-123:
 
@@ -148,7 +148,7 @@ class UpstreamClient:
         return await self.client.call_tool(tool_name, arguments)
 ```
 
-- [ ] **Step 3: タイムアウトテスト作成**
+- [x] **Step 3: タイムアウトテスト作成**
 
 Create `tests/unit/test_upstream_timeout.py`:
 
@@ -202,13 +202,13 @@ def test_timeout_config_tool_specific():
     assert config.get_timeout("memory_search") == 30.0
 ```
 
-- [ ] **Step 4: テスト実行と検証**
+- [x] **Step 4: テスト実行と検証**
 
 Run: `uv run pytest tests/unit/test_upstream_timeout.py -v`
 
 Expected: All 3 tests pass, timeout handling works correctly.
 
-- [ ] **Step 5: コミット**
+- [x] **Step 5: コミット**
 
 ```bash
 git add src/mcp_gateway/upstream/timeout_client.py \
@@ -235,7 +235,7 @@ Addresses SPEC.md §16.5 D-1"
 
 Read系ツール（`memory_search`, `memory_stats` 等）の評価バイパス、評価結果のキャッシング、並列化を導入。
 
-- [ ] **Step 1: LLMEvaluator.__init__ に evaluation_timeout を追加**
+- [x] **Step 1: LLMEvaluator.__init__ に evaluation_timeout を追加**
 
 Modify `src/mcp_gateway/policy/llm_evaluator.py` in `__init__`:
 
@@ -253,7 +253,7 @@ class LLMEvaluator:
         )
 ```
 
-- [ ] **Step 1b: Read系ツール識別リストの定義**
+- [x] **Step 1b: Read系ツール識別リストの定義**
 
 Modify `src/mcp_gateway/policy/llm_evaluator.py` to add at module level (before class definition):
 
@@ -267,7 +267,7 @@ READ_ONLY_TOOLS = {
 }
 ```
 
-- [ ] **Step 2: LLM評価バイパス機構の実装**
+- [x] **Step 2: LLM評価バイパス機構の実装**
 
 Modify `src/mcp_gateway/policy/llm_evaluator.py` around line 236:
 
@@ -319,7 +319,7 @@ def _make_cache_key(self, tool_name: str, arguments: dict) -> str:
     return f"eval:{tool_name}:{h}"
 ```
 
-- [ ] **Step 3: Memory 取得と LLM 判定の並列化**
+- [x] **Step 3: Memory 取得と LLM 判定の並列化**
 
 Modify `src/mcp_gateway/policy/llm_evaluator.py` to refactor `_evaluate_with_llm`:
 
@@ -423,7 +423,7 @@ async def _get_llm_decision(
         return None
 ```
 
-- [ ] **Step 4: テスト作成**
+- [x] **Step 4: テスト作成**
 
 Create `tests/unit/test_llm_evaluator_optimization.py`:
 
@@ -518,13 +518,13 @@ async def test_parallel_context_and_decision():
     assert elapsed < 0.4, f"Expected parallel (~0.2s), got {elapsed}s"
 ```
 
-- [ ] **Step 5: テスト実行**
+- [x] **Step 5: テスト実行**
 
 Run: `uv run pytest tests/unit/test_llm_evaluator_optimization.py -v`
 
 Expected: All tests pass, parallel execution verified.
 
-- [ ] **Step 6: コミット**
+- [x] **Step 6: コミット**
 
 ```bash
 git add src/mcp_gateway/policy/llm_evaluator.py \
@@ -551,7 +551,7 @@ Addresses SPEC.md §16.5 D-2"
 
 承認バイパス対象ツール分類と可変タイムアウト実装。
 
-- [ ] **Step 1: intents.yaml に承認バイパス分類を追加**
+- [x] **Step 1: intents.yaml に承認バイパス分類を追加**
 
 Modify `src/mcp_gateway/policy/intents.yaml` to add approval_required flag:
 
@@ -578,7 +578,7 @@ intents:
     description: "Delete memory"
 ```
 
-- [ ] **Step 2: サーバーの承認タイムアウト可変化**
+- [x] **Step 2: サーバーの承認タイムアウト可変化**
 
 Modify `src/mcp_gateway/server.py` around line 448-518:
 
@@ -699,7 +699,7 @@ class ChronosServer:
         return await self.execute_tool(tool_name, arguments)
 ```
 
-- [ ] **Step 3: テスト（簡易版）**
+- [x] **Step 3: テスト（簡易版）**
 
 Modify or create integration test snippet in existing test file:
 
@@ -728,7 +728,7 @@ async def test_approval_required_for_write_tools():
     assert server.execute_tool.called
 ```
 
-- [ ] **Step 4: コミット**
+- [x] **Step 4: コミット**
 
 ```bash
 git add src/mcp_gateway/policy/intents.yaml \
@@ -755,7 +755,7 @@ Addresses SPEC.md §16.5 D-3"
 
 `_process_chunk` を並列化し、graph_enabled=false時のスループット向上。
 
-- [ ] **Step 1: 並列化設定の追加**
+- [x] **Step 1: 並列化設定の追加**
 
 Modify `src/context_store/ingestion/pipeline.py` to add constants near class definition:
 
@@ -768,7 +768,7 @@ CHUNK_PARALLEL_SEMAPHORE_SIZE = 10  # Max concurrent chunk processing
 CHUNK_PARALLEL_ENABLED_WITHOUT_GRAPH = True  # Enable parallel when graph disabled
 ```
 
-- [ ] **Step 2: IngestionPipeline クラスへ Semaphore 追加**
+- [x] **Step 2: IngestionPipeline クラスへ Semaphore 追加**
 
 Modify `src/context_store/ingestion/pipeline.py` in `__init__`:
 
@@ -781,7 +781,7 @@ class IngestionPipeline:
         )
 ```
 
-- [ ] **Step 3: _process_chunk 並列化実装**
+- [x] **Step 3: _process_chunk 並列化実装**
 
 Modify `src/context_store/ingestion/pipeline.py` around line 218-263:
 
@@ -856,7 +856,7 @@ async def _process_chunk(
     return memory
 ```
 
-- [ ] **Step 4: テスト作成**
+- [x] **Step 4: テスト作成**
 
 Create `tests/unit/test_ingestion_parallel.py`:
 
@@ -944,13 +944,13 @@ async def test_semaphore_limits_concurrency():
     assert max_concurrent <= 2, f"Exceeded semaphore limit: {max_concurrent}"
 ```
 
-- [ ] **Step 5: テスト実行**
+- [x] **Step 5: テスト実行**
 
 Run: `uv run pytest tests/unit/test_ingestion_parallel.py -v`
 
 Expected: All tests pass.
 
-- [ ] **Step 6: コミット**
+- [x] **Step 6: コミット**
 
 ```bash
 git add src/context_store/ingestion/pipeline.py \
@@ -1409,17 +1409,61 @@ git commit -m "docs: add Phase 2 timeout configuration documentation"
 | D-2 | LLM Evaluator 並列化 | ✅ | Task 2 |
 | D-3 | 承認 timeout + bypass | ✅ | Task 3 |
 | E-1 | Chunk 並列化 | ✅ | Task 4 |
-| E-2 | 埋め込みリトライ調整 | ✅ | Task 5 |
+|| E-2 | 埋め込みリトライ調整 | 🔄 | Task 5（未着手） |
 | E-3 | Supabase keyword 最適化 | 📋 | Phase 2b（低優先度） |
 | E-4 | GraphLinker 重複呼び出し解消 | 📋 | Phase 2b（低優先度） |
 | E-5 | Orchestrator RPC 統合 | 📋 | Phase 2b（低優先度） |
 | E-6 | InMemory Cache cold-start | 📋 | Phase 2b（低優先度） |
 | E-7 | ローカルモデル eager preload | 📋 | Phase 2c（中優先度） |
 
-**High/Medium優先度の5項目を実装、Low優先度3項目は Phase 2b 以降へ。**
+**High優先度の4項目（D-1〜E-1）を実装、E-2（Task 5）は次セッションで継続。**
 
 ---
+---
 
+## 📌 セッション継続メモ（2026-05-29）
+
+### 完了項目
+- [x] **D-1**: UpstreamClient.call_tool タイムアウト追加（TimeoutConfig + asyncio.wait_for）
+- [x] **D-2**: LLM Evaluator 最適化（READ_ONLY バイパス、キャッシュ、memory fetch タイムアウト）
+- [x] **D-3**: intents.example.yaml に requires_approval 追加
+- [x] **E-1**: IngestionPipeline チャンク並列化（graph=None 時のみ）
+- 各項目の単体テスト追加・pass 確認済み
+- `ruff check` pass 確認済み
+
+### 未完了 (再開時はここから)
+| # | タスク | ファイル | 概要 |
+|---|----|---------|------|
+| 1 | E-2 embedding retry | `retry_config.py`, `openai.py`, `litellm.py`, `test_embedding_retry.py` | EmbeddingRetryPolicy + tenacity retry 調整 + per-attempt timeout |
+| 2 | 統合テスト | `tests/integration/test_phase2_timeout_integration.py` (任意) | 各改善項目の結合確認 |
+| 3 | ドキュメント更新 | `README.md` | Phase 2 環境変数一覧追加 |
+
+### アクティブコンテキスト
+- **ブランチ**: `feature/mcp-timeout-improvements-phase2`（master から分岐済み）
+- **未 commit**: D-1〜E-1 の変更11ファイル（git status で確認）
+- **devcontainer**: `.venv` が root 所有のため `uv run` 不可 → ホスト `uv --frozen` を代替使用
+- **テスト実行**: `env -u CHRONOS_EVALUATOR_MODEL uv run --frozen pytest tests/unit/test_XXX.py -v`
+
+### 主要ファイル
+| ファイル | 役割 |
+|---------|------|
+| `src/mcp_gateway/upstream/timeout_client.py` | TimeoutConfig (D-1) |
+| `src/mcp_gateway/upstream/context_store_client.py` | call_tool wait_for ラップ (D-1) |
+| `src/mcp_gateway/errors.py` | UpstreamError に code/recoverable 追加 (D-1) |
+| `src/mcp_gateway/policy/llm_evaluator.py` | READ_ONLY_TOOLS export (D-2) |
+| `src/mcp_gateway/policy/composite.py` | バイパス・キャッシュ・タイムアウト (D-2) |
+| `src/mcp_gateway/policies/intents.example.yaml` | write ツール承認設定 (D-3) |
+| `src/context_store/ingestion/pipeline.py` | 並列/逐次分岐 (E-1) |
+
+### 再開手順
+```bash
+# 1. ブランチをチェックアウト
+git checkout feature/mcp-timeout-improvements-phase2
+
+# 2. 計画書を参照
+# → docs/superpowers/plans/2026-05-28-mcp-timeout-improvements.md Task 5 (E-2) から実行
+# → 実装後、Task 6 (統合テスト) → Task 7 (ドキュメント) → コミット分割 → PR作成まで
+```
 計画完成しました！📋
 
 **実行方法:**

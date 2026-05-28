@@ -107,7 +107,10 @@ def build_app(
             ),
         )
 
-    registry = ToolRegistry(initial_tools or [])
+    hidden_tools: frozenset[str] = (
+        frozenset({"memory_save"}) if settings.ingestion_mode == "all" else frozenset()
+    )
+    registry = ToolRegistry(initial_tools or [], hidden_tools=hidden_tools)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:

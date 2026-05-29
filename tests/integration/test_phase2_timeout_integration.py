@@ -203,7 +203,7 @@ class TestE2EmbeddingRetryEndToEnd:
         # 復帰したベクトルが返る
         assert len(embeddings) == 1
         assert len(embeddings[0]) == 1536
-        # 合計時間境界: per_attempt 2.0s + max_wait 0.1s × (max_attempts-1) = 2.2s 上限。
+        # 合計時間境界: per_attempt 2.0s + max_wait 0.1s x (max_attempts-1) = 2.2s 上限。
         # 実環境では Retry-After=0 + 軽量モックなので 0.5s 未満で完了する。
         assert elapsed < 1.5, f"Recovery should complete quickly, took {elapsed}s"
 
@@ -244,7 +244,7 @@ class TestE2EmbeddingRetryEndToEnd:
         assert call_count == 3
         # reraise=True なので生の HTTPStatusError が伝搬する
         assert exc_info.value.response.status_code == 500
-        # 上限: max_wait=0.05 × 2 (attempts-1) + 各試行軽量 ≈ 0.5s 未満
+        # 上限: max_wait=0.05 x 2 (attempts-1) + 各試行軽量 ≈ 0.5s 未満
         assert elapsed < 1.0, f"Failure should be bounded, took {elapsed}s"
 
 
@@ -258,7 +258,7 @@ class TestE1ChunkParallelIngestion:
 
     @pytest.mark.asyncio
     async def test_parallel_mode_completes_faster_than_sequential_baseline(self) -> None:
-        """5 チャンクの save_memory 100ms × 5 が並列実行で 1 シーケンシャル分以下に収まる。"""
+        """5 チャンクの save_memory 100ms x 5 が並列実行で 1 シーケンシャル分以下に収まる。"""
         per_save_delay = 0.1  # 100ms
         chunks_target = 5
 
@@ -287,7 +287,7 @@ class TestE1ChunkParallelIngestion:
             f"Expected >= {chunks_target} chunks, got {len(results)}"
         )
 
-        # 並列実行: per_save_delay × チャンク数 が逐次想定。並列ならこの程度で済むはず。
+        # 並列実行: per_save_delay x チャンク数 が逐次想定。並列ならこの程度で済むはず。
         # CI 環境の負荷を考慮し、閾値を 0.8 に緩和 (Issue 1 修正)
         sequential_estimate = per_save_delay * len(results)
         assert elapsed < sequential_estimate * 0.8, (

@@ -659,6 +659,30 @@ ChronosGraph 本体およびセキュリティ判定エンジン（Universal Eva
 echo "$CONVERSATION_LOG" | python scripts/agent_turn_hook.py &
 ```
 
+### 4. Phase 2: タイムアウト・遅延最適化 (Phase 2 Timeout & Latency Improvements)
+
+MCP 経由のツール呼び出しや埋め込み API のハング・長期リトライを防止し、総レイテンシを予測可能に bound するための設定群です。設計背景は [SPEC.md §16.5](SPEC.md) を参照してください。
+
+| 環境変数 | デフォルト | 範囲 / 上限 | 説明 |
+|---|---|---|---|
+| `MCP_GATEWAY_TOOL_TIMEOUT_SECONDS` | `30.0` | > 0 | **(D-1)** Upstream MCP ツール呼び出しのデフォルトタイムアウト秒数。`MCP_TOOL_TIMEOUT_SECONDS` を fallback 名として参照可。 |
+| `MCP_GATEWAY_MAX_TOOL_TIMEOUT_SECONDS` | `300.0` | > 0 | **(D-1)** ツール固有タイムアウトを含めた絶対上限秒数。 |
+| `MCP_GATEWAY_APPROVAL_TIMEOUT_SECONDS` | `30.0` | (0, 600] | **(D-3)** 人間承認の待機タイムアウト秒数。経過後は `approval_timeout` decision で fail-soft にクローズ。 |
+| `CHUNK_PARALLEL_SEMAPHORE_SIZE` | `10` | > 0 | **(E-1)** Ingestion 並列モード (`GRAPH_ENABLED=false` 時) でのチャンク同時処理の最大同時実行数。 |
+| `EMBEDDING_MAX_RETRIES` | `3` | > 0 | **(E-2)** OpenAI / LiteLLM 埋め込み API リトライの最大試行回数 (旧 5 → 3)。 |
+| `EMBEDDING_MIN_WAIT` | `1.0` | > 0 | **(E-2)** 指数バックオフの最小待機秒数。 |
+| `EMBEDDING_MAX_WAIT` | `10.0` | > 0 | **(E-2)** 指数バックオフの最大待機秒数 (旧 60s → 10s)。`Retry-After` ヘッダを尊重する際もこの値でクランプ。 |
+| `EMBEDDING_PER_ATTEMPT_TIMEOUT` | `10.0` | > 0 | **(E-2)** 1 リトライ試行あたりの HTTP タイムアウト秒数。 |
+
+> 💡 **レイテンシ設計:** 上記の組み合わせにより Embedding API 経由の総レイテンシを **最大 ~50 秒** (3 試行 × 10s + 2 待機 × 10s) に bound し、MCP Gateway のツールタイムアウト枠 (`MCP_GATEWAY_TOOL_TIMEOUT_SECONDS=30s`) と整合した設計となっています。`EMBEDDING_*` の不正値・非正値は警告ログ + デフォルト値へフォールバック (fail-soft) します。
+
+**実装参照:**
+
+- **D-1** Upstream timeout: [`src/mcp_gateway/upstream/timeout_client.py`](src/mcp_gateway/upstream/timeout_client.py) `TimeoutConfig`
+- **D-3** Approval timeout: [`src/mcp_gateway/config.py`](src/mcp_gateway/config.py) `GatewaySettings.approval_timeout_seconds`
+- **E-1** Chunk 並列化: [`src/context_store/ingestion/pipeline.py`](src/context_store/ingestion/pipeline.py) `CHUNK_PARALLEL_SEMAPHORE_SIZE`
+- **E-2** Embedding retry: [`src/context_store/embedding/retry_config.py`](src/context_store/embedding/retry_config.py) `EmbeddingRetryPolicy`
+
 ### 💡 カスタムエンドポイント (ローカルLLM / vLLM / Azure 等) の設定
 
 Universal Evaluator はバックエンドに [LiteLLM](https://github.com/BerriAI/litellm) を使用しています。そのため、専用の環境変数を追加しなくても、LiteLLM が標準でサポートする環境変数（`OPENAI_API_BASE` など）を利用してあらゆるカスタムエンドポイントにルーティングできます。

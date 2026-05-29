@@ -570,6 +570,106 @@ async def test_ingest_calls_embed_batch_once_for_all_chunks(monkeypatch) -> None
 
 
 @pytest.mark.asyncio
+async def test_ingest_processes_chunks_in_parallel_without_graph(monkeypatch) -> None:
+    storage = _make_mock_storage()
+    embedding_provider = _make_mock_embedding_provider()
+    pipeline = IngestionPipeline(
+        storage=storage,
+        graph=None,
+        embedding_provider=embedding_provider,
+        settings=None,
+    )
+
+    fake_chunks = [
+        RawContent(content=f"c{i}", source_type=SourceType.MANUAL, metadata={"chunk_index": i})
+        for i in range(4)
+    ]
+
+    def fake_chunk(raw: RawContent):
+        yield from fake_chunks
+
+    concurrent = 0
+    max_concurrent = 0
+
+    async def tracked_process(
+        chunk: RawContent,
+        *,
+        base_metadata: dict[str, Any],
+        prior_document_memories: list[Memory],
+        precomputed_embedding: list[float] | None = None,
+    ) -> IngestionResult:
+        nonlocal concurrent, max_concurrent
+        concurrent += 1
+        max_concurrent = max(max_concurrent, concurrent)
+        await asyncio.sleep(0.02)
+        concurrent -= 1
+        return IngestionResult(
+            memory_id=chunk.content,
+            action=DeduplicationAction.INSERT,
+            chunk_index=int(chunk.metadata["chunk_index"]),
+        )
+
+    monkeypatch.setattr(pipeline._chunker, "chunk", fake_chunk)
+    monkeypatch.setattr(pipeline, "_process_chunk", tracked_process)
+    pipeline._chunk_parallel_semaphore = asyncio.Semaphore(2)
+
+    results = await pipeline.ingest("dummy", source_type=SourceType.MANUAL, metadata={})
+
+    assert [result.memory_id for result in results] == ["c0", "c1", "c2", "c3"]
+    assert max_concurrent == 2
+
+
+@pytest.mark.asyncio
+async def test_ingest_processes_chunks_sequentially_with_graph(monkeypatch) -> None:
+    storage = _make_mock_storage()
+    graph = _make_mock_graph()
+    embedding_provider = _make_mock_embedding_provider()
+    pipeline = IngestionPipeline(
+        storage=storage,
+        graph=graph,
+        embedding_provider=embedding_provider,
+        settings=None,
+    )
+
+    fake_chunks = [
+        RawContent(content=f"c{i}", source_type=SourceType.MANUAL, metadata={"chunk_index": i})
+        for i in range(3)
+    ]
+
+    def fake_chunk(raw: RawContent):
+        yield from fake_chunks
+
+    concurrent = 0
+    max_concurrent = 0
+
+    async def tracked_process(
+        chunk: RawContent,
+        *,
+        base_metadata: dict[str, Any],
+        prior_document_memories: list[Memory],
+        precomputed_embedding: list[float] | None = None,
+    ) -> IngestionResult:
+        nonlocal concurrent, max_concurrent
+        concurrent += 1
+        max_concurrent = max(max_concurrent, concurrent)
+        await asyncio.sleep(0.02)
+        concurrent -= 1
+        return IngestionResult(
+            memory_id=chunk.content,
+            action=DeduplicationAction.INSERT,
+            chunk_index=int(chunk.metadata["chunk_index"]),
+        )
+
+    monkeypatch.setattr(pipeline._chunker, "chunk", fake_chunk)
+    monkeypatch.setattr(pipeline, "_process_chunk", tracked_process)
+
+    results = await pipeline.ingest("dummy", source_type=SourceType.MANUAL, metadata={})
+
+    assert [result.memory_id for result in results] == ["c0", "c1", "c2"]
+    assert max_concurrent == 1
+
+
+@pytest.mark.asyncio
 async def test_ingest_propagates_embed_batch_failure() -> None:
     """When embed_batch raises, ingest() must abort instead of partially succeeding."""
     storage = MagicMock()

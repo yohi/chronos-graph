@@ -15,6 +15,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import weakref
 from dataclasses import dataclass
 from datetime import datetime
@@ -34,6 +35,20 @@ from context_store.storage.protocols import GraphAdapter, MemoryFilters, Storage
 from context_store.utils import mask_url
 
 logger = logging.getLogger(__name__)
+
+
+def _positive_int_env(key: str, default: int) -> int:
+    raw = os.getenv(key)
+    if raw is None:
+        return default
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+
+CHUNK_PARALLEL_SEMAPHORE_SIZE = _positive_int_env("CHUNK_PARALLEL_SEMAPHORE_SIZE", 10)
 
 
 @dataclass
@@ -87,6 +102,9 @@ class IngestionPipeline:
         )
         self._content_results: dict[Any, asyncio.Task[IngestionResult | None]] = {}
         self._locks_mutex = asyncio.Lock()
+        self._chunk_parallel_semaphore: asyncio.Semaphore = asyncio.Semaphore(
+            CHUNK_PARALLEL_SEMAPHORE_SIZE
+        )
 
     @property
     def chunker(self) -> Chunker:
@@ -226,44 +244,18 @@ class IngestionPipeline:
         else:
             embedding_map = {}
 
-        results: list[IngestionResult] = []
-        document_memories: dict[str, list[Memory]] = {}
-        failed_chunks: list[dict[str, Any]] = []
-
-        for chunk in flattened:
-            document_id = str(chunk.metadata.get("document_id", ""))
-            prior_document_memories = document_memories.get(document_id, [])
-            content_hash = self._compute_hash(chunk.content)
-            key = self._compute_memo_key(chunk, meta)
-            embedding = embedding_map[key]
-            try:
-                result = await self._process_chunk(
-                    chunk,
-                    base_metadata=meta,
-                    prior_document_memories=prior_document_memories,
-                    precomputed_embedding=embedding,
-                )
-                if result:
-                    results.append(result)
-                    if document_id and result.persisted_memory is not None:
-                        document_memories.setdefault(document_id, []).append(
-                            result.persisted_memory
-                        )
-            except Exception as e:
-                logger.error(
-                    "Chunk 処理失敗 (content_hash=%s, doc_id=%s): %s",
-                    content_hash[:8],
-                    document_id,
-                    e,
-                    exc_info=True,
-                )
-                failed_chunks.append(
-                    {
-                        "content_hash": content_hash,
-                        "document_id": document_id,
-                        "error": str(e),
-                    }
-                )
+        if self._graph is None:
+            results, failed_chunks = await self._process_chunks_parallel(
+                chunks=flattened,
+                base_metadata=meta,
+                embedding_map=embedding_map,
+            )
+        else:
+            results, failed_chunks = await self._process_chunks_sequential(
+                chunks=flattened,
+                base_metadata=meta,
+                embedding_map=embedding_map,
+            )
 
         if flattened and not results:
             raise RuntimeError(
@@ -272,6 +264,106 @@ class IngestionPipeline:
             )
 
         return results
+
+    async def _process_chunks_sequential(
+        self,
+        *,
+        chunks: list[RawContent],
+        base_metadata: dict[str, Any],
+        embedding_map: dict[tuple[str, str, str], list[float]],
+    ) -> tuple[list[IngestionResult], list[dict[str, Any]]]:
+        results: list[IngestionResult] = []
+        document_memories: dict[str, list[Memory]] = {}
+        failed_chunks: list[dict[str, Any]] = []
+
+        for chunk in chunks:
+            document_id = str(chunk.metadata.get("document_id", ""))
+            prior_document_memories = document_memories.get(document_id, [])
+            try:
+                result = await self._process_chunk(
+                    chunk,
+                    base_metadata=base_metadata,
+                    prior_document_memories=prior_document_memories,
+                    precomputed_embedding=embedding_map[
+                        self._compute_memo_key(chunk, base_metadata)
+                    ],
+                )
+                if result:
+                    results.append(result)
+                    if document_id and result.persisted_memory is not None:
+                        document_memories.setdefault(document_id, []).append(
+                            result.persisted_memory
+                        )
+            except Exception as exc:
+                self._record_chunk_failure(
+                    chunk=chunk,
+                    document_id=document_id,
+                    error=exc,
+                    failed_chunks=failed_chunks,
+                )
+
+        return results, failed_chunks
+
+    async def _process_chunks_parallel(
+        self,
+        *,
+        chunks: list[RawContent],
+        base_metadata: dict[str, Any],
+        embedding_map: dict[tuple[str, str, str], list[float]],
+    ) -> tuple[list[IngestionResult], list[dict[str, Any]]]:
+        async def process_one(
+            chunk: RawContent,
+        ) -> tuple[IngestionResult | None, dict[str, Any] | None]:
+            document_id = str(chunk.metadata.get("document_id", ""))
+            try:
+                async with self._chunk_parallel_semaphore:
+                    result = await self._process_chunk(
+                        chunk,
+                        base_metadata=base_metadata,
+                        prior_document_memories=[],
+                        precomputed_embedding=embedding_map[
+                            self._compute_memo_key(chunk, base_metadata)
+                        ],
+                    )
+                return result, None
+            except Exception as exc:
+                tmp_failed: list[dict[str, Any]] = []
+                self._record_chunk_failure(
+                    chunk=chunk,
+                    document_id=document_id,
+                    error=exc,
+                    failed_chunks=tmp_failed,
+                )
+                return None, tmp_failed[0] if tmp_failed else None
+
+        gathered = await asyncio.gather(*(process_one(chunk) for chunk in chunks))
+        results = [result for result, failure in gathered if result is not None and failure is None]
+        failed_chunks = [failure for _, failure in gathered if failure is not None]
+        return results, failed_chunks
+
+    def _record_chunk_failure(
+        self,
+        *,
+        chunk: RawContent,
+        document_id: str,
+        error: Exception,
+        failed_chunks: list[dict[str, Any]],
+    ) -> None:
+        content_hash = self._compute_hash(chunk.content)
+        logger.error(
+            "Chunk 処理失敗 (content_hash=%s, doc_id=%s): %s",
+            content_hash[:8],
+            document_id,
+            error,
+            exc_info=True,
+        )
+        failed_chunks.append(
+            {
+                "content_hash": content_hash,
+                "document_id": document_id,
+                "error": str(error),
+            }
+        )
 
     def _compute_memo_key(
         self, chunk: RawContent, base_metadata: dict[str, Any]

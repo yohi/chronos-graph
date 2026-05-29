@@ -6,9 +6,17 @@ import logging
 from typing import Any, cast
 
 import httpx
-import tenacity
+
+from context_store.embedding.retry_config import (
+    EmbeddingRetryPolicy,
+    should_retry_embedding,
+)
 
 logger = logging.getLogger(__name__)
+
+# Backward compatibility: 旧 `_is_retryable` を should_retry_embedding に統合したため、
+# 既存テストの import 互換を保つための再エクスポート。
+_is_retryable = should_retry_embedding
 
 # モデル別のデフォルト次元数
 _MODEL_DIMENSIONS: dict[str, int] = {
@@ -23,21 +31,14 @@ _DEFAULT_CHUNK_SIZE = 100
 _OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings"
 
 
-def _is_retryable(exc: BaseException) -> bool:
-    """リトライ対象の例外かどうかを判定する。"""
-    if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code in (429, 500, 502, 503, 504)
-    if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError)):
-        return True
-    return False
-
-
 class OpenAIEmbeddingProvider:
     """OpenAI API を利用した Embedding Provider。
 
-    - embed_batch は内部でチャンク分割してリクエスト
-    - 429/5xx/タイムアウト時に Exponential Backoff でリトライ
-    - 入力 texts の順序を完全に保持して返す
+    - ``embed_batch`` は内部でチャンク分割してリクエスト
+    - 429 / 5xx / タイムアウト時に統一リトライポリシー (EmbeddingRetryPolicy) でリトライ
+    - レスポンスの ``Retry-After`` ヘッダを尊重 (上限クランプあり)
+    - 1 試行あたり ``retry_policy.per_attempt_timeout_seconds`` でタイムアウト
+    - 入力 ``texts`` の順序を完全に保持して返す
     """
 
     def __init__(
@@ -46,6 +47,7 @@ class OpenAIEmbeddingProvider:
         model: str = "text-embedding-3-small",
         chunk_size: int = _DEFAULT_CHUNK_SIZE,
         timeout: float = 60.0,
+        retry_policy: EmbeddingRetryPolicy | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
@@ -53,6 +55,8 @@ class OpenAIEmbeddingProvider:
         self._timeout = timeout
         self._client = httpx.AsyncClient(timeout=self._timeout)
         self._dimension_warning_emitted = False
+        # retry_policy が未指定の場合は env から読み込む (fail-soft)
+        self.retry_policy = retry_policy or EmbeddingRetryPolicy.from_env()
 
     @property
     def dimension(self) -> int:
@@ -77,8 +81,8 @@ class OpenAIEmbeddingProvider:
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """複数テキストを埋め込みベクトルに変換する。
 
-        - 入力を chunk_size ごとに分割して API リクエスト
-        - 入力 texts の順序を保持して返す
+        - 入力を ``chunk_size`` ごとに分割して API リクエスト
+        - 入力 ``texts`` の順序を保持して返す
         """
         if not texts:
             return []
@@ -98,14 +102,23 @@ class OpenAIEmbeddingProvider:
         all_embeddings.sort(key=lambda x: x[0])
         return [emb for _, emb in all_embeddings]
 
-    @tenacity.retry(
-        retry=tenacity.retry_if_exception(_is_retryable),
-        wait=tenacity.wait_exponential(multiplier=1, min=1, max=60),
-        stop=tenacity.stop_after_attempt(5),
-        before_sleep=tenacity.before_sleep_log(logger, logging.WARNING),
-    )
     async def _post(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """OpenAI API にPOSTリクエストを送信する。"""
+        """OpenAI API にリトライ付きで POST する。
+
+        - ``retry_policy`` で設定された最大試行回数までリトライ
+        - 各試行は ``per_attempt_timeout_seconds`` でタイムアウト
+        - 429 レスポンスの ``Retry-After`` ヘッダを尊重 (``max_wait_seconds`` でクランプ)
+        """
+        retrying = self.retry_policy.get_async_retrying()
+        async for attempt in retrying:
+            with attempt:
+                return await self._post_once(endpoint, payload)
+        # AsyncRetrying は ``reraise=True`` のため最終試行で例外が伝搬する。
+        # ここに到達することはないが、型チェッカ向けに明示的にエラーを上げておく。
+        raise RuntimeError("AsyncRetrying loop exited without success or exception")
+
+    async def _post_once(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """OpenAI API への単発 POST (リトライなし)。"""
         response = await self._client.post(
             endpoint,
             json=payload,
@@ -113,10 +126,14 @@ class OpenAIEmbeddingProvider:
                 "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
             },
+            timeout=self.retry_policy.per_attempt_timeout_seconds,
         )
         response.raise_for_status()
         return cast(dict[str, Any], response.json())
 
     async def close(self) -> None:
-        """内部 AsyncClient をクローズする。"""
+        """内部 ``AsyncClient`` をクローズする。"""
         await self._client.aclose()
+
+
+__all__ = ["OpenAIEmbeddingProvider"]

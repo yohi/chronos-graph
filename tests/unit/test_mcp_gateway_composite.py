@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import MappingProxyType
 from unittest.mock import AsyncMock, MagicMock
 
@@ -111,6 +112,75 @@ async def test_llm_allow_passes_through() -> None:
     llm.judge.assert_awaited_once()
     kwargs = llm.judge.await_args.kwargs
     assert list(kwargs["memories"]) == []
+
+
+@pytest.mark.asyncio
+async def test_read_only_tools_bypass_llm_and_memory() -> None:
+    from mcp_gateway.policy.llm_evaluator import READ_ONLY_TOOLS
+
+    llm = MagicMock()
+    llm.judge = AsyncMock(return_value=Decision(decision="ask", ask_message="confirm?"))
+    memory = MagicMock()
+    memory.retrieve = AsyncMock(return_value=[])
+    ev = _make_evaluator(
+        tier1_result=EvaluationResult(status="ALLOW"),
+        llm=llm,
+        memory=memory,
+    )
+
+    for tool_name in READ_ONLY_TOOLS:
+        out = await ev.evaluate(ToolCallInput(tool_name=tool_name, tool_input={"query": "test"}))
+        assert out == Decision(decision="allow")
+
+    llm.judge.assert_not_called()
+    memory.retrieve.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_llm_decision_is_cached_for_repeated_write_call() -> None:
+    llm = MagicMock()
+    llm.judge = AsyncMock(return_value=Decision(decision="allow"))
+    memory = MagicMock()
+    memory.retrieve = AsyncMock(return_value=[])
+    ev = _make_evaluator(
+        tier1_result=EvaluationResult(status="ALLOW"),
+        llm=llm,
+        memory=memory,
+    )
+    input_ = ToolCallInput(tool_name="memory_save", tool_input={"content": "x"})
+
+    first = await ev.evaluate(input_)
+    second = await ev.evaluate(input_)
+
+    assert first == Decision(decision="allow")
+    assert second == Decision(decision="allow")
+    llm.judge.assert_awaited_once()
+    memory.retrieve.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_memory_fetch_timeout_does_not_block_llm() -> None:
+    llm = MagicMock()
+    llm.judge = AsyncMock(return_value=Decision(decision="allow"))
+    memory = MagicMock()
+
+    async def slow_retrieve(*args: object, **kwargs: object) -> list[object]:
+        await asyncio.sleep(1.0)
+        return []
+
+    memory.retrieve = AsyncMock(side_effect=slow_retrieve)
+    ev = _make_evaluator(
+        tier1_result=EvaluationResult(status="ALLOW"),
+        llm=llm,
+        memory=memory,
+    )
+    ev._memory_timeout_seconds = 0.01
+
+    out = await ev.evaluate(ToolCallInput(tool_name="memory_save", tool_input={"content": "x"}))
+
+    assert out == Decision(decision="allow")
+    kwargs = llm.judge.await_args.kwargs
+    assert kwargs["memories"] == []
 
 
 @pytest.mark.asyncio

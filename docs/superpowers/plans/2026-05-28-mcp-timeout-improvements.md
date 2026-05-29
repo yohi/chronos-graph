@@ -6,7 +6,7 @@
 
 **Architecture:** 
 本計画はSPEC.md §16.5で定義された9個の改善項目（D-1, D-2, D-3, E-1, E-2, E-3, E-4, E-5, E-6, E-7）をPhase 2以降のロードマップとして実装。
-高優先度（High）の4項目（D-1, D-2, E-1, E-2）を優先し、Medium/Low優先度の項目は段階的に実装する。
+高優先度（High）の5項目（D-1, D-2, D-3, E-1, E-2）を優先し、Medium/Low優先度の項目は段階的に実装する。
 各改善はタイムアウト問題の根本原因（直列処理、リトライ長期化、lazy初期化）に対応。
 
 **Tech Stack:** 
@@ -978,7 +978,7 @@ Addresses SPEC.md §16.5 E-1"
 
 リトライ戦略統一、`Retry-After` 尊重、タイムアウト短縮。
 
-- [ ] **Step 1: 統一リトライ設定モジュール作成**
+- [x] **Step 1: 統一リトライ設定モジュール作成**
 
 Create `src/context_store/embedding/retry_config.py`:
 
@@ -1079,7 +1079,7 @@ def parse_retry_after_header(retry_after_header: str | None) -> float | None:
         return None
 ```
 
-- [ ] **Step 2: OpenAI プロバイダ更新**
+- [x] **Step 2: OpenAI プロバイダ更新**
 
 Modify `src/context_store/embedding/openai.py` around line 101-117:
 
@@ -1133,7 +1133,7 @@ class OpenAIEmbeddingProvider:
             ) from e
 ```
 
-- [ ] **Step 3: LiteLLM プロバイダ更新**
+- [x] **Step 3: LiteLLM プロバイダ更新**
 
 Modify `src/context_store/embedding/litellm.py` around line 107-117:
 
@@ -1188,7 +1188,7 @@ class LiteLLMEmbeddingProvider:
             ) from e
 ```
 
-- [ ] **Step 4: テスト作成**
+- [x] **Step 4: テスト作成**
 
 Create `tests/unit/test_embedding_retry.py`:
 
@@ -1288,13 +1288,13 @@ async def test_embedding_respects_per_attempt_timeout():
     assert "Failed to embed" in str(exc_info.value)
 ```
 
-- [ ] **Step 5: テスト実行**
+- [x] **Step 5: テスト実行**
 
 Run: `uv run pytest tests/unit/test_embedding_retry.py -v`
 
 Expected: All tests pass.
 
-- [ ] **Step 6: コミット**
+- [x] **Step 6: コミット**
 
 ```bash
 git add src/context_store/embedding/retry_config.py \
@@ -1409,14 +1409,14 @@ git commit -m "docs: add Phase 2 timeout configuration documentation"
 | D-2 | LLM Evaluator 並列化 | ✅ | Task 2 |
 | D-3 | 承認 timeout + bypass | ✅ | Task 3 |
 | E-1 | Chunk 並列化 | ✅ | Task 4 |
-| E-2 | 埋め込みリトライ調整 | 🔄 | Task 5（未着手） |
+| E-2 | 埋め込みリトライ調整 | ✅ | Task 5 |
 | E-3 | Supabase keyword 最適化 | 📋 | Phase 2b（低優先度） |
 | E-4 | GraphLinker 重複呼び出し解消 | 📋 | Phase 2b（低優先度） |
 | E-5 | Orchestrator RPC 統合 | 📋 | Phase 2b（低優先度） |
 | E-6 | InMemory Cache cold-start | 📋 | Phase 2b（低優先度） |
 | E-7 | ローカルモデル eager preload | 📋 | Phase 2c（中優先度） |
 
-**High優先度の4項目（D-1〜E-1）を実装、E-2（Task 5）は次セッションで継続。**
+**High優先度の5項目（D-1〜E-2）すべて実装完了。残タスクは Task 6（統合テスト・任意）と Task 7（README ドキュメント更新）。**
 
 ---
 ---
@@ -1428,19 +1428,20 @@ git commit -m "docs: add Phase 2 timeout configuration documentation"
 - [x] **D-2**: LLM Evaluator 最適化（READ_ONLY バイパス、キャッシュ、memory fetch タイムアウト）
 - [x] **D-3**: intents.example.yaml に requires_approval 追加
 - [x] **E-1**: IngestionPipeline チャンク並列化（graph=None 時のみ）
-- 各項目の単体テスト追加・pass 確認済み
-- `ruff check` pass 確認済み
+- [x] **E-2**: EmbeddingRetryPolicy 統一（max_attempts 5→3、max_wait 60s→10s、per-attempt timeout 10s、Retry-After 尊重）
+- 各項目の単体テスト追加・pass 確認済み（E-2 は新規 38 テスト含む）
+- `ruff check` / `ruff format --check` / `mypy` pass 確認済み
 
 ### 未完了 (再開時はここから)
 | # | タスク | ファイル | 概要 |
 |---|----|---------|------|
-| 1 | E-2 embedding retry | `retry_config.py`, `openai.py`, `litellm.py`, `test_embedding_retry.py` | EmbeddingRetryPolicy + tenacity retry 調整 + per-attempt timeout |
-| 2 | 統合テスト | `tests/integration/test_phase2_timeout_integration.py` (任意) | 各改善項目の結合確認 |
-| 3 | ドキュメント更新 | `README.md` | Phase 2 環境変数一覧追加 |
+| 1 | 統合テスト（任意） | `tests/integration/test_phase2_timeout_integration.py` | 各改善項目の結合確認（オプション。スキップ可） |
+| 2 | ドキュメント更新 | `README.md` | Phase 2 環境変数一覧追加 |
+| 3 | PR 作成 | - | master 直 push 禁止。PR 経由で人間がマージ |
 
 ### アクティブコンテキスト
 - **ブランチ**: `feature/mcp-timeout-improvements-phase2`（master から分岐済み）
-- **未 commit**: D-1〜E-1 の変更11ファイル（git status で確認）
+- **コミット済み**: D-1〜E-2 までの 6 コミットを push 済み（`feature/mcp-timeout-improvements-phase2`）
 - **devcontainer**: `.venv` が root 所有のため `uv run` 不可 → ホスト `uv --frozen` を代替使用
 - **テスト実行**: `env -u CHRONOS_EVALUATOR_MODEL uv run --frozen pytest tests/unit/test_XXX.py -v`
 
@@ -1454,6 +1455,9 @@ git commit -m "docs: add Phase 2 timeout configuration documentation"
 | `src/mcp_gateway/policy/composite.py` | バイパス・キャッシュ・タイムアウト (D-2) |
 | `src/mcp_gateway/policies/intents.example.yaml` | write ツール承認設定 (D-3) |
 | `src/context_store/ingestion/pipeline.py` | 並列/逐次分岐 (E-1) |
+| `src/context_store/embedding/retry_config.py` | EmbeddingRetryPolicy / Retry-After 尊重 (E-2) |
+| `src/context_store/embedding/openai.py` | AsyncRetrying + per-attempt timeout (E-2) |
+| `src/context_store/embedding/litellm.py` | AsyncRetrying + asyncio.wait_for (E-2) |
 
 ### 再開手順
 ```bash
@@ -1461,8 +1465,8 @@ git commit -m "docs: add Phase 2 timeout configuration documentation"
 git checkout feature/mcp-timeout-improvements-phase2
 
 # 2. 計画書を参照
-# → docs/superpowers/plans/2026-05-28-mcp-timeout-improvements.md Task 5 (E-2) から実行
-# → 実装後、Task 6 (統合テスト) → Task 7 (ドキュメント) → コミット分割 → PR作成まで
+# → docs/superpowers/plans/2026-05-28-mcp-timeout-improvements.md Task 6（統合テスト）から実行
+# → Task 7 (README) → PR作成（master へのマージは人間オペレーター）
 ```
 計画完成しました！📋
 

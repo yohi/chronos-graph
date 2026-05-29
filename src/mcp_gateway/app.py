@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from contextlib import asynccontextmanager
 from importlib.resources import as_file, files
@@ -107,9 +108,16 @@ def build_app(
             ),
         )
 
-    hidden_tools: frozenset[str] = (
-        frozenset({"memory_save"}) if settings.ingestion_mode == "all" else frozenset()
-    )
+    if settings.ingestion_mode == "all":
+        hidden_tools: frozenset[str] = frozenset({"memory_save"})
+        logging.getLogger(__name__).warning(
+            "ingestion mode: all - 'memory_save' tool is HIDDEN from agents. "
+            "Client-side hook (e.g. scripts/agent_turn_hook.py via Stop event) "
+            "MUST be configured to send conversation logs at turn end. "
+            "See README.md \u00a7Hybrid Ingestion Mode for client-specific setup."
+        )
+    else:
+        hidden_tools = frozenset()
     registry = ToolRegistry(initial_tools or [], hidden_tools=hidden_tools)
 
     @asynccontextmanager

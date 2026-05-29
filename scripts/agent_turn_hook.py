@@ -1,21 +1,28 @@
 """ターン終了時に会話ログを MCP Gateway へ fire-and-forget で送信するフック。
 
 呼び出し例:
+    # 生のテキストを stdin で渡す (汎用)
     echo "$CONVERSATION_LOG" | python scripts/agent_turn_hook.py &
-    # または
+
+    # --content 引数で渡す
     python scripts/agent_turn_hook.py --content "..." &
 
-設計書: docs/superpowers/specs/2026-05-27-hybrid-ingestion-mode-design.md §4.5
+    # Claude Code / Codex / Cursor / Antigravity の Stop hook から JSON payload を渡す
+    # (transcript_path / transcriptPath フィールドが自動的に解釈される)
+    python scripts/agent_turn_hook.py --client claude-code &
+
+設計書: docs/superpowers/specs/2026-05-27-hybrid-ingestion-mode-design.md
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import sys
-from typing import Final
+from typing import Any, Final
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -28,6 +35,24 @@ DEFAULT_TIMEOUT_SECONDS: Final[float] = 2.0
 DEFAULT_SSE_TIMEOUT_SECONDS: Final[float] = 1.0
 DEFAULT_MAX_LOG_BYTES: Final[int] = 8 * 1024 * 1024
 TRUNCATION_MARKER_TEMPLATE: Final[str] = "[truncated to last {n} bytes]\n"
+
+# サポートする ``--client`` の値。
+# - ``raw``: 生のテキストとしてそのまま送信 (既存の後方互換動作)。
+# - ``claude-code`` / ``codex`` / ``cursor``: stdin の JSON から ``transcript_path``
+#   フィールドを取り出し、JSONL transcript を読み込んで会話ログ文字列に整形する。
+# - ``antigravity``: ``transcriptPath`` (キャメルケース) からも読み込む。
+SUPPORTED_CLIENTS: Final[tuple[str, ...]] = (
+    "raw",
+    "claude-code",
+    "codex",
+    "cursor",
+    "antigravity",
+)
+
+
+# ---------------------------------------------------------------------------
+# 純関数: 切り詰め
+# ---------------------------------------------------------------------------
 
 
 def truncate_log(content: str, max_bytes: int) -> tuple[str, bool]:
@@ -49,12 +74,155 @@ def truncate_log(content: str, max_bytes: int) -> tuple[str, bool]:
     return marker + tail, True
 
 
+# ---------------------------------------------------------------------------
+# 純関数: クライアント別 payload からの会話ログ抽出
+# ---------------------------------------------------------------------------
+
+
+def _coerce_text_content(content: Any) -> str:
+    """Claude Code 形式の content (list of {type, text}) 等を平文に正規化する。"""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                # Claude Code: {"type": "text", "text": "..."}
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+                    continue
+                # Generic: {"role": ..., "content": "..."} の入れ子
+                inner = item.get("content")
+                if inner:
+                    parts.append(_coerce_text_content(inner))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(p for p in parts if p)
+    if isinstance(content, dict):
+        text = content.get("text")
+        if isinstance(text, str):
+            return text
+        return ""
+    return str(content)
+
+
+def format_transcript_messages(messages: list[Any]) -> str:
+    """JSONL transcript の messages 配列を ``Role: text`` の連結文字列に整形する。
+
+    Claude Code の transcript は 1 行 1 オブジェクトの JSONL で、各行は
+    ``{"type": "user"|"assistant", "message": {"role": ..., "content": ...}}``
+    のような形を取る (バージョンにより微差あり)。本関数はベストエフォートで
+    主要なフィールド形を吸収する純関数。
+    """
+    lines: list[str] = []
+    for entry in messages:
+        if not isinstance(entry, dict):
+            continue
+
+        # role 抽出: トップレベル role / type、message.role の順で見る
+        role = entry.get("role") or entry.get("type")
+        message = entry.get("message")
+        if isinstance(message, dict):
+            role = message.get("role") or role
+            content_source: Any = message.get("content")
+        else:
+            content_source = entry.get("content")
+
+        text = _coerce_text_content(content_source).strip()
+        if not text:
+            continue
+        if not role:
+            role = "unknown"
+
+        # role を表示用に正規化 (user → User, assistant → Assistant)
+        role_label = str(role).strip().capitalize() if str(role).islower() else str(role)
+        lines.append(f"{role_label}: {text}")
+    return "\n\n".join(lines)
+
+
+def read_jsonl_transcript(path: str) -> str:
+    """JSONL transcript ファイルを読み込み、整形済みの会話ログ文字列を返す。
+
+    パース不能な行はスキップする (フェイルソフト)。
+    """
+    messages: list[Any] = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            messages.append(obj)
+    return format_transcript_messages(messages)
+
+
+def extract_payload(client: str, raw: str) -> str:
+    """``--client`` の値に応じて raw 入力から会話ログ文字列を抽出する純関数。
+
+    - ``raw``: そのまま返す。
+    - ``claude-code`` / ``codex`` / ``cursor`` / ``antigravity``:
+      raw を JSON としてパースし、``transcript_path`` または ``transcriptPath``
+      フィールドのファイルを読み込んで整形する。失敗時は raw をそのまま返す。
+    """
+    if client == "raw" or not raw:
+        return raw
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        # クライアント指定なのに JSON でなかった場合は、raw として扱ってフェイルソフト
+        return raw
+
+    if not isinstance(data, dict):
+        return raw
+
+    transcript_path = data.get("transcript_path") or data.get("transcriptPath")
+    if isinstance(transcript_path, str) and transcript_path:
+        try:
+            text = read_jsonl_transcript(transcript_path)
+        except OSError as exc:
+            logging.warning("failed to read transcript at %r: %s", transcript_path, exc)
+            return raw
+        if text:
+            return text
+
+    # 一部のクライアントは payload に直接 messages 配列を含める可能性がある
+    messages = data.get("messages")
+    if isinstance(messages, list):
+        text = format_transcript_messages(messages)
+        if text:
+            return text
+
+    # 何も抽出できない: raw を返してフェイルソフト
+    return raw
+
+
+# ---------------------------------------------------------------------------
+# CLI ラッパ
+# ---------------------------------------------------------------------------
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="ChronosGraph turn-end memory ingestion hook")
     parser.add_argument(
         "--content",
         default=None,
         help="会話ログ本文。未指定時は stdin から読み取る。",
+    )
+    parser.add_argument(
+        "--client",
+        default="raw",
+        choices=SUPPORTED_CLIENTS,
+        help=(
+            "stdin に渡される入力の解釈方法。"
+            "raw=生テキスト, claude-code/codex/cursor/antigravity=JSON payload を解釈。"
+        ),
     )
     return parser
 
@@ -193,12 +361,23 @@ def main() -> int:
         logging.debug("empty input; skipping hook invocation")
         return 0
 
+    # クライアント別の payload 解釈 (raw 以外は JSON → transcript 変換を試みる)
+    try:
+        extracted = extract_payload(args.client, raw)
+    except Exception as exc:  # noqa: BLE001 - intentional broad catch
+        logging.warning("payload extraction failed (%s); falling back to raw input", exc)
+        extracted = raw
+
+    if not extracted:
+        logging.debug("payload extraction yielded empty content; skipping hook invocation")
+        return 0
+
     max_bytes = int(os.environ.get("MCP_HOOK_MAX_LOG_BYTES", DEFAULT_MAX_LOG_BYTES))
-    payload, was_truncated = truncate_log(raw, max_bytes)
+    payload, was_truncated = truncate_log(extracted, max_bytes)
     if was_truncated:
         logging.warning(
             "payload truncated: original=%d bytes, sent=%d bytes",
-            len(raw.encode("utf-8")),
+            len(extracted.encode("utf-8")),
             len(payload.encode("utf-8")),
         )
 

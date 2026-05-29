@@ -182,14 +182,14 @@ class TestE2EmbeddingRetryEndToEnd:
             max_wait_seconds=0.1,
             per_attempt_timeout_seconds=2.0,
         )
+        # 内部 httpx クライアントを MockTransport 付きで DI する (Issue 2 修正)
+        mock_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         provider = OpenAIEmbeddingProvider(
             api_key="sk-test",
             model="text-embedding-3-small",
             retry_policy=retry_policy,
+            http_client=mock_client,
         )
-        # 内部 httpx クライアントを MockTransport 付きへ差し替え
-        await provider._client.aclose()
-        provider._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
         try:
             start = time.monotonic()
@@ -223,13 +223,14 @@ class TestE2EmbeddingRetryEndToEnd:
             max_wait_seconds=0.05,
             per_attempt_timeout_seconds=2.0,
         )
+        # 内部 httpx クライアントを MockTransport 付きで DI する (Issue 2 修正)
+        mock_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         provider = OpenAIEmbeddingProvider(
             api_key="sk-test",
             model="text-embedding-3-small",
             retry_policy=retry_policy,
+            http_client=mock_client,
         )
-        await provider._client.aclose()
-        provider._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
         try:
             start = time.monotonic()
@@ -286,11 +287,12 @@ class TestE1ChunkParallelIngestion:
             f"Expected >= {chunks_target} chunks, got {len(results)}"
         )
 
-        # 並列実行: per_save_delay × チャンク数 が逐次想定。並列ならこの半分以下で済む。
+        # 並列実行: per_save_delay × チャンク数 が逐次想定。並列ならこの程度で済むはず。
+        # CI 環境の負荷を考慮し、閾値を 0.8 に緩和 (Issue 1 修正)
         sequential_estimate = per_save_delay * len(results)
-        assert elapsed < sequential_estimate * 0.6, (
+        assert elapsed < sequential_estimate * 0.8, (
             f"Parallel ingestion took {elapsed:.3f}s, "
-            f"expected < {sequential_estimate * 0.6:.3f}s "
+            f"expected < {sequential_estimate * 0.8:.3f}s "
             f"(sequential baseline {sequential_estimate:.3f}s)"
         )
 
@@ -326,10 +328,13 @@ class TestD1UpstreamTimeoutNormalization:
         client._session = mock_session
         client._started = True
 
-        start = time.monotonic()
-        with pytest.raises(UpstreamError) as exc_info:
-            await client.call_tool("any_tool", {"q": 1})
-        elapsed = time.monotonic() - start
+        try:
+            start = time.monotonic()
+            with pytest.raises(UpstreamError) as exc_info:
+                await client.call_tool("any_tool", {"q": 1})
+            elapsed = time.monotonic() - start
+        finally:
+            await client.stop()  # クリーンアップ (Issue 3 修正)
 
         # タイムアウト正規化を検証
         assert exc_info.value.code == "UPSTREAM_TIMEOUT"

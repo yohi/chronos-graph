@@ -48,12 +48,13 @@ class OpenAIEmbeddingProvider:
         chunk_size: int = _DEFAULT_CHUNK_SIZE,
         timeout: float = 60.0,
         retry_policy: EmbeddingRetryPolicy | None = None,
+        http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
         self._chunk_size = chunk_size
         self._timeout = timeout
-        self._client = httpx.AsyncClient(timeout=self._timeout)
+        self._client = http_client or httpx.AsyncClient(timeout=self._timeout)
         self._dimension_warning_emitted = False
         # retry_policy が未指定の場合は env から読み込む (fail-soft)
         self.retry_policy = retry_policy or EmbeddingRetryPolicy.from_env()

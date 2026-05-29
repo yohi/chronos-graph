@@ -1433,6 +1433,7 @@ git commit -m "docs: add Phase 2 timeout configuration documentation"
 - `ruff check` / `ruff format --check` / `mypy` pass 確認済み
 
 ### 未完了 (再開時はここから)
+
 | # | タスク | ファイル | 概要 |
 |---|----|---------|------|
 | 1 | 統合テスト（任意） | `tests/integration/test_phase2_timeout_integration.py` | 各改善項目の結合確認（オプション。スキップ可） |
@@ -1446,6 +1447,7 @@ git commit -m "docs: add Phase 2 timeout configuration documentation"
 - **テスト実行**: `env -u CHRONOS_EVALUATOR_MODEL uv run --frozen pytest tests/unit/test_XXX.py -v`
 
 ### 主要ファイル
+
 | ファイル | 役割 |
 |---------|------|
 | `src/mcp_gateway/upstream/timeout_client.py` | TimeoutConfig (D-1) |
@@ -1453,7 +1455,7 @@ git commit -m "docs: add Phase 2 timeout configuration documentation"
 | `src/mcp_gateway/errors.py` | UpstreamError に code/recoverable 追加 (D-1) |
 | `src/mcp_gateway/policy/llm_evaluator.py` | READ_ONLY_TOOLS export (D-2) |
 | `src/mcp_gateway/policy/composite.py` | バイパス・キャッシュ・タイムアウト (D-2) |
-| `src/mcp_gateway/policies/intents.example.yaml` | write ツール承認設定 (D-3) |
+| `src/mcp_gateway/policy/intents.yaml` | write ツール承認設定 (D-3) |
 | `src/context_store/ingestion/pipeline.py` | 並列/逐次分岐 (E-1) |
 | `src/context_store/embedding/retry_config.py` | EmbeddingRetryPolicy / Retry-After 尊重 (E-2) |
 | `src/context_store/embedding/openai.py` | AsyncRetrying + per-attempt timeout (E-2) |

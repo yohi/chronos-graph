@@ -665,8 +665,8 @@ MCP 経由のツール呼び出しや埋め込み API のハング・長期リ�
 
 | 環境変数 | デフォルト | 範囲 / 上限 | 説明 |
 |---|---|---|---|
-| `MCP_GATEWAY_TOOL_TIMEOUT_SECONDS` | `30.0` | > 0 | **(D-1)** Upstream MCP ツール呼び出しのデフォルトタイムアウト秒数。`MCP_TOOL_TIMEOUT_SECONDS` を fallback 名として参照可。 |
-| `MCP_GATEWAY_MAX_TOOL_TIMEOUT_SECONDS` | `300.0` | > 0 | **(D-1)** ツール固有タイムアウトを含めた絶対上限秒数。 |
+| `MCP_TOOL_TIMEOUT_SECONDS` | `30.0` | > 0 | **(D-1)** Upstream MCP ツール呼び出しのデフォルトタイムアウト秒数。 |
+| `MCP_MAX_TOOL_TIMEOUT_SECONDS` | `300.0` | > 0 | **(D-1)** ツール固有タイムアウトを含めた絶対上限秒数。 |
 | `MCP_GATEWAY_APPROVAL_TIMEOUT_SECONDS` | `30.0` | (0, 600] | **(D-3)** 人間承認の待機タイムアウト秒数。経過後は `approval_timeout` decision で fail-soft にクローズ。 |
 | `CHUNK_PARALLEL_SEMAPHORE_SIZE` | `10` | > 0 | **(E-1)** Ingestion 並列モード (`GRAPH_ENABLED=false` 時) でのチャンク同時処理の最大同時実行数。 |
 | `EMBEDDING_MAX_RETRIES` | `3` | > 0 | **(E-2)** OpenAI / LiteLLM 埋め込み API リトライの最大試行回数 (旧 5 → 3)。 |

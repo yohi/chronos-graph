@@ -111,40 +111,43 @@ MCP設定の場合は、いかなるツール呼び出しよりも前に、必�
 > 9番の `LLM Evaluator` で `使用しない` が選ばれた場合を除き、**10番および11番の LLM モデル選択・APIキー入力催促のステップを絶対に勝手にスキップ（省略）してはならず、必ずユーザーに選ばせてください。**
 > ユーザーから個別に明示的なデフォルト運用の指示が無い限り、**必ず本ツールの呼び出しを強制**し、ユーザーが選んだ構成（Supabase、OpenAI、LiteLLM モデル等）に応じた正確な設定内容を出力してください。
 
-1. **ソース (配置・起動方法)**: MCPサーバーをどこから起動するか。
+1. **保存モード (Ingestion Mode)**: エージェントの記憶保存方法を選択します。
+   * `all` (全量保存モード: エージェントのターン終了時に会話ログをバックグラウンドで全量自動保存します)
+   * `selective` (自律判断保存モード: 従来通り、AIが重要と判断した情報のみを `memory_save` ツール経由で保存します)
+2. **ソース (配置・起動方法)**: MCPサーバーをどこから起動するか。
    * `remote` (🌟**最も推奨**: リポジトリをクローンせず `uvx` を使用してオンザフライで起動・実行する。環境を汚しません)
    * `local` (ローカルにクローン済みの本リポジトリ内で直接実行する)
-2. **ストレージ (保存用データベース)**: 記憶データを永続化する場所。
+3. **ストレージ (保存用データベース)**: 記憶データを永続化する場所。
    * `sqlite` (🌟**最も推奨**: ゼロ設定かつ軽量に動作し、追加の外部データベースコンテナが不要です)
    * `postgres` (本番用: セマンティック検索のための `pgvector` 機能が必要です)
    * `supabase` (本番用: クラウドベースの Supabase Data API を経由して接続します)
-3. **ベクトル機能の有無 (PostgreSQL選択時のみ)**: セマンティック検索の有効化。
+4. **ベクトル機能の有無 (PostgreSQL選択時のみ)**: セマンティック検索の有効化。
    * `有効` (🌟**推奨**: 記憶の意味的な近さを判定する高度なセマンティック検索を利用します)
    * `無効` (キーワード一致検索のみのシンプルな動作に制限します)
-4. **Neo4j（グラフ関係性機能）**: 記憶同士のつながり（関連リンク）を記録・可視化するグラフ機能。
+5. **Neo4j（グラフ関係性機能）**: 記憶同士のつながり（関連リンク）を記録・可視化するグラフ機能。
    * `無効` (🌟**最も推奨**: SQLite/PostgreSQLの内部関係検索のみを使用する、高速かつシンプルな軽量構成)
    * `有効` (本番用: 外部の Neo4j グラフデータベースを立ち上げ、記憶間の緻密な関連ネットワーク分析を有効にします)
-5. **キャッシュ**: 記憶の一時キャッシュ。
+6. **キャッシュ**: 記憶の一時キャッシュ。
    * `inmemory` (🌟**最も推奨**: プロセス内メモリでキャッシュ管理を行い、外部コンテナを必要としません)
    * `redis` (本番用: 外部の Redis キャッシュサーバーを使用してスケーリングします)
-6. **Embedding (埋め込みベクトルモデル)**: 記憶のベクトル化に何を使用するか。
+7. **Embedding (埋め込みベクトルモデル)**: 記憶のベクトル化に何を使用するか。
    * `cl-nagoya/ruri-v3-310m` (🌟**推奨**: 日本語表現に優れ、ローカルで軽快に動作する標準モデル)
    * `OpenAI` (OpenAI の高品質な Embedding API を利用します)
-7. **OpenAIのモデル (OpenAI選択時のみ)**: 使用する OpenAI 埋め込みモデル名。
+8. **OpenAIのモデル (OpenAI選択時のみ)**: 使用する OpenAI 埋め込みモデル名。
    * `text-embedding-3-small` (🌟**推奨**: 優れたコストパフォーマンスと精度バランスを持つ標準モデル)
    * `text-embedding-3-large` (高密度でリッチなセマンティック表現が可能な高精度モデル)
    * `text-embedding-ada-002` (従来の標準モデル)
-8. **API KEYの入力 (OpenAI選択時のみ)**: `.env` に `OPENAI_API_KEY` の設定を促す。
+9. **API KEYの入力 (OpenAI選択時のみ)**: `.env` に `OPENAI_API_KEY` の設定を促す。
    * OpenAI 選択時は、[機密情報の分離収集ルール](#-機密情報の分離収集ルールsensitive-information-handling-rule)に従い、ユーザーに `.env` へ直接 `OPENAI_API_KEY` を記入するよう案内してください。記入完了の報告を受けるまで次のステップに進んではいけません。
-9. **LLM Evaluator (保護判定エンジン)**: ツール安全評価器として稼働させる際の判定エンジンの配置。
+10. **LLM Evaluator (保護判定エンジン)**: ツール安全評価器として稼働させる際の判定エンジンの配置。
    * `クラウド` (🌟**推奨**: LiteLLM 経由でクラウド上の最新モデル（Anthropic / OpenAI 等）の API キーを設定して使用します)
    * `ローカル` (ローカル環境上の Ollama 等のモデルを叩いて判定します)
    * `使用しない` (LLMによる保護判定をオフにし、決定論的ルール intents.yaml のみでツール安全性を判定します)
-10. **LLMモデルの選択 (LLM使用時のみ)**: 使用する判定用 LLM モデル名。
+11. **LLMモデルの選択 (LLM使用時のみ)**: 使用する判定用 LLM モデル名。
     * `anthropic/claude-3-5-haiku-20241022` (🌟**推奨**: 高速・高性能で極めて安定した保護判定が可能です)
     * `openai/gpt-4o-mini` (高速かつリーズナブルな標準的判定モデル)
     * `その他（LiteLLM識別子）` (ユーザーが希望するその他のモデル識別子)
-11. **LLM用 API KEYの入力 (LLM使用時のみ)**: `.env` に対応する API キーの登録を促す。
+12. **LLM用 API KEYの入力 (LLM使用時のみ)**: `.env` に対応する API キーの登録を促す。
     * LLM 使用時は、[機密情報の分離収集ルール](#-機密情報の分離収集ルールsensitive-information-handling-rule)に従い、ユーザーに選択したモデルプロバイダに対応する API キー（`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` 等）を `.env` へ直接記入するよう案内してください。記入完了の報告を受けるまで次のステップに進んではいけません。
 
 #### 2. 構築と検証 (本番モード用)
@@ -658,6 +661,30 @@ ChronosGraph 本体およびセキュリティ判定エンジン（Universal Eva
 ```bash
 echo "$CONVERSATION_LOG" | python scripts/agent_turn_hook.py &
 ```
+
+### 4. Phase 2: タイムアウト・遅延最適化 (Phase 2 Timeout & Latency Improvements)
+
+MCP 経由のツール呼び出しや埋め込み API のハング・長期リトライを防止し、総レイテンシを予測可能に bound するための設定群です。設計背景は [SPEC.md §16.5](SPEC.md) を参照してください。
+
+| 環境変数 | デフォルト | 範囲 / 上限 | 説明 |
+|---|---|---|---|
+| `MCP_GATEWAY_TOOL_TIMEOUT_SECONDS` | `30.0` | > 0 | **(D-1)** Upstream MCP ツール呼び出しのデフォルトタイムアウト秒数。`MCP_TOOL_TIMEOUT_SECONDS` を fallback 名として参照可。 |
+| `MCP_GATEWAY_MAX_TOOL_TIMEOUT_SECONDS` | `300.0` | > 0 | **(D-1)** ツール固有タイムアウトを含めた絶対上限秒数。 |
+| `MCP_GATEWAY_APPROVAL_TIMEOUT_SECONDS` | `30.0` | (0, 600] | **(D-3)** 人間承認の待機タイムアウト秒数。経過後は `approval_timeout` decision で fail-soft にクローズ。 |
+| `CHUNK_PARALLEL_SEMAPHORE_SIZE` | `10` | > 0 | **(E-1)** Ingestion 並列モード (`GRAPH_ENABLED=false` 時) でのチャンク同時処理の最大同時実行数。 |
+| `EMBEDDING_MAX_RETRIES` | `3` | > 0 | **(E-2)** OpenAI / LiteLLM 埋め込み API リトライの最大試行回数 (旧 5 → 3)。 |
+| `EMBEDDING_MIN_WAIT` | `1.0` | > 0 | **(E-2)** 指数バックオフの最小待機秒数。 |
+| `EMBEDDING_MAX_WAIT` | `10.0` | > 0 | **(E-2)** 指数バックオフの最大待機秒数 (旧 60s → 10s)。`Retry-After` ヘッダを尊重する際もこの値でクランプ。 |
+| `EMBEDDING_PER_ATTEMPT_TIMEOUT` | `10.0` | > 0 | **(E-2)** 1 リトライ試行あたりの HTTP タイムアウト秒数。 |
+
+> 💡 **レイテンシ設計:** Embedding API 経由の総レイテンシは **最大 ~50 秒** (3 試行 × 10s + 2 待機 × 10s) と見積もられます。これに対し MCP Gateway のデフォルトタイムアウトは 30s ですが、リトライが長期化する `memory_save_url` ツールには個別で 40s の上限が設定されています。最悪ケースでは Gateway 側が先にタイムアウトし fail-soft に処理を打ち切ることで、リソースの占有を防ぐ設計となっています。`CHUNK_PARALLEL_SEMAPHORE_SIZE` および `EMBEDDING_*` の不正値・非正値は警告ログ + デフォルト値へフォールバック (fail-soft) します。
+
+**実装参照:**
+
+- **D-1** Upstream timeout: [`src/mcp_gateway/upstream/timeout_client.py`](src/mcp_gateway/upstream/timeout_client.py) `TimeoutConfig`
+- **D-3** Approval timeout: [`src/mcp_gateway/config.py`](src/mcp_gateway/config.py) `GatewaySettings.approval_timeout_seconds`
+- **E-1** Chunk 並列化: [`src/context_store/ingestion/pipeline.py`](src/context_store/ingestion/pipeline.py) `CHUNK_PARALLEL_SEMAPHORE_SIZE`
+- **E-2** Embedding retry: [`src/context_store/embedding/retry_config.py`](src/context_store/embedding/retry_config.py) `EmbeddingRetryPolicy`
 
 ### 💡 カスタムエンドポイント (ローカルLLM / vLLM / Azure 等) の設定
 

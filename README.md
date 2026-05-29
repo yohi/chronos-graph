@@ -41,11 +41,12 @@ https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
 > [!CAUTION]
 > **AIエージェントへの強制命令 (CRITICAL):**
 > あなたが AI エージェント（Claude Code / Gemini CLI / Cursor 等）である場合、いかなる副作用（インストール、ファイルの作成・修正、コマンド実行）を伴うアクションを開始する前に、必ず以下の **Agent Setup Protocol** を遵守してください。
-> すでに `.env` が配置され、接続確認が成功している場合は、本プロトコルをスキップして実務へと移行してください。
+> **たとえ `.env` や設定ファイルが既に存在していても、それが本プロトコル（ask ツールによる明示的承認）を経て作成された正当なものであるか確証が持てない場合は、決してスキップせず、必ず Phase 1 から再開してください。** 自己完結的な現状判断による「スキップの宣言」は、プロトコル違反とみなされます。
 
 > [!IMPORTANT]
 > **🚨 ユーザー確認ツール（Askツール等）の使用強制 (STRICT ASK CONSTRAINT):**
-> あなた（AIエージェント）が各フェーズの **`BLOCKING STEP`** （目的や実行モードのロックイン、認証情報の合意、本番適用直前の確認など）を実行する際は、**絶対にチャットテキスト上の対話だけで自己完結して進めてはいけません。**
+> あなた（AIエージェント）が各フェーズの **`BLOCKING STEP`** を実行する際は、**絶対にチャットテキスト上の対話だけで自己完結して進めてはいけません。**
+> 「すでに完了しているように見えます」という報告や「スキップします」という合意形成であっても、それが**セットアップの根幹に関わる判断であるなら、必ず `ask_question` 等のツールを明示的に呼び出し、ユーザーがUI上で明示的に合意するプロセスを確実に踏んでください。**
 > もしあなたが **`ask_question` や `ask_permission`、またはそれに類するユーザー承認確認用ツールを装備している場合、それらを明示的かつ強制的に呼び出して、ユーザーがUI上で承認ボタンや選択肢をクリックして明示的に合意するプロセスを確実に踏んでください。**
 > ツール経由での明示的な承認が得られるまで、次のステップへ処理を進めることは厳格に禁止されます。
 
@@ -107,12 +108,12 @@ MCP設定の場合は、いかなるツール呼び出しよりも前に、必�
 
 > [!IMPORTANT]
 > **🚨 設定の勝手な仮定・省略の厳格な禁止 (STRICT NON-OMISSION CONSTRAINT):**
-> あなた（AIエージェント）は、デバッグモード（Dry-run）であるか本番モードであるかにかかわらず、**「SQLite / グラフ無効 / ローカルモデル」などの構成を勝手にデフォルト値として仮定し、本確認手順をスキップ（省略）して設定例を出力してはいけません。**
-> 9番の `LLM Evaluator` で `使用しない` が選ばれた場合を除き、**10番および11番の LLM モデル選択・APIキー入力催促のステップを絶対に勝手にスキップ（省略）してはならず、必ずユーザーに選ばせてください。**
-> ユーザーから個別に明示的なデフォルト運用の指示が無い限り、**必ず本ツールの呼び出しを強制**し、ユーザーが選んだ構成（Supabase、OpenAI、LiteLLM モデル等）に応じた正確な設定内容を出力してください。
+> あなた（AIエージェント）は、デバッグモード（Dry-run）であるか本番モードであるかにかかわらず、**「SQLite だからグラフは不要」「Supabase だから外部データベースは聞かなくていい」といった、前項の回答に基づく動的な質問の省略（最適化）を絶対に行ってはいけません。**
+> あなたに課せられた義務は、**以下の 1〜12 のすべての項目番号を、提示する `ask_question` 内に明示的に含め、一括してユーザーに提示することです。**
+> 9番の `LLM Evaluator` で `使用しない` が選ばれた場合のみ 10〜12 をスキップできますが、それ以外の項目（特に 5番の Neo4j グラフ機能など）は、ストレージ構成に関わらず必ず独立した項目としてユーザーに選ばせてください。
 
 1. **保存モード (Ingestion Mode)**: エージェントの記憶保存方法を選択します。
-   * `all` (全量保存モード: エージェントのターン終了時に会話ログをバックグラウンドで全量自動保存します)
+   * `all` (全量保存モード: エージェントのターン終了時に会話ログをバックグラウンドで全量自動保存します。**Phase 2 でクライアント側に Stop event hook の追加設定が必須**となります。詳細は §3 「`CHRONOS_INGESTION_MODE=all` を選ぶ場合のクライアント別セットアップ」 を参照)
    * `selective` (自律判断保存モード: 従来通り、AIが重要と判断した情報のみを `memory_save` ツール経由で保存します)
 2. **ソース (配置・起動方法)**: MCPサーバーをどこから起動するか。
    * `remote` (🌟**最も推奨**: リポジトリをクローンせず `uvx` を使用してオンザフライで起動・実行する。環境を汚しません)
@@ -151,7 +152,12 @@ MCP設定の場合は、いかなるツール呼び出しよりも前に、必�
     * LLM 使用時は、[機密情報の分離収集ルール](#-機密情報の分離収集ルールsensitive-information-handling-rule)に従い、ユーザーに選択したモデルプロバイダに対応する API キー（`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` 等）を `.env` へ直接記入するよう案内してください。記入完了の報告を受けるまで次のステップに進んではいけません。
 
 #### 2. 構築と検証 (本番モード用)
-1. **.envの作成と認証情報の入力**: `.env.example` から `.env` を作成し、上記で確定した構成に必要な認証情報のプレースホルダを含めた完成見本をユーザーに提示し、実際に値を埋めてもらうよう依頼します。**ファイル作成・編集後は、必ず `view_file` を用いて、正しく値が書き込まれたことを自己検証してください。**（※デバッグモードの場合は、シミュレーション用の `.env` 見本を画面上に提示するだけに留めます）
+1. **.envの作成と認証情報の入力**: `.env.example` から `.env` を作成します。
+   > [!CAUTION]
+   > **🚨 構成の事後的変更および項目削除の厳禁 (STRICT FIDELITY CONSTRAINT):**
+   > * あなた（AIエージェント）は、Phase 1 で確定した構成について、**「技術的に不整合がある」「この組み合わせは動かない」といった理由で、ユーザーに構成の再選択（修正）を迫ったり、独断で構成を変更してはいけません。**
+   > * **たとえ技術的に矛盾やエラーが予想される構成であっても、ユーザーが Phase 1 で「有効」とした機能の設定項目（プレースホルダ）は、必ず `.env` ファイル内に含めてください。** 設定の妥当性は、その後の「接続確認」ステップで機械的に検証されるべきであり、ドラフト作成段階で項目を間引くことは許されません。
+   > * `.env.example` を編集する際、**選択されなかった機能のブロックを削除することは構いませんが、選択された機能に関連する設定値やコメントを「不要」と判断して削除してはいけません。**
 2. **接続確認**: ユーザーから機密情報の入力完了報告を受けた後、`uv run python scripts/check_connectivity.py` を実行してデータベースやキャッシュへの接続が成功することを確認します。（※デバッグモードの場合は、実際の接続確認は行わず、接続成功を仮定して次のステップに進みます）
 3. **対象AIエージェントの選択 (BLOCKING STEP)**: 接続テスト成功後（**デバッグモードの場合はシミュレーション完了後**）、必ず **`ask_question` 等のユーザー確認ツールを使用し、複数選択可能な選択肢（チェックボックス形式）として以下の対象クライアントを提示し、必ずユーザーに明示的に選択させてください。**
    * `[ ] Claude Code`
@@ -173,7 +179,27 @@ MCP設定の場合は、いかなるツール呼び出しよりも前に、必�
 4. **設定追加例の出力**: 3で選択した AI エージェント向けの設定追加例を出力します。その際、環境変数やAPIキーなどは絶対に設定ファイル内に直書きせず、各クライアントの環境変数ロード機能や変数展開（例: OpenCode なら `{env:VARIABLE_NAME}`）を利用して動的にロードできるように構成してください。
    **ポリシーファイル (`intents.yaml`) について**: 各エージェントの設定ファイルと同じディレクトリに自動生成し、そのパスを環境変数（`CHRONOS_EVALUATOR_POLICY_PATH`）にセットしてください。
 
-5. **AGENTS.mdへの追記と重複確認 (BLOCKING STEP)**:
+   > [!IMPORTANT]
+   > **🚨 `CHRONOS_INGESTION_MODE=all` 選択時の追加ステップ (BLOCKING):**
+   >
+   > Phase 1 の **保存モード (Ingestion Mode)** で `all` が選ばれた場合、上記の MCP サーバー登録設定に **加えて**、選択された各 AI エージェントについて **§3 「`CHRONOS_INGESTION_MODE=all` を選ぶ場合のクライアント別セットアップ」 (README L671 以降)** を必ず参照し、ターン終了 hook (`scripts/agent_turn_hook.py` を起動する設定) を追加で出力してください。
+   >
+   > この追加 hook が無い場合、Gateway 側で `memory_save` ツールが隠蔽されているにもかかわらず保存経路が存在しない sad path 状態となり、`all` モードを選んだユーザーの会話ログは一切保存されません。Gateway 起動時には `ingestion mode: all - 'memory_save' tool is HIDDEN from agents. Client-side hook ... MUST be configured` の WARNING が stderr に出ます。
+   >
+   > 出力する設定では次の前提条件も必ずユーザーに明示してください:
+   > * `MCP_GATEWAY_API_KEY` を hook プロセスから読めるように環境変数として伝播させる (各クライアントの hook が継承する環境変数の取り扱いに依存)。
+   > * `MCP_GATEWAY_URL` (デフォルト `http://127.0.0.1:9100`) が hook プロセスから到達可能であること。
+   > * Gateway 側のポリシーファイル (`intents.yaml` 等) で intent `memory.ingest` を許可済みであること。
+   >
+   > `selective` が選ばれた場合は本ステップは不要です (従来どおり AGENTS.md に `memory_save` プロトコルを追記する Step 5 のみ実施)。
+
+5. **AGENTS.mdへの追記と重複確認 (BLOCKING STEP, Phase 1 の選択に応じて分岐)**:
+
+   > [!IMPORTANT]
+   > **🚨 Phase 1 の Ingestion Mode 選択による分岐 (CRITICAL):**
+   >
+   > * **`selective` モード選択時 (既定動作)**: 以下のとおり [`docs/agent-prompts/memory-save-system-prompt.md`](docs/agent-prompts/memory-save-system-prompt.md) の長期記憶プロトコルを `AGENTS.md` に追記してください。
+   > * **`all` モード選択時**: `memory_save` ツールはエージェントから隠蔽されるため、上記の `memory_save` プロトコル (エージェントの自律保存指示) は **追記しないでください**。代わりに「ターン終了時にクライアント側 hook が自動的に会話ログを保存する」旨の短い説明 (1〜3行) のみを `AGENTS.md` に追記すれば十分です。`memory_save` の呼び出しを促す指示はこのモードでは論理的に意味を成しません (ツールが見えないため)。
    設定の提示後、対象クライアント用の `AGENTS.md`（またはそれに相当するエージェント指示ファイル）に対して、長期記憶運用のためのプロトコル（[docs/agent-prompts/memory-save-system-prompt.md](docs/agent-prompts/memory-save-system-prompt.md) の内容）を追記する提案を行ってください。
 
    > [!IMPORTANT]
@@ -199,6 +225,7 @@ Hook設定の場合は、いかなるツール呼び出しよりも前に、必�
 
 1. **対象AIエージェント（複数選択可）**: 設定例や構築手順を提示したいエージェントをすべて選択させてください。
    * `Claude Code` (MCP/HTTPフック直接連携)
+   * `Codex CLI` (Claude Code 互換 hooks: `hooks.json` または `config.toml` の `[hooks]`)
    * `OpenCode` (Node.jsプラグイン/Hooks連携)
    * `Antigravity CLI` (MCPフック/コマンドワンライナー直接連携)
    * `Claude Desktop` (MCPサーバーとしてのクイックスタート)
@@ -214,7 +241,7 @@ Hook設定の場合は、いかなるツール呼び出しよりも前に、必�
   "questions": [
     {
       "question": "1. 対象AIエージェントを選択してください（複数選択可）",
-      "options": ["Claude Code", "OpenCode", "Antigravity CLI", "Claude Desktop", "Cursor", "その他"],
+      "options": ["Claude Code", "Codex CLI", "OpenCode", "Antigravity CLI", "Claude Desktop", "Cursor", "その他"],
       "is_multi_select": true
     },
     {
@@ -236,7 +263,7 @@ Hook設定の場合は、いかなるツール呼び出しよりも前に、必�
    * リモートゲートウェイ用の API キー等がある場合は、[機密情報の分離収集ルール](#-機密情報の分離収集ルールsensitive-information-handling-rule)に従い、ユーザーに `.env` へ直接記入するよう案内してください。（URLはデフォルトで `http://127.0.0.1:9100` を使用し、変更が必要な場合のみ入力を促してください）
    * **【必須プロセス】** ツール安全判定にどの **LLMモデル**（例: `anthropic/claude-3-5-haiku-20241022` 等）を使用するかを合意し、対応するプロバイダの **API キー（`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` 等）** の準備・入力を、同様に [機密情報の分離収集ルール](#-機密情報の分離収集ルールsensitive-information-handling-rule)に従ってユーザーに依頼（または `.env` へのシミュレーション追記を案内）してください。
 2. **フック設定・スクリプトの出力と配置**:
-   * 選択した方式、およびOS自動判定ルールに基づき、後述の **「[💡 AIエージェントへの Hook 設定方法 (Configuration)](#-aiエージェントへの-hook-設定方法-configuration)」** セクションにある具体的な **設定パターン（A〜E）** を必ず参照し、現在の環境に適した **フック設定ブロック（JSON等）およびスクリプトファイル（Linuxなら `.sh`、Windowsなら `.cmd` 等）** を生成して提示します。
+   * 選択した方式、およびOS自動判定ルールに基づき、後述の **「[💡 AIエージェントへの Hook 設定方法 (Configuration)](#-aiエージェントへの-hook-設定方法-configuration)」** セクションにある具体的な **設定パターン（A〜G）** を必ず参照し、現在の環境に適した **フック設定ブロック（JSON等）およびスクリプトファイル（Linuxなら `.sh`、Windowsなら `.cmd` 等）** を生成して提示します。選択されたクライアントに対応するパターン (Claude Code→A / Codex CLI→F / OpenCode→C / Antigravity→D / Cursor→G / その他→E) を必ず選択し、不足している部分を補完してください。
    * **【構成提示の厳格ルール】**: AIエージェント（あなた）は、必ず上記セクションの構成例をテンプレートとして正確に使用してください。独自の設定形式を創作しないでください。
    * 本番モードの場合、スクリプトファイルを実際に書き込み、実行権限を与えます。**書き込み後は必ず `view_file` 等の読込ツールを用いて正しく書き込まれたか確認し、かつ `ls -la` などのコマンドで実在を確認・出力してください。**
    * **【絶対出力要件】** この提示の際、**必ず「使用する LLM モデルの設定環境変数（`CHRONOS_EVALUATOR_MODEL`）」および「対応する API キー環境変数」の設定例（※環境変数は直書きせず、各クライアントの環境変数ロード機能や変数展開を用いること）をシミュレーションや解説の中に明記してください。**
@@ -245,7 +272,7 @@ Hook設定の場合は、いかなるツール呼び出しよりも前に、必�
 4. **動作確認テストの実行（必須）**
 ユーザーから設定完了の報告を受けた後、必ず実際に以下のテストコマンドを実行し、評価器が正常に判定（`allow`/`deny`）を返却するログを出力・検証してください。
 ```bash
-echo '{"tool_name":"bash","tool_input":{"command":"ls"}}' | mcp_gateway evaluate --json-io --policy-path "${CHRONOS_EVALUATOR_POLICY_PATH:-$HOME/.config/opencode/intents.yaml}"
+echo '{"tool_name":"bash","tool_input":{"command":"ls"}}' | mcp_gateway evaluate --json-io --policy-path "${CHRONOS_EVALUATOR_POLICY_PATH:-$HOME/.config/chronos/intents.yaml}"
 ```
 *(※フック方式に応じて、`uvx chronos-mcp-gateway` や `python -m mcp_gateway` 等、適切なコマンドを構築して実行してください)*
 
@@ -366,11 +393,11 @@ Universal Evaluator は、ツール実行前フック（`PreToolUse` Hook）を�
 
 ---
 
-#### 📌 設定パターン A：MCP フックによる直接連携（推奨・最もシンプル）
+#### 📌 設定パターン A：Claude Code への MCP フック直接連携（推奨・最もシンプル）
 
-Claude Code や Antigravity CLI などの MCP フックをサポートする先進的なエージェントでは、**ラッパースクリプトを一切作成することなく**、すでにマウントされている MCP サーバー（例: `chronos-graph`）の `evaluate` ツールを直接指定できます。
+Claude Code は MCP フックをネイティブにサポートしているため、**ラッパースクリプトを一切作成することなく**、すでにマウントされている MCP サーバー（例: `chronos-graph`）の `evaluate` ツールを直接指定できます。Antigravity CLI / Codex CLI / Cursor も同様の MCP フック記法をサポートしていますが、それぞれ設定パターン D / F / G に専用セクションがあります。
 
-エージェントの設定ファイル（例: `~/.claude/settings.json` や `.agents/hooks.json`）に以下のように記述します。
+Claude Code の設定ファイル (`~/.claude/settings.json` または `.claude/settings.json`) に以下のように記述します。
 
 ```json
 {
@@ -566,6 +593,103 @@ OpenCode 等の設定で、ラッパースクリプトへの絶対パスを環�
 }
 ```
 
+---
+
+#### 📌 設定パターン F：Codex CLI への連携
+
+Codex CLI は Claude Code 互換の hook 仕様を採用しており、`PreToolUse` イベントで `evaluate` ツールを直接呼び出せます。設定ファイルは `~/.codex/hooks.json` または `~/.codex/config.toml` の `[hooks]` セクションを使用します。初回使用時は Codex の `/hooks` コマンドで信頼レビュー (trust) を完了させる必要があります。
+
+##### 1. MCPフック経由での設定 (推奨)
+
+**`hooks.json` 形式:**
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "mcp",
+            "server": "chronos-graph",
+            "tool": "evaluate"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**`config.toml` 形式 (同等):**
+
+```toml
+[[hooks.PreToolUse]]
+matcher = "*"
+
+[[hooks.PreToolUse.hooks]]
+type = "mcp"
+server = "chronos-graph"
+tool = "evaluate"
+```
+
+##### 2. コマンド直接指定 (クローン不要・`uvx` 使用)
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uvx --quiet --from \"context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git\" chronos-mcp-gateway evaluate --json-io --policy-path \"$CHRONOS_EVALUATOR_POLICY_PATH\""
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+ポリシーファイル `intents.yaml` は `~/.codex/intents.yaml` への配置を推奨します。
+
+---
+
+#### 📌 設定パターン G：Cursor への連携
+
+Cursor は **2 つの hook 経路** を提供します。新規プロジェクトでは **方式 1 (Cursor ネイティブ形式)** を、既存の Claude Code 設定を流用したい場合は **方式 2 (Claude Code 互換)** を選んでください。
+
+##### 1. Cursor ネイティブ形式 (`.cursor/hooks.json`)
+
+Cursor 独自の `preToolUse` (小文字) イベントを使います。コマンド直接指定の例:
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "command": "uvx --quiet --from \"context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git\" chronos-mcp-gateway evaluate --json-io --policy-path \"$CHRONOS_EVALUATOR_POLICY_PATH\""
+      }
+    ]
+  }
+}
+```
+
+ラッパースクリプトを使いたい場合は、**設定パターン E** の `chronos-evaluator-hook.sh` をそのまま流用できます。
+
+##### 2. Claude Code 互換形式 (`.claude/settings.json`)
+
+Cursor は Claude Code 形式の hook を自動的にマッピングします (`PreToolUse` → `preToolUse` など)。Claude Code と同じ設定ファイルを共有したい場合に有効です。**設定パターン A** の JSON をそのまま流用できます。
+
+> [!NOTE]
+> Cursor で `chronos-graph` を MCP サーバーとして登録する (`mcp.json`) だけでは PreToolUse hook は起動しません。`mcp.json` は MCP ツールを呼べる状態にするためのもので、自動的な安全評価には別途 `hooks.json` 等の登録が必要です。
+
+ポリシーファイル `intents.yaml` は `.cursor/intents.yaml` への配置を推奨します。
+
 
 
 
@@ -661,6 +785,143 @@ ChronosGraph 本体およびセキュリティ判定エンジン（Universal Eva
 ```bash
 echo "$CONVERSATION_LOG" | python scripts/agent_turn_hook.py &
 ```
+
+#### `CHRONOS_INGESTION_MODE=all` を選ぶ場合のクライアント別セットアップ
+
+> [!WARNING]
+> `CHRONOS_INGESTION_MODE=all` を **環境変数として設定するだけでは全量保存は機能しません。** Gateway 側ではエージェントから `memory_save` ツールを隠蔽するだけで、自動保存の経路はクライアント側 hook の責務です。Gateway 起動時には `ingestion mode: all - 'memory_save' tool is HIDDEN from agents. Client-side hook ... MUST be configured` という WARNING が stderr に出力されます。
+
+**前提条件 (全クライアント共通)**
+
+1. `MCP_GATEWAY_API_KEY` 環境変数を hook プロセスに渡す (未設定時は no-op)。
+2. `MCP_GATEWAY_URL` を hook プロセスから到達可能にする (デフォルト `http://127.0.0.1:9100`)。
+3. Gateway のポリシーファイル (`intents.yaml`) で intent `memory.ingest` を許可しておく。
+
+##### 🟦 Claude Code (`~/.claude/settings.json` または `.claude/settings.json`)
+
+Claude Code の `Stop` event は `transcript_path` を含む JSON を stdin に渡します。`--client claude-code` がこれを自動解釈し、JSONL transcript を `User: ...` / `Assistant: ...` 形式に整形してからGateway に送信します。
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PROJECT_DIR}/scripts/agent_turn_hook.py --client claude-code &"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+##### 🟪 Codex CLI (`hooks.json` または `config.toml` の `[hooks]`)
+
+Codex CLI は Claude Code 互換の hook 仕様を採用しています。設定例は Claude Code とほぼ同一で、`--client codex` を指定します。`/hooks` コマンドで初回信頼レビューを完了させる必要があります。
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ./scripts/agent_turn_hook.py --client codex &"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+##### 🟧 Cursor (`.cursor/hooks.json`)
+
+Cursor 独自の小文字イベント名 (`stop`) を使います。Cursor は Claude Code 形式の `.claude/settings.json` も自動的に読むので、Claude Code と同一の `.claude/settings.json` を共有することも可能です。
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      {
+        "command": "python ./scripts/agent_turn_hook.py --client cursor &"
+      }
+    ]
+  }
+}
+```
+
+##### 🟩 Antigravity CLI (`.agents/hooks.json` または `~/.gemini/config/hooks.json`)
+
+Antigravity は payload に `transcriptPath` (キャメルケース) を含めます。`--client antigravity` がこれも解釈します。
+
+```json
+{
+  "chronos-ingestion": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "python ./scripts/agent_turn_hook.py --client antigravity &",
+        "timeout": 5
+      }
+    ]
+  }
+}
+```
+
+##### 🟨 OpenCode (`.opencode/plugins/chronos-turn-end.ts`)
+
+OpenCode は hook 機構を持たず、代わりに TypeScript プラグインで `session.idle` イベントを購読します。プラグイン側で会話履歴を取得し、子プロセスとして `agent_turn_hook.py --content "..."` を spawn します。
+
+```typescript
+import { spawn } from "node:child_process";
+import path from "node:path";
+
+export const ChronosTurnEnd = async ({ client, directory }) => {
+  return {
+    event: async ({ event }) => {
+      if (event.type !== "session.idle") return;
+      const sessionId = event.properties?.sessionID;
+      if (!sessionId) return;
+
+      const messages = await client.session.messages.list({ path: { id: sessionId } });
+      const text = messages.data
+        .map((m: any) => {
+          const parts = (m.parts ?? [])
+            .map((p: any) => p.type === "text" ? p.text : "")
+            .filter(Boolean)
+            .join("\n");
+          return `${m.role}: ${parts}`;
+        })
+        .join("\n\n");
+
+      const script = path.join(directory, "scripts/agent_turn_hook.py");
+      const child = spawn("python", [script, "--content", text], {
+        detached: true,
+        stdio: "ignore",
+        env: { ...process.env },
+      });
+      child.unref();
+    },
+  };
+};
+```
+
+##### 🔧 動作確認用の手動実行 (任意)
+
+Hook を仕込まずに動作確認だけしたい場合は、生のテキストを stdin で渡します。
+
+```bash
+echo "User: hello\nAssistant: hi" | python scripts/agent_turn_hook.py &
+```
+
+詳細仕様は [`docs/superpowers/specs/2026-05-27-hybrid-ingestion-mode-design.md`](docs/superpowers/specs/2026-05-27-hybrid-ingestion-mode-design.md) を参照してください。
+
 
 ### 4. Phase 2: タイムアウト・遅延最適化 (Phase 2 Timeout & Latency Improvements)
 

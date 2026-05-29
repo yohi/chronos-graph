@@ -1618,8 +1618,8 @@ Universal LLM Evaluatorとして設計され、LiteLLM経由で任意のプロ�
 | ID | 改善項目 | 影響 | 優先度 | 主要箇所 |
 |----|---------|------|--------|---------|
 | D-1 | `UpstreamClient.call_tool` への明示タイムアウト導入 | `mcp.ClientSession.call_tool` を `asyncio.wait_for` でラップし、ツール単位のタイムアウト（既定 30s 程度、設定可能化）と `UpstreamError` への正規化を行う。現状はハング型タイムアウトをそのままクライアントへ伝播してしまう。 | High (実装済) | `src/mcp_gateway/upstream/context_store_client.py:117-123` |
-| D-2 | Universal Evaluator (LiteLLM) のレイテンシ最適化 | `CHRONOS_EVALUATOR_API_KEY` 設定時、全ツール呼び出しに `acompletion()`（既定 10s）と `MemoryClient.retrieve()`（既定 3s）が直列で挟まる。read 系（`memory_search`/`memory_stats`/`list_projects`）の評価バイパス、評価結果の短 TTL キャッシュ、memory 取得と LLM 判定の並列化（`asyncio.gather`）を導入する。 | High (実装済) | `src/mcp_gateway/policy/composite.py:109-117`, `src/mcp_gateway/policy/llm_evaluator.py:236, 275-284` |
-| D-3 | 承認モードのタイムアウト調整とバイパス分類 | Blocking 承認モードでは `approval_timeout_seconds=30.0` 固定。安全と判明している read-only ツール（`memory_search` 等）を承認バイパス対象として `intents.yaml` 側で分類し、または承認待ちを non-blocking flow（イベント駆動）へ移行することでクライアントから見たタイムアウト体感を改善する。 | Medium (実装済) | `src/mcp_gateway/server.py:120, 448-518` |
+| D-2 | Universal Evaluator (LiteLLM) のレイテンシ最適化 | `CHRONOS_EVALUATOR_API_KEY` 設定時、全ツール呼び出しに `acompletion()`（既定 10s）と `MemoryClient.retrieve()`（既定 3s）が直列で挟まる。read 系（`memory_search`/`memory_stats`/`list_projects`）の評価バイパス、評価結果の短 TTL キャッシュを導入する。（※LLMのプロンプト内に取得したメモリを含めるアーキテクチャ上の制約により、memory取得とLLM判定は並列化せず直列のままそれぞれのタイムアウトで管理する設計に修正） | High (実装済) | `src/mcp_gateway/policy/composite.py:109-117`, `src/mcp_gateway/policy/llm_evaluator.py:236, 275-284` |
+| D-3 | 承認モードのタイムアウト調整とバイパス分類 | Blocking 承認モードでは `approval_timeout_seconds=30.0` 固定。安全と判明している read-only ツール（`memory_search` 等）を承認バイパス対象として `intents.yaml` に基づく Tier 1 判定 (`PolicyEngine`) に統合し、二重管理を防ぐ。また、承認待機のタイムアウトを `GatewaySettings` で可変化することでクライアントから見たタイムアウト体感を改善する。 | Medium (実装済) | `src/mcp_gateway/server.py:120, 448-518` |
 
 #### E. ストレージ・取り込みパイプライン層の追加改善（中〜低影響）
 

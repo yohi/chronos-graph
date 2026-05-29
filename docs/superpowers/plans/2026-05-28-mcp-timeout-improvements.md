@@ -1409,7 +1409,7 @@ git commit -m "docs: add Phase 2 timeout configuration documentation"
 | D-2 | LLM Evaluator 並列化 | ✅ | Task 2 |
 | D-3 | 承認 timeout + bypass | ✅ | Task 3 |
 | E-1 | Chunk 並列化 | ✅ | Task 4 |
-|| E-2 | 埋め込みリトライ調整 | 🔄 | Task 5（未着手） |
+| E-2 | 埋め込みリトライ調整 | 🔄 | Task 5（未着手） |
 | E-3 | Supabase keyword 最適化 | 📋 | Phase 2b（低優先度） |
 | E-4 | GraphLinker 重複呼び出し解消 | 📋 | Phase 2b（低優先度） |
 | E-5 | Orchestrator RPC 統合 | 📋 | Phase 2b（低優先度） |

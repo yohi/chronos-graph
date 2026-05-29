@@ -123,7 +123,7 @@ class UpstreamClient:
         return copy.deepcopy(tools)
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        timeout = getattr(self, "timeout_config", TimeoutConfig.from_env()).get_timeout(name)
+        timeout = self.timeout_config.get_timeout(name)
         try:
             return await asyncio.wait_for(
                 self._call_tool_internal(name, arguments),

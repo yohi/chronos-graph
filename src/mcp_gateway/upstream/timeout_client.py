@@ -32,7 +32,9 @@ class TimeoutConfig:
         )
 
     def get_timeout(self, tool_name: str) -> float:
-        timeout = self.tool_timeouts.get(tool_name, self.default_timeout_seconds)
+        timeout = self.tool_timeouts.get(tool_name)
+        if timeout is None or timeout <= 0:
+            timeout = self.default_timeout_seconds
         return min(timeout, self.max_timeout_seconds)
 
 

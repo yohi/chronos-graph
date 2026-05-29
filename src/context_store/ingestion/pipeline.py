@@ -327,19 +327,14 @@ class IngestionPipeline:
                     )
                 return result, None
             except Exception as exc:
-                content_hash = self._compute_hash(chunk.content)
-                logger.error(
-                    "Chunk 処理失敗 (content_hash=%s, doc_id=%s): %s",
-                    content_hash[:8],
-                    document_id,
-                    exc,
-                    exc_info=True,
+                tmp_failed: list[dict[str, Any]] = []
+                self._record_chunk_failure(
+                    chunk=chunk,
+                    document_id=document_id,
+                    error=exc,
+                    failed_chunks=tmp_failed,
                 )
-                return None, {
-                    "content_hash": content_hash,
-                    "document_id": document_id,
-                    "error": str(exc),
-                }
+                return None, tmp_failed[0] if tmp_failed else None
 
         gathered = await asyncio.gather(*(process_one(chunk) for chunk in chunks))
         results = [result for result, failure in gathered if result is not None and failure is None]

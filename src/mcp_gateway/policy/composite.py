@@ -54,9 +54,13 @@ class CompositeEvaluator:
                 f"fallback_when_llm_not_configured must be allow/ask, got {invalid_fallback!r}"
             )
         self._fallback: Literal["allow", "ask"] = fallback_when_llm_not_configured
+        if memory_timeout_seconds <= 0:
+            raise ValueError(f"memory_timeout_seconds must be > 0, got {memory_timeout_seconds}")
         self._evaluation_cache_ttl_seconds: float = evaluation_cache_ttl_seconds
         self._memory_timeout_seconds: float = memory_timeout_seconds
         self._decision_cache: dict[str, tuple[float, Decision]] = {}
+        self._last_cleanup_time: float = time.monotonic()
+        self._cache_cleanup_interval: float = 60.0  # seconds
 
         logger.warning(
             "evaluator config: llm=%s memory=%s fallback_when_llm_not_configured=%s",
@@ -119,6 +123,7 @@ class CompositeEvaluator:
                 )
             return Decision(decision="allow")
 
+        self._maybe_cleanup_cache()
         cache_key = self._make_decision_cache_key(input_, intent, agent_id)
         cached = self._get_cached_decision(cache_key)
         if cached is not None:
@@ -170,6 +175,25 @@ class CompositeEvaluator:
         expires_at = time.monotonic() + self._evaluation_cache_ttl_seconds
         self._decision_cache[cache_key] = (expires_at, decision)
 
+    def _maybe_cleanup_cache(self) -> None:
+        """一定時間経過していたら期限切れキャッシュを掃除する。"""
+        now = time.monotonic()
+        if now - self._last_cleanup_time < self._cache_cleanup_interval:
+            return
+        self._last_cleanup_time = now
+        self._cleanup_expired_decisions()
+
+    def _cleanup_expired_decisions(self) -> None:
+        """期限切れのエントリをすべて削除する。"""
+        now = time.monotonic()
+        expired_keys = [
+            k for k, (expires_at, _) in self._decision_cache.items() if expires_at <= now
+        ]
+        for k in expired_keys:
+            self._decision_cache.pop(k, None)
+        if expired_keys:
+            logger.debug("Cleaned up %d expired cache entries", len(expired_keys))
+
     def _make_decision_cache_key(
         self,
         input_: ToolCallInput,
@@ -180,6 +204,7 @@ class CompositeEvaluator:
             "agent_id": agent_id,
             "intent": intent,
             "llm_model": getattr(self._llm, "_model", None),
+            "project": str(input_.context.get("project") or ""),
             "tool_input": input_.tool_input,
             "tool_name": input_.tool_name,
         }

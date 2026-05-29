@@ -1481,6 +1481,7 @@ class TestUpstreamClient:
         from unittest.mock import AsyncMock
 
         from mcp_gateway.upstream.context_store_client import UpstreamClient
+        from mcp_gateway.upstream.timeout_client import TimeoutConfig
 
         fake_session = AsyncMock()
         fake_session.list_tools.return_value = type(
@@ -1490,6 +1491,7 @@ class TestUpstreamClient:
             "R", (), {"content": [{"type": "text", "text": '{"a":1}'}], "isError": False}
         )()
         client = UpstreamClient.__new__(UpstreamClient)  # type: ignore[call-arg]
+        client.timeout_config = TimeoutConfig()  # type: ignore[attr-defined]
         client._session = fake_session  # type: ignore[attr-defined]
         client._tools_cache = None  # type: ignore[attr-defined]
 
@@ -1506,10 +1508,12 @@ class TestUpstreamClient:
 
         from mcp_gateway.errors import UpstreamError
         from mcp_gateway.upstream.context_store_client import UpstreamClient
+        from mcp_gateway.upstream.timeout_client import TimeoutConfig
 
         fake_session = AsyncMock()
         fake_session.list_tools.side_effect = Exception("network error")
         client = UpstreamClient.__new__(UpstreamClient)  # type: ignore[call-arg]
+        client.timeout_config = TimeoutConfig()  # type: ignore[attr-defined]
         client._session = fake_session  # type: ignore[attr-defined]
         client._tools_cache = None  # type: ignore[attr-defined]
 
@@ -1523,6 +1527,7 @@ class TestUpstreamClient:
         from unittest.mock import AsyncMock
 
         from mcp_gateway.upstream.context_store_client import UpstreamClient
+        from mcp_gateway.upstream.timeout_client import TimeoutConfig
 
         fake_session = AsyncMock()
         fake_session.call_tool.return_value = type(
@@ -1530,6 +1535,7 @@ class TestUpstreamClient:
         )()
 
         client = UpstreamClient.__new__(UpstreamClient)  # type: ignore[call-arg]
+        client.timeout_config = TimeoutConfig()  # type: ignore[attr-defined]
         client._session = fake_session  # type: ignore[attr-defined]
 
         payload = await client.call_tool("t", {})
@@ -1542,11 +1548,13 @@ class TestUpstreamClient:
 
         from mcp_gateway.errors import UpstreamError
         from mcp_gateway.upstream.context_store_client import UpstreamClient
+        from mcp_gateway.upstream.timeout_client import TimeoutConfig
 
         fake_session = AsyncMock()
         fake_session.call_tool.side_effect = RuntimeError("connection lost")
 
         client = UpstreamClient.__new__(UpstreamClient)  # type: ignore[call-arg]
+        client.timeout_config = TimeoutConfig()  # type: ignore[attr-defined]
         client._session = fake_session  # type: ignore[attr-defined]
 
         with pytest.raises(UpstreamError, match="upstream tool call 't' failed") as excinfo:
@@ -1560,8 +1568,10 @@ class TestUpstreamClient:
         from unittest.mock import AsyncMock
 
         from mcp_gateway.upstream.context_store_client import UpstreamClient
+        from mcp_gateway.upstream.timeout_client import TimeoutConfig
 
         client = UpstreamClient.__new__(UpstreamClient)  # type: ignore[call-arg]
+        client.timeout_config = TimeoutConfig()  # type: ignore[attr-defined]
         client._session = AsyncMock()  # type: ignore[attr-defined]
         client._stdio_ctx = AsyncMock()  # type: ignore[attr-defined]
         client._tools_cache = [{"name": "stale"}]  # type: ignore[attr-defined]

@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-import tenacity
 
 from context_store.embedding.protocols import EmbeddingProvider
 
@@ -171,10 +170,10 @@ class TestLiteLLMEmbeddingProvider:
         mock_litellm.aembedding = mock_aembedding
 
         with patch("context_store.embedding.litellm._get_litellm", return_value=mock_litellm):
-            with pytest.raises(tenacity.RetryError):
+            with pytest.raises(httpx.HTTPStatusError):
                 await provider.embed_batch(texts)
 
-        assert call_count == 5
+        assert call_count == 3
 
 
 class TestCustomAPIEmbeddingProvider:

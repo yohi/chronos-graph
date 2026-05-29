@@ -43,9 +43,22 @@ def _positive_int_env(key: str, default: int) -> int:
         return default
     try:
         parsed = int(raw)
+        if parsed > 0:
+            return parsed
+        logger.warning(
+            "Invalid value for %s: %s (must be > 0). Falling back to default: %d",
+            key,
+            raw,
+            default,
+        )
     except ValueError:
-        return default
-    return parsed if parsed > 0 else default
+        logger.warning(
+            "Invalid format for %s: %s (must be integer). Falling back to default: %d",
+            key,
+            raw,
+            default,
+        )
+    return default
 
 
 CHUNK_PARALLEL_SEMAPHORE_SIZE = _positive_int_env("CHUNK_PARALLEL_SEMAPHORE_SIZE", 10)

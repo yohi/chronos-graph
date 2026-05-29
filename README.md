@@ -677,7 +677,7 @@ MCP 経由のツール呼び出しや埋め込み API のハング・長期リ�
 | `EMBEDDING_MAX_WAIT` | `10.0` | > 0 | **(E-2)** 指数バックオフの最大待機秒数 (旧 60s → 10s)。`Retry-After` ヘッダを尊重する際もこの値でクランプ。 |
 | `EMBEDDING_PER_ATTEMPT_TIMEOUT` | `10.0` | > 0 | **(E-2)** 1 リトライ試行あたりの HTTP タイムアウト秒数。 |
 
-> 💡 **レイテンシ設計:** 上記の組み合わせにより Embedding API 経由の総レイテンシを **最大 ~50 秒** (3 試行 × 10s + 2 待機 × 10s) に bound し、MCP Gateway のツールタイムアウト枠 (`MCP_GATEWAY_TOOL_TIMEOUT_SECONDS=30s`) と整合した設計となっています。`EMBEDDING_*` の不正値・非正値は警告ログ + デフォルト値へフォールバック (fail-soft) します。
+> 💡 **レイテンシ設計:** Embedding API 経由の総レイテンシは **最大 ~50 秒** (3 試行 × 10s + 2 待機 × 10s) と見積もられます。これに対し MCP Gateway のデフォルトタイムアウトは 30s ですが、リトライが長期化する `memory_save_url` ツールには個別で 40s の上限が設定されています。最悪ケースでは Gateway 側が先にタイムアウトし fail-soft に処理を打ち切ることで、リソースの占有を防ぐ設計となっています。`CHUNK_PARALLEL_SEMAPHORE_SIZE` および `EMBEDDING_*` の不正値・非正値は警告ログ + デフォルト値へフォールバック (fail-soft) します。
 
 **実装参照:**
 

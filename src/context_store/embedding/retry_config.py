@@ -63,7 +63,8 @@ def parse_retry_after_header(header: str | None) -> float | None:
 
     # decimal-integer (秒数として直接パース)
     try:
-        return float(text)
+        val = float(text)
+        return max(val, 0.0)
     except ValueError:
         pass
 

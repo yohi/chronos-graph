@@ -35,6 +35,11 @@ class TestParseRetryAfterHeader:
         """0 秒指定が 0.0 として返ることを検証。"""
         assert parse_retry_after_header("0") == 0.0
 
+    def test_decimal_negative_clamped_to_zero(self) -> None:
+        """負の秒数指定が 0.0 にクランプされることを検証。"""
+        assert parse_retry_after_header("-10") == 0.0
+        assert parse_retry_after_header("-0.1") == 0.0
+
     def test_decimal_with_decimal_point(self) -> None:
         """小数点を含む値もパース可能なことを検証。"""
         assert parse_retry_after_header("1.5") == 1.5

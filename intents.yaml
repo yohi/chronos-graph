@@ -1,0 +1,16 @@
+version: 1
+output_filters:
+  default_filter:
+    type: "none"
+intents:
+  default:
+    description: "Default intent"
+    allowed_tools: ["bash"]
+    output_filter: "default_filter"
+  memory.ingest:
+    description: "Ingest memory"
+    allowed_tools: ["memory_save", "context-store_memory_save"]
+    output_filter: "default_filter"
+agents:
+  OpenCode:
+    allowed_intents: ["default", "memory.ingest"]

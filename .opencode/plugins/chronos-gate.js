@@ -43,12 +43,60 @@ async function evaluateTool(toolCall) {
   return new Promise((resolve, reject) => {
     const policyPath = process.env.CHRONOS_EVALUATOR_POLICY_PATH || path.join(process.env.HOME, '.config', 'opencode', 'intents.yaml');
 
-    const proc = spawn('uvx', [
+    // Search for the project directory containing .env to resolve local path
+    const searchDirs = [
+      globalDirectory,
+      process.cwd(),
+      process.env.PWD,
+      path.join(process.env.HOME, 'program', 'chronos-graph'),
+      path.join(process.env.HOME, 'chronos-graph')
+    ].filter(Boolean);
+
+    let projectDir = null;
+    for (const dir of searchDirs) {
+      const envPath = path.join(dir, '.env');
+      if (fs.existsSync(envPath)) {
+        projectDir = dir;
+        break;
+      }
+    }
+
+    if (!projectDir) {
+      projectDir = process.cwd() || process.env.HOME;
+    }
+
+    const localVenvGateway = path.join(projectDir, '.venv', 'bin', 'chronos-mcp-gateway');
+    let cmd = 'uvx';
+    let args = [
       '--quiet',
       '--from', 'context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git',
       'chronos-mcp-gateway', 'evaluate', '--json-io',
       '--policy-path', policyPath
-    ]);
+    ];
+
+    if (fs.existsSync(localVenvGateway) || fs.existsSync(path.join(projectDir, 'pyproject.toml'))) {
+      const localBinUv = path.join(process.env.HOME, '.local', 'bin', 'uv');
+      cmd = fs.existsSync(localBinUv) ? localBinUv : 'uv';
+      args = ['run', 'chronos-mcp-gateway', 'evaluate', '--json-io', '--policy-path', policyPath];
+      logDebug(`evaluateTool: Using local uv run evaluate`);
+    } else {
+      const localBinUvx = path.join(process.env.HOME, '.local', 'bin', 'uvx');
+      cmd = fs.existsSync(localBinUvx) ? localBinUvx : 'uvx';
+      logDebug(`evaluateTool: Using uvx evaluate fallback`);
+    }
+
+    // Ensure HOME/.local/bin is in PATH
+    const localBinDir = path.join(process.env.HOME, '.local', 'bin');
+    const currentPath = process.env.PATH || '';
+    const newPath = currentPath.includes(localBinDir) ? currentPath : `${localBinDir}:${currentPath}`;
+
+    const proc = spawn(cmd, args, {
+      cwd: projectDir,
+      env: {
+        ...process.env,
+        PATH: newPath
+      }
+    });
 
     const timeout = setTimeout(() => {
       proc.kill();

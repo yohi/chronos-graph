@@ -66,13 +66,13 @@
 ### ⚙️ 【ケース A】MCPサーバーをセットアップする場合
 
 #### 1. 設定情報の確認とロックイン (BLOCKING STEP)
-MCP設定の場合は、いかなるツール呼び出しよりも前に、必ず **`ask_question` 等のユーザー確認ツールを使用して、以下の 1〜12 のすべての確認項目を提示し、回答を確定させてください。**
+MCP設定の場合は、いかなるツール呼び出しよりも前に、必ず **`ask_question` 等のユーザー確認ツールを使用して、以下の 1〜9 のすべての確認項目を提示し、回答を確定させてください。**
 
 > [!IMPORTANT]
 > **🚨 設定の勝手な仮定・省略の厳格な禁止 (STRICT NON-OMISSION CONSTRAINT):**
 > あなた（AIエージェント）は、デバッグモード（Dry-run）であるか本番モードであるかにかかわらず、**「SQLite だからグラフは不要」「Supabase だから外部データベースは聞かなくていい」といった、前項の回答に基づく動的な質問の省略（最適化）を絶対に行ってはいけません。**
-> あなたに課せられた義務は、**以下の 1〜12 のすべての項目番号を、提示する `ask_question` 内に明示的に含め、一括してユーザーに提示することです。**
-> 条件付き項目（例: OpenAI 選択時のみ、LLM 使用時のみ）であっても、質問番号と条件は必ず明示してください。10番の `LLM Evaluator` で `使用しない` が選ばれた場合のみ 11〜12 をスキップできますが、それ以外の項目（特に 5番のグラフ関係性機能など）は、ストレージ構成に関わらず必ず独立した項目としてユーザーに選ばせてください。
+> あなたに課せられた義務は、**以下の 1〜9 のすべての項目番号を、提示する `ask_question` 内に明示的に含め、一括してユーザーに提示することです。**
+> 条件付き項目（例: OpenAI 選択時のみ）であっても、質問番号と条件は必ず明示してください。LLM Evaluator / Universal Evaluator の設定はケースA（長期記憶 MCP サーバー）の基本セットアップには含めません。ツール実行前保護フックを設定する場合はケースBを使用してください。
 
 1. **保存モード (Ingestion Mode)**: エージェントの記憶保存方法を選択します。
    * `all` (全量保存モード: エージェントのターン終了時に会話ログをバックグラウンドで全量自動保存します。**Phase 2 でクライアント側に Stop event hook の追加設定が必須**となります。詳細は §3 「`CHRONOS_INGESTION_MODE=all` を選ぶ場合のクライアント別セットアップ」 を参照)
@@ -84,9 +84,9 @@ MCP設定の場合は、いかなるツール呼び出しよりも前に、必�
    * `sqlite` (🌟**最も推奨**: ゼロ設定かつ軽量に動作し、追加の外部データベースコンテナが不要です)
    * `postgres` (本番用: セマンティック検索のための `pgvector` 機能が必要です)
    * `supabase` (本番用: クラウドベースの Supabase Data API を経由して接続します)
-4. **ベクトル機能の有無 (PostgreSQL選択時のみ)**: セマンティック検索の有効化。
-   * `有効` (🌟**推奨**: 記憶の意味的な近さを判定する高度なセマンティック検索を利用します)
-   * `無効` (キーワード一致検索のみのシンプルな動作に制限します)
+4. **PostgreSQL ベクトル検索の前提確認 (PostgreSQL選択時のみ)**: PostgreSQL バックエンドは `pgvector` を前提とします。無効化フラグはありません。
+   * `確認した` (PostgreSQL 選択時は `pgvector` 拡張とベクトルカラムが利用可能であることを確認します)
+   * `該当なし` (SQLite または Supabase を選択した場合)
 5. **グラフ関係性機能（SQLite internal / Neo4j）**: 記憶同士のつながり（関連リンク）を記録・可視化するグラフ機能。
    * `無効` (🌟**最も推奨**: グラフ関係性機能を無効化する、高速かつシンプルな軽量構成)
    * `有効` (SQLite では同一DB内の内部グラフ、PostgreSQL では外部 Neo4j を使用します。Supabase では現時点で非対応です)
@@ -102,16 +102,6 @@ MCP設定の場合は、いかなるツール呼び出しよりも前に、必�
    * `text-embedding-ada-002` (従来の標準モデル)
 9. **API KEYの入力 (OpenAI選択時のみ)**: `.env` に `OPENAI_API_KEY` の設定を促す。
    * OpenAI 選択時は、[機密情報の分離収集ルール](#-機密情報の分離収集ルールsensitive-information-handling-rule)に従い、ユーザーに `.env` へ直接 `OPENAI_API_KEY` を記入するよう案内してください。記入完了の報告を受けるまで次のステップに進んではいけません。
-10. **LLM Evaluator (保護判定エンジン)**: ツール安全評価器として稼働させる際の判定エンジンの配置。
-   * `クラウド` (🌟**推奨**: LiteLLM 経由でクラウド上の最新モデル（Anthropic / OpenAI 等）の API キーを設定して使用します)
-   * `ローカル` (ローカル環境上の Ollama 等のモデルを叩いて判定します)
-   * `使用しない` (LLMによる保護判定をオフにし、決定論的ルール intents.yaml のみでツール安全性を判定します)
-11. **LLMモデルの選択 (LLM使用時のみ)**: 使用する判定用 LLM モデル名。
-    * `anthropic/claude-3-5-haiku-20241022` (🌟**推奨**: 高速・高性能で極めて安定した保護判定が可能です)
-    * `openai/gpt-4o-mini` (高速かつリーズナブルな標準的判定モデル)
-    * `その他（LiteLLM識別子）` (ユーザーが希望するその他のモデル識別子)
-12. **LLM用 API KEYの入力 (LLM使用時のみ)**: `.env` に `CHRONOS_EVALUATOR_API_KEY` の登録を促す。
-    * LLM 使用時は、[機密情報の分離収集ルール](#-機密情報の分離収集ルールsensitive-information-handling-rule)に従い、ユーザーに選択したモデルプロバイダに対応する API キーを `.env` の `CHRONOS_EVALUATOR_API_KEY` へ直接記入するよう案内してください。`ANTHROPIC_API_KEY` は v3.0 以降の Evaluator では使用しません。記入完了の報告を受けるまで次のステップに進んではいけません。
 
 #### 2. 構築と検証 (本番モード用)
 1. **.envの作成と認証情報の入力**: `.env.example` から `.env` を作成します。
@@ -138,8 +128,7 @@ MCP設定の場合は、いかなるツール呼び出しよりも前に、必�
    > あなた（AIエージェント）がデバッグモードで実行されている場合であっても、「シミュレーションだから」と自己判断して本ステップをスキップしたり、特定のクライアント（例: Claude Desktop 等）を想定した出力を勝手に自己完結させて提示してはいけません。
    > デバッグモードであっても、**必ず本ツールの呼び出しを強制**し、ユーザーが選んだクライアントに対する設定シミュレーションのみを出力してください。
 
-4. **設定追加例の出力**: 3で選択した AI エージェント向けの設定追加例を出力します。その際、環境変数やAPIキーなどは絶対に設定ファイル内に直書きせず、各クライアントの環境変数ロード機能や変数展開（例: OpenCode なら `{env:VARIABLE_NAME}`）を利用して動的にロードできるように構成してください。
-   **ポリシーファイル (`intents.yaml`) について**: 各エージェントの設定ファイルと同じディレクトリに自動生成し、そのパスを環境変数（`CHRONOS_EVALUATOR_POLICY_PATH`）にセットしてください。
+4. **設定追加例の出力**: 3で選択した AI エージェント向けの長期記憶 MCP サーバー登録例を出力します。その際、環境変数やAPIキーなどは絶対に設定ファイル内に直書きせず、各クライアントの環境変数ロード機能や変数展開（例: OpenCode なら `{env:VARIABLE_NAME}`）を利用して動的にロードできるように構成してください。`selective` モードでは Gateway ポリシーファイルや `CHRONOS_EVALUATOR_*` は不要です。
 
    > [!IMPORTANT]
    > **🚨 `CHRONOS_INGESTION_MODE=all` 選択時の追加ステップ (BLOCKING):**
@@ -151,8 +140,8 @@ MCP設定の場合は、いかなるツール呼び出しよりも前に、必�
    > 出力する設定では次の前提条件も必ずユーザーに明示してください:
    > * `MCP_GATEWAY_API_KEY` を hook プロセスから読めるように環境変数として伝播させる (各クライアントの hook が継承する環境変数の取り扱いに依存)。
    > * `MCP_GATEWAY_URL` (デフォルト `http://127.0.0.1:9100`) が hook プロセスから到達可能であること。
-   > * Gateway サーバー側では `MCP_GATEWAY_API_KEYS_JSON` に `{"agent-id":"raw-api-key"}` 形式の API キーマップを設定し、hook 側の `MCP_GATEWAY_API_KEY` と一致させること。
-   > * Gateway 側のポリシーファイル (`intents.yaml` 等) で intent `memory.ingest` を許可済みであること。
+   > * Gateway サーバー側では `MCP_GATEWAY_API_KEYS_JSON` に `{"turn-end-ingestion-bot":"raw-api-key"}` 形式の API キーマップを設定し、hook 側の `MCP_GATEWAY_API_KEY` と一致させること。
+   > * Gateway 側のポリシーファイル (`intents.yaml` 等。環境変数は `MCP_GATEWAY_POLICY_PATH`) で agent `turn-end-ingestion-bot` に intent `memory.ingest` を許可済みであること。
    >
    > `selective` が選ばれた場合は本ステップは不要です (従来どおり AGENTS.md に `memory_save` プロトコルを追記する Step 5 のみ実施)。
 
@@ -232,7 +221,7 @@ Hook設定の場合は、いかなるツール呼び出しよりも前に、必�
    * リモートゲートウェイ用の API キー等がある場合は、[機密情報の分離収集ルール](#-機密情報の分離収集ルールsensitive-information-handling-rule)に従い、ユーザーに `.env` へ直接記入するよう案内してください。（URLはデフォルトで `http://127.0.0.1:9100` を使用し、変更が必要な場合のみ入力を促してください）
    * **【必須プロセス】** ツール安全判定にどの **LLMモデル**（例: `anthropic/claude-3-5-haiku-20241022` 等）を使用するかを合意し、対応するプロバイダの **API キーを `CHRONOS_EVALUATOR_API_KEY` として設定する準備・入力**を、同様に [機密情報の分離収集ルール](#-機密情報の分離収集ルールsensitive-information-handling-rule)に従ってユーザーに依頼（または `.env` へのシミュレーション追記を案内）してください。`ANTHROPIC_API_KEY` は Evaluator では使用しません。
 2. **フック設定・スクリプトの出力と配置**:
-   * 選択した方式、およびOS自動判定ルールに基づき、後述の **「[💡 AIエージェントへの Hook 設定方法 (Configuration)](#-aiエージェントへの-hook-設定方法-configuration)」** セクションにある具体的な **設定パターン（A〜G）** を必ず参照し、現在の環境に適した **フック設定ブロック（JSON等）およびスクリプトファイル（Linuxなら `.sh`、Windowsなら `.cmd` 等）** を生成して提示します。選択されたクライアントに対応するパターン (Claude Code→A / Codex CLI→F / OpenCode→C / Antigravity→D / Cursor→G / その他→E) を必ず選択し、不足している部分を補完してください。
+   * 選択した方式、およびOS自動判定ルールに基づき、README の **「[💡 AIエージェントへの Hook 設定方法 (Configuration)](../README.md#-aiエージェントへの-hook-設定方法-configuration)」** セクションにある具体的な **設定パターン（A〜G）** を必ず参照し、現在の環境に適した **フック設定ブロック（JSON等）およびスクリプトファイル（Linuxなら `.sh`、Windowsなら `.cmd` 等）** を生成して提示します。選択されたクライアントに対応するパターン (Claude Code→A / Codex CLI→F / OpenCode→C / Antigravity→D / Cursor→G / その他→E) を必ず選択し、不足している部分を補完してください。
    * **【構成提示の厳格ルール】**: AIエージェント（あなた）は、必ず上記セクションの構成例をテンプレートとして正確に使用してください。独自の設定形式を創作しないでください。
    * 本番モードの場合、スクリプトファイルを実際に書き込み、実行権限を与えます。**書き込み後は必ず `view_file` 等の読込ツールを用いて正しく書き込まれたか確認し、かつ `ls -la` などのコマンドで実在を確認・出力してください。**
    * **【絶対出力要件】** この提示の際、**必ず「使用する LLM モデルの設定環境変数（`CHRONOS_EVALUATOR_MODEL`）」および「対応する API キー環境変数」の設定例（※環境変数は直書きせず、各クライアントの環境変数ロード機能や変数展開を用いること）をシミュレーションや解説の中に明記してください。**
@@ -241,7 +230,7 @@ Hook設定の場合は、いかなるツール呼び出しよりも前に、必�
 4. **動作確認テストの実行（必須）**
 ユーザーから設定完了の報告を受けた後、必ず実際に以下のテストコマンドを実行し、評価器が正常に判定（`allow`/`deny`）を返却するログを出力・検証してください。
 ```bash
-echo '{"tool_name":"bash","tool_input":{"command":"ls"}}' | mcp_gateway evaluate --json-io --policy-path "${CHRONOS_EVALUATOR_POLICY_PATH:-$HOME/.config/chronos/intents.yaml}"
+echo '{"tool_name":"bash","tool_input":{"command":"ls"}}' | chronos-mcp-gateway evaluate --json-io --policy-path "${CHRONOS_EVALUATOR_POLICY_PATH:-$HOME/.config/chronos/intents.yaml}"
 ```
 *(※フック方式に応じて、`uvx chronos-mcp-gateway`、`uv run python -m mcp_gateway`、または `python3 -m mcp_gateway` 等、現在の実行環境で利用可能なコマンドを構築して実行してください。`python` コマンドが存在するとは限りません。)*
 

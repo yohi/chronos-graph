@@ -232,11 +232,10 @@ def extract_payload(client: str, raw: str) -> str:
     if isinstance(transcript_path, str) and transcript_path:
         try:
             text = read_jsonl_transcript(transcript_path)
+            if text:
+                return text
         except (OSError, PermissionError) as exc:
             logging.warning("failed to read transcript at %r: %s", transcript_path, exc)
-            return raw
-        if text:
-            return text
 
     # 一部のクライアントは payload に直接 messages 配列を含める可能性がある
     messages = data.get("messages")
@@ -368,8 +367,25 @@ async def _main_async(payload: str) -> None:
     gateway_url = os.environ.get("MCP_GATEWAY_URL", DEFAULT_GATEWAY_URL)
     api_key = os.environ.get("MCP_GATEWAY_API_KEY")
     intent = os.environ.get("MCP_INTENT", DEFAULT_INTENT)
-    total_timeout = float(os.environ.get("MCP_HOOK_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS))
-    sse_timeout = float(os.environ.get("MCP_HOOK_SSE_TIMEOUT_SECONDS", DEFAULT_SSE_TIMEOUT_SECONDS))
+    try:
+        total_timeout = float(
+            os.environ.get("MCP_HOOK_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))
+        )
+    except ValueError as exc:
+        logging.warning(
+            "Failed to parse MCP_HOOK_TIMEOUT_SECONDS, falling back to default: %s", exc
+        )
+        total_timeout = DEFAULT_TIMEOUT_SECONDS
+
+    try:
+        sse_timeout = float(
+            os.environ.get("MCP_HOOK_SSE_TIMEOUT_SECONDS", str(DEFAULT_SSE_TIMEOUT_SECONDS))
+        )
+    except ValueError as exc:
+        logging.warning(
+            "Failed to parse MCP_HOOK_SSE_TIMEOUT_SECONDS, falling back to default: %s", exc
+        )
+        sse_timeout = DEFAULT_SSE_TIMEOUT_SECONDS
 
     if not api_key:
         logging.error("MCP_GATEWAY_API_KEY is not set; aborting hook (no-op)")
@@ -418,7 +434,11 @@ def main() -> int:
         logging.debug("payload extraction yielded empty content; skipping hook invocation")
         return 0
 
-    max_bytes = int(os.environ.get("MCP_HOOK_MAX_LOG_BYTES", DEFAULT_MAX_LOG_BYTES))
+    try:
+        max_bytes = int(os.environ.get("MCP_HOOK_MAX_LOG_BYTES", str(DEFAULT_MAX_LOG_BYTES)))
+    except ValueError as exc:
+        logging.warning("Failed to parse MCP_HOOK_MAX_LOG_BYTES, falling back to default: %s", exc)
+        max_bytes = DEFAULT_MAX_LOG_BYTES
     payload, was_truncated = truncate_log(extracted, max_bytes)
     if was_truncated:
         logging.warning(

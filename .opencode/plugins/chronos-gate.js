@@ -65,39 +65,50 @@ async function OnBeforeToolExecute(toolCall) {
 const ChronosTurnEnd = $(async ({ client, directory }) => {
   return {
     event: async ({ event }) => {
-      if (event.type !== "session.idle") return;
-      const sessionId = event.properties?.sessionID;
-      if (!sessionId) return;
+      try {
+        if (event.type !== "session.idle") return;
+        const sessionId = event.properties?.sessionID;
+        if (!sessionId) return;
 
-      const messages = await client.session.messages.list({ path: { id: sessionId } });
-      const text = messages.data
-        .map((m) => {
-          const parts = (m.parts ?? [])
-            .map((p) => p.type === "text" ? p.text : "")
-            .filter(Boolean)
-            .join("\n");
-          return `${m.role}: ${parts}`;
-        })
-        .join("\n\n");
+        const messages = await client.session.messages.list({ path: { id: sessionId } });
+        const text = messages.data
+          .map((m) => {
+            const parts = (m.parts ?? [])
+              .map((p) => p.type === "text" ? p.text : "")
+              .filter(Boolean)
+              .join("\n");
+            return `${m.role}: ${parts}`;
+          })
+          .join("\n\n");
 
-      let baseDir = '/home/y_ohi/program/chronos-graph';
-      if (directory && typeof directory === 'string') {
-        // Prevent path injection by resolving and confirming safe path structure
-        const resolved = path.resolve(directory);
-        if (resolved.startsWith('/') && !resolved.includes('..')) {
-          baseDir = resolved;
+        let baseDir = path.join(__dirname, "..", "..");
+        if (directory && typeof directory === 'string') {
+          // Prevent path injection by resolving and confirming safe path structure
+          const resolved = path.resolve(directory);
+          if (resolved.startsWith('/') && !resolved.includes('..')) {
+            baseDir = resolved;
+          }
         }
-      }
 
-      const script = path.join(baseDir, "scripts", "agent_turn_hook.py");
-      const child = spawn("python", [script], {
-        detached: true,
-        stdio: ["pipe", "ignore", "ignore"],
-        env: { ...process.env },
-      });
-      child.stdin.write(text, "utf-8");
-      child.stdin.end();
-      child.unref();
+        const script = path.join(baseDir, "scripts", "agent_turn_hook.py");
+        try {
+          const child = spawn("python", [script], {
+            detached: true,
+            stdio: ["pipe", "ignore", "ignore"],
+            env: { ...process.env },
+          });
+          child.on("error", (err) => {
+            console.error("chronos-gate.js: child process error:", err);
+          });
+          child.stdin.write(text, "utf-8");
+          child.stdin.end();
+          child.unref();
+        } catch (spawnError) {
+          console.error("chronos-gate.js: failed to spawn or write to agent_turn_hook.py:", spawnError);
+        }
+      } catch (eventError) {
+        console.error("chronos-gate.js: error during session.idle event handling:", eventError);
+      }
     },
   };
 });

@@ -1,8 +1,18 @@
 from __future__ import annotations
 
+import importlib
+import sys
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def reload_gateway_modules() -> None:
+    # mcp_gateway.app と config モジュールを安全に再ロードする
+    for mod_name in ["mcp_gateway.config", "mcp_gateway.app"]:
+        if mod_name in sys.modules:
+            importlib.reload(sys.modules[mod_name])
 
 
 @pytest.fixture
@@ -16,7 +26,9 @@ def test_selective_mode_does_not_hide_memory_save(
     monkeypatch: pytest.MonkeyPatch,
     policy_file: Path,
 ) -> None:
-    monkeypatch.delenv("CHRONOS_INGESTION_MODE", raising=False)
+    # ローカル .env が CHRONOS_INGESTION_MODE=all を持っていても確実に上書きするため、
+    # delenv ではなく明示的に "selective" を setenv する。
+    monkeypatch.setenv("CHRONOS_INGESTION_MODE", "selective")
     monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy_file))
 
     from mcp_gateway.app import build_app
@@ -83,3 +95,53 @@ def test_hidden_tools_persists_after_replace(
     names = [tool["name"] for tool in registry.all_tools]
     assert "memory_save" not in names
     assert "other_tool" in names
+
+
+def test_all_mode_emits_setup_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    policy_file: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """AC-6: all モード起動時に WARNING が stderr 相当に出る。"""
+    import logging
+
+    monkeypatch.setenv("CHRONOS_INGESTION_MODE", "all")
+    monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy_file))
+
+    with caplog.at_level(logging.WARNING, logger="mcp_gateway.app"):
+        from mcp_gateway.app import build_app
+
+        build_app(
+            initial_tools=[{"name": "memory_save", "description": "x"}],
+            upstream_override=object(),
+        )
+
+    msgs = [r.message for r in caplog.records if r.name == "mcp_gateway.app"]
+    assert any("ingestion mode: all" in m for m in msgs)
+    assert any("memory_save" in m and "HIDDEN" in m for m in msgs)
+    assert any("Client-side hook" in m for m in msgs)
+
+
+def test_selective_mode_does_not_emit_setup_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    policy_file: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """selective モードでは setup 警告が出ないことを検証する。"""
+    import logging
+
+    # ローカル .env が CHRONOS_INGESTION_MODE=all を持っていても上書きするため
+    # delenv ではなく明示的に "selective" を setenv する。
+    monkeypatch.setenv("CHRONOS_INGESTION_MODE", "selective")
+    monkeypatch.setenv("MCP_GATEWAY_POLICY_PATH", str(policy_file))
+
+    with caplog.at_level(logging.WARNING, logger="mcp_gateway.app"):
+        from mcp_gateway.app import build_app
+
+        build_app(
+            initial_tools=[{"name": "memory_save", "description": "x"}],
+            upstream_override=object(),
+        )
+
+    msgs = [r.message for r in caplog.records if r.name == "mcp_gateway.app"]
+    assert not any("ingestion mode: all" in m for m in msgs)

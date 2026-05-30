@@ -1,0 +1,26 @@
+{
+  "name": "@yohi/opencode-plugin-chronos-gate",
+  "version": "1.0.0",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yohi/chronos-graph.git"
+  },
+  "main": "./.opencode/plugins/chronos-gate.js",
+  "files": [
+    ".opencode/plugins/chronos-gate.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "engines": {
+    "node": ">=26.0.0"
+  },
+  "scripts": {
+    "build": "echo 'No build step required'"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

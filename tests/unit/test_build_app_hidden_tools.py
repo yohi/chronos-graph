@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import sys
 from pathlib import Path
 
@@ -8,10 +9,10 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def reload_gateway_modules() -> None:
-    # キャッシュを削除して、テストごとに環境変数の変更が反映されるようにする
-    for mod in list(sys.modules.keys()):
-        if mod.startswith("mcp_gateway"):
-            sys.modules.pop(mod, None)
+    # mcp_gateway.app と config モジュールを安全に再ロードする
+    for mod_name in ["mcp_gateway.config", "mcp_gateway.app"]:
+        if mod_name in sys.modules:
+            importlib.reload(sys.modules[mod_name])
 
 
 @pytest.fixture

@@ -29,7 +29,7 @@ ChronosGraph の長期記憶への取り込み (ingestion) を、AI エージェ
 
 ### 3.1 トポロジ
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────┐
 │  AI Agent (Claude Code / Codex / Cursor / Antigravity / OpenCode) │
 │   ┌─────────────────────────────────────────────────────┐         │
@@ -218,7 +218,7 @@ export const ChronosTurnEnd = async ({ client }) => {
         .join("\n\n");
       // fire-and-forget で agent_turn_hook.py を起動
       const child = spawn("python", [
-        ".opencode/scripts/agent_turn_hook.py",
+        "scripts/agent_turn_hook.py",
         "--content", text,
       ], { detached: true, stdio: "ignore" });
       child.unref();

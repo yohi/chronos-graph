@@ -15,11 +15,12 @@ import importlib.util
 import json
 import pathlib
 import sys
+from types import ModuleType
 
 import pytest
 
 
-def _load_hook_module():
+def _load_hook_module() -> ModuleType:
     """scripts/agent_turn_hook.py を tests から動的に import するヘルパ。"""
     if "agent_turn_hook" in sys.modules:
         return sys.modules["agent_turn_hook"]

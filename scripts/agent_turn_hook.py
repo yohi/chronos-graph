@@ -22,6 +22,8 @@ import json
 import logging
 import os
 import sys
+import tempfile
+from pathlib import Path
 from typing import Any, Final
 from urllib.parse import parse_qs, urlparse
 
@@ -143,11 +145,55 @@ def format_transcript_messages(messages: list[Any]) -> str:
     return "\n\n".join(lines)
 
 
+def is_safe_path(path_str: str) -> bool:
+    """パスが安全な場所（ホームディレクトリ、カレントディレクトリ、または一時ディレクトリ配下）にあり、
+
+    かつ拡張子が .jsonl であることを検証する。
+    """
+    try:
+        path = Path(path_str).expanduser().resolve()
+        if path.suffix != ".jsonl":
+            return False
+
+        home = Path.home().resolve()
+        cwd = Path.cwd().resolve()
+        temp_dir = Path(tempfile.gettempdir()).resolve()
+
+        is_under_home = False
+        try:
+            path.relative_to(home)
+            is_under_home = True
+        except ValueError:
+            pass
+
+        is_under_cwd = False
+        try:
+            path.relative_to(cwd)
+            is_under_cwd = True
+        except ValueError:
+            pass
+
+        is_under_temp = False
+        try:
+            path.relative_to(temp_dir)
+            is_under_temp = True
+        except ValueError:
+            pass
+
+        return is_under_home or is_under_cwd or is_under_temp
+    except Exception:
+        return False
+
+
 def read_jsonl_transcript(path: str) -> str:
     """JSONL transcript ファイルを読み込み、整形済みの会話ログ文字列を返す。
 
     パース不能な行はスキップする (フェイルソフト)。
     """
+    if not is_safe_path(path):
+        logging.warning("Prevented reading unsafe path: %r", path)
+        raise PermissionError(f"Unsafe path access blocked: {path}")
+
     messages: list[Any] = []
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -186,7 +232,7 @@ def extract_payload(client: str, raw: str) -> str:
     if isinstance(transcript_path, str) and transcript_path:
         try:
             text = read_jsonl_transcript(transcript_path)
-        except OSError as exc:
+        except (OSError, PermissionError) as exc:
             logging.warning("failed to read transcript at %r: %s", transcript_path, exc)
             return raw
         if text:
@@ -364,7 +410,7 @@ def main() -> int:
     # クライアント別の payload 解釈 (raw 以外は JSON → transcript 変換を試みる)
     try:
         extracted = extract_payload(args.client, raw)
-    except Exception as exc:  # noqa: BLE001 - intentional broad catch
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
         logging.warning("payload extraction failed (%s); falling back to raw input", exc)
         extracted = raw
 
@@ -380,6 +426,9 @@ def main() -> int:
             len(extracted.encode("utf-8")),
             len(payload.encode("utf-8")),
         )
+    if not payload:
+        logging.debug("payload is empty after truncation; skipping hook invocation")
+        return 0
 
     try:
         asyncio.run(_main_async(payload))

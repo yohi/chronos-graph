@@ -12,15 +12,43 @@ async function OnBeforeToolExecute(toolCall) {
       '--policy-path', policyPath
     ]);
 
+    const timeout = setTimeout(() => {
+      proc.kill();
+      reject(new Error('Evaluation timed out after 10000ms'));
+    }, 10000);
+
+    proc.on('error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+
     proc.stdin.write(JSON.stringify(toolCall));
     proc.stdin.end();
 
     let output = '';
-    proc.stdout.on('data', (data) => { output += data; });
+    const MAX_BUFFER = 65536;
+    proc.stdout.on('data', (data) => {
+      if (output.length + data.length > MAX_BUFFER) {
+        clearTimeout(timeout);
+        proc.kill();
+        reject(new Error('Evaluation output buffer exceeded limit'));
+        return;
+      }
+      output += data;
+    });
     
     proc.on('close', (code) => {
-      if (code !== 0) return reject(new Error('Evaluation failed'));
-      const result = JSON.parse(output);
+      clearTimeout(timeout);
+      if (code !== 0) {
+        return reject(new Error(`Evaluation failed with exit code ${code}. Output: ${output}`));
+      }
+      
+      let result;
+      try {
+        result = JSON.parse(output);
+      } catch (parseError) {
+        return reject(new Error(`Failed to parse evaluation output as JSON. Code: ${code}. Output: ${output}. Error: ${parseError.message}`));
+      }
       
       if (result.decision === 'allow') {
         resolve({ status: 'allow' });
@@ -49,12 +77,15 @@ const ChronosTurnEnd = async ({ client, directory }) => {
         })
         .join("\n\n");
 
-      const script = path.join('/home/y_ohi/program/chronos-graph', "scripts/agent_turn_hook.py");
-      const child = spawn("python", [script, "--content", text], {
+      const baseDir = directory || '/home/y_ohi/program/chronos-graph';
+      const script = path.join(baseDir, "scripts", "agent_turn_hook.py");
+      const child = spawn("python", [script], {
         detached: true,
-        stdio: "ignore",
+        stdio: ["pipe", "ignore", "ignore"],
         env: { ...process.env },
       });
+      child.stdin.write(text, "utf-8");
+      child.stdin.end();
       child.unref();
     },
   };

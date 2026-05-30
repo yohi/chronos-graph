@@ -11,7 +11,7 @@
 > | Python モジュール名 | `context_store` | `src/context_store/` など |
 > | CLI コマンド | `context-store` | `python -m context_store` など |
 > | データベース名 | `context_store` | PostgreSQL の DB名・ユーザー名 |
-> | Docker サービス名 | `postgres`, `neo4j` | (変更なし) |
+> | Docker サービス名 | `postgres`, `neo4j`, `redis` | 外部バックエンド利用時のみ |
 > | 環境変数プレフィックス| (なし) | `POSTGRES_DB` など既存のまま |
 > 
 > **互換性の保証**:
@@ -86,9 +86,11 @@ AIエージェント（Claude Code / Gemini CLI / Cursor 等）にセッショ�
 
 | コンポーネント | 役割 | 障害時の挙動 | スキーマ管理 |
 |---|---|---|---|
-| PostgreSQL 16 + pgvector | マスターDB。記憶本体・メタデータ・ベクトル・FTS | 障害時は全機能停止 | 自動マイグレーション（SQLベース） |
-| Neo4j 5.x | グラフDB。記憶間のリレーションシップ | 障害時はグラフ検索をスキップして継続 | (スキーマレス/Cypher初期化) |
-| Redis 7.x | キャッシュ。検索結果・埋め込みベクトル | 障害時はキャッシュなしで継続 | (キーベース) |
+| SQLite + sqlite-vec | デフォルトの軽量DB。記憶本体・メタデータ・ベクトル・内部グラフ | 障害時は全機能停止 | 自動マイグレーション（SQLベース） |
+| PostgreSQL 16 + pgvector | 本番向けDB。記憶本体・メタデータ・ベクトル・FTS | 障害時は全機能停止 | 自動マイグレーション（SQLベース） |
+| Supabase (PostgREST) | HTTPS 経由のクラウド PostgreSQL バックエンド | 通信障害時はリトライ後 fail-soft/fail-fast を分類 | Supabase CLI 管理の SQL マイグレーション |
+| Neo4j 5.x | PostgreSQL 構成時の外部グラフDB。記憶間のリレーションシップ | 障害時はグラフ検索をスキップして継続 | (スキーマレス/Cypher初期化) |
+| Redis 7.x | 任意のキャッシュ。検索結果・埋め込みベクトル | 障害時はキャッシュなしで継続 | (キーベース) |
 
 ### 2.3 実装言語・フレームワーク
 
@@ -96,9 +98,11 @@ AIエージェント（Claude Code / Gemini CLI / Cursor 等）にセッショ�
 |---|---|
 | 言語 | Python 3.12+ |
 | MCP フレームワーク | FastMCP |
+| SQLite ドライバ | aiosqlite + sqlite-vec |
 | PostgreSQL ドライバ | asyncpg |
+| Supabase ドライバ | supabase-py / PostgREST |
 | Neo4j ドライバ | neo4j-python-driver (async) |
-| 日本語 FTS | pg_bigm または pgroonga |
+| 日本語 FTS | PostgreSQL: pg_bigm または pgroonga / SQLite: LIKE・sqlite-vec 併用 |
 | 埋め込み（ローカル） | sentence-transformers |
 | 設定管理 | pydantic-settings |
 | テスト | pytest + pytest-asyncio |
@@ -176,7 +180,7 @@ class SourceType(str, Enum):
 ### 3.4 記憶の自動分類ルール
 
 LLM は使用しない（トークン消費ゼロの原則）。
-ルールベース（キーワード・構文パターン）+ 埋め込みプロトタイプ比較で分類する。
+現行実装ではルールベース（キーワード・構文パターン）のスコアリングのみで分類する。埋め込みプロトタイプ比較は未実装の拡張候補とする。
 
 | 種別 | 分類シグナル |
 |---|---|
@@ -661,6 +665,8 @@ HTTP タイムアウトを持つため、非同期ワーカーが枯渇し他の
 ベクトル検索・キーワード検索・グラフ検索をクエリ意図に基づいて自動重み付けし、
 RRF + 時間減衰で統合して結果を返す。
 
+> **現行実装の制限**: `memory_type` 引数は API 互換性のため受け取るが、RetrievalPipeline 側のフィルタにはまだ接続されていない。指定時は WARNING ログを出し、検索結果には反映しない。
+
 #### `memory_search_graph` — グラフトラバーサル検索
 
 | 引数 | 型 | 必須 | デフォルト | 説明 |
@@ -671,7 +677,9 @@ RRF + 時間減衰で統合して結果を返す。
 | `project` | str? | — | None | プロジェクトフィルタ |
 
 記憶のグラフ構造を辿って関連する記憶群を取得する。
-返却値にはリレーションシップ情報も含む。
+返却値にはリレーションシップ情報も含む設計とする。
+
+> **現行実装の制限**: `memory_search_graph` は `GRAPH_ENABLED=true` のときのみ利用可能だが、`edge_types` と `depth` を GraphTraversal へ直接渡す専用経路は未実装。指定値がある場合は WARNING ログを出し、標準のハイブリッド検索（`top_k=5`）へフォールバックする。
 
 #### `memory_delete` — 記憶の削除
 
@@ -679,7 +687,7 @@ RRF + 時間減衰で統合して結果を返す。
 |---|---|---|---|
 | `memory_id` | str | ✅ | 削除対象の記憶 ID |
 
-PostgreSQL・Neo4j 両方から削除する。
+有効な StorageAdapter から削除し、GraphAdapter が有効な場合は対応ノードもベストエフォートで削除する。
 
 #### `memory_prune` — クリーンアップ
 
@@ -954,14 +962,14 @@ SQLファイルベースの軽量なマイグレーションシステムを備�
 
 | 設定値 | StorageAdapter | GraphAdapter | CacheAdapter |
 |---|---|---|---|
-| `sqlite` (デフォルト) | SQLiteStorageAdapter | SQLiteGraphAdapter | InMemoryCacheAdapter |
-| `postgres` | PostgresStorageAdapter | Neo4jGraphAdapter* | RedisCacheAdapter* |
-| `supabase` | SupabaseStorageAdapter | (非対応)* | InMemoryCacheAdapter |
+| `sqlite` (デフォルト) | SQLiteStorageAdapter | `GRAPH_ENABLED=true` の場合 SQLiteGraphAdapter | `CACHE_BACKEND` に応じて InMemoryCacheAdapter または RedisCacheAdapter |
+| `postgres` | PostgresStorageAdapter | `GRAPH_ENABLED=true` の場合 Neo4jGraphAdapter* | `CACHE_BACKEND` に応じて InMemoryCacheAdapter または RedisCacheAdapter |
+| `supabase` | SupabaseStorageAdapter | (非対応)* | `CACHE_BACKEND` に応じて InMemoryCacheAdapter または RedisCacheAdapter |
 
-\* `GRAPH_ENABLED=false` の場合は GraphAdapter を None に、Redis 未接続時は InMemoryCacheAdapter にフォールバック。
+\* `GRAPH_ENABLED=false` の場合は GraphAdapter を None にする。Redis は `CACHE_BACKEND=redis` のときのみ使用し、接続失敗時の暗黙フォールバックは行わない。
 \* `supabase` バックエンドは現在グラフ機能をサポートしない（Neo4j Bolt を HTTPS 経由でカプセル化できないため）。
 
-> **注意**: `sqlite` モードではグラフ機能は常に有効（`GRAPH_ENABLED` 設定は `postgres` モードのみに適用）。
+> **注意**: `sqlite` モードでも `GRAPH_ENABLED=false` の場合は GraphAdapter を None にする。`GRAPH_ENABLED=true` の場合のみ SQLiteGraphAdapter を使用する。
 
 ---
 
@@ -1305,11 +1313,12 @@ MCP サーバーとは独立した Read-Only 可視化ダッシュボード。�
                               └────────────┘     └────────────────┘
 ```
 
-**CQRS 設計方針**: Orchestrator を経由せず、`create_storage(settings, read_only=True)` で StorageAdapter と GraphAdapter を直接取得。EmbeddingProvider・IngestionPipeline・RetrievalPipeline は一切初期化しない。
+**CQRS 設計方針**: Orchestrator を経由せず、`create_storage(settings, read_only=True)` で StorageAdapter と GraphAdapter を直接取得する。Dashboard 用検索経路では必要に応じて RetrievalPipeline と EmbeddingProvider を初期化するが、IngestionPipeline は初期化しない。
 
 **Read-Only 保証**:
 - SQLite: `file:{path}?mode=ro` URI モードで接続（OS レベルで書き込み不可）
 - Neo4j: `default_access_mode=READ_ACCESS` セッションのみ発行
+- PostgreSQL / Supabase: read-only StorageAdapter は未実装のため、Dashboard 起動時は限定機能用の `ReadOnlyNoOpStorageAdapter` にフォールバックする。
 
 **セキュリティ（二層）**:
 1. Docker ポートフォワード: `127.0.0.1:8000:8000` でホスト外アクセスを遮断
@@ -1570,10 +1579,10 @@ Universal LLM Evaluatorとして設計され、LiteLLM経由で任意のプロ�
 | Neo4j グラフアダプタ（READ_ACCESS 対応） | |
 | Ingestion Pipeline（全 Source Adapter） | ConversationAdapter / ManualAdapter / URLAdapter |
 | Retrieval Pipeline（ハイブリッド検索・RRF） | |
-| Lifecycle Manager（衰退・アーカイブ・パージ） | |
+| Lifecycle Manager（衰退・アーカイブ・パージ） | 明示的な `memory_prune` は現行実装では SQLite バックエンドのみ実行し、PostgreSQL / Supabase ではスキップ |
 | MCP 7 ツール + 2 リソース | FastMCP ベース |
-| グラフトラバーサル（timeout・depth 制限） | `GRAPH_TRAVERSAL_TIMEOUT_SECONDS` 対応 |
-| Dashboard Web UI（バックエンド + フロントエンド） | §14 参照 |
+| グラフトラバーサル（timeout・depth 制限） | RetrievalPipeline 内の GraphTraversal は対応。`memory_search_graph` 専用 API の `edge_types` / `depth` 反映は未実装 |
+| Dashboard Web UI（バックエンド + フロントエンド） | SQLite read-only 中心。PostgreSQL / Supabase read-only は限定機能にフォールバック。§14 参照 |
 | Docker Compose 統合（chronos-dashboard サービス） | `127.0.0.1:8000:8000` バインド |
 | pre-commit フック（ruff / mypy / shellcheck） | |
 | Playwright E2E テスト（6 テストグループ + axe-core） | |

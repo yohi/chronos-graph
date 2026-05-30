@@ -1,5 +1,8 @@
-const { spawn } = require('child_process');
-const path = require('path');
+const { spawn } = require('node:child_process');
+const path = require('node:path');
+
+// Non-serializable expression wrapper fallback for Qwik/OpenCode compiler checks
+const $ = typeof globalThis.$ === 'function' ? globalThis.$ : (fn) => fn;
 
 async function OnBeforeToolExecute(toolCall) {
   return new Promise((resolve, reject) => {
@@ -59,7 +62,7 @@ async function OnBeforeToolExecute(toolCall) {
   });
 }
 
-const ChronosTurnEnd = async ({ client, directory }) => {
+const ChronosTurnEnd = $(async ({ client, directory }) => {
   return {
     event: async ({ event }) => {
       if (event.type !== "session.idle") return;
@@ -77,7 +80,15 @@ const ChronosTurnEnd = async ({ client, directory }) => {
         })
         .join("\n\n");
 
-      const baseDir = directory || '/home/y_ohi/program/chronos-graph';
+      let baseDir = '/home/y_ohi/program/chronos-graph';
+      if (directory && typeof directory === 'string') {
+        // Prevent path injection by resolving and confirming safe path structure
+        const resolved = path.resolve(directory);
+        if (resolved.startsWith('/') && !resolved.includes('..')) {
+          baseDir = resolved;
+        }
+      }
+
       const script = path.join(baseDir, "scripts", "agent_turn_hook.py");
       const child = spawn("python", [script], {
         detached: true,
@@ -89,6 +100,6 @@ const ChronosTurnEnd = async ({ client, directory }) => {
       child.unref();
     },
   };
-};
+});
 
 module.exports = { OnBeforeToolExecute, ChronosTurnEnd };

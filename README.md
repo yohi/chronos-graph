@@ -126,8 +126,8 @@ MCP設定の場合は、いかなるツール呼び出しよりも前に、必�
    * `有効` (🌟**推奨**: 記憶の意味的な近さを判定する高度なセマンティック検索を利用します)
    * `無効` (キーワード一致検索のみのシンプルな動作に制限します)
 5. **Neo4j（グラフ関係性機能）**: 記憶同士のつながり（関連リンク）を記録・可視化するグラフ機能。
-   * `無効` (🌟**最も推奨**: SQLite/PostgreSQLの内部関係検索のみを使用する、高速かつシンプルな軽量構成)
-   * `有効` (本番用: 外部の Neo4j グラフデータベースを立ち上げ、記憶間の緻密な関連ネットワーク分析を有効にします)
+   * `無効` (🌟**最も推奨**: グラフ関係性機能を無効化する、高速かつシンプルな軽量構成)
+   * `有効` (SQLite では同一DB内の内部グラフ、PostgreSQL では外部 Neo4j を使用します。Supabase では現時点で非対応です)
 6. **キャッシュ**: 記憶の一時キャッシュ。
    * `inmemory` (🌟**最も推奨**: プロセス内メモリでキャッシュ管理を行い、外部コンテナを必要としません)
    * `redis` (本番用: 外部の Redis キャッシュサーバーを使用してスケーリングします)
@@ -301,17 +301,20 @@ echo '{"tool_name":"bash","tool_input":{"command":"ls"}}' | mcp_gateway evaluate
 
 ## ⚡ 特徴
 
-- **ハイブリッド検索** — ベクトル検索 + キーワード検索 + グラフトラバーサルを RRF で融合
+- **ハイブリッド検索** — ベクトル検索 + キーワード検索 + グラフ結果を RRF で融合（グラフ有効時）
 - **自動マイグレーション** — SQLite / PostgreSQL 両対応の SQL ベース軽量マイグレーション
 - **多層記憶モデル** — [📜 Episodic] / [🧠 Semantic] / [🕒 Procedural] の自動分類
-- **時間的減衰** — 指数関数的減衰スコアで古い記憶を自動アーカイブ
+- **時間的減衰** — 指数関数的減衰スコアで古い記憶を整理（明示的な `memory_prune` は現行実装では SQLite バックエンドのみ実行）
 - **重複排除** — Append-only 置換 + SUPERSEDES グラフエッジで変遷を追跡
 - **ライトウェイトモード** — SQLite + sqlite-vec でゼロ設定で起動
-- **スケーラブル** — PostgreSQL + Neo4j + Redis への切り替え対応、Supabase Data API による HTTPS 経由のアクセス
+- **スケーラブル** — PostgreSQL + Neo4j + Redis への切り替え対応、Supabase Data API による HTTPS 経由のアクセス（Supabase のグラフ機能は現時点で非対応）
 - **RL 拡張ポイント** — ActionLogger / RewardSignal / PolicyHook インターフェース
-- **Dashboard Web UI** — Cytoscape.js グラフ可視化・リアルタイムログストリーミング（React + FastAPI）
+- **Dashboard Web UI** — Cytoscape.js グラフ可視化・リアルタイムログストリーミング（React + FastAPI、SQLite read-only 中心）
 
 - **Universal Evaluator** — AIエージェントのツール呼び出しを deterministic + LLM の二層で判定する CLI (`PreToolUse` Hook 対応)
+
+> [!NOTE]
+> **現行実装上の注意**: `memory_search` の `memory_type` フィルタは API 互換性のため受け取りますが、検索結果にはまだ反映されません。`memory_search_graph` の `edge_types` / `depth` 指定も専用経路は未実装で、標準のハイブリッド検索へフォールバックします。
 
 ---
 
@@ -743,9 +746,9 @@ ChronosGraph 本体およびセキュリティ判定エンジン（Universal Eva
 | `EMBEDDING_PROVIDER` | `local-model` | デフォルト可 | 埋め込みプロバイダー (`local-model` / `openai` / `litellm`) |
 | `LOCAL_MODEL_NAME` | `cl-nagoya/ruri-v3-310m` | デフォルト可 | ローカルモデル名 (768次元) |
 | `EMBEDDING_DIMENSION` | `768` | デフォルト可 | 埋め込みベクトル次元数 (例: 768) |
-| `GRAPH_ENABLED` | `false` | デフォルト可 | グラフ関係性機能の有効化 |
+| `GRAPH_ENABLED` | `false` | デフォルト可 | グラフ関係性機能の有効化。SQLite では内部グラフ、PostgreSQL では Neo4j を使用。Supabase では非対応 |
 | `CACHE_BACKEND` | `inmemory` | デフォルト可 | キャッシュバックエンド (`inmemory` / `redis`) |
-| `REDIS_URL` | `redis://localhost:6379` | **[Redis用]** 設定必須 | Redis 接続 URL |
+| `REDIS_URL` | `redis://localhost:6379` | **[Redis用]** 設定必須 | Redis 接続 URL。`CACHE_BACKEND=redis` のときのみ使用し、接続失敗時の暗黙フォールバックは行いません |
 
 ### 2. ツール実行前安全評価器 (Universal Evaluator) 設定
 

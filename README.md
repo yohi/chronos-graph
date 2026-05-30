@@ -189,69 +189,37 @@ Claude Code の設定ファイル (`~/.claude/settings.json` または `.claude/
 
 #### 📌 設定パターン C：OpenCode プラグイン形式による連携
 
-OpenCode では、フック機能を **「プラグイン」** として拡張・ロードします。 Node.js プラグインを構成し、ツール実行前イベントにフックさせて `uvx` からオンザフライに `evaluate` を実行させます。
+OpenCode では、フック機能を **「プラグイン」** として拡張・ロードします。本プラグインは GitHub Packages に `@yohi/opencode-plugin-chronos-gate` として公開されています。
 
-* **プラグインの JavaScript 実装例:**
-  OpenCode では TypeScript/JavaScript プラグインとしてフックを実装します。
+**1. GitHub Packages からプラグインをインストール**
 
-  ```javascript
-  const { spawn } = require('child_process');
-  const path = require('path');
+```bash
+# .npmrc に GitHub Packages レジストリを設定
+echo "@yohi:registry=https://npm.pkg.github.com" >> ~/.npmrc
 
-  /**
-   * OpenCode ツール実行前フック (tool.execute.before)
-   * Universal Evaluator を呼び出し、実行の可否を判定します。
-   */
-  async function OnBeforeToolExecute(toolCall) {
-    return new Promise((resolve, reject) => {
-      // ポリシーファイル (intents.yaml) は設定ファイルと同じディレクトリを優先的に参照
-      const defaultConfigDir = path.join(process.env.HOME || process.env.USERPROFILE, '.config', 'opencode');
-      const policyPath = process.env.CHRONOS_EVALUATOR_POLICY_PATH || path.join(defaultConfigDir, 'intents.yaml');
+# プラグインをインストール
+npm install @yohi/opencode-plugin-chronos-gate
+```
 
-      const proc = spawn('uvx', [
-        '--quiet',
-        '--from', 'context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git',
-        'chronos-mcp-gateway', 'evaluate', '--json-io',
-        '--policy-path', policyPath
-      ]);
+**2. 設定ファイル (`~/.config/opencode/opencode.json`) への登録:**
+インストールしたプラグインを **`plugins`** キーを使用して登録します（`hooks` キーは使用しません）。
+```json
+{
+  "plugins": [
+    {
+      "name": "chronos-safety-gate",
+      "path": "./node_modules/@yohi/opencode-plugin-chronos-gate",
+      "enabled": true
+    }
+  ]
+}
+```
 
-      proc.stdin.write(JSON.stringify(toolCall));
-      proc.stdin.end();
-
-      let output = '';
-      proc.stdout.on('data', (data) => { output += data; });
-      
-      proc.on('close', (code) => {
-        if (code !== 0) return reject(new Error('Evaluation failed'));
-        const result = JSON.parse(output);
-        
-        if (result.decision === 'allow') {
-          resolve({ status: 'allow' });
-        } else {
-          resolve({ status: 'deny', reason: result.reason });
-        }
-      });
-    });
-  }
-  ```
-
-* **設定ファイル (`~/.config/opencode/opencode.json`) への登録:**
-  作成したプラグインファイルをプロジェクト内の適切な場所に配置し、**`plugins`** キーを使用して登録します（`hooks` キーは使用しません）。
-  ```json
-  {
-    "plugins": [
-      {
-        "name": "chronos-safety-gate",
-        "path": "./.opencode/plugins/chronos-gate.js",
-        "enabled": true
-      }
-    ]
-  }
-  ```
+> [!NOTE]
+> 開発時やリポジトリ内で直接カスタマイズする場合は、`.opencode/plugins/chronos-gate.js` を直接参照することもできます。
 
 > [!CAUTION]
 > **OpenCode の重要な制限**: **`hooks` キーは未サポート** です。エージェントは **絶対に `hooks` を含む JSON を OpenCode 向けに生成してはいけません。** また、設定の変更は新規作成ではなく、**`~/.config/opencode/opencode.json(c)`** の更新を行ってください。
-
 ---
 
 #### 📌 設定パターン D：Antigravity CLI による連携

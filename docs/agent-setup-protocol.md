@@ -122,7 +122,7 @@ MCP設定の場合は、いかなるツール呼び出しよりも前に、必�
    > **🚨 OpenCode 設定ファイルに関する制約 (STRICT OPENCODE CONSTRAINT):**
    > 対象エージェントが **OpenCode** の場合、あなたは絶対に **`oh-my-opencode.json(c)`** または **`oh-my-openagent.json(c)`** を作成・修正してはいけません。これらは「Oh-My-Openagent」等の外部拡張用設定ファイルであり、本プロジェクトのフック（Hook）設定とは無関係です。
    > また、**新規に `opencode.json(c)` を作成するのではなく、必ず `~/.config/opencode/opencode.json(c)` を読み込み、その内容を更新してください。**
-   > さらに、**`opencode.json(c)` は `hooks` キーをサポートしていません。** したがって、**絶対に `hooks` キーを含む設定 JSON を OpenCode 向けに提案しないでください。** 設定の追加や変更は、必ず標準 of `opencode.json(c)` に対して有効なキーのみで行うか、後述のプラグイン形式を案内してください。
+   > さらに、**`opencode.json(c)` は `hooks` キーをサポートしていません。** したがって、**絶対に `hooks` キーを含む設定 JSON を OpenCode 向けに生成してはいけません。** 設定の追加や変更は、必ず標準 of `opencode.json(c)` に対して有効なキーのみで行うか、README の「設定パターン C：OpenCode プラグイン形式」を参照して、`@yohi/opencode-plugin-chronos-gate` を案内してください。
    > [!IMPORTANT]
    > **🚨 デバッグモード（Dry-run）時の独善的バイパスの厳格な禁止:**
    > あなた（AIエージェント）がデバッグモードで実行されている場合であっても、「シミュレーションだから」と自己判断して本ステップをスキップしたり、特定のクライアント（例: Claude Desktop 等）を想定した出力を勝手に自己完結させて提示してはいけません。

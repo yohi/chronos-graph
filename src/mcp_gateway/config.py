@@ -72,7 +72,7 @@ class GatewaySettings(BaseSettings):
     upstream_command: list[str] = ["python", "-m", "context_store"]
     upstream_env_passthrough: list[str] = [
         "OPENAI_API_KEY",
-        "CONTEXT_STORE_DB_PATH",
+        "SQLITE_DB_PATH",
         "GRAPH_ENABLED",
         "EMBEDDING_PROVIDER",
         CHRONOS_INGESTION_MODE_ENV,

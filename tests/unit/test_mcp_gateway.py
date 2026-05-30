@@ -1462,16 +1462,16 @@ class TestUpstreamClient:
         from mcp_gateway.upstream.context_store_client import build_upstream_env
 
         env = build_upstream_env(
-            passthrough=["OPENAI_API_KEY", "CONTEXT_STORE_DB_PATH"],
+            passthrough=["OPENAI_API_KEY", "SQLITE_DB_PATH"],
             base_env={
                 "OPENAI_API_KEY": "sk-allowed",
                 "AWS_SECRET_ACCESS_KEY": "should-not-leak",
-                "CONTEXT_STORE_DB_PATH": "/tmp/x",  # noqa: S108
+                "SQLITE_DB_PATH": "/tmp/x",  # noqa: S108
                 "PATH": "/usr/bin",
             },
         )
         assert env.get("OPENAI_API_KEY") == "sk-allowed"
-        assert env.get("CONTEXT_STORE_DB_PATH") == "/tmp/x"  # noqa: S108
+        assert env.get("SQLITE_DB_PATH") == "/tmp/x"  # noqa: S108
         assert "AWS_SECRET_ACCESS_KEY" not in env
         # PATH は明示的に含める(allowlist と別軸でユーティリティで継承)
         assert "PATH" in env

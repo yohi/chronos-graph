@@ -122,6 +122,6 @@ class Deduplicator:
         archived_at を設定して update_memory を呼ぶ。
         """
         updates: dict[str, Any] = {
-            "archived_at": datetime.now(timezone.utc).isoformat(),
+            "archived_at": datetime.now(timezone.utc),
         }
         await self._storage.update_memory(str(memory.id), updates)

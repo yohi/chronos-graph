@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/yohi/chronos-graph/compare/v1.0.0...v1.1.0) (2026-05-30)
+
+
+### Features
+
+* **release:** chronos-gate プラグインのパッケージ登録をトリガー ([#293](https://github.com/yohi/chronos-graph/issues/293)) ([18e0e3f](https://github.com/yohi/chronos-graph/commit/18e0e3fae67697361435a295d720384d9deaf244))
+
 ## 1.0.0 (2026-05-30)
 
 

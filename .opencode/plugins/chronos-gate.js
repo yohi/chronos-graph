@@ -338,16 +338,6 @@ async function handleEvent(event) {
 
             const replyVal = result.status === 'allow' ? "once" : "reject";
 
-            // Prioritize official SDK permissionApi over raw HTTP client calls
-            let permissionApi = null;
-            if (globalInput) {
-              permissionApi = globalInput.permission || globalInput.sdk?.permission;
-            }
-            const clientObj = globalClient || event.client;
-            if (!permissionApi && clientObj) {
-              permissionApi = clientObj.permission || clientObj.sdk?.permission;
-            }
-
             if (permissionApi) {
               logDebug(`Sending reply via SDK API: ${replyVal} for request ${props.id}`);
               await permissionApi.reply({ requestID: props.id, reply: replyVal, directory: projectDir });
@@ -652,4 +642,3 @@ module.exports = {
     return hooksObj;
   }
 };
-

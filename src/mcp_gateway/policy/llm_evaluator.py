@@ -237,11 +237,13 @@ class LlmEvaluator:
         model: str = "anthropic/claude-haiku-4-5-20251001",
         timeout_seconds: float = 10.0,
         max_tokens: int = 1536,
+        extra_args: dict[str, object] | None = None,
     ) -> None:
         self._api_key: str = api_key
         self._model: str = model
         self._timeout_seconds: float = timeout_seconds
         self._max_tokens: int = max_tokens
+        self._extra_args: dict[str, object] = extra_args or {}
 
     @classmethod
     def from_env(cls) -> LlmEvaluator | None:
@@ -251,19 +253,20 @@ class LlmEvaluator:
         settings = EvaluatorSettings()
         if not settings.api_key:
             return None
+
+        extra_args: dict[str, object] = {}
         if settings.cloudflare_account_id:
-            os.environ["CLOUDFLARE_ACCOUNT_ID"] = settings.cloudflare_account_id.get_secret_value()
-            os.environ["CLOUDFLARE_API_KEY"] = settings.api_key.get_secret_value()
-        if settings.model.startswith("gemini/"):
-            os.environ["GEMINI_API_KEY"] = settings.api_key.get_secret_value()
-        if settings.model.startswith("nvidia/") or settings.model.startswith("nvidia_nim/"):
-            os.environ["NVIDIA_API_KEY"] = settings.api_key.get_secret_value()
+            account_id = settings.cloudflare_account_id.get_secret_value()
+            extra_args["api_base"] = (
+                f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
+            )
 
         return cls(
             api_key=settings.api_key.get_secret_value(),
             model=settings.model,
             timeout_seconds=_parse_float_env("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", 10.0),
             max_tokens=_parse_int_env("CHRONOS_EVALUATOR_MAX_TOKENS", 1536),
+            extra_args=extra_args,
         )
 
     async def judge(
@@ -291,6 +294,7 @@ class LlmEvaluator:
                 max_tokens=self._max_tokens,
                 timeout=self._timeout_seconds,
                 api_key=self._api_key,
+                **self._extra_args,
             )
         except Exception as exc:
             raise LlmUnavailableError(f"LLM call failed: {type(exc).__name__}") from exc

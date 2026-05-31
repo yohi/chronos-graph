@@ -100,7 +100,7 @@ AIエージェントにセットアップを依頼する場合の詳細な手順
   }
 }
 ```
-*💡 **環境変数について**: この Quick Start は長期記憶 MCP サーバー (`context-store`) の最小例です。Universal Evaluator / Gateway を使う場合は、別途 `CHRONOS_EVALUATOR_API_KEY` や `MCP_GATEWAY_API_KEYS_JSON` などを設定してください。Claude Desktop は JSON 設定ファイル内の `${VAR}` 構文を展開しません。機密情報を渡す場合は、環境変数をエクスポートしてから起動するラッパースクリプトを指定することを推奨します。*
+*💡 **環境変数について**: この Quick Start は長期記憶 MCP サーバー (`context-store`) の最小構成例です。認証キーやゲートウェイを利用する高度な設定方法については、[🛡️ Universal Evaluator (MCP Gateway)](#-universal-evaluator-mcp-gateway) セクションを参照してください。また、Claude Desktop は JSON 設定ファイル内の `${VAR}` 構文を展開しません。機密情報を渡す場合は、環境変数をエクスポートしてから起動するラッパースクリプトを指定することを推奨します。*
 
 ---
 

@@ -138,7 +138,7 @@ class CompositeEvaluator:
         # Coalesce duplicate concurrent evaluations
         if cache_key in self._in_flight_judgments:
             logger.info("Found in-flight judgment for key %s, waiting for result", cache_key)
-            return await self._in_flight_judgments[cache_key]
+            return await asyncio.shield(self._in_flight_judgments[cache_key])
 
         loop = asyncio.get_running_loop()
         fut = loop.create_future()
@@ -154,15 +154,18 @@ class CompositeEvaluator:
                 intent_name=intent,
             )
             self._store_cached_decision(cache_key, decision)
-            fut.set_result(decision)
+            if not fut.done():
+                fut.set_result(decision)
             return decision
         except (LlmUnavailableError, ResponseParseError) as exc:
             logger.warning("Tier-2 fallback to ask: %s", exc)
             fallback_decision = Decision(decision="ask", ask_message=_FALLBACK_ASK_MESSAGE)
-            fut.set_result(fallback_decision)
+            if not fut.done():
+                fut.set_result(fallback_decision)
             return fallback_decision
         except Exception as exc:
-            fut.set_exception(exc)
+            if not fut.done():
+                fut.set_exception(exc)
             raise exc
         finally:
             self._in_flight_judgments.pop(cache_key, None)

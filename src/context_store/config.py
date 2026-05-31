@@ -262,9 +262,9 @@ class Settings(BaseSettings):
 
         types: list[str] = []
         if isinstance(v, str):
-            types = [t.strip() for t in v.split(",") if t.strip()]
+            types = [t.strip().lower() for t in v.split(",") if t.strip()]
         elif isinstance(v, list):
-            types = [str(t).strip() for t in v if str(t).strip()]
+            types = [str(t).strip().lower() for t in v if str(t).strip()]
         else:
             raise ValueError(f"url_allowed_content_types must be a string or list, not {type(v)}")
 

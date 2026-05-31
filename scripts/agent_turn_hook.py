@@ -181,7 +181,8 @@ def is_safe_path(path_str: str) -> bool:
             pass
 
         return is_under_home or is_under_cwd or is_under_temp
-    except Exception:
+    except (FileNotFoundError, OSError, RuntimeError, ValueError) as e:
+        logging.error("Path validation failed: %s", e)
         return False
 
 
@@ -391,7 +392,7 @@ async def _main_async(payload: str) -> bool:
 
     if not api_key:
         logging.error("MCP_GATEWAY_API_KEY is not set; aborting hook")
-        return False
+        return True
 
     try:
         await asyncio.wait_for(

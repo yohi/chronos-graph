@@ -692,8 +692,28 @@ def build_router(
 
     @router.post("/evaluate")
     async def evaluate_call(request: Request) -> Any:
+        import logging
 
+        from pydantic import ValidationError
+
+        from mcp_gateway.errors import AuthError
         from mcp_gateway.policy.models_evaluator import ToolCallInput
+
+        logger = logging.getLogger("mcp_gateway.server")
+
+        if api_authenticator is not None:
+            auth_header = request.headers.get("Authorization")
+            if not auth_header:
+                raise HTTPException(status_code=401, detail="Missing Authorization header")
+            if not auth_header.startswith("Bearer "):
+                raise HTTPException(
+                    status_code=401, detail="Invalid Authorization scheme; must be Bearer"
+                )
+            token = auth_header[7:].strip()
+            try:
+                api_authenticator.authenticate(token)
+            except AuthError as exc:
+                raise HTTPException(status_code=401, detail=str(exc)) from exc
 
         try:
             body = await request.json()
@@ -724,8 +744,11 @@ def build_router(
             )
             decision = await shared_evaluator.evaluate(input_)
             return decision.to_dict()
+        except (ValidationError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            logger.exception("Unexpected error during evaluation")
+            raise HTTPException(status_code=500, detail="Internal server error") from exc
 
     @router.get("/healthz")
     async def healthz() -> dict[str, str]:

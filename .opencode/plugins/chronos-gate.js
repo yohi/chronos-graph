@@ -2,11 +2,62 @@ const { spawn } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 
+const gatewayPort = process.env.MCP_GATEWAY_PORT || '9100';
+
+function sanitizeToolCall(toolCall) {
+  if (!toolCall) return null;
+  const sanitized = { ...toolCall };
+  if (sanitized.tool_input) {
+    sanitized.tool_input = { ...sanitized.tool_input };
+    const sensitiveKeys = ['api_key', 'token', 'password', 'secret', 'key', 'credential', 'command'];
+    for (const k of Object.keys(sanitized.tool_input)) {
+      if (sensitiveKeys.some(s => k.toLowerCase().includes(s))) {
+        sanitized.tool_input[k] = '[REDACTED]';
+      }
+    }
+  }
+  return sanitized;
+}
+
+function sanitizeMessagesData(data) {
+  if (!Array.isArray(data)) return data;
+  return data.map(m => {
+    const role = m.info?.role || "unknown";
+    const contentSummary = (m.parts ?? [])
+      .map(p => p.type === "text" ? p.text : "")
+      .filter(Boolean)
+      .join("\n");
+    const truncated = contentSummary.length > 100 ? contentSummary.substring(0, 100) + '... [TRUNCATED]' : contentSummary;
+    return { role, textLength: contentSummary.length, textPreview: truncated };
+  });
+}
+
 // Debug log helper
 function logDebug(msg) {
+  const isDebug = process.env.CHRONOS_GATE_DEBUG || process.env.NODE_DEBUG;
+  if (!isDebug) return;
+
+  let output = msg;
+  if (typeof msg === 'string') {
+    output = msg
+      .replace(/(sk-[a-zA-Z0-9]{20,})/g, '[REDACTED_API_KEY]')
+      .replace(/(bearer\s+)[a-zA-Z0-9_\-\.]+/ig, '$1[REDACTED_TOKEN]')
+      .replace(/(authorization:\s*)[a-zA-Z0-9_\-\.]+/ig, '$1[REDACTED_TOKEN]');
+  } else if (typeof msg === 'object' && msg !== null) {
+    try {
+      output = JSON.stringify(msg);
+      output = output
+        .replace(/(sk-[a-zA-Z0-9]{20,})/g, '[REDACTED_API_KEY]')
+        .replace(/(bearer\s+)[a-zA-Z0-9_\-\.]+/ig, '$1[REDACTED_TOKEN]')
+        .replace(/(authorization:\s*)[a-zA-Z0-9_\-\.]+/ig, '$1[REDACTED_TOKEN]');
+    } catch (e) {
+      output = '[Unserializable Object]';
+    }
+  }
+
   try {
-    fs.appendFileSync(path.join(process.env.HOME, '.config', 'opencode', 'chronos-gate-debug.log'), `[${new Date().toISOString()}] ${msg}\n`);
-  } catch (e) {}
+    fs.appendFileSync(path.join(process.env.HOME, '.config', 'opencode', 'chronos-gate-debug.log'), `[${new Date().toISOString()}] ${output}\n`);
+  } catch {}
 }
 
 logDebug("Plugin script loaded (evaluated).");
@@ -22,7 +73,7 @@ function loadEnvFile(envPath) {
       if (!trimmed || trimmed.startsWith('#')) continue;
       const match = trimmed.match(/^([^=]+)=(.*)$/);
       if (match) {
-        let key = match[1].trim();
+        const key = match[1].trim();
         let val = match[2].trim();
         if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
           val = val.substring(1, val.length - 1);
@@ -46,7 +97,7 @@ async function evaluateTool(toolCall) {
     
     const options = {
       hostname: '127.0.0.1',
-      port: 9100,
+      port: parseInt(gatewayPort, 10),
       path: '/evaluate',
       method: 'POST',
       headers: {
@@ -136,8 +187,8 @@ function checkAndStartGateway() {
   clientSocket.setTimeout(1000);
   clientSocket.once('connect', () => {
     clientSocket.destroy();
-    logDebug("Gateway is already running (port 9100 responds).");
-    showToast("Gateway is already running (port 9100).", "success");
+    logDebug(`Gateway is already running (port ${gatewayPort} responds).`);
+    showToast(`Gateway is already running (port ${gatewayPort}).`, "success");
   }).once('error', (err) => {
     clientSocket.destroy();
     if (isSpawning) {
@@ -233,7 +284,7 @@ function checkAndStartGateway() {
       logDebug(`Gateway spawn sync exception: ${spawnError.message}`);
       showToast(`Failed to initialize gateway auto-start: ${spawnError.message}`, "error");
     }
-  }).connect(9100, '127.0.0.1');
+  }).connect(parseInt(gatewayPort, 10), '127.0.0.1');
 }
 
 // Core event handler
@@ -255,7 +306,7 @@ async function handleEvent(event) {
     // Handle Permission Asked -> Auto Reply using Gateway Evaluation (Bypasses permission.ask bug)
     if (event.type === "permission.asked") {
       const props = event.properties;
-      if (props && props.id) {
+      if (props?.id) {
         if (activeEvaluations.has(props.id)) {
           logDebug(`Duplicate permission.asked event for request ${props.id}. Skipping.`);
           return;
@@ -263,7 +314,36 @@ async function handleEvent(event) {
         activeEvaluations.add(props.id);
         logDebug(`Auto-evaluating permission.asked: ${props.id} for type: ${props.permission}`);
         try {
-          const projectDir = path.join(process.env.HOME, 'program', 'chronos-graph');
+          // Resolve project directory dynamically
+          let projectDir = path.join(__dirname, "..", "..");
+          const dirVal = event.directory || globalDirectory;
+          if (dirVal && typeof dirVal === 'string') {
+            const resolved = path.resolve(dirVal);
+            if (resolved.startsWith('/') && !resolved.includes('..')) {
+              projectDir = resolved;
+            }
+          }
+
+          const searchDirs = [
+            event.directory,
+            globalDirectory,
+            process.cwd(),
+            process.env.PWD,
+            path.join(process.env.HOME, 'program', 'chronos-graph'),
+            path.join(process.env.HOME, 'chronos-graph')
+          ].filter(Boolean);
+
+          for (const dir of searchDirs) {
+            const envPath = path.join(dir, '.env');
+            if (fs.existsSync(envPath)) {
+              const tempEnv = loadEnvFile(envPath);
+              if (tempEnv.STORAGE_BACKEND || tempEnv.MCP_GATEWAY_PORT || tempEnv.CHRONOS_INGESTION_MODE) {
+                projectDir = dir;
+                break;
+              }
+            }
+          }
+
           const contextObj = {
             intent: "default",
             agent_id: "OpenCode",
@@ -299,7 +379,7 @@ async function handleEvent(event) {
 
           if (toolCall) {
             logDebug(`Evaluating tool via event hook: ${toolCall.tool_name}`);
-            logDebug(`toolCall payload: ${JSON.stringify(toolCall)}`);
+            logDebug(`toolCall payload: ${JSON.stringify(sanitizeToolCall(toolCall))}`);
             const result = await evaluateTool(toolCall);
             if (result.status !== 'allow') {
               if (result.decision === 'ask' && result.ask_message) {
@@ -342,7 +422,7 @@ async function handleEvent(event) {
               logDebug(`Sending reply via SDK API: ${replyVal} for request ${props.id}`);
               await permissionApi.reply({ requestID: props.id, reply: replyVal, directory: projectDir });
               logDebug(`SDK API reply successful for request ${props.id}`);
-            } else if (clientObj && clientObj._client) {
+            } else if (clientObj?._client) {
               logDebug(`Sending direct API reply (fallback): ${replyVal} for request ${props.id}`);
               try {
                 await clientObj._client.post({
@@ -377,27 +457,25 @@ async function handleEvent(event) {
           showToast(`Evaluation System Error: ${err.message}`, "error");
           const clientObj = globalClient || event.client;
           const projectDir = globalDirectory || process.cwd();
-          if (clientObj && clientObj._client) {
+          if (clientObj?._client) {
             try {
               await clientObj._client.post({
-                url: "/permission/{requestID}/reply",
-                params: { requestID: props.id },
+                url: `/permission/${props.id}/reply`,
                 payload: {
                   reply: "reject",
                   directory: projectDir
                 }
               });
-            } catch (e) {
+            } catch {
               try {
                 await clientObj._client.post({
-                  url: "/permissions/{requestID}/reply",
-                  params: { requestID: props.id },
+                  url: `/permissions/${props.id}/reply`,
                   payload: {
                     reply: "reject",
                     directory: projectDir
                   }
                 });
-              } catch (e2) {}
+              } catch {}
             }
           } else {
             let permissionApi = null;
@@ -432,7 +510,7 @@ async function handleEvent(event) {
       }
 
       const messages = await clientObj.session.messages({ path: { id: sessionId } });
-      logDebug(`Raw messages.data: ${JSON.stringify(messages.data)}`);
+      logDebug(`Raw messages.data: ${JSON.stringify(sanitizeMessagesData(messages.data))}`);
       const text = messages.data
         .map((m) => {
           const role = m.info?.role || "unknown";
@@ -607,7 +685,7 @@ const permissionAskHook = async (permission, output) => {
 module.exports = {
   id: "@yohi/opencode-plugin-chronos-gate",
   "permission.ask": permissionAskHook,
-  server: async (input, options) => {
+  server: async (input, _options) => {
     logDebug("Plugin activation function (init) called.");
     if (input) {
       globalClient = input.client;

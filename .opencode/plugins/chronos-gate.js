@@ -100,8 +100,8 @@ async function evaluateTool(toolCall) {
 
     const timeout = setTimeout(() => {
       proc.kill();
-      reject(new Error('Evaluation timed out after 10000ms'));
-    }, 10000);
+      reject(new Error('Evaluation timed out after 45000ms'));
+    }, 45000);
 
     proc.on('error', (err) => {
       clearTimeout(timeout);
@@ -148,6 +148,7 @@ async function evaluateTool(toolCall) {
 // Global reference variables to store client/directory if initialized via function
 let globalClient = null;
 let globalDirectory = null;
+let globalInput = null;
 
 // Helper to show TUI toast message with slight delay to ensure TUI layer is ready
 function showToast(message, variant = "info") {
@@ -277,6 +278,153 @@ async function handleEvent(event) {
     // Handle Session Creation -> Auto Start Gateway if offline
     if (event.type === "session.created") {
       checkAndStartGateway();
+    }
+
+    // Handle Permission Asked -> Auto Reply using Gateway Evaluation (Bypasses permission.ask bug)
+    if (event.type === "permission.asked") {
+      const props = event.properties;
+      if (props && props.id) {
+        logDebug(`Auto-evaluating permission.asked: ${props.id} for type: ${props.permission}`);
+        try {
+          let toolCall = null;
+          const permType = props.permission;
+
+          if (permType === "mcp" || permType === "tool") {
+            toolCall = {
+              tool_name: props.metadata?.tool || props.patterns?.[0] || props.id,
+              tool_input: props.metadata?.arguments || {}
+            };
+          } else if (permType === "command" || permType === "bash" || permType === "execute") {
+            toolCall = {
+              tool_name: "bash",
+              tool_input: {
+                command: props.metadata?.command || props.patterns?.[0] || ""
+              }
+            };
+          } else {
+            // Other system permissions (read, edit, etc.)
+            toolCall = {
+              tool_name: permType,
+              tool_input: {
+                path: props.patterns?.[0] || ""
+              }
+            };
+          }
+
+          if (toolCall) {
+            logDebug(`Evaluating tool via event hook: ${toolCall.tool_name}`);
+            const result = await evaluateTool(toolCall);
+            
+            // Dynamically resolve permission API (clientObj.permission or globalInput.sdk.permission)
+            let permissionApi = null;
+            if (globalInput) {
+              try {
+                logDebug(`globalInput ownProperties: ${Object.getOwnPropertyNames(globalInput).join(", ")}`);
+                if (globalInput.sdk) {
+                  logDebug(`globalInput.sdk ownProperties: ${Object.getOwnPropertyNames(globalInput.sdk).join(", ")}`);
+                }
+              } catch (e) {}
+              permissionApi = globalInput.permission || globalInput.sdk?.permission;
+            }
+            const clientObj = globalClient || event.client;
+            if (clientObj) {
+              try {
+                logDebug(`clientObj ownProperties: ${Object.getOwnPropertyNames(clientObj).join(", ")}`);
+                if (clientObj.sdk) {
+                  logDebug(`clientObj.sdk ownProperties: ${Object.getOwnPropertyNames(clientObj.sdk).join(", ")}`);
+                }
+                if (clientObj._client) {
+                  logDebug(`clientObj._client ownProperties: ${Object.getOwnPropertyNames(clientObj._client).join(", ")}`);
+                }
+              } catch (e) {}
+            }
+            if (!permissionApi && clientObj) {
+              permissionApi = clientObj.permission || clientObj.sdk?.permission;
+            }
+
+            const projectDir = globalDirectory || process.cwd();
+            const replyVal = result.status === 'allow' ? "once" : "reject";
+
+            if (clientObj && clientObj._client) {
+              logDebug(`Sending direct API reply: ${replyVal} for request ${props.id}`);
+              try {
+                await clientObj._client.post({
+                  url: "/permission/{requestID}/reply",
+                  params: { requestID: props.id },
+                  payload: {
+                    reply: replyVal,
+                    directory: projectDir
+                  }
+                });
+                logDebug(`Direct API reply successful for request ${props.id}`);
+              } catch (apiErr) {
+                logDebug(`Direct API reply failed on permission endpoint: ${apiErr.message}. Trying permissions endpoint...`);
+                try {
+                  await clientObj._client.post({
+                    url: "/permissions/{requestID}/reply",
+                    params: { requestID: props.id },
+                    payload: {
+                      reply: replyVal,
+                      directory: projectDir
+                    }
+                  });
+                  logDebug(`Direct API reply successful (plural) for request ${props.id}`);
+                } catch (apiErr2) {
+                  logDebug(`Both direct API reply endpoints failed: ${apiErr2.message}`);
+                }
+              }
+            } else if (permissionApi) {
+              if (result.status === 'allow') {
+                logDebug(`Auto-allowing permission request ${props.id} (fallback)`);
+                await permissionApi.reply({ requestID: props.id, reply: "once", directory: projectDir });
+              } else {
+                logDebug(`Auto-denying permission request ${props.id} because: ${result.reason} (fallback)`);
+                await permissionApi.reply({ requestID: props.id, reply: "reject", directory: projectDir });
+              }
+            } else {
+              logDebug("Cannot reply: neither clientObj._client nor permission API is found.");
+            }
+          }
+        } catch (err) {
+          logDebug(`Auto-evaluation error for ${props.id}: ${err.message}. Defaulting to deny for safety.`);
+          const clientObj = globalClient || event.client;
+          const projectDir = globalDirectory || process.cwd();
+          if (clientObj && clientObj._client) {
+            try {
+              await clientObj._client.post({
+                url: "/permission/{requestID}/reply",
+                params: { requestID: props.id },
+                payload: {
+                  reply: "reject",
+                  directory: projectDir
+                }
+              });
+            } catch (e) {
+              try {
+                await clientObj._client.post({
+                  url: "/permissions/{requestID}/reply",
+                  params: { requestID: props.id },
+                  payload: {
+                    reply: "reject",
+                    directory: projectDir
+                  }
+                });
+              } catch (e2) {}
+            }
+          } else {
+            let permissionApi = null;
+            if (globalInput) {
+              permissionApi = globalInput.permission || globalInput.sdk?.permission;
+            }
+            if (!permissionApi && clientObj) {
+              permissionApi = clientObj.permission || clientObj.sdk?.permission;
+            }
+            if (permissionApi) {
+              await permissionApi.reply({ requestID: props.id, reply: "reject", directory: projectDir }).catch(() => {});
+            }
+          }
+        }
+      }
     }
 
     // Handle Session Idle -> Auto Ingest Log
@@ -413,16 +561,62 @@ async function handleEvent(event) {
 }
 
 
+const permissionAskHook = async (permission, output) => {
+  logDebug(`permission.ask hook invoked (standalone/direct) for type: ${permission.type}`);
+  try {
+    let toolCall = null;
+    if (permission.type === "mcp" || permission.type === "tool") {
+      toolCall = {
+        tool_name: permission.metadata?.tool || permission.pattern || permission.id,
+        tool_input: permission.metadata?.arguments || {}
+      };
+    } else if (permission.type === "command" || permission.type === "bash" || permission.type === "execute") {
+      toolCall = {
+        tool_name: "bash",
+        tool_input: {
+          command: permission.metadata?.command || permission.pattern || ""
+        }
+      };
+    } else {
+      // Other system permissions (read, edit, etc.)
+      toolCall = {
+        tool_name: permission.type,
+        tool_input: {
+          path: permission.pattern || ""
+        }
+      };
+    }
+
+    if (toolCall) {
+      logDebug(`Evaluating tool (direct hook): ${toolCall.tool_name}`);
+      const result = await evaluateTool(toolCall);
+      if (result.status === 'allow') {
+        output.status = 'allow';
+      } else {
+        output.status = 'deny';
+        output.reason = result.reason;
+        logDebug(`Permission denied: ${result.reason}`);
+      }
+    }
+  } catch (err) {
+    logDebug(`Evaluation error: ${err.message}. Defaulting to deny for safety.`);
+    output.status = 'deny';
+    output.reason = `Security gate evaluation error: ${err.message}`;
+  }
+};
+
 // --------------------------------------------------------------------------
 // OpenCode Plugin Specification compliant export
 // --------------------------------------------------------------------------
 module.exports = {
-  id: "chronos-gate",
+  id: "@yohi/opencode-plugin-chronos-gate",
+  "permission.ask": permissionAskHook,
   server: async (input, options) => {
     logDebug("Plugin activation function (init) called.");
     if (input) {
       globalClient = input.client;
       globalDirectory = input.directory;
+      globalInput = input;
     }
 
     // Proactively check and start Gateway on plugin initialization
@@ -432,7 +626,7 @@ module.exports = {
       logDebug(`Error starting gateway on init: ${err.message}`);
     }
 
-    return {
+    const hooksObj = {
       // Session event lifecycle hook
       event: async ({ event }) => {
         const ev = event.event || event;
@@ -441,49 +635,15 @@ module.exports = {
 
       // Security Evaluation Gate hook
       "permission.ask": async (permission, output) => {
-        logDebug(`permission.ask hook invoked for type: ${permission.type}`);
-        try {
-          let toolCall = null;
-          if (permission.type === "mcp" || permission.type === "tool") {
-            toolCall = {
-              tool_name: permission.metadata?.tool || permission.pattern || permission.id,
-              tool_input: permission.metadata?.arguments || {}
-            };
-          } else if (permission.type === "command" || permission.type === "bash" || permission.type === "execute") {
-            toolCall = {
-              tool_name: "bash",
-              tool_input: {
-                command: permission.metadata?.command || permission.pattern || ""
-              }
-            };
-          } else {
-            // Other system permissions (read, edit, etc.)
-            toolCall = {
-              tool_name: permission.type,
-              tool_input: {
-                path: permission.pattern || ""
-              }
-            };
-          }
-
-          if (toolCall) {
-            logDebug(`Evaluating tool: ${toolCall.tool_name}`);
-            const result = await evaluateTool(toolCall);
-            if (result.status === 'allow') {
-              output.status = 'allow';
-            } else {
-              output.status = 'deny';
-              output.reason = result.reason;
-              logDebug(`Permission denied: ${result.reason}`);
-            }
-          }
-        } catch (err) {
-          logDebug(`Evaluation error: ${err.message}. Defaulting to deny for safety.`);
-          output.status = 'deny';
-          output.reason = `Security gate evaluation error: ${err.message}`;
-        }
+        logDebug(`permission.ask hook invoked (nested in server) for type: ${permission.type}`);
+        return permissionAskHook(permission, output);
       }
     };
+
+    // Support both w[G] and w.hooks[G] lookups
+    hooksObj.hooks = hooksObj;
+
+    return hooksObj;
   }
 };
 

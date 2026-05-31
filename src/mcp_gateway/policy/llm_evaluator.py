@@ -251,6 +251,10 @@ class LlmEvaluator:
         settings = EvaluatorSettings()
         if not settings.api_key:
             return None
+        if settings.cloudflare_account_id:
+            os.environ["CLOUDFLARE_ACCOUNT_ID"] = settings.cloudflare_account_id.get_secret_value()
+            os.environ["CLOUDFLARE_API_KEY"] = settings.api_key.get_secret_value()
+
         return cls(
             api_key=settings.api_key.get_secret_value(),
             model=settings.model,

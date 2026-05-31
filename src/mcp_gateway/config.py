@@ -114,6 +114,7 @@ class EvaluatorSettings(BaseSettings):
 
     api_key: SecretStr | None = None
     model: str = "anthropic/claude-haiku-4-5-20251001"
+    cloudflare_account_id: SecretStr | None = None
 
     @model_serializer(mode="wrap")
     def _mask_secrets(self, handler: Any, info: SerializationInfo) -> dict[str, Any]:

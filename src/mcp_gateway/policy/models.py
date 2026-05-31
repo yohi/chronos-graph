@@ -108,6 +108,7 @@ class ToolGuardrail(BaseModel):
     model_config = ConfigDict(frozen=True)
     params: dict[str, ParamConstraint] = Field(default_factory=dict)
     requires_approval: bool = False
+    skip_llm: bool = False
 
 
 class IntentPolicy(BaseModel):

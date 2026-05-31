@@ -254,6 +254,10 @@ class LlmEvaluator:
         if settings.cloudflare_account_id:
             os.environ["CLOUDFLARE_ACCOUNT_ID"] = settings.cloudflare_account_id.get_secret_value()
             os.environ["CLOUDFLARE_API_KEY"] = settings.api_key.get_secret_value()
+        if settings.model.startswith("gemini/"):
+            os.environ["GEMINI_API_KEY"] = settings.api_key.get_secret_value()
+        if settings.model.startswith("nvidia/") or settings.model.startswith("nvidia_nim/"):
+            os.environ["NVIDIA_API_KEY"] = settings.api_key.get_secret_value()
 
         return cls(
             api_key=settings.api_key.get_secret_value(),

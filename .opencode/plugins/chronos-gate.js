@@ -72,7 +72,12 @@ async function evaluateTool(toolCall) {
           if (result.decision === 'allow') {
             resolve({ status: 'allow' });
           } else {
-            resolve({ status: 'deny', reason: result.reason });
+            resolve({
+              status: 'deny',
+              reason: result.reason,
+              decision: result.decision,
+              ask_message: result.ask_message
+            });
           }
         } catch (e) {
           reject(new Error(`Failed to parse response: ${e.message}. Data: ${data}`));
@@ -98,6 +103,10 @@ async function evaluateTool(toolCall) {
 let globalClient = null;
 let globalDirectory = null;
 let globalInput = null;
+if (!global.__chronos_active_evaluations) {
+  global.__chronos_active_evaluations = new Set();
+}
+const activeEvaluations = global.__chronos_active_evaluations;
 
 // Helper to show TUI toast message with slight delay to ensure TUI layer is ready
 function showToast(message, variant = "info") {
@@ -118,6 +127,8 @@ function showToast(message, variant = "info") {
   }, 500);
 }
 
+let isSpawning = false;
+
 // Helper to check gateway status and start it if offline
 function checkAndStartGateway() {
   const net = require('node:net');
@@ -129,6 +140,12 @@ function checkAndStartGateway() {
     showToast("Gateway is already running (port 9100).", "success");
   }).once('error', (err) => {
     clientSocket.destroy();
+    if (isSpawning) {
+      logDebug("Gateway auto-start is already in progress. Skipping duplicate spawn.");
+      return;
+    }
+    isSpawning = true;
+    setTimeout(() => { isSpawning = false; }, 15000); // Reset flag after 15s
     logDebug(`Gateway is offline. Attempting auto-start: ${err.message}`);
     showToast("Gateway is offline. Auto-starting...", "warning");
     try {
@@ -223,6 +240,12 @@ function checkAndStartGateway() {
 async function handleEvent(event) {
   try {
     logDebug(`Received event: ${event.type}`);
+    if (event.client && !globalClient) {
+      globalClient = event.client;
+    }
+    if (event.directory && !globalDirectory) {
+      globalDirectory = event.directory;
+    }
 
     // Handle Session Creation -> Auto Start Gateway if offline
     if (event.type === "session.created") {
@@ -233,6 +256,11 @@ async function handleEvent(event) {
     if (event.type === "permission.asked") {
       const props = event.properties;
       if (props && props.id) {
+        if (activeEvaluations.has(props.id)) {
+          logDebug(`Duplicate permission.asked event for request ${props.id}. Skipping.`);
+          return;
+        }
+        activeEvaluations.add(props.id);
         logDebug(`Auto-evaluating permission.asked: ${props.id} for type: ${props.permission}`);
         try {
           const projectDir = path.join(process.env.HOME, 'program', 'chronos-graph');
@@ -273,6 +301,13 @@ async function handleEvent(event) {
             logDebug(`Evaluating tool via event hook: ${toolCall.tool_name}`);
             logDebug(`toolCall payload: ${JSON.stringify(toolCall)}`);
             const result = await evaluateTool(toolCall);
+            if (result.status !== 'allow') {
+              if (result.decision === 'ask' && result.ask_message) {
+                showToast(`Evaluation Check: ${result.ask_message}`, "warning");
+              } else if (result.reason) {
+                showToast(`Permission denied: ${result.reason}`, "error");
+              }
+            }
             
             // Dynamically resolve permission API (clientObj.permission or globalInput.sdk.permission)
             let permissionApi = null;
@@ -303,12 +338,25 @@ async function handleEvent(event) {
 
             const replyVal = result.status === 'allow' ? "once" : "reject";
 
-            if (clientObj && clientObj._client) {
-              logDebug(`Sending direct API reply: ${replyVal} for request ${props.id}`);
+            // Prioritize official SDK permissionApi over raw HTTP client calls
+            let permissionApi = null;
+            if (globalInput) {
+              permissionApi = globalInput.permission || globalInput.sdk?.permission;
+            }
+            const clientObj = globalClient || event.client;
+            if (!permissionApi && clientObj) {
+              permissionApi = clientObj.permission || clientObj.sdk?.permission;
+            }
+
+            if (permissionApi) {
+              logDebug(`Sending reply via SDK API: ${replyVal} for request ${props.id}`);
+              await permissionApi.reply({ requestID: props.id, reply: replyVal, directory: projectDir });
+              logDebug(`SDK API reply successful for request ${props.id}`);
+            } else if (clientObj && clientObj._client) {
+              logDebug(`Sending direct API reply (fallback): ${replyVal} for request ${props.id}`);
               try {
                 await clientObj._client.post({
-                  url: "/permission/{requestID}/reply",
-                  params: { requestID: props.id },
+                  url: `/permission/${props.id}/reply`,
                   payload: {
                     reply: replyVal,
                     directory: projectDir
@@ -319,8 +367,7 @@ async function handleEvent(event) {
                 logDebug(`Direct API reply failed on permission endpoint: ${apiErr.message}. Trying permissions endpoint...`);
                 try {
                   await clientObj._client.post({
-                    url: "/permissions/{requestID}/reply",
-                    params: { requestID: props.id },
+                    url: `/permissions/${props.id}/reply`,
                     payload: {
                       reply: replyVal,
                       directory: projectDir
@@ -331,20 +378,13 @@ async function handleEvent(event) {
                   logDebug(`Both direct API reply endpoints failed: ${apiErr2.message}`);
                 }
               }
-            } else if (permissionApi) {
-              if (result.status === 'allow') {
-                logDebug(`Auto-allowing permission request ${props.id} (fallback)`);
-                await permissionApi.reply({ requestID: props.id, reply: "once", directory: projectDir });
-              } else {
-                logDebug(`Auto-denying permission request ${props.id} because: ${result.reason} (fallback)`);
-                await permissionApi.reply({ requestID: props.id, reply: "reject", directory: projectDir });
-              }
             } else {
               logDebug("Cannot reply: neither clientObj._client nor permission API is found.");
             }
           }
         } catch (err) {
           logDebug(`Auto-evaluation error for ${props.id}: ${err.message}. Defaulting to deny for safety.`);
+          showToast(`Evaluation System Error: ${err.message}`, "error");
           const clientObj = globalClient || event.client;
           const projectDir = globalDirectory || process.cwd();
           if (clientObj && clientObj._client) {
@@ -381,6 +421,8 @@ async function handleEvent(event) {
               await permissionApi.reply({ requestID: props.id, reply: "reject", directory: projectDir }).catch(() => {});
             }
           }
+        } finally {
+          activeEvaluations.delete(props.id);
         }
       }
     }
@@ -554,10 +596,16 @@ const permissionAskHook = async (permission, output) => {
         output.status = 'deny';
         output.reason = result.reason;
         logDebug(`Permission denied: ${result.reason}`);
+        if (result.decision === 'ask' && result.ask_message) {
+          showToast(`Evaluation Check: ${result.ask_message}`, "warning");
+        } else if (result.reason) {
+          showToast(`Permission denied: ${result.reason}`, "error");
+        }
       }
     }
   } catch (err) {
     logDebug(`Evaluation error: ${err.message}. Defaulting to deny for safety.`);
+    showToast(`Evaluation System Error: ${err.message}`, "error");
     output.status = 'deny';
     output.reason = `Security gate evaluation error: ${err.message}`;
   }

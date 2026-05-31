@@ -127,6 +127,21 @@ def build_router(
     if approval_blocking_mode and approval_timeout_seconds <= 0:
         raise ValueError("approval_timeout_seconds must be positive")
 
+    import os
+
+    from mcp_gateway.policy.composite import CompositeEvaluator
+    from mcp_gateway.policy.llm_evaluator import LlmEvaluator
+    from mcp_gateway.policy.memory_client import MemoryClient
+
+    shared_evaluator = CompositeEvaluator(
+        engine=engine,
+        memory_client=MemoryClient.from_env(),
+        llm_evaluator=LlmEvaluator.from_env(),
+        default_intent=os.getenv("CHRONOS_EVALUATOR_DEFAULT_INTENT", "default"),
+        default_agent_id=os.getenv("CHRONOS_EVALUATOR_DEFAULT_AGENT_ID", "claude-code"),
+        fallback_when_llm_not_configured=os.getenv("CHRONOS_EVALUATOR_FALLBACK", "allow"),  # type: ignore
+    )
+
     router = APIRouter()
     if approval_notifier is None:
         approval_notifier = LogOnlyApprovalNotifier()
@@ -677,11 +692,7 @@ def build_router(
 
     @router.post("/evaluate")
     async def evaluate_call(request: Request) -> Any:
-        import os
 
-        from mcp_gateway.policy.composite import CompositeEvaluator
-        from mcp_gateway.policy.llm_evaluator import LlmEvaluator
-        from mcp_gateway.policy.memory_client import MemoryClient
         from mcp_gateway.policy.models_evaluator import ToolCallInput
 
         try:
@@ -706,20 +717,12 @@ def build_router(
             raise HTTPException(status_code=400, detail="context must be a JSON object")
 
         try:
-            evaluator = CompositeEvaluator(
-                engine=engine,
-                memory_client=MemoryClient.from_env(),
-                llm_evaluator=LlmEvaluator.from_env(),
-                default_intent=os.getenv("CHRONOS_EVALUATOR_DEFAULT_INTENT", "default"),
-                default_agent_id=os.getenv("CHRONOS_EVALUATOR_DEFAULT_AGENT_ID", "claude-code"),
-                fallback_when_llm_not_configured=os.getenv("CHRONOS_EVALUATOR_FALLBACK", "allow"),  # type: ignore
-            )
             input_ = ToolCallInput(
                 tool_name=tool_name,
                 tool_input=tool_input,
                 context=context,
             )
-            decision = await evaluator.evaluate(input_)
+            decision = await shared_evaluator.evaluate(input_)
             return decision.to_dict()
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc

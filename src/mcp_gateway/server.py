@@ -675,6 +675,55 @@ def build_router(
                 return JSONResponse({"error": "self_approval_forbidden"}, status_code=403)
             return JSONResponse({"error": "approval_not_found"}, status_code=404)
 
+    @router.post("/evaluate")
+    async def evaluate_call(request: Request) -> Any:
+        import os
+
+        from mcp_gateway.policy.composite import CompositeEvaluator
+        from mcp_gateway.policy.llm_evaluator import LlmEvaluator
+        from mcp_gateway.policy.memory_client import MemoryClient
+        from mcp_gateway.policy.models_evaluator import ToolCallInput
+
+        try:
+            body = await request.json()
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
+
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Body must be a JSON object")
+
+        tool_name = body.get("tool_name")
+        tool_input = body.get("tool_input", {})
+        context = body.get("context", {})
+
+        if not isinstance(tool_name, str) or not tool_name:
+            raise HTTPException(
+                status_code=400, detail="tool_name is required and must be a string"
+            )
+        if not isinstance(tool_input, dict):
+            raise HTTPException(status_code=400, detail="tool_input must be a JSON object")
+        if not isinstance(context, dict):
+            raise HTTPException(status_code=400, detail="context must be a JSON object")
+
+        try:
+            evaluator = CompositeEvaluator(
+                engine=engine,
+                memory_client=MemoryClient.from_env(),
+                llm_evaluator=LlmEvaluator.from_env(),
+                default_intent=os.getenv("CHRONOS_EVALUATOR_DEFAULT_INTENT", "default"),
+                default_agent_id=os.getenv("CHRONOS_EVALUATOR_DEFAULT_AGENT_ID", "claude-code"),
+                fallback_when_llm_not_configured=os.getenv("CHRONOS_EVALUATOR_FALLBACK", "allow"),  # type: ignore
+            )
+            input_ = ToolCallInput(
+                tool_name=tool_name,
+                tool_input=tool_input,
+                context=context,
+            )
+            decision = await evaluator.evaluate(input_)
+            return decision.to_dict()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
     @router.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}

@@ -41,107 +41,56 @@ function loadEnvFile(envPath) {
 // Core logic for tool evaluation
 async function evaluateTool(toolCall) {
   return new Promise((resolve, reject) => {
-    const policyPath = process.env.CHRONOS_EVALUATOR_POLICY_PATH || path.join(process.env.HOME, '.config', 'opencode', 'intents.yaml');
+    const http = require('node:http');
+    const postData = JSON.stringify(toolCall);
+    
+    const options = {
+      hostname: '127.0.0.1',
+      port: 9100,
+      path: '/evaluate',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData)
+      },
+      timeout: 45000
+    };
 
-    // Search for the project directory containing .env to resolve local path
-    const searchDirs = [
-      globalDirectory,
-      process.cwd(),
-      process.env.PWD,
-      path.join(process.env.HOME, 'program', 'chronos-graph'),
-      path.join(process.env.HOME, 'chronos-graph')
-    ].filter(Boolean);
-
-    let projectDir = null;
-    for (const dir of searchDirs) {
-      const envPath = path.join(dir, '.env');
-      if (fs.existsSync(envPath)) {
-        projectDir = dir;
-        break;
-      }
-    }
-
-    if (!projectDir) {
-      projectDir = process.cwd() || process.env.HOME;
-    }
-
-    const localVenvGateway = path.join(projectDir, '.venv', 'bin', 'chronos-mcp-gateway');
-    let cmd = 'uvx';
-    let args = [
-      '--quiet',
-      '--from', 'context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git',
-      'chronos-mcp-gateway', 'evaluate', '--json-io',
-      '--policy-path', policyPath
-    ];
-
-    if (fs.existsSync(localVenvGateway) || fs.existsSync(path.join(projectDir, 'pyproject.toml'))) {
-      const localBinUv = path.join(process.env.HOME, '.local', 'bin', 'uv');
-      cmd = fs.existsSync(localBinUv) ? localBinUv : 'uv';
-      args = ['run', 'chronos-mcp-gateway', 'evaluate', '--json-io', '--policy-path', policyPath];
-      logDebug(`evaluateTool: Using local uv run evaluate`);
-    } else {
-      const localBinUvx = path.join(process.env.HOME, '.local', 'bin', 'uvx');
-      cmd = fs.existsSync(localBinUvx) ? localBinUvx : 'uvx';
-      logDebug(`evaluateTool: Using uvx evaluate fallback`);
-    }
-
-    // Ensure HOME/.local/bin is in PATH
-    const localBinDir = path.join(process.env.HOME, '.local', 'bin');
-    const currentPath = process.env.PATH || '';
-    const newPath = currentPath.includes(localBinDir) ? currentPath : `${localBinDir}:${currentPath}`;
-
-    const proc = spawn(cmd, args, {
-      cwd: projectDir,
-      env: {
-        ...process.env,
-        PATH: newPath
-      }
+    const req = http.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+      res.on('end', () => {
+        if (res.statusCode !== 200) {
+          reject(new Error(`Server returned status code ${res.statusCode}: ${data}`));
+          return;
+        }
+        try {
+          const result = JSON.parse(data);
+          logDebug(`evaluateTool raw output (http): ${JSON.stringify(result)}`);
+          if (result.decision === 'allow') {
+            resolve({ status: 'allow' });
+          } else {
+            resolve({ status: 'deny', reason: result.reason });
+          }
+        } catch (e) {
+          reject(new Error(`Failed to parse response: ${e.message}. Data: ${data}`));
+        }
+      });
     });
 
-    const timeout = setTimeout(() => {
-      proc.kill();
-      reject(new Error('Evaluation timed out after 45000ms'));
-    }, 45000);
-
-    proc.on('error', (err) => {
-      clearTimeout(timeout);
-      reject(err);
+    req.on('error', (e) => {
+      reject(e);
     });
 
-    proc.stdin.write(JSON.stringify(toolCall));
-    proc.stdin.end();
-
-    let output = '';
-    const MAX_BUFFER = 65536;
-    proc.stdout.on('data', (data) => {
-      if (output.length + data.length > MAX_BUFFER) {
-        clearTimeout(timeout);
-        proc.kill();
-        reject(new Error('Evaluation output buffer exceeded limit'));
-        return;
-      }
-      output += data;
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Evaluation request timed out after 45000ms'));
     });
 
-    proc.on('close', (code) => {
-      clearTimeout(timeout);
-      if (code !== 0) {
-        return reject(new Error(`Evaluation failed with exit code ${code}. Output: ${output}`));
-      }
-
-      let result;
-      try {
-        result = JSON.parse(output);
-      } catch (parseError) {
-        return reject(new Error(`Failed to parse evaluation output as JSON. Code: ${code}. Output: ${output}. Error: ${parseError.message}`));
-      }
-
-      if (result.decision === 'allow') {
-        resolve({ status: 'allow' });
-      } else {
-        resolve({ status: 'deny', reason: result.reason });
-      }
-    });
+    req.write(postData);
+    req.end();
   });
 }
 
@@ -189,11 +138,11 @@ function checkAndStartGateway() {
 
       // Search for the project directory containing .env to resolve validation errors
       const searchDirs = [
+        path.join(process.env.HOME, 'program', 'chronos-graph'),
+        path.join(process.env.HOME, 'chronos-graph'),
         globalDirectory,
         process.cwd(),
-        process.env.PWD,
-        path.join(process.env.HOME, 'program', 'chronos-graph'),
-        path.join(process.env.HOME, 'chronos-graph')
+        process.env.PWD
       ].filter(Boolean);
 
       let projectDir = null;
@@ -286,20 +235,28 @@ async function handleEvent(event) {
       if (props && props.id) {
         logDebug(`Auto-evaluating permission.asked: ${props.id} for type: ${props.permission}`);
         try {
+          const projectDir = path.join(process.env.HOME, 'program', 'chronos-graph');
+          const contextObj = {
+            intent: "default",
+            agent_id: "OpenCode",
+            project: projectDir
+          };
           let toolCall = null;
           const permType = props.permission;
 
           if (permType === "mcp" || permType === "tool") {
             toolCall = {
               tool_name: props.metadata?.tool || props.patterns?.[0] || props.id,
-              tool_input: props.metadata?.arguments || {}
+              tool_input: props.metadata?.arguments || {},
+              context: contextObj
             };
           } else if (permType === "command" || permType === "bash" || permType === "execute") {
             toolCall = {
               tool_name: "bash",
               tool_input: {
                 command: props.metadata?.command || props.patterns?.[0] || ""
-              }
+              },
+              context: contextObj
             };
           } else {
             // Other system permissions (read, edit, etc.)
@@ -307,12 +264,14 @@ async function handleEvent(event) {
               tool_name: permType,
               tool_input: {
                 path: props.patterns?.[0] || ""
-              }
+              },
+              context: contextObj
             };
           }
 
           if (toolCall) {
             logDebug(`Evaluating tool via event hook: ${toolCall.tool_name}`);
+            logDebug(`toolCall payload: ${JSON.stringify(toolCall)}`);
             const result = await evaluateTool(toolCall);
             
             // Dynamically resolve permission API (clientObj.permission or globalInput.sdk.permission)
@@ -342,7 +301,6 @@ async function handleEvent(event) {
               permissionApi = clientObj.permission || clientObj.sdk?.permission;
             }
 
-            const projectDir = globalDirectory || process.cwd();
             const replyVal = result.status === 'allow' ? "once" : "reject";
 
             if (clientObj && clientObj._client) {

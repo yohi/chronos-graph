@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/yohi/chronos-graph/compare/v1.1.0...v1.2.0) (2026-05-31)
+
+
+### Features
+
+* chronos-gateの判定異常系におけるTUIトースト通知追加とバグ修正 ([#295](https://github.com/yohi/chronos-graph/issues/295)) ([b48a85f](https://github.com/yohi/chronos-graph/commit/b48a85fba3d927da6667cecb038c0ec1af543a71))
+
 ## [1.1.0](https://github.com/yohi/chronos-graph/compare/v1.0.0...v1.1.0) (2026-05-30)
 
 

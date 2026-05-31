@@ -27,7 +27,7 @@ function sanitizeMessagesData(data) {
       .map(p => p.type === "text" ? p.text : "")
       .filter(Boolean)
       .join("\n");
-    const truncated = contentSummary.length > 100 ? contentSummary.substring(0, 100) + '... [TRUNCATED]' : contentSummary;
+    const truncated = contentSummary.length > 100 ? `${contentSummary.substring(0, 100)}... [TRUNCATED]` : contentSummary;
     return { role, textLength: contentSummary.length, textPreview: truncated };
   });
 }
@@ -41,16 +41,16 @@ function logDebug(msg) {
   if (typeof msg === 'string') {
     output = msg
       .replace(/(sk-[a-zA-Z0-9]{20,})/g, '[REDACTED_API_KEY]')
-      .replace(/(bearer\s+)[a-zA-Z0-9_\-\.]+/ig, '$1[REDACTED_TOKEN]')
-      .replace(/(authorization:\s*)[a-zA-Z0-9_\-\.]+/ig, '$1[REDACTED_TOKEN]');
+      .replace(/(bearer\s+)[a-zA-Z0-9_.-]+/ig, '$1[REDACTED_TOKEN]')
+      .replace(/(authorization:\s*)[a-zA-Z0-9_.-]+/ig, '$1[REDACTED_TOKEN]');
   } else if (typeof msg === 'object' && msg !== null) {
     try {
       output = JSON.stringify(msg);
       output = output
         .replace(/(sk-[a-zA-Z0-9]{20,})/g, '[REDACTED_API_KEY]')
-        .replace(/(bearer\s+)[a-zA-Z0-9_\-\.]+/ig, '$1[REDACTED_TOKEN]')
-        .replace(/(authorization:\s*)[a-zA-Z0-9_\-\.]+/ig, '$1[REDACTED_TOKEN]');
-    } catch (e) {
+        .replace(/(bearer\s+)[a-zA-Z0-9_.-]+/ig, '$1[REDACTED_TOKEN]')
+        .replace(/(authorization:\s*)[a-zA-Z0-9_.-]+/ig, '$1[REDACTED_TOKEN]');
+    } catch {
       output = '[Unserializable Object]';
     }
   }
@@ -397,7 +397,7 @@ async function handleEvent(event) {
                 if (globalInput.sdk) {
                   logDebug(`globalInput.sdk ownProperties: ${Object.getOwnPropertyNames(globalInput.sdk).join(", ")}`);
                 }
-              } catch (e) {}
+              } catch {}
               permissionApi = globalInput.permission || globalInput.sdk?.permission;
             }
             const clientObj = globalClient || event.client;
@@ -410,7 +410,7 @@ async function handleEvent(event) {
                 if (clientObj._client) {
                   logDebug(`clientObj._client ownProperties: ${Object.getOwnPropertyNames(clientObj._client).join(", ")}`);
                 }
-              } catch (e) {}
+              } catch {}
             }
             if (!permissionApi && clientObj) {
               permissionApi = clientObj.permission || clientObj.sdk?.permission;

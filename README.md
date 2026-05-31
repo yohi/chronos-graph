@@ -100,7 +100,7 @@ AIエージェントにセットアップを依頼する場合の詳細な手順
   }
 }
 ```
-*💡 **環境変数について**: この Quick Start は長期記憶 MCP サーバー (`context-store`) の最小構成例です。認証キーやゲートウェイを利用する高度な設定方法については、[🛡️ Universal Evaluator (MCP Gateway)](#-universal-evaluator-mcp-gateway) セクションを参照してください。また、Claude Desktop は JSON 設定ファイル内の `${VAR}` 構文を展開しません。機密情報を渡す場合は、環境変数をエクスポートしてから起動するラッパースクリプトを指定することを推奨します。*
+*💡 **環境変数について**: この Quick Start は長期記憶 MCP サーバー (`context-store`) の最小構成例です。認証キーやゲートウェイを利用する高度な設定方法については、[🛡️ Universal Evaluator (MCP Gateway)](#universal-evaluator-mcp-gateway) セクションを参照してください。また、Claude Desktop は JSON 設定ファイル内の `${VAR}` 構文を展開しません。機密情報を渡す場合は、環境変数をエクスポートしてから起動するラッパースクリプトを指定することを推奨します。*
 
 ---
 
@@ -138,6 +138,7 @@ SQLite では `ALTER COLUMN TYPE` がサポートされていないため、以�
 #### 3. エラーと対処
 起動時に `ConfigurationError` や `StorageError` が発生した場合は、`.env` の `EMBEDDING_DIMENSION` がストレージ側の次元と一致しているか確認してください。
 
+<a id="universal-evaluator-mcp-gateway"></a>
 ## 🛡️ Universal Evaluator (MCP Gateway)
 
 エージェントの `PreToolUse` Hook から呼び出され、提案されたツール呼び出しを **deterministic（決定論的ポリシー: intents.yaml）** + **LLM（LiteLLM経由）** の二層で多面的に検証・判定する防壁 CLI です。

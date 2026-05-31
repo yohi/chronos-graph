@@ -260,6 +260,15 @@ class LlmEvaluator:
             extra_args["api_base"] = (
                 f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
             )
+            if settings.model.startswith("anthropic/"):
+                logger.warning(
+                    "Cloudflare account ID is set, but CHRONOS_EVALUATOR_MODEL (%r) "
+                    "starts with 'anthropic/'. "
+                    "LiteLLM may route requests directly to Anthropic instead of "
+                    "Cloudflare. Consider using an OpenAI-compatible prefix "
+                    "(e.g., 'openai/...') for Cloudflare AI Gateway/Workers AI.",
+                    settings.model,
+                )
 
         return cls(
             api_key=settings.api_key.get_secret_value(),

@@ -17,20 +17,26 @@ from context_store.storage.postgres_helpers import (
     _record_to_memory,
 )
 from context_store.storage.protocols import ALLOWED_SORT_COLUMNS, MemoryFilters, StorageError
+from context_store.sync.outbox_writer import OutboxWriter
 
 
 class PostgresStorageAdapter:
     """StorageAdapter implementation backed by PostgreSQL + pgvector + pg_bigm."""
 
-    def __init__(self, pool: asyncpg.Pool) -> None:
+    def __init__(self, pool: asyncpg.Pool, outbox_writer: OutboxWriter | None = None) -> None:
         self._pool = pool
+        self._outbox_writer: OutboxWriter | None = outbox_writer
 
     # ------------------------------------------------------------------
     # Factory
     # ------------------------------------------------------------------
 
     @classmethod
-    async def create(cls, settings: Settings) -> "PostgresStorageAdapter":
+    async def create(
+        cls,
+        settings: Settings,
+        outbox_writer: OutboxWriter | None = None,
+    ) -> "PostgresStorageAdapter":
         """Create a new adapter by connecting to PostgreSQL."""
         import ssl
 
@@ -54,7 +60,7 @@ class PostgresStorageAdapter:
             ssl=ssl_opt,
             statement_cache_size=settings.postgres_statement_cache_size,
         )
-        adapter = cls(pool)
+        adapter = cls(pool, outbox_writer=outbox_writer)
         try:
             await adapter.initialize()
         except Exception:
@@ -94,25 +100,32 @@ class PostgresStorageAdapter:
 
         try:
             async with self._pool.acquire() as conn:
-                row_id = await conn.fetchval(
-                    sql,
-                    memory.id,
-                    memory.content,
-                    memory.memory_type.value,
-                    memory.source_type.value,
-                    json.dumps(memory.source_metadata),
-                    embedding_str,
-                    memory.semantic_relevance,
-                    memory.importance_score,
-                    memory.access_count,
-                    memory.last_accessed_at,
-                    memory.created_at,
-                    memory.updated_at,
-                    memory.archived_at,
-                    memory.tags,
-                    memory.project,
-                    content_hash,
-                )
+                async with conn.transaction():
+                    row_id = await conn.fetchval(
+                        sql,
+                        memory.id,
+                        memory.content,
+                        memory.memory_type.value,
+                        memory.source_type.value,
+                        json.dumps(memory.source_metadata),
+                        embedding_str,
+                        memory.semantic_relevance,
+                        memory.importance_score,
+                        memory.access_count,
+                        memory.last_accessed_at,
+                        memory.created_at,
+                        memory.updated_at,
+                        memory.archived_at,
+                        memory.tags,
+                        memory.project,
+                        content_hash,
+                    )
+                    if self._outbox_writer is not None:
+                        await self._outbox_writer.enqueue_sync(
+                            conn=conn,
+                            memory_id=str(row_id),
+                            event_type="SYNC_MEMORY",
+                        )
         except asyncpg.UniqueViolationError as e:
             raise StorageError(
                 message=str(e),
@@ -161,8 +174,24 @@ class PostgresStorageAdapter:
         """Delete a memory. Returns True if deleted."""
         sql = "DELETE FROM memories WHERE id = $1"
         async with self._pool.acquire() as conn:
-            status = await conn.execute(sql, memory_id)
-        return str(status) == "DELETE 1"
+            async with conn.transaction():
+                if self._outbox_writer is not None:
+                    meta_row = await conn.fetchrow(
+                        "SELECT memory_type, tags, project FROM memories WHERE id = $1::uuid",
+                        memory_id,
+                    )
+                else:
+                    meta_row = None
+                status = await conn.execute(sql, memory_id)
+                deleted = str(status) == "DELETE 1"
+                if deleted and self._outbox_writer is not None:
+                    await self._outbox_writer.enqueue_sync(
+                        conn=conn,
+                        memory_id=memory_id,
+                        event_type="DELETE_MEMORY",
+                        payload=dict(meta_row) if meta_row else {},
+                    )
+        return deleted
 
     async def update_memory(self, memory_id: str, updates: dict[str, Any]) -> bool:
         """Apply partial updates to a memory."""

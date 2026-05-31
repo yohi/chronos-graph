@@ -102,6 +102,8 @@ def test_from_env_returns_none_when_litellm_missing(monkeypatch: pytest.MonkeyPa
 def test_from_env_creates_evaluator_with_default_model(monkeypatch: pytest.MonkeyPatch) -> None:
     # 1. verify from_env copies settings.model default
     monkeypatch.setenv("CHRONOS_EVALUATOR_API_KEY", "test-key")
+    monkeypatch.delenv("CHRONOS_EVALUATOR_MODEL", raising=False)
+    monkeypatch.setitem(llm_evaluator_module.EvaluatorSettings.model_config, "env_file", None)
     evaluator = LlmEvaluator.from_env()
     assert evaluator is not None
     assert evaluator._model == "anthropic/claude-haiku-4-5-20251001"
@@ -117,6 +119,37 @@ def test_from_env_respects_max_tokens_env(monkeypatch: pytest.MonkeyPatch) -> No
     evaluator = LlmEvaluator.from_env()
     assert evaluator is not None
     assert evaluator._max_tokens == 4096
+
+
+def test_from_env_warns_on_cloudflare_with_anthropic_model(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("CHRONOS_EVALUATOR_API_KEY", "test-key")
+    monkeypatch.setenv("CHRONOS_EVALUATOR_CLOUDFLARE_ACCOUNT_ID", "test-account-id")
+    monkeypatch.setenv("CHRONOS_EVALUATOR_MODEL", "anthropic/claude-haiku-4-5-20251001")
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="chronos_evaluator.llm"):
+        evaluator = LlmEvaluator.from_env()
+        assert evaluator is not None
+        assert any("Cloudflare account ID is set" in record.message for record in caplog.records)
+
+
+def test_from_env_no_warn_on_cloudflare_with_openai_model(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("CHRONOS_EVALUATOR_API_KEY", "test-key")
+    monkeypatch.setenv("CHRONOS_EVALUATOR_CLOUDFLARE_ACCOUNT_ID", "test-account-id")
+    monkeypatch.setenv("CHRONOS_EVALUATOR_MODEL", "openai/gpt-4o")
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="chronos_evaluator.llm"):
+        evaluator = LlmEvaluator.from_env()
+        assert evaluator is not None
+        assert evaluator._model == "openai/gpt-4o"
+        assert not any(
+            "Cloudflare account ID is set" in record.message for record in caplog.records
+        )
 
 
 def test_from_env_handles_invalid_timeout_env(monkeypatch: pytest.MonkeyPatch) -> None:

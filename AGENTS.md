@@ -111,7 +111,7 @@ After calling `memory_save` or `session_flush`, perform a self-verification usin
 
 2. **Summary Self-Containment:**
    - [ ] Can the saved text be understood on its own without referring to context or history?
-   - [ ] Are specific details like proper nouns, commands, and paths included?
+   - [ ] Are details like proper nouns, commands, and paths included?
    - [ ] Does it avoid pronouns or relative terms like "the previous," "above," or "this"?
 
 3. **Avoidance of Duplication and Noise:**

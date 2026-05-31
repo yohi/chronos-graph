@@ -127,6 +127,21 @@ def build_router(
     if approval_blocking_mode and approval_timeout_seconds <= 0:
         raise ValueError("approval_timeout_seconds must be positive")
 
+    import os
+
+    from mcp_gateway.policy.composite import CompositeEvaluator
+    from mcp_gateway.policy.llm_evaluator import LlmEvaluator
+    from mcp_gateway.policy.memory_client import MemoryClient
+
+    shared_evaluator = CompositeEvaluator(
+        engine=engine,
+        memory_client=MemoryClient.from_env(),
+        llm_evaluator=LlmEvaluator.from_env(),
+        default_intent=os.getenv("CHRONOS_EVALUATOR_DEFAULT_INTENT", "default"),
+        default_agent_id=os.getenv("CHRONOS_EVALUATOR_DEFAULT_AGENT_ID", "claude-code"),
+        fallback_when_llm_not_configured=os.getenv("CHRONOS_EVALUATOR_FALLBACK", "allow"),  # type: ignore
+    )
+
     router = APIRouter()
     if approval_notifier is None:
         approval_notifier = LogOnlyApprovalNotifier()
@@ -674,6 +689,66 @@ def build_router(
             if outcome.value == "forbidden":
                 return JSONResponse({"error": "self_approval_forbidden"}, status_code=403)
             return JSONResponse({"error": "approval_not_found"}, status_code=404)
+
+    @router.post("/evaluate")
+    async def evaluate_call(request: Request) -> Any:
+        import logging
+
+        from pydantic import ValidationError
+
+        from mcp_gateway.errors import AuthError
+        from mcp_gateway.policy.models_evaluator import ToolCallInput
+
+        logger = logging.getLogger("mcp_gateway.server")
+
+        if api_authenticator is not None:
+            auth_header = request.headers.get("Authorization")
+            if not auth_header:
+                raise HTTPException(status_code=401, detail="Missing Authorization header")
+            if not auth_header.startswith("Bearer "):
+                raise HTTPException(
+                    status_code=401, detail="Invalid Authorization scheme; must be Bearer"
+                )
+            token = auth_header[7:].strip()
+            try:
+                api_authenticator.authenticate(token)
+            except AuthError as exc:
+                raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+        try:
+            body = await request.json()
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
+
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Body must be a JSON object")
+
+        tool_name = body.get("tool_name")
+        tool_input = body.get("tool_input", {})
+        context = body.get("context", {})
+
+        if not isinstance(tool_name, str) or not tool_name:
+            raise HTTPException(
+                status_code=400, detail="tool_name is required and must be a string"
+            )
+        if not isinstance(tool_input, dict):
+            raise HTTPException(status_code=400, detail="tool_input must be a JSON object")
+        if not isinstance(context, dict):
+            raise HTTPException(status_code=400, detail="context must be a JSON object")
+
+        try:
+            input_ = ToolCallInput(
+                tool_name=tool_name,
+                tool_input=tool_input,
+                context=context,
+            )
+            decision = await shared_evaluator.evaluate(input_)
+            return decision.to_dict()
+        except (ValidationError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.exception("Unexpected error during evaluation")
+            raise HTTPException(status_code=500, detail="Internal server error") from exc
 
     @router.get("/healthz")
     async def healthz() -> dict[str, str]:

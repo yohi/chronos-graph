@@ -61,6 +61,7 @@ class CompositeEvaluator:
         self._decision_cache: dict[str, tuple[float, Decision]] = {}
         self._last_cleanup_time: float = time.monotonic()
         self._cache_cleanup_interval: float = 60.0  # seconds
+        self._in_flight_judgments: dict[str, asyncio.Future[Decision]] = {}
 
         logger.warning(
             "evaluator config: llm=%s memory=%s fallback_when_llm_not_configured=%s",
@@ -112,6 +113,11 @@ class CompositeEvaluator:
             )
             return Decision(decision="deny", reason="unexpected_evaluation_status")
 
+        # Skip LLM evaluation if guardrail explicitly configures skip_llm=true
+        guardrail = grant.guardrails.get(input_.tool_name)
+        if guardrail is not None and getattr(guardrail, "skip_llm", False):
+            return Decision(decision="allow")
+
         if input_.tool_name in READ_ONLY_TOOLS:
             return Decision(decision="allow")
 
@@ -129,20 +135,40 @@ class CompositeEvaluator:
         if cached is not None:
             return cached
 
-        memories = await self._fetch_memories_safely(input_)
-        rules = self._render_rules_for_prompt(grant, input_.tool_name)
+        # Coalesce duplicate concurrent evaluations
+        if cache_key in self._in_flight_judgments:
+            logger.info("Found in-flight judgment for key %s, waiting for result", cache_key)
+            return await asyncio.shield(self._in_flight_judgments[cache_key])
+
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        self._in_flight_judgments[cache_key] = fut
+
         try:
+            memories = await self._fetch_memories_safely(input_)
+            rules = self._render_rules_for_prompt(grant, input_.tool_name)
             decision = await self._llm.judge(
                 input_=input_,
                 rules=rules,
                 memories=memories,
                 intent_name=intent,
             )
+            self._store_cached_decision(cache_key, decision)
+            if not fut.done():
+                fut.set_result(decision)
+            return decision
         except (LlmUnavailableError, ResponseParseError) as exc:
             logger.warning("Tier-2 fallback to ask: %s", exc)
-            return Decision(decision="ask", ask_message=_FALLBACK_ASK_MESSAGE)
-        self._store_cached_decision(cache_key, decision)
-        return decision
+            fallback_decision = Decision(decision="ask", ask_message=_FALLBACK_ASK_MESSAGE)
+            if not fut.done():
+                fut.set_result(fallback_decision)
+            return fallback_decision
+        except Exception as exc:
+            if not fut.done():
+                fut.set_exception(exc)
+            raise exc
+        finally:
+            self._in_flight_judgments.pop(cache_key, None)
 
     async def _fetch_memories_safely(self, input_: ToolCallInput) -> list[MemoryItem]:
         if self._memory is None:

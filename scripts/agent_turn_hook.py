@@ -181,7 +181,8 @@ def is_safe_path(path_str: str) -> bool:
             pass
 
         return is_under_home or is_under_cwd or is_under_temp
-    except Exception:
+    except (FileNotFoundError, OSError, RuntimeError, ValueError) as e:
+        logging.error("Path validation failed: %s", e)
         return False
 
 
@@ -329,8 +330,10 @@ async def _post_tools_call(
             "consider lowering MCP_HOOK_MAX_LOG_BYTES (currently %d)",
             int(os.environ.get("MCP_HOOK_MAX_LOG_BYTES", DEFAULT_MAX_LOG_BYTES)),
         )
+        post_resp.raise_for_status()
     elif post_resp.status_code >= 400:
         logging.warning("Gateway returned HTTP %d", post_resp.status_code)
+        post_resp.raise_for_status()
 
 
 async def _send(
@@ -363,7 +366,7 @@ async def _send(
         await _post_tools_call(client, gateway_url, session_id, payload, headers)
 
 
-async def _main_async(payload: str) -> None:
+async def _main_async(payload: str) -> bool:
     gateway_url = os.environ.get("MCP_GATEWAY_URL", DEFAULT_GATEWAY_URL)
     api_key = os.environ.get("MCP_GATEWAY_API_KEY")
     intent = os.environ.get("MCP_INTENT", DEFAULT_INTENT)
@@ -388,20 +391,24 @@ async def _main_async(payload: str) -> None:
         sse_timeout = DEFAULT_SSE_TIMEOUT_SECONDS
 
     if not api_key:
-        logging.error("MCP_GATEWAY_API_KEY is not set; aborting hook (no-op)")
-        return
+        logging.error("MCP_GATEWAY_API_KEY is not set; aborting hook")
+        return True
 
     try:
         await asyncio.wait_for(
             _send(gateway_url, api_key, intent, payload, total_timeout, sse_timeout),
             timeout=total_timeout,
         )
+        return True
     except TimeoutError as exc:
-        logging.info("turn hook timed out (total budget exhausted): %s", exc)
+        logging.error("turn hook timed out (total budget exhausted): %s", exc)
+        return False
     except httpx.HTTPError as exc:
-        logging.warning("turn hook failed (HTTP error): %s", exc)
+        logging.error("turn hook failed (HTTP error): %s", exc)
+        return False
     except Exception as exc:  # noqa: BLE001 - intentional broad catch
-        logging.warning("turn hook failed (unexpected): %s", exc, exc_info=True)
+        logging.error("turn hook failed (unexpected): %s", exc, exc_info=True)
+        return False
 
 
 def main() -> int:
@@ -417,7 +424,7 @@ def main() -> int:
         raw = _read_input(args)
     except Exception as exc:  # noqa: BLE001 - intentional broad catch
         logging.warning("failed to read input: %s", exc)
-        return 0
+        return 1
 
     if not raw:
         logging.debug("empty input; skipping hook invocation")
@@ -451,9 +458,12 @@ def main() -> int:
         return 0
 
     try:
-        asyncio.run(_main_async(payload))
+        success = asyncio.run(_main_async(payload))
+        if not success:
+            return 1
     except Exception as exc:  # noqa: BLE001 - intentional broad catch
         logging.warning("turn hook failed at top level: %s", exc, exc_info=True)
+        return 1
 
     return 0
 

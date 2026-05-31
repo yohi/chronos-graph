@@ -52,6 +52,11 @@ intents:
       memory_prune:
         requires_approval: true
 
+  memory.ingest:
+    description: "Turn-end automatic conversation ingestion from trusted client hooks."
+    allowed_tools: [memory_save]
+    output_filter: curator_full
+
   ingest_external_url:
     description: "External URL ingestion only."
     allowed_tools: [memory_save_url]
@@ -74,3 +79,5 @@ agents:
     allowed_intents: [read_only_recall, curate_memories]
   ingestion-bot:
     allowed_intents: [ingest_external_url]
+  turn-end-ingestion-bot:
+    allowed_intents: [memory.ingest]

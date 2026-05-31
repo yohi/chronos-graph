@@ -253,6 +253,23 @@ class Settings(BaseSettings):
         default_factory=lambda: ["text/*", "application/json"]
     )
 
+    @field_validator("url_allowed_content_types", mode="before")
+    @classmethod
+    def _parse_url_allowed_content_types(cls, v: Any) -> list[str]:
+        default_types = ["text/*", "application/json"]
+        if v is None:
+            return default_types
+
+        types: list[str] = []
+        if isinstance(v, str):
+            types = [t.strip().lower() for t in v.split(",") if t.strip()]
+        elif isinstance(v, list):
+            types = [str(t).strip().lower() for t in v if str(t).strip()]
+        else:
+            raise ValueError(f"url_allowed_content_types must be a string or list, not {type(v)}")
+
+        return types if types else default_types
+
     @property
     def postgres_dsn(self) -> str:
         encoded_user = quote(self.postgres_user, safe="")

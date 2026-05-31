@@ -237,11 +237,13 @@ class LlmEvaluator:
         model: str = "anthropic/claude-haiku-4-5-20251001",
         timeout_seconds: float = 10.0,
         max_tokens: int = 1536,
+        extra_args: dict[str, object] | None = None,
     ) -> None:
         self._api_key: str = api_key
         self._model: str = model
         self._timeout_seconds: float = timeout_seconds
         self._max_tokens: int = max_tokens
+        self._extra_args: dict[str, object] = extra_args or {}
 
     @classmethod
     def from_env(cls) -> LlmEvaluator | None:
@@ -251,11 +253,29 @@ class LlmEvaluator:
         settings = EvaluatorSettings()
         if not settings.api_key:
             return None
+
+        extra_args: dict[str, object] = {}
+        if settings.cloudflare_account_id:
+            account_id = settings.cloudflare_account_id.get_secret_value()
+            extra_args["api_base"] = (
+                f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
+            )
+            if settings.model.startswith("anthropic/"):
+                logger.warning(
+                    "Cloudflare account ID is set, but CHRONOS_EVALUATOR_MODEL (%r) "
+                    "starts with 'anthropic/'. "
+                    "LiteLLM may route requests directly to Anthropic instead of "
+                    "Cloudflare. Consider using an OpenAI-compatible prefix "
+                    "(e.g., 'openai/...') for Cloudflare AI Gateway/Workers AI.",
+                    settings.model,
+                )
+
         return cls(
             api_key=settings.api_key.get_secret_value(),
             model=settings.model,
             timeout_seconds=_parse_float_env("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", 10.0),
             max_tokens=_parse_int_env("CHRONOS_EVALUATOR_MAX_TOKENS", 1536),
+            extra_args=extra_args,
         )
 
     async def judge(
@@ -283,6 +303,7 @@ class LlmEvaluator:
                 max_tokens=self._max_tokens,
                 timeout=self._timeout_seconds,
                 api_key=self._api_key,
+                **self._extra_args,
             )
         except Exception as exc:
             raise LlmUnavailableError(f"LLM call failed: {type(exc).__name__}") from exc

@@ -521,3 +521,62 @@ class TestDashboardQueries:
 
         count = await adp.count_edges()
         assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# execute_write
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_neo4j_execute_write_runs_cypher_with_parameters() -> None:
+    """execute_write は session.run で書き込みクエリを実行する。"""
+    from context_store.storage.neo4j import Neo4jGraphAdapter
+
+    adp = Neo4jGraphAdapter.__new__(Neo4jGraphAdapter)
+    adp._driver = MagicMock()  # type: ignore[attr-defined]
+    adp._read_only = False  # type: ignore[attr-defined]
+
+    fake_session = AsyncMock()
+    fake_session.__aenter__.return_value = fake_session
+    fake_session.__aexit__.return_value = None
+    fake_session.run = AsyncMock()
+
+    adp._driver.session.return_value = fake_session
+
+    cypher = "UNWIND $batch AS r MERGE (m:Memory {id:r.id})"
+    await adp.execute_write(cypher, {"batch": [{"id": "x"}]})
+
+    fake_session.run.assert_awaited_once()
+    cypher_arg = fake_session.run.await_args.args[0]
+    assert "UNWIND" in cypher_arg
+
+
+@pytest.mark.asyncio
+async def test_neo4j_execute_write_raises_on_read_only() -> None:
+    """read_only モードでは StorageError を送出する。"""
+    from context_store.storage.neo4j import Neo4jGraphAdapter
+    from context_store.storage.protocols import StorageError
+
+    adp = Neo4jGraphAdapter.__new__(Neo4jGraphAdapter)
+    adp._driver = MagicMock()  # type: ignore[attr-defined]
+    adp._read_only = True  # type: ignore[attr-defined]
+
+    with pytest.raises(StorageError):
+        await adp.execute_write("MERGE (m:Memory {id:'x'})", {})
+
+
+@pytest.mark.asyncio
+async def test_neo4j_execute_write_reraises_on_failure() -> None:
+    """例外発生時は re-raise する（呼び出し側で Backoff）。"""
+    from context_store.storage.neo4j import Neo4jGraphAdapter
+
+    adp = Neo4jGraphAdapter.__new__(Neo4jGraphAdapter)
+    adp._driver = MagicMock()  # type: ignore[attr-defined]
+    adp._read_only = False  # type: ignore[attr-defined]
+    fake_session = AsyncMock()
+    fake_session.__aenter__.side_effect = RuntimeError("network error")
+    adp._driver.session.return_value = fake_session
+
+    with pytest.raises(RuntimeError):
+        await adp.execute_write("MERGE (m:Memory {id:'x'})", {})

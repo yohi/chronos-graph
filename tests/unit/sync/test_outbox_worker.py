@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -14,9 +15,9 @@ from context_store.sync.models import OutboxEvent
 def _evt(event_type: str = "SYNC_MEMORY", retry_count: int = 0) -> OutboxEvent:
     now = datetime.now(timezone.utc)
     return OutboxEvent(
-        id="e1",
+        id="11111111-1111-1111-1111-111111111111",
         event_type=event_type,  # type: ignore[arg-type]
-        memory_id="m1",
+        memory_id="22222222-2222-2222-2222-222222222222",
         payload={},
         status="PROCESSING",
         retry_count=retry_count,
@@ -37,7 +38,9 @@ async def test_worker_processes_pending_events_then_deletes() -> None:
     reader.delete_completed = AsyncMock()
 
     storage = MagicMock()
-    storage.get_memories_batch = AsyncMock(return_value=[MagicMock(id="m1")])
+    storage.get_memories_batch = AsyncMock(
+        return_value=[MagicMock(id="22222222-2222-2222-2222-222222222222")]
+    )
     graph_sync = MagicMock()
     graph_sync.bulk_merge_memories = AsyncMock(return_value=1)
 
@@ -58,7 +61,7 @@ async def test_worker_processes_pending_events_then_deletes() -> None:
     await task
 
     graph_sync.bulk_merge_memories.assert_awaited()
-    reader.delete_completed.assert_awaited_with(["e1"])
+    reader.delete_completed.assert_awaited_with([uuid.UUID("11111111-1111-1111-1111-111111111111")])
 
 
 @pytest.mark.asyncio
@@ -71,7 +74,9 @@ async def test_worker_retries_on_neo4j_failure_with_backoff() -> None:
     reader.reset_to_pending = AsyncMock()
 
     storage = MagicMock()
-    storage.get_memories_batch = AsyncMock(return_value=[MagicMock(id="m1")])
+    storage.get_memories_batch = AsyncMock(
+        return_value=[MagicMock(id="22222222-2222-2222-2222-222222222222")]
+    )
     graph_sync = MagicMock()
     graph_sync.bulk_merge_memories = AsyncMock(side_effect=RuntimeError("neo4j down"))
 
@@ -107,7 +112,9 @@ async def test_worker_marks_failed_after_max_retries() -> None:
     reader.mark_failed = AsyncMock()
 
     storage = MagicMock()
-    storage.get_memories_batch = AsyncMock(return_value=[MagicMock(id="m1")])
+    storage.get_memories_batch = AsyncMock(
+        return_value=[MagicMock(id="22222222-2222-2222-2222-222222222222")]
+    )
     graph_sync = MagicMock()
     graph_sync.bulk_merge_memories = AsyncMock(side_effect=RuntimeError("neo4j down"))
 
@@ -188,7 +195,7 @@ async def test_worker_handles_orphaned_sync_event() -> None:
     await worker.stop()
     await task
 
-    reader.delete_completed.assert_awaited_with(["e1"])
+    reader.delete_completed.assert_awaited_with([uuid.UUID("11111111-1111-1111-1111-111111111111")])
 
 
 @pytest.mark.asyncio
@@ -200,7 +207,9 @@ async def test_worker_run_catchup_processes_all_actionable() -> None:
     reader.delete_completed = AsyncMock()
 
     storage = MagicMock()
-    storage.get_memories_batch = AsyncMock(return_value=[MagicMock(id="m1")])
+    storage.get_memories_batch = AsyncMock(
+        return_value=[MagicMock(id="22222222-2222-2222-2222-222222222222")]
+    )
     graph_sync = MagicMock()
     graph_sync.bulk_merge_memories = AsyncMock(return_value=1)
 
@@ -229,7 +238,9 @@ async def test_worker_process_pending_once_returns_event_count() -> None:
     reader.delete_completed = AsyncMock()
 
     storage = MagicMock()
-    storage.get_memories_batch = AsyncMock(return_value=[MagicMock(id="m1")])
+    storage.get_memories_batch = AsyncMock(
+        return_value=[MagicMock(id="22222222-2222-2222-2222-222222222222")]
+    )
     graph_sync = MagicMock()
     graph_sync.bulk_merge_memories = AsyncMock(return_value=1)
 

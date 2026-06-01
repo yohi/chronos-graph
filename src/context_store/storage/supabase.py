@@ -100,7 +100,8 @@ class SupabaseStorageAdapter:
                 postgrest_client_timeout=settings.supabase_request_timeout_seconds,
             ),
         )
-        adapter = cls(client)
+        outbox_enabled = settings.graph_sync_mode == "async_outbox"
+        adapter = cls(client, outbox_enabled=outbox_enabled)
         try:
             actual_dim = await adapter.get_vector_dimension()
         except Exception as exc:
@@ -213,6 +214,12 @@ class SupabaseStorageAdapter:
                 ).execute()
             except Exception as exc:
                 raise self._map_to_storage_error(exc) from exc
+            if not response.data:
+                raise StorageError(
+                    "upsert_memory_with_outbox RPC returned no data",
+                    code="STORAGE_ERROR",
+                    recoverable=True,
+                )
             return cast(str, response.data)
 
         row = {

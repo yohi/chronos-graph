@@ -11,16 +11,14 @@ import pytest
 async def test_supabase_save_memory_uses_rpc_when_outbox_enabled() -> None:
     from context_store.storage.supabase import SupabaseStorageAdapter
 
-    adp = SupabaseStorageAdapter.__new__(SupabaseStorageAdapter)
-    adp._outbox_enabled = True  # type: ignore[attr-defined]
-
     fake_rpc_result = MagicMock()
     fake_rpc_result.data = "55555555-5555-5555-5555-555555555555"
     fake_rpc = MagicMock()
     fake_rpc.execute = AsyncMock(return_value=fake_rpc_result)
     fake_client = MagicMock()
     fake_client.rpc = MagicMock(return_value=fake_rpc)
-    adp._client = fake_client  # type: ignore[attr-defined]
+
+    adp = SupabaseStorageAdapter(fake_client, outbox_enabled=True)
 
     import uuid
     from datetime import datetime, timezone
@@ -41,7 +39,9 @@ async def test_supabase_save_memory_uses_rpc_when_outbox_enabled() -> None:
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )
-    await adp.save_memory(mem)
+    result = await adp.save_memory(mem)
+    assert result == fake_rpc_result.data
+    assert isinstance(result, str)
 
     # upsert_memory_with_outbox RPC が呼ばれたことを確認
     assert fake_client.rpc.call_args.args[0] == "upsert_memory_with_outbox"
@@ -51,16 +51,14 @@ async def test_supabase_save_memory_uses_rpc_when_outbox_enabled() -> None:
 async def test_supabase_delete_memory_uses_rpc_when_outbox_enabled() -> None:
     from context_store.storage.supabase import SupabaseStorageAdapter
 
-    adp = SupabaseStorageAdapter.__new__(SupabaseStorageAdapter)
-    adp._outbox_enabled = True  # type: ignore[attr-defined]
-
     fake_rpc_result = MagicMock()
     fake_rpc_result.data = True
     fake_rpc = MagicMock()
     fake_rpc.execute = AsyncMock(return_value=fake_rpc_result)
     fake_client = MagicMock()
     fake_client.rpc = MagicMock(return_value=fake_rpc)
-    adp._client = fake_client  # type: ignore[attr-defined]
+
+    adp = SupabaseStorageAdapter(fake_client, outbox_enabled=True)
 
     result = await adp.delete_memory("55555555-5555-5555-5555-555555555555")
 

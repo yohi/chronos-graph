@@ -1,3 +1,6 @@
+-- 設計方針:
+-- 1. status: 成功したイベントは物理削除される設計(Delete-on-Success)のため、DONE等の成功ステータスは定義していません。
+-- 2. updated_at: レコード更新時は、アプリケーション層で明示的に NOW() をセットして更新する設計です。
 CREATE TABLE graph_sync_outbox (
     id            UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     event_type    VARCHAR(20)  NOT NULL CHECK (event_type IN ('SYNC_MEMORY', 'DELETE_MEMORY')),

@@ -1,5 +1,8 @@
+-- 設計方針:
+-- 1. status: 成功したイベントは物理削除される設計(Delete-on-Success)のため、DONE等の成功ステータスは定義していません。
+-- 2. updated_at: レコード更新時は、アプリケーション層で明示的に現在時刻をセットして更新する設計です。
 CREATE TABLE graph_sync_outbox (
-    id            TEXT PRIMARY KEY,
+    id            TEXT NOT NULL PRIMARY KEY,
     event_type    TEXT NOT NULL CHECK (event_type IN ('SYNC_MEMORY', 'DELETE_MEMORY')),
     memory_id     TEXT NOT NULL,
     payload       TEXT NOT NULL DEFAULT '{}',

@@ -98,9 +98,9 @@ class PostgresStorageAdapter:
 
         content_hash = _content_hash(memory.content)
 
-        try:
-            async with self._pool.acquire() as conn:
-                async with conn.transaction():
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                try:
                     row_id = await conn.fetchval(
                         sql,
                         memory.id,
@@ -120,18 +120,18 @@ class PostgresStorageAdapter:
                         memory.project,
                         content_hash,
                     )
-                    if self._outbox_writer is not None:
-                        await self._outbox_writer.enqueue_sync(
-                            conn=conn,
-                            memory_id=str(row_id),
-                            event_type="SYNC_MEMORY",
-                        )
-        except asyncpg.UniqueViolationError as e:
-            raise StorageError(
-                message=str(e),
-                code="DUPLICATE_CONTENT",
-                recoverable=False,
-            ) from e
+                except asyncpg.UniqueViolationError as e:
+                    raise StorageError(
+                        message=str(e),
+                        code="DUPLICATE_CONTENT",
+                        recoverable=False,
+                    ) from e
+                if self._outbox_writer is not None:
+                    await self._outbox_writer.enqueue_sync(
+                        conn=conn,
+                        memory_id=str(row_id),
+                        event_type="SYNC_MEMORY",
+                    )
 
         return str(row_id)
 

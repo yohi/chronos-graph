@@ -70,6 +70,12 @@ def mock_pool():
     """asyncpg.Pool のモック。"""
     pool = MagicMock()
     conn = AsyncMock()
+    conn.transaction = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=None),
+            __aexit__=AsyncMock(return_value=None),
+        )
+    )
     pool.acquire = MagicMock(
         return_value=AsyncMock(
             __aenter__=AsyncMock(return_value=conn),
@@ -88,6 +94,7 @@ def adapter(mock_pool):
     pool, conn = mock_pool
     adapter = PostgresStorageAdapter.__new__(PostgresStorageAdapter)
     adapter._pool = pool
+    adapter._outbox_writer = None
     return adapter, conn
 
 

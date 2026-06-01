@@ -178,14 +178,20 @@ class SQLiteStorageAdapter:
     # ------------------------------------------------------------------
 
     @classmethod
-    async def create(cls, settings: Settings, *, read_only: bool = False) -> "SQLiteStorageAdapter":
+    async def create(
+        cls,
+        settings: Settings,
+        *,
+        read_only: bool = False,
+        outbox_writer: OutboxWriter | None = None,
+    ) -> "SQLiteStorageAdapter":
         """Create and initialise the adapter (runs schema migration)."""
         db_path = os.path.expanduser(settings.sqlite_db_path)
         if not read_only:
             os.makedirs(
                 os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True
             )
-        adapter = cls(db_path, settings, read_only=read_only)
+        adapter = cls(db_path, settings, read_only=read_only, outbox_writer=outbox_writer)
         try:
             if not read_only:
                 lock = StaleAwareFileLock(
@@ -500,10 +506,14 @@ class SQLiteStorageAdapter:
                     return False
                 await conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
                 if self._outbox_writer is not None:
+                    try:
+                        tags = json.loads(meta_row[1]) if meta_row and meta_row[1] else []
+                    except Exception:
+                        tags = []
                     payload = (
                         {
                             "memory_type": meta_row[0],
-                            "tags": meta_row[1],
+                            "tags": tags,
                             "project": meta_row[2],
                         }
                         if meta_row

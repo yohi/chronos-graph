@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -61,7 +60,7 @@ async def test_worker_processes_pending_events_then_deletes() -> None:
     await task
 
     graph_sync.bulk_merge_memories.assert_awaited()
-    reader.delete_completed.assert_awaited_with([uuid.UUID("11111111-1111-1111-1111-111111111111")])
+    reader.delete_completed.assert_awaited_with(["11111111-1111-1111-1111-111111111111"])
 
 
 @pytest.mark.asyncio
@@ -195,7 +194,7 @@ async def test_worker_handles_orphaned_sync_event() -> None:
     await worker.stop()
     await task
 
-    reader.delete_completed.assert_awaited_with([uuid.UUID("11111111-1111-1111-1111-111111111111")])
+    reader.delete_completed.assert_awaited_with(["11111111-1111-1111-1111-111111111111"])
 
 
 @pytest.mark.asyncio

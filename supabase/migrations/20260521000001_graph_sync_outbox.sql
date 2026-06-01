@@ -9,7 +9,7 @@ CREATE TABLE graph_sync_outbox (
     payload       JSONB        NOT NULL DEFAULT '{}',
     status        VARCHAR(20)  NOT NULL DEFAULT 'PENDING'
                                CHECK (status IN ('PENDING', 'PROCESSING', 'FAILED')),
-    retry_count   INT          NOT NULL DEFAULT 0,
+    retry_count   INT          NOT NULL DEFAULT 0 CONSTRAINT retry_count_nonnegative CHECK (retry_count >= 0),
     next_retry_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     error_message TEXT,
     created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
@@ -141,6 +141,10 @@ SECURITY INVOKER
 SET search_path = public
 AS $$
 BEGIN
+    IF p_limit IS NULL OR p_limit <= 0 THEN
+        RAISE EXCEPTION 'p_limit must be a positive integer';
+    END IF;
+
     RETURN QUERY
     UPDATE graph_sync_outbox o
     SET status = 'PROCESSING', updated_at = NOW()

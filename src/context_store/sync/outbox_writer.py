@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Protocol
+from typing import Any, Protocol, get_args
 
 from context_store.sync.models import EventType
 
-_ALLOWED_EVENT_TYPES = {"SYNC_MEMORY", "DELETE_MEMORY"}
+_ALLOWED_EVENT_TYPES = frozenset(get_args(EventType))
 
 
 def _validate_event_type(event_type: str) -> None:
@@ -40,7 +40,12 @@ class OutboxWriter(Protocol):
 
 
 class PostgresOutboxWriter:
-    """asyncpg.Connection の TX 内で INSERT する。"""
+    """asyncpg.Connection の TX 内で INSERT する。
+
+    Note:
+        Postgres 側はマイグレーションで id カラムに `DEFAULT gen_random_uuid()` が
+        設定されているため、INSERT クエリから id を省略して自動生成に依存しています。
+    """
 
     _SQL = (
         "INSERT INTO graph_sync_outbox (event_type, memory_id, payload) "
@@ -64,7 +69,12 @@ class PostgresOutboxWriter:
 
 
 class SqliteOutboxWriter:
-    """aiosqlite.Connection の TX 内で INSERT する。"""
+    """aiosqlite.Connection の TX 内で INSERT する。
+
+    Note:
+        SQLite 側は標準で組み込みの UUID 自動生成デフォルト値を持たないため、
+        アプリケーション層で明示的に uuid.uuid4() を生成して挿入しています。
+    """
 
     _SQL = "INSERT INTO graph_sync_outbox (id, event_type, memory_id, payload) VALUES (?, ?, ?, ?)"
 

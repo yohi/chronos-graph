@@ -17,3 +17,5 @@ CREATE TABLE graph_sync_outbox (
 
 CREATE INDEX idx_outbox_status_retry ON graph_sync_outbox (status, next_retry_at ASC);
 CREATE INDEX idx_outbox_memory_id ON graph_sync_outbox (memory_id);
+
+ALTER TABLE graph_sync_outbox ENABLE ROW LEVEL SECURITY;

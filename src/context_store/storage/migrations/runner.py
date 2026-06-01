@@ -91,6 +91,7 @@ class MigrationRunner:
         requirements = {
             "0001": ["memories"],
             "0002": ["memory_nodes", "memory_edges"],
+            "0003": ["graph_sync_outbox"],
         }
         for file_path in files:
             # Extract prefix e.g. "0001" from "0001_initial.sql"

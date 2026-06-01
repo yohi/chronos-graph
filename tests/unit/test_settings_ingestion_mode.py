@@ -31,7 +31,7 @@ def test_context_store_settings_defaults_to_selective(
     monkeypatch.delenv(CHRONOS_INGESTION_MODE_ENV, raising=False)
     from context_store.config import Settings
 
-    settings = Settings()
+    settings = Settings(_env_file=None)
     assert settings.ingestion_mode == "selective"
     assert settings.ingestion_mode == DEFAULT_INGESTION_MODE
 
@@ -42,7 +42,7 @@ def test_context_store_settings_reads_all_from_env(
     monkeypatch.setenv(CHRONOS_INGESTION_MODE_ENV, "all")
     from context_store.config import Settings
 
-    settings = Settings()
+    settings = Settings(_env_file=None)
     assert settings.ingestion_mode == "all"
 
 
@@ -53,14 +53,14 @@ def test_context_store_settings_rejects_invalid_value(
     from context_store.config import Settings
 
     with pytest.raises(ValidationError):
-        Settings()
+        Settings(_env_file=None)
 
 
 def test_gateway_settings_defaults_to_selective(
     monkeypatch: pytest.MonkeyPatch, policy_file: Path
 ) -> None:
     monkeypatch.delenv(CHRONOS_INGESTION_MODE_ENV, raising=False)
-    settings = GatewaySettings(policy_path=policy_file)
+    settings = GatewaySettings(policy_path=policy_file, _env_file=None)
     assert settings.ingestion_mode == "selective"
     assert settings.ingestion_mode == DEFAULT_INGESTION_MODE
 
@@ -69,7 +69,7 @@ def test_gateway_settings_reads_all_from_env(
     monkeypatch: pytest.MonkeyPatch, policy_file: Path
 ) -> None:
     monkeypatch.setenv(CHRONOS_INGESTION_MODE_ENV, "all")
-    settings = GatewaySettings(policy_path=policy_file)
+    settings = GatewaySettings(policy_path=policy_file, _env_file=None)
     assert settings.ingestion_mode == "all"
 
 
@@ -78,18 +78,18 @@ def test_gateway_settings_rejects_invalid_value(
 ) -> None:
     monkeypatch.setenv(CHRONOS_INGESTION_MODE_ENV, "invalid_value")
     with pytest.raises(ValidationError):
-        GatewaySettings(policy_path=policy_file)
+        GatewaySettings(policy_path=policy_file, _env_file=None)
 
 
 def test_gateway_upstream_passthrough_includes_ingestion_mode(policy_file: Path) -> None:
     """AC-10: default passthrough includes CHRONOS_INGESTION_MODE."""
-    settings = GatewaySettings(policy_path=policy_file)
+    settings = GatewaySettings(policy_path=policy_file, _env_file=None)
     assert CHRONOS_INGESTION_MODE_ENV in settings.upstream_env_passthrough
 
 
 def test_build_upstream_env_propagates_ingestion_mode(policy_file: Path) -> None:
     """AC-10: build_upstream_env passes CHRONOS_INGESTION_MODE downstream."""
-    settings = GatewaySettings(policy_path=policy_file)
+    settings = GatewaySettings(policy_path=policy_file, _env_file=None)
     base = {
         "PATH": "dummy-path",
         "OPENAI_API_KEY": "dummy",
@@ -110,8 +110,8 @@ def test_both_settings_use_same_ssot_type(
     monkeypatch.setenv(CHRONOS_INGESTION_MODE_ENV, "all")
     from context_store.config import Settings
 
-    context_settings = Settings()
-    gateway_settings = GatewaySettings(policy_path=policy_file)
+    context_settings = Settings(_env_file=None)
+    gateway_settings = GatewaySettings(policy_path=policy_file, _env_file=None)
     value_context: IngestionMode = context_settings.ingestion_mode
     value_gateway: IngestionMode = gateway_settings.ingestion_mode
     assert value_context == value_gateway == "all"

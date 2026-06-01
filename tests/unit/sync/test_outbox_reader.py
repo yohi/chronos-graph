@@ -24,16 +24,19 @@ async def test_fetch_pending_returns_only_due_events(sqlite_db) -> None:
     """next_retry_at が未来の PENDING は返さない。"""
     from context_store.sync.outbox_reader import SqliteOutboxReader
 
+    m1_id = str(uuid.uuid4())
+    m2_id = str(uuid.uuid4())
+
     async with aiosqlite.connect(sqlite_db) as conn:
         await conn.execute(
             "INSERT INTO graph_sync_outbox (id, event_type, memory_id, status, next_retry_at) "
             "VALUES (?, 'SYNC_MEMORY', ?, 'PENDING', '2000-01-01T00:00:00Z')",
-            (str(uuid.uuid4()), "m1"),
+            (str(uuid.uuid4()), m1_id),
         )
         await conn.execute(
             "INSERT INTO graph_sync_outbox (id, event_type, memory_id, status, next_retry_at) "
             "VALUES (?, 'SYNC_MEMORY', ?, 'PENDING', '9999-01-01T00:00:00Z')",
-            (str(uuid.uuid4()), "m2"),
+            (str(uuid.uuid4()), m2_id),
         )
         await conn.commit()
 
@@ -41,7 +44,7 @@ async def test_fetch_pending_returns_only_due_events(sqlite_db) -> None:
     events = await reader.fetch_pending(limit=10)
 
     assert len(events) == 1
-    assert events[0].memory_id == "m1"
+    assert str(events[0].memory_id) == m1_id
 
 
 @pytest.mark.asyncio
@@ -49,11 +52,13 @@ async def test_fetch_pending_marks_processing(sqlite_db) -> None:
     """fetch_pending は対象を PROCESSING に遷移させる。"""
     from context_store.sync.outbox_reader import SqliteOutboxReader
 
+    m1_id = str(uuid.uuid4())
+
     async with aiosqlite.connect(sqlite_db) as conn:
         await conn.execute(
             "INSERT INTO graph_sync_outbox (id, event_type, memory_id, status, next_retry_at) "
             "VALUES (?, 'SYNC_MEMORY', ?, 'PENDING', '2000-01-01T00:00:00Z')",
-            (str(uuid.uuid4()), "m1"),
+            (str(uuid.uuid4()), m1_id),
         )
         await conn.commit()
 
@@ -62,7 +67,8 @@ async def test_fetch_pending_marks_processing(sqlite_db) -> None:
 
     async with aiosqlite.connect(sqlite_db) as conn:
         async with conn.execute(
-            "SELECT status FROM graph_sync_outbox WHERE memory_id = 'm1'"
+            "SELECT status FROM graph_sync_outbox WHERE memory_id = ?",
+            (m1_id,),
         ) as cur:
             row = await cur.fetchone()
             assert row[0] == "PROCESSING"
@@ -73,13 +79,14 @@ async def test_reset_stuck_processing_resets_to_pending_below_max_retries(sqlite
     from context_store.sync.outbox_reader import SqliteOutboxReader
 
     eid = str(uuid.uuid4())
+    mid = str(uuid.uuid4())
     async with aiosqlite.connect(sqlite_db) as conn:
         await conn.execute(
             "INSERT INTO graph_sync_outbox (id, event_type, memory_id, status, retry_count, "
             "updated_at, next_retry_at) "
-            "VALUES (?, 'SYNC_MEMORY', 'm', 'PROCESSING', 3, '2000-01-01T00:00:00Z', "
+            "VALUES (?, 'SYNC_MEMORY', ?, 'PROCESSING', 3, '2000-01-01T00:00:00Z', "
             "'2000-01-01T00:00:00Z')",
-            (eid,),
+            (eid, mid),
         )
         await conn.commit()
 
@@ -100,13 +107,14 @@ async def test_reset_stuck_processing_marks_failed_at_max_retries(sqlite_db) -> 
     from context_store.sync.outbox_reader import SqliteOutboxReader
 
     eid = str(uuid.uuid4())
+    mid = str(uuid.uuid4())
     async with aiosqlite.connect(sqlite_db) as conn:
         await conn.execute(
             "INSERT INTO graph_sync_outbox (id, event_type, memory_id, status, retry_count, "
             "updated_at, next_retry_at) "
-            "VALUES (?, 'SYNC_MEMORY', 'm', 'PROCESSING', 10, '2000-01-01T00:00:00Z', "
+            "VALUES (?, 'SYNC_MEMORY', ?, 'PROCESSING', 10, '2000-01-01T00:00:00Z', "
             "'2000-01-01T00:00:00Z')",
-            (eid,),
+            (eid, mid),
         )
         await conn.commit()
 

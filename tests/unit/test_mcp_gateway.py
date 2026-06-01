@@ -53,8 +53,10 @@ class TestErrors:
 
 class TestSettings:
     def test_required_policy_path(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("MCP_GATEWAY_POLICY_PATH", raising=False)
         from mcp_gateway.config import GatewaySettings
+
+        monkeypatch.setitem(GatewaySettings.model_config, "env_file", None)
+        monkeypatch.delenv("MCP_GATEWAY_POLICY_PATH", raising=False)
 
         with pytest.raises(ValidationError):
             GatewaySettings()
@@ -3408,6 +3410,9 @@ class TestEntrypoint:
             used_as_file = True
             yield policy
 
+        from mcp_gateway.config import GatewaySettings
+
+        monkeypatch.setitem(GatewaySettings.model_config, "env_file", None)
         monkeypatch.delenv("MCP_GATEWAY_POLICY_PATH", raising=False)
         monkeypatch.setattr(app_module, "files", lambda package: FakePackage(resource))
         monkeypatch.setattr(app_module, "as_file", fake_as_file, raising=False)

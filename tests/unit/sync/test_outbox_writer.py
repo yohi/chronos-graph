@@ -70,6 +70,7 @@ async def test_sqlite_outbox_writer_inserts_with_generated_uuid() -> None:
     _uuid.UUID(generated_id)  # 有効な UUID 形式であることを確認
     assert event_type_arg == "SYNC_MEMORY"
     assert memory_id_arg == "abc"
+    assert payload_arg == "{}"
 
 
 @pytest.mark.asyncio

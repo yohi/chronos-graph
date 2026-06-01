@@ -200,3 +200,43 @@ async def test_sqlite_full_baseline_path(tmp_path):
             assert "0000_system.sql" in versions
             assert "0001_initial.sql" in versions
             assert "0002_graph.sql" in versions
+
+
+@pytest.mark.asyncio
+async def test_sqlite_migration_0003_creates_outbox_table(tmp_path) -> None:
+    """0003 マイグレーション適用後に graph_sync_outbox テーブルが存在する。"""
+    from context_store.storage.migrations.runner import MigrationRunner
+
+    db = tmp_path / "test.db"
+    async with aiosqlite.connect(str(db)) as conn:
+        runner = MigrationRunner("sqlite", conn)
+        await runner.run()
+        async with conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='graph_sync_outbox'"
+        ) as cur:
+            row = await cur.fetchone()
+            assert row is not None, "graph_sync_outbox テーブルが作成されていません"
+
+
+@pytest.mark.asyncio
+async def test_sqlite_baseline_includes_0003(tmp_path) -> None:
+    """既存 outbox テーブルがあれば baseline 対象に含まれる。"""
+    from context_store.storage.migrations.runner import MigrationRunner
+
+    db = tmp_path / "test.db"
+    async with aiosqlite.connect(str(db)) as conn:
+        # 先に空でないテーブルだけ手動作成
+        await conn.executescript(
+            "CREATE TABLE memories (id TEXT PRIMARY KEY);"
+            "CREATE TABLE memory_nodes (id TEXT PRIMARY KEY);"
+            "CREATE TABLE memory_edges (id TEXT PRIMARY KEY);"
+            "CREATE TABLE graph_sync_outbox (id TEXT PRIMARY KEY);"
+        )
+        await conn.commit()
+
+        runner = MigrationRunner("sqlite", conn)
+        await runner.run()
+        async with conn.execute("SELECT version FROM schema_migrations") as cur:
+            applied = {row[0] async for row in cur}
+
+        assert "0003_graph_sync_outbox.sql" in applied

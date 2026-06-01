@@ -241,7 +241,9 @@ class Neo4jGraphAdapter:
                 code="READ_ONLY",
                 recoverable=False,
             )
-        async with self._driver.session() as session:
+        import neo4j
+
+        async with self._session(access_mode=neo4j.WRITE_ACCESS) as session:
             await session.run(cypher, parameters)
 
     async def dispose(self) -> None:

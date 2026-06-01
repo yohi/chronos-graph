@@ -172,7 +172,7 @@ class PostgresStorageAdapter:
 
     async def delete_memory(self, memory_id: str) -> bool:
         """Delete a memory. Returns True if deleted."""
-        sql = "DELETE FROM memories WHERE id = $1"
+        sql = "DELETE FROM memories WHERE id = $1::uuid"
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 if self._outbox_writer is not None:

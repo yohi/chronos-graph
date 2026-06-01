@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from pydantic import SecretStr
 
 from context_store.models.graph import Edge, GraphResult
+from context_store.storage.protocols import StorageError
 
 logger = logging.getLogger(__name__)
 _EDGE_TYPE_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -226,6 +227,24 @@ class Neo4jGraphAdapter:
                 await session.run(cypher, id=memory_id)
         except Exception as exc:
             logger.warning("Neo4j delete_node failed (degraded): %s", exc)
+
+    async def execute_write(self, cypher: str, parameters: dict[str, Any]) -> None:
+        """任意の書き込み Cypher を実行する。
+
+        Outbox Worker / リカバリスクリプトから使用される汎用書き込み API。
+        Read-only モードでは StorageError を送出する。
+        失敗は呼び出し側で Exponential Backoff されるため、例外は再送する。
+        """
+        if self._read_only:
+            raise StorageError(
+                "Neo4jGraphAdapter is in read-only mode; execute_write disallowed",
+                code="READ_ONLY",
+                recoverable=False,
+            )
+        import neo4j
+
+        async with self._session(access_mode=neo4j.WRITE_ACCESS) as session:
+            await session.run(cypher, parameters)
 
     async def dispose(self) -> None:
         """Close the driver."""

@@ -338,17 +338,28 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _validate_outbox_backoff(self) -> "Settings":
+        if self.outbox_backoff_max_seconds < self.outbox_backoff_base_seconds:
+            raise ValueError(
+                "outbox_backoff_max_seconds は outbox_backoff_base_seconds "
+                "以上である必要があります。"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_graph_sync_mode(self) -> "Settings":
         if self.graph_sync_mode == "async_outbox" and not self.graph_enabled:
-            raise ValueError("graph_sync_mode='async_outbox' requires graph_enabled=true")
+            raise ValueError(
+                "graph_sync_mode='async_outbox' は graph_enabled=true の場合のみ有効です。"
+            )
         if (
             self.storage_backend == "supabase"
             and self.graph_enabled
             and self.graph_sync_mode != "async_outbox"
         ):
             raise ValueError(
-                "Supabase + graph requires graph_sync_mode='async_outbox' "
-                "(Neo4j Bolt cannot be tunneled over HTTPS)"
+                "Supabase + graph の組み合わせには graph_sync_mode='async_outbox' が必須です "
+                "(Neo4j Bolt は HTTPS にカプセル化できないため)。"
             )
         return self
 

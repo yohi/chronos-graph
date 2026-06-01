@@ -48,9 +48,11 @@ class OutboxEvent(BaseModel):
     @field_validator("payload", mode="after")
     @classmethod
     def freeze_payload(cls, v: Mapping[str, Any]) -> MappingProxyType[str, Any]:
+        import copy
+
         if isinstance(v, MappingProxyType):
             return v
-        return MappingProxyType(dict(v))
+        return MappingProxyType(copy.deepcopy(dict(v)))
 
     @field_serializer("payload")
     def serialize_payload(self, v: Mapping[str, Any]) -> dict[str, Any]:

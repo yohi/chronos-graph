@@ -73,6 +73,14 @@ BEGIN
     IF v_memory_id IS NOT NULL THEN
         INSERT INTO graph_sync_outbox (event_type, memory_id)
         VALUES ('SYNC_MEMORY', v_memory_id);
+    ELSE
+        IF NOT EXISTS (
+            SELECT 1 FROM graph_sync_outbox
+            WHERE memory_id = p_id AND status IN ('PENDING', 'PROCESSING')
+        ) THEN
+            INSERT INTO graph_sync_outbox (event_type, memory_id)
+            VALUES ('SYNC_MEMORY', p_id);
+        END IF;
     END IF;
 
     RETURN p_id;

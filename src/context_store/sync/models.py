@@ -10,6 +10,8 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 EventType = Literal["SYNC_MEMORY", "DELETE_MEMORY"]
+# 正常処理されたイベントは OutboxWorker によって物理削除されるため (Delete-on-Success)、
+# "DONE" / "COMPLETED" などの成功ステータスは定義していません。
 EventStatus = Literal["PENDING", "PROCESSING", "FAILED"]
 
 

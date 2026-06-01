@@ -95,3 +95,122 @@ async def test_bulk_merge_memories_empty_list_is_noop() -> None:
     result = await svc.bulk_merge_memories([])
     assert result == 0
     graph.execute_write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_bulk_merge_memories_with_edges() -> None:
+    import uuid
+
+    from context_store.models.graph import Edge
+    from context_store.storage.protocols import GraphAdapter
+    from context_store.sync.graph_sync import GraphSyncService
+
+    graph = MagicMock()
+    graph.execute_write = AsyncMock()
+
+    class MockStorageGraphAdapter(GraphAdapter):
+        async def list_edges_for_memories(self, memory_ids: list[str]) -> list[Edge]:
+            pass
+
+    storage = MagicMock(spec=MockStorageGraphAdapter)
+
+    mem_a_id = str(uuid.uuid4())
+    mem_b_id = str(uuid.uuid4())
+    edge = Edge(
+        from_id=mem_a_id,
+        to_id=mem_b_id,
+        edge_type="RELATED_TO",
+        properties={"weight": 1.0},
+    )
+    storage.list_edges_for_memories = AsyncMock(return_value=[edge])
+
+    svc = GraphSyncService(graph_adapter=graph, storage_adapter=storage)
+    memories = [_make_memory(id=mem_a_id), _make_memory(id=mem_b_id)]
+    n = await svc.bulk_merge_memories(memories)
+
+    assert n == 2
+    assert graph.execute_write.call_count == 2
+    cypher_calls = [c.args[0] for c in graph.execute_write.await_args_list]
+    assert any("MERGE (a)-[r:RELATED_TO]->(b)" in c for c in cypher_calls)
+
+
+@pytest.mark.asyncio
+async def test_full_sync_pagination_and_safeguard() -> None:
+    import uuid
+
+    from context_store.sync.graph_sync import GraphSyncService
+
+    graph = MagicMock()
+    graph.execute_write = AsyncMock()
+    storage = MagicMock()
+
+    mem_1_id = str(uuid.uuid4())
+    mem_2_id = str(uuid.uuid4())
+    page1 = [_make_memory(id=mem_1_id)]
+    page2 = [_make_memory(id=mem_2_id)]
+    storage.list_by_filter = AsyncMock(side_effect=[page1, page2, []])
+
+    svc = GraphSyncService(graph_adapter=graph, storage_adapter=storage)
+    total = await svc.full_sync_from_storage(chunk_size=1)
+
+    assert total == 2
+    assert graph.execute_write.call_count == 2
+
+    # Safeguard check
+    storage.list_by_filter = AsyncMock(return_value=[_make_memory(id=str(uuid.uuid4()))])
+    total_safeguard = await svc.full_sync_from_storage(chunk_size=1, max_pages=3)
+    assert total_safeguard == 3
+
+
+def test_sanitize_edge_type_validation() -> None:
+    from context_store.sync.graph_sync import _sanitize_edge_type
+
+    assert _sanitize_edge_type("RELATED_TO") == "RELATED_TO"
+    assert _sanitize_edge_type("has_property") == "has_property"
+    assert _sanitize_edge_type("_private") == "_private"
+
+    with pytest.raises(ValueError):
+        _sanitize_edge_type("1abc")
+
+    with pytest.raises(ValueError):
+        _sanitize_edge_type("")
+
+    with pytest.raises(ValueError):
+        _sanitize_edge_type("a-b")
+
+    with pytest.raises(ValueError):
+        _sanitize_edge_type("a; DROP TABLE nodes;")
+
+
+@pytest.mark.asyncio
+async def test_bulk_merge_invalid_edge_type_raises() -> None:
+    import uuid
+
+    from context_store.models.graph import Edge
+    from context_store.storage.protocols import GraphAdapter
+    from context_store.sync.graph_sync import GraphSyncService
+
+    graph = MagicMock()
+    graph.execute_write = AsyncMock()
+
+    class MockStorageGraphAdapter(GraphAdapter):
+        async def list_edges_for_memories(self, memory_ids: list[str]) -> list[Edge]:
+            pass
+
+    storage = MagicMock(spec=MockStorageGraphAdapter)
+    mem_a_id = str(uuid.uuid4())
+    mem_b_id = str(uuid.uuid4())
+    edge = Edge(
+        from_id=mem_a_id,
+        to_id=mem_b_id,
+        edge_type="1invalid",
+        properties={},
+    )
+    storage.list_edges_for_memories = AsyncMock(return_value=[edge])
+
+    svc = GraphSyncService(graph_adapter=graph, storage_adapter=storage)
+    memories = [_make_memory(id=mem_a_id), _make_memory(id=mem_b_id)]
+
+    with pytest.raises(ValueError) as excinfo:
+        await svc.bulk_merge_memories(memories)
+    assert "Invalid edge_type for Cypher" in str(excinfo.value)

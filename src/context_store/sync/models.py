@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Any, Literal, Mapping
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 EventType = Literal["SYNC_MEMORY", "DELETE_MEMORY"]
 # 正常処理されたイベントは OutboxWorker によって物理削除されるため (Delete-on-Success)、
@@ -45,8 +45,13 @@ class OutboxEvent(BaseModel):
             return dt.astimezone(timezone.utc)
         return v
 
-    def __init__(self, **data: Any) -> None:
-        super().__init__(**data)
-        # frozen=True なので object.__setattr__ を使って MappingProxyType に置き換える
-        if not isinstance(self.payload, MappingProxyType):
-            object.__setattr__(self, "payload", MappingProxyType(self.payload))
+    @field_validator("payload", mode="after")
+    @classmethod
+    def freeze_payload(cls, v: Mapping[str, Any]) -> MappingProxyType[str, Any]:
+        if isinstance(v, MappingProxyType):
+            return v
+        return MappingProxyType(dict(v))
+
+    @field_serializer("payload")
+    def serialize_payload(self, v: Mapping[str, Any]) -> dict[str, Any]:
+        return dict(v)

@@ -40,7 +40,7 @@ def test_outbox_event_validation_and_coercion() -> None:
     assert event.updated_at.tzinfo == timezone.utc
 
     # 不変性 (frozen) の検証
-    with pytest.raises(ValidationError if hasattr(pytest, "ValidationError") else Exception):
+    with pytest.raises(ValidationError):
         # frozen=True なので属性への直接代入は不可
         event.status = "PROCESSING"  # type: ignore
 
@@ -59,6 +59,10 @@ def test_outbox_event_payload_immutability() -> None:
 
     # payload が MappingProxyType でラップされていることの確認
     assert isinstance(event.payload, MappingProxyType)
+
+    # model_validate 経由での復元時も MappingProxyType でラップされていることの検証
+    validated_event = OutboxEvent.model_validate(event.model_dump())
+    assert isinstance(validated_event.payload, MappingProxyType)
 
     # payload への変更がブロックされることの検証
     with pytest.raises(TypeError):

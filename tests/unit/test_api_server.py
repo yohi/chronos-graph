@@ -13,6 +13,7 @@ from context_store.dashboard.services import DashboardService
 
 def test_cors_origins_from_settings(monkeypatch):
     """Verify that CORSMiddleware uses origins from Settings."""
+    monkeypatch.setenv("ENV_FILE", "/dev/null")
     monkeypatch.setenv("DASHBOARD_CORS_ORIGINS", "http://custom-origin.com,http://another.com")
 
     app = create_app()

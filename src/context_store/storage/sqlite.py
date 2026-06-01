@@ -508,7 +508,7 @@ class SQLiteStorageAdapter:
                 if self._outbox_writer is not None:
                     try:
                         tags = json.loads(meta_row[1]) if meta_row and meta_row[1] else []
-                    except Exception:
+                    except (json.JSONDecodeError, TypeError):
                         tags = []
                     payload = (
                         {

@@ -8,7 +8,7 @@ CREATE TABLE graph_sync_outbox (
     payload       TEXT NOT NULL DEFAULT '{}',
     status        TEXT NOT NULL DEFAULT 'PENDING'
                        CHECK (status IN ('PENDING', 'PROCESSING', 'FAILED')),
-    retry_count   INTEGER NOT NULL DEFAULT 0,
+    retry_count   INTEGER NOT NULL DEFAULT 0 CONSTRAINT retry_count_nonnegative CHECK (retry_count >= 0),
     next_retry_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     error_message TEXT,
     created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),

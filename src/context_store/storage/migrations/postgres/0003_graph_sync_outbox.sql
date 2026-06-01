@@ -8,7 +8,7 @@ CREATE TABLE graph_sync_outbox (
     payload       JSONB        NOT NULL DEFAULT '{}',
     status        VARCHAR(20)  NOT NULL DEFAULT 'PENDING'
                                CHECK (status IN ('PENDING', 'PROCESSING', 'FAILED')),
-    retry_count   INT          NOT NULL DEFAULT 0,
+    retry_count   INT          NOT NULL DEFAULT 0 CONSTRAINT retry_count_nonnegative CHECK (retry_count >= 0),
     next_retry_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     error_message TEXT,
     created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),

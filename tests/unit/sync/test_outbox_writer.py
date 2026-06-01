@@ -61,9 +61,16 @@ async def test_sqlite_outbox_writer_inserts_with_generated_uuid() -> None:
         memory_id="abc",
         event_type="SYNC_MEMORY",
     )
-    sql, *_ = conn.execute.await_args.args
+    sql, params = conn.execute.await_args.args
     assert "INSERT INTO graph_sync_outbox" in sql
     assert "?" in sql  # SQLite placeholders
+    generated_id, event_type_arg, memory_id_arg, payload_arg = params
+    import uuid as _uuid
+
+    _uuid.UUID(generated_id)  # 有効な UUID 形式であることを確認
+    assert event_type_arg == "SYNC_MEMORY"
+    assert memory_id_arg == "abc"
+    assert payload_arg == "{}"
 
 
 @pytest.mark.asyncio

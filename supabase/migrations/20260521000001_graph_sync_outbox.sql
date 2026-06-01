@@ -9,7 +9,7 @@ CREATE TABLE graph_sync_outbox (
     payload       JSONB        NOT NULL DEFAULT '{}',
     status        VARCHAR(20)  NOT NULL DEFAULT 'PENDING'
                                CHECK (status IN ('PENDING', 'PROCESSING', 'FAILED')),
-    retry_count   INT          NOT NULL DEFAULT 0,
+    retry_count   INT          NOT NULL DEFAULT 0 CONSTRAINT retry_count_nonnegative CHECK (retry_count >= 0),
     next_retry_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     error_message TEXT,
     created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
@@ -18,6 +18,9 @@ CREATE TABLE graph_sync_outbox (
 
 CREATE INDEX idx_outbox_status_retry ON graph_sync_outbox (status, next_retry_at ASC);
 CREATE INDEX idx_outbox_memory_id ON graph_sync_outbox (memory_id);
+CREATE UNIQUE INDEX uq_outbox_pending_processing ON graph_sync_outbox (memory_id) WHERE status IN ('PENDING', 'PROCESSING');
+
+ALTER TABLE graph_sync_outbox ENABLE ROW LEVEL SECURITY;
 
 -- =====================================================================
 -- RPC: メモリ UPSERT + Outbox 書き込みをアトミックに実行
@@ -65,12 +68,20 @@ BEGIN
         project            = EXCLUDED.project,
         content_hash       = EXCLUDED.content_hash,
         updated_at         = NOW()
+    WHERE memories.content_hash IS DISTINCT FROM EXCLUDED.content_hash
     RETURNING id INTO v_memory_id;
 
-    INSERT INTO graph_sync_outbox (event_type, memory_id)
-    VALUES ('SYNC_MEMORY', v_memory_id);
+    IF v_memory_id IS NOT NULL THEN
+        INSERT INTO graph_sync_outbox (event_type, memory_id)
+        VALUES ('SYNC_MEMORY', v_memory_id)
+        ON CONFLICT (memory_id) WHERE status IN ('PENDING', 'PROCESSING') DO NOTHING;
+    ELSE
+        INSERT INTO graph_sync_outbox (event_type, memory_id)
+        VALUES ('SYNC_MEMORY', p_id)
+        ON CONFLICT (memory_id) WHERE status IN ('PENDING', 'PROCESSING') DO NOTHING;
+    END IF;
 
-    RETURN v_memory_id;
+    RETURN p_id;
 END;
 $$;
 
@@ -90,14 +101,13 @@ DECLARE
     v_meta JSONB;
     affected INTEGER;
 BEGIN
-    SELECT jsonb_build_object(
+    DELETE FROM memories
+    WHERE id = p_memory_id
+    RETURNING jsonb_build_object(
         'memory_type', memory_type,
         'tags', to_jsonb(tags),
         'project', project
-    ) INTO v_meta
-    FROM memories WHERE id = p_memory_id;
-
-    DELETE FROM memories WHERE id = p_memory_id;
+    ) INTO v_meta;
     GET DIAGNOSTICS affected = ROW_COUNT;
 
     IF affected > 0 THEN
@@ -137,6 +147,10 @@ SECURITY INVOKER
 SET search_path = public
 AS $$
 BEGIN
+    IF p_limit IS NULL OR p_limit <= 0 THEN
+        RAISE EXCEPTION 'p_limit must be a positive integer';
+    END IF;
+
     RETURN QUERY
     UPDATE graph_sync_outbox o
     SET status = 'PROCESSING', updated_at = NOW()
@@ -178,6 +192,7 @@ BEGIN
     UPDATE graph_sync_outbox
     SET status = 'PENDING',
         retry_count = retry_count + 1,
+        next_retry_at = NOW() + (POWER(2, retry_count) || ' seconds')::interval,
         updated_at = NOW()
     WHERE status = 'PROCESSING'
       AND updated_at < NOW() - (p_threshold_seconds || ' seconds')::interval;

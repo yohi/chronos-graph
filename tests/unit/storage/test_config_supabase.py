@@ -10,6 +10,7 @@ def _make_supabase_settings(**overrides):
         "supabase_key": "test-service-role-key",
         "graph_enabled": False,
         "embedding_dimension": 768,
+        "_env_file": None,
     }
     base.update(overrides)
     return Settings(**base)
@@ -48,7 +49,7 @@ def test_supabase_rejects_dimension_mismatch():
 
 
 def test_default_embedding_dimension_is_768():
-    s = Settings(storage_backend="sqlite")
+    s = Settings(storage_backend="sqlite", _env_file=None)
     assert s.embedding_dimension == 768
 
 

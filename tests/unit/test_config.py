@@ -159,7 +159,7 @@ def test_embedding_provider_validation(default_settings):
                 "supabase_url": "https://url",
                 "supabase_key": "key",
             },
-            "graph_enabled=true をサポートしません",
+            "Supabase \\+ graph",
         ),
     ],
 )

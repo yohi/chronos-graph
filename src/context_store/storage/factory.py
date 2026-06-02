@@ -452,6 +452,9 @@ async def create_storage_with_outbox(
         if settings.graph_sync_mode != "async_outbox":
             return storage, graph_adp, cache_adp, None
 
+        if isinstance(storage, ReadOnlyNoOpStorageAdapter):
+            raise ValueError("Outbox sync is not supported in read_only mode")
+
         if graph_adp is None:
             raise ValueError("async_outbox requires graph_enabled=true")
 
@@ -465,7 +468,6 @@ async def create_storage_with_outbox(
         elif settings.storage_backend == "postgres":
             reader = PostgresOutboxReader(pool=storage._pool)  # type: ignore[attr-defined]
         elif settings.storage_backend == "supabase":
-            storage._outbox_enabled = True  # type: ignore[attr-defined]
             # Supabase は asyncpg を直接使えないため、RPC を呼び出す SupabaseOutboxReader を使用する
             from context_store.sync.outbox_reader import SupabaseOutboxReader
 

@@ -298,8 +298,6 @@ async def create_storage(
         raise
 
 
-
-
 async def _create_storage_adapter(
     settings: "Settings",
     *,
@@ -430,7 +428,6 @@ async def create_storage_with_outbox(
     """async_outbox モード対応の Factory。Worker も生成して返す。"""
     from context_store.sync.graph_sync import GraphSyncService
     from context_store.sync.outbox_reader import (
-        OutboxReader,
         PostgresOutboxReader,
         SqliteOutboxReader,
     )

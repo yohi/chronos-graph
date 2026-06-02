@@ -677,3 +677,94 @@ class TestSessionFlush:
             project=None,
             tags=None,
         )
+
+
+class TestOutboxWorkerLifecycle:
+    """OutboxWorker のライフサイクルテスト。"""
+
+    @pytest.mark.asyncio
+    async def test_start_lifecycle_starts_outbox_worker_when_provided(self) -> None:
+        """outbox_worker が渡されている場合 start_lifecycle でタスクが起動する。"""
+        from context_store.orchestrator import Orchestrator
+
+        worker = AsyncMock()
+        worker.run = AsyncMock()
+        worker.stop = AsyncMock()
+
+        orch = Orchestrator(
+            storage=_make_mock_storage(),
+            graph=_make_mock_graph(),
+            cache=_make_mock_cache(),
+            embedding_provider=_make_mock_embedding(),
+            ingestion_pipeline=_make_mock_ingestion_pipeline(),
+            retrieval_pipeline=_make_mock_retrieval_pipeline(),
+            lifecycle_manager=_make_mock_lifecycle_manager(),
+            task_registry=_make_mock_task_registry(),
+            outbox_worker=worker,  # type: ignore[arg-type]
+            settings=make_settings(),
+            batch_processor=AsyncMock(),
+        )
+
+        await orch.start_lifecycle()
+
+        assert orch._outbox_worker_task is not None
+        assert not orch._outbox_worker_task.done()
+
+        # cleanup
+        await orch.dispose()
+
+    @pytest.mark.asyncio
+    async def test_dispose_stops_outbox_worker_when_provided(self) -> None:
+        """dispose で outbox_worker が停止される。"""
+        from context_store.orchestrator import Orchestrator
+
+        worker = AsyncMock()
+        worker.run = AsyncMock()
+        worker.stop = AsyncMock()
+
+        orch = Orchestrator(
+            storage=_make_mock_storage(),
+            graph=_make_mock_graph(),
+            cache=_make_mock_cache(),
+            embedding_provider=_make_mock_embedding(),
+            ingestion_pipeline=_make_mock_ingestion_pipeline(),
+            retrieval_pipeline=_make_mock_retrieval_pipeline(),
+            lifecycle_manager=_make_mock_lifecycle_manager(),
+            task_registry=_make_mock_task_registry(),
+            outbox_worker=worker,  # type: ignore[arg-type]
+            settings=make_settings(),
+            batch_processor=AsyncMock(),
+        )
+
+        await orch.start_lifecycle()
+        await orch.dispose()
+
+        worker.stop.assert_called_once()
+        assert orch._outbox_worker_task is not None
+        assert orch._outbox_worker_task.done()
+
+    @pytest.mark.asyncio
+    async def test_start_lifecycle_skips_worker_when_none(self) -> None:
+        """outbox_worker が None の場合はタスクが起動しない。"""
+        from context_store.orchestrator import Orchestrator
+
+        orch = Orchestrator(
+            storage=_make_mock_storage(),
+            graph=_make_mock_graph(),
+            cache=_make_mock_cache(),
+            embedding_provider=_make_mock_embedding(),
+            ingestion_pipeline=_make_mock_ingestion_pipeline(),
+            retrieval_pipeline=_make_mock_retrieval_pipeline(),
+            lifecycle_manager=_make_mock_lifecycle_manager(),
+            task_registry=_make_mock_task_registry(),
+            outbox_worker=None,
+            settings=make_settings(),
+            batch_processor=AsyncMock(),
+        )
+
+        await orch.start_lifecycle()
+
+        assert orch._outbox_worker_task is None
+
+        # cleanup
+        await orch.dispose()

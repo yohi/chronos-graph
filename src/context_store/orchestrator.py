@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from context_store.lifecycle.manager import LifecycleManager
     from context_store.retrieval.pipeline import RetrievalPipeline, RetrievalResponse
     from context_store.storage.protocols import CacheAdapter, GraphAdapter, StorageAdapter
+    from context_store.sync.outbox_worker import OutboxWorker
 
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ class Orchestrator:
         policy_hook: "PolicyHook | None" = None,
         settings: "Settings | None" = None,
         batch_processor: "BatchProcessor | None" = None,
+        outbox_worker: "OutboxWorker | None" = None,
     ) -> None:
         self._storage = storage
         self._graph = graph
@@ -84,6 +86,8 @@ class Orchestrator:
         self._batch_processor = batch_processor
         self._settings = settings
         self._flush_lock = asyncio.Lock()
+        self._outbox_worker = outbox_worker
+        self._outbox_worker_task: asyncio.Task[Any] | None = None
 
         # RL 拡張フック(None の場合は NoOp)
         self.action_logger: "ActionLogger" = (
@@ -428,9 +432,21 @@ class Orchestrator:
     async def start_lifecycle(self) -> None:
         """ライフサイクルマネージャーを開始する。"""
         await self._lifecycle_manager.start()
+        if self._outbox_worker is not None:
+            self._outbox_worker_task = asyncio.create_task(
+                self._outbox_worker.run(), name="outbox-worker"
+            )
 
     async def dispose(self) -> None:
         """全アダプターのリソースを解放する。"""
+        # 0. OutboxWorker の停止
+        if self._outbox_worker is not None and self._outbox_worker_task is not None:
+            await self._outbox_worker.stop()
+            try:
+                await asyncio.wait_for(self._outbox_worker_task, timeout=10.0)
+            except asyncio.TimeoutError:
+                self._outbox_worker_task.cancel()
+
         # 1. ライフサイクルマネージャーのシャットダウン
         try:
             await self._lifecycle_manager.graceful_shutdown()
@@ -517,10 +533,10 @@ async def create_orchestrator(
     )
     from context_store.lifecycle.purger import Purger
     from context_store.retrieval.pipeline import RetrievalPipeline
-    from context_store.storage.factory import create_storage
+    from context_store.storage.factory import create_storage_with_outbox
 
     # アダプター生成
-    storage, graph, cache = await create_storage(settings)
+    storage, graph, cache, outbox_worker = await create_storage_with_outbox(settings)
 
     try:
         # 埋め込みプロバイダー生成
@@ -602,6 +618,7 @@ async def create_orchestrator(
             lifecycle_manager=lifecycle_manager,
             task_registry=task_registry,
             batch_processor=batch_processor,
+            outbox_worker=outbox_worker,
             action_logger=action_logger,
             reward_signal=reward_signal,
             policy_hook=policy_hook,

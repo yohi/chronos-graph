@@ -445,7 +445,23 @@ class Orchestrator:
             try:
                 await asyncio.wait_for(self._outbox_worker_task, timeout=10.0)
             except asyncio.TimeoutError:
+                logger.warning("Outbox worker stop timed out, cancelling.")
                 self._outbox_worker_task.cancel()
+                try:
+                    await self._outbox_worker_task
+                except (asyncio.CancelledError, Exception):  # noqa: S110
+                    pass
+            except (asyncio.CancelledError, Exception) as exc:
+                logger.warning(
+                    "Outbox worker stopped with exception or cancellation: %s",
+                    exc,
+                    exc_info=True,
+                )
+                self._outbox_worker_task.cancel()
+                try:
+                    await self._outbox_worker_task
+                except (asyncio.CancelledError, Exception):  # noqa: S110
+                    pass
 
         # 1. ライフサイクルマネージャーのシャットダウン
         try:

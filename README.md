@@ -36,6 +36,7 @@ https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
 ### 🤖 AIエージェント向け自動セットアップ（Agent Setup Protocol）
 
 AIエージェントにセットアップを依頼する場合の詳細な手順と制約は、[Agent Setup Protocol](docs/agent-setup-protocol.md) を参照してください。
+AIエージェントはユーザーに必要な設定事項を質問し、その結果を引数として `scripts/bootstrap.sh` に渡して機械的にセットアップを実行します。これにより、環境依存による設定のブレを防ぎます。
 
 
 ## 🧠 Agent Identity & Memory Protocol

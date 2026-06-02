@@ -293,12 +293,13 @@ class TestSupabaseBackend:
                 await dispose_adapters(storage, graph_adp, cache_adp)
 
     @pytest.mark.asyncio
-    async def test_supabase_graph_enabled_raises_error(self) -> None:
-        """STORAGE_BACKEND=supabase で graph_enabled=True の場合は ValueError を投げる."""
+    async def test_supabase_graph_enabled_without_async_outbox_raises_error(self) -> None:
+        """Supabase + graph_enabled で async_outbox 以外は ValueError を投げる."""
         # Settings のバリデータでも弾かれるが、factory 側の安全装置も検証
         settings = MagicMock()
         settings.storage_backend = "supabase"
         settings.graph_enabled = True
+        settings.graph_sync_mode = "sync"
 
         with pytest.raises(ValueError, match="Supabase \\\u002b graph requires graph_sync_mode="):
             await _create_graph_adapter(settings)
@@ -337,7 +338,7 @@ class TestOutboxFactory:
             sqlite_db_path=db_path,
             graph_enabled=True,
             graph_sync_mode="async_outbox",
-            neo4j_password="secret",
+            neo4j_password="secret",  # noqa: S106
             embedding_provider="local-model",
         )
 
@@ -350,4 +351,87 @@ class TestOutboxFactory:
             assert isinstance(worker, OutboxWorker)
             assert getattr(storage, "_outbox_writer", None) is not None
         finally:
+            if worker is not None:
+                await worker.stop()
             await dispose_adapters(storage, graph_adp, cache_adp)
+
+    @pytest.mark.asyncio
+    async def test_create_storage_with_outbox_supabase(self) -> None:
+        """Supabase + async_outbox モードの正常系テスト（モックを使用）."""
+        settings = MagicMock()
+        settings.storage_backend = "supabase"
+        settings.graph_enabled = True
+        settings.graph_sync_mode = "async_outbox"
+        settings.cache_backend = "inmemory"
+        settings.neo4j_uri = "bolt://localhost:7687"
+        settings.neo4j_user = "neo4j"
+        settings.neo4j_password.get_secret_value.return_value = "password"  # noqa: S106
+
+        from unittest.mock import AsyncMock, patch
+
+        mock_storage = MagicMock()
+        mock_storage._client = MagicMock()
+        mock_storage.dispose = AsyncMock()
+
+        mock_graph = MagicMock()
+        mock_graph.dispose = AsyncMock()
+
+        mock_cache = MagicMock()
+        mock_cache.dispose = AsyncMock()
+
+        from context_store.storage.factory import create_storage_with_outbox
+        from context_store.sync.outbox_worker import OutboxWorker
+
+        with (
+            patch(
+                "context_store.storage.factory.create_storage",
+                AsyncMock(return_value=(mock_storage, mock_graph, mock_cache)),
+            ),
+            patch("context_store.sync.outbox_reader.SupabaseOutboxReader") as mock_reader_cls,
+        ):
+            storage, graph_adp, cache_adp, worker = await create_storage_with_outbox(settings)
+            try:
+                assert storage is mock_storage
+                assert graph_adp is mock_graph
+                assert cache_adp is mock_cache
+                assert worker is not None
+                assert isinstance(worker, OutboxWorker)
+                mock_reader_cls.assert_called_once_with(client=mock_storage._client)
+            finally:
+                if worker is not None:
+                    await worker.stop()
+                await dispose_adapters(storage, graph_adp, cache_adp)
+
+    @pytest.mark.asyncio
+    async def test_create_storage_with_outbox_readonly_raises(self) -> None:
+        """read_only=True 時の NoOp アダプタでの ValueError 発生を検証."""
+        settings = MagicMock()
+        settings.storage_backend = "postgres"
+        settings.graph_enabled = True
+        settings.graph_sync_mode = "async_outbox"
+        settings.cache_backend = "inmemory"
+        settings.neo4j_uri = "bolt://localhost:7687"
+        settings.neo4j_user = "neo4j"
+        settings.neo4j_password.get_secret_value.return_value = "password"  # noqa: S106
+
+        from unittest.mock import AsyncMock, patch
+
+        from context_store.storage.factory import (
+            ReadOnlyNoOpStorageAdapter,
+            create_storage_with_outbox,
+        )
+
+        mock_storage = ReadOnlyNoOpStorageAdapter()
+        mock_graph = MagicMock()
+        mock_graph.dispose = AsyncMock()
+        mock_cache = MagicMock()
+        mock_cache.dispose = AsyncMock()
+
+        with (
+            patch(
+                "context_store.storage.factory.create_storage",
+                AsyncMock(return_value=(mock_storage, mock_graph, mock_cache)),
+            ),
+        ):
+            with pytest.raises(ValueError, match="Outbox sync is not supported in read_only mode"):
+                await create_storage_with_outbox(settings, read_only=True)

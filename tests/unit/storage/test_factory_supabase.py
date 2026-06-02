@@ -57,5 +57,5 @@ async def test_factory_graph_disabled_for_supabase() -> None:
 async def test_factory_graph_enabled_for_supabase_raises() -> None:
     settings = _make_settings(graph_enabled=True)
 
-    with pytest.raises(ValueError, match="storage_backend=supabase"):
+    with pytest.raises(ValueError, match="graph_sync_mode='async_outbox'"):
         await _create_graph_adapter(settings, read_only=False)

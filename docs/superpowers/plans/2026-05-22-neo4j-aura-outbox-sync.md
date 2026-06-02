@@ -143,17 +143,17 @@ master
 | 1.3 | feat/outbox-supabase-migrations |  |  |
 | 2.1 | feat/outbox-writer |  |  |
 | 2.2 | feat/outbox-neo4j-execute-write |  |  |
-| 2.3 | feat/outbox-graph-sync |  |  |
-| 3.1 | feat/outbox-postgres-integration |  |  |
-| 3.2 | feat/outbox-sqlite-integration |  |  |
-| 3.3 | feat/outbox-supabase-integration |  |  |
-| 4.1 | feat/outbox-reader |  |  |
-| 4.2 | feat/outbox-worker-loop |  |  |
+| 2.3 | feat/outbox-graph-sync | https://github.com/yohi/chronos-graph/pull/304 | ✅ Done |
+| 3.1 | feat/outbox-postgres-integration | https://github.com/yohi/chronos-graph/pull/306 | ✅ Done |
+| 3.2 | feat/outbox-sqlite-integration | https://github.com/yohi/chronos-graph/pull/307 | ✅ Done |
+| 3.3 | feat/outbox-supabase-integration | https://github.com/yohi/chronos-graph/pull/308 | ✅ Done |
+| 4.1 | feat/outbox-reader | https://github.com/yohi/chronos-graph/pull/305 | ✅ Done |
+| 4.2 | feat/outbox-worker-loop | https://github.com/yohi/chronos-graph/pull/309 | ✅ Done |
 | 5.1 | feat/outbox-factory | https://github.com/yohi/chronos-graph/pull/312 | ✅ Done |
 | 5.2 | feat/outbox-orchestrator | https://github.com/yohi/chronos-graph/pull/313 | ✅ Done |
-|| 5.3 | feat/outbox-pipeline | https://github.com/yohi/chronos-graph/pull/314 | ✅ Done |
-| 6.1 | feat/outbox-recovery-script |  |  |
-|| 6.2 | feat/outbox-e2e | https://github.com/yohi/chronos-graph/pull/315 | ✅ Done |
+| 5.3 | feat/outbox-pipeline | https://github.com/yohi/chronos-graph/pull/314 | ✅ Done |
+| 6.1 | feat/outbox-recovery-script | https://github.com/yohi/chronos-graph/pull/310 | ✅ Done |
+| 6.2 | feat/outbox-e2e | https://github.com/yohi/chronos-graph/pull/315 | ✅ Done |
 
 ---
 
@@ -172,7 +172,7 @@ master
 - Create: `src/context_store/sync/models.py`
 - Create: `tests/unit/sync/__init__.py`
 
-- [ ] **Step 1: ブランチ作成と派生元検証**
+- [x] **Step 1: ブランチ作成と派生元検証**
 
 ```bash
 EXPECTED_BASE="master"
@@ -185,7 +185,7 @@ git merge-base --is-ancestor "$EXPECTED_BASE" "$CURRENT_BRANCH" || {
 }
 ```
 
-- [ ] **Step 2: Devcontainer baseline テスト実行（クリーン状態確認）**
+- [x] **Step 2: Devcontainer baseline テスト実行（クリーン状態確認）**
 
 ```bash
 uv run ruff check src/ tests/ && uv run ruff format --check src/ tests/ && uv run mypy src/ && uv run pytest tests/unit -q
@@ -193,7 +193,7 @@ uv run ruff check src/ tests/ && uv run ruff format --check src/ tests/ && uv ru
 
 Expected: PASS（既存テストすべて通る）
 
-- [ ] **Step 3: `.env.example` に Outbox 関連環境変数追加**
+- [x] **Step 3: `.env.example` に Outbox 関連環境変数追加**
 
 `.env.example` の末尾に追記:
 
@@ -209,7 +209,7 @@ OUTBOX_BACKOFF_BASE_SECONDS=1.0
 OUTBOX_BACKOFF_MAX_SECONDS=60.0
 ```
 
-- [ ] **Step 4: sync パッケージの空モジュール作成**
+- [x] **Step 4: sync パッケージの空モジュール作成**
 
 `src/context_store/sync/__init__.py`:
 
@@ -257,7 +257,7 @@ class OutboxEvent:
 
 `tests/unit/sync/__init__.py`: 空ファイル
 
-- [ ] **Step 5: CI で動くことを確認**
+- [x] **Step 5: CI で動くことを確認**
 
 ```bash
 uv run ruff check src/context_store/sync/ tests/unit/sync/
@@ -266,7 +266,7 @@ uv run mypy src/context_store/sync/
 
 Expected: PASS
 
-- [ ] **Step 6: コミット & プッシュ**
+- [x] **Step 6: コミット & プッシュ**
 
 ```bash
 git add .env.example src/context_store/sync/ tests/unit/sync/
@@ -274,7 +274,7 @@ git commit -m "chore(outbox): Phase Root - sync パッケージ初期化と環�
 git push -u origin feat/outbox-base
 ```
 
-- [ ] **Step 7: Draft PR 作成**
+- [x] **Step 7: Draft PR 作成**
 
 ```bash
 gh pr create --draft --base master --title "chore(outbox): Phase Root - sync パッケージ初期化" --body "$(cat <<'EOF'
@@ -287,7 +287,7 @@ gh pr create --draft --base master --title "chore(outbox): Phase Root - sync パ
 本 PR はパッケージ骨格のみ。実ロジックは後続 PR で stack される。
 
 ## Test plan
-- [ ] CI: ruff/mypy/pytest が全てパス
+- [x] CI: ruff/mypy/pytest が全てパス
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
@@ -311,7 +311,7 @@ PR URL を「Draft PR 一覧」の Task 0.1 行に記録。
 - Modify: `src/context_store/config.py`
 - Create: `tests/unit/test_config_graph_sync.py`
 
-- [ ] **Step 1: ブランチ作成と派生元検証**
+- [x] **Step 1: ブランチ作成と派生元検証**
 
 ```bash
 EXPECTED_BASE="feat/outbox-base"
@@ -324,7 +324,7 @@ git merge-base --is-ancestor "$EXPECTED_BASE" "$CURRENT_BRANCH" || {
 }
 ```
 
-- [ ] **Step 2: 失敗テストを書く (TDD - RED)**
+- [x] **Step 2: 失敗テストを書く (TDD - RED)**
 
 `tests/unit/test_config_graph_sync.py`:
 
@@ -411,7 +411,7 @@ def test_outbox_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.outbox_backoff_max_seconds == 60.0
 ```
 
-- [ ] **Step 3: テストを実行して失敗を確認 (RED)**
+- [x] **Step 3: テストを実行して失敗を確認 (RED)**
 
 ```bash
 uv run pytest tests/unit/test_config_graph_sync.py -v
@@ -419,7 +419,7 @@ uv run pytest tests/unit/test_config_graph_sync.py -v
 
 Expected: FAIL（`graph_sync_mode` 属性が存在しない / バリデーションが未実装）
 
-- [ ] **Step 4: Config 実装 (GREEN)**
+- [x] **Step 4: Config 実装 (GREEN)**
 
 `src/context_store/config.py` の `Settings` クラス内、`url_allowed_content_types` 定義の直後に以下を追加:
 
@@ -497,7 +497,7 @@ Expected: FAIL（`graph_sync_mode` 属性が存在しない / バリデーショ
         return "disabled"
 ```
 
-- [ ] **Step 5: テストを実行 (GREEN)**
+- [x] **Step 5: テストを実行 (GREEN)**
 
 ```bash
 uv run pytest tests/unit/test_config_graph_sync.py -v
@@ -507,7 +507,7 @@ uv run mypy src/context_store/config.py
 
 Expected: 全 PASS
 
-- [ ] **Step 6: コミット & プッシュ**
+- [x] **Step 6: コミット & プッシュ**
 
 ```bash
 git add src/context_store/config.py tests/unit/test_config_graph_sync.py
@@ -515,7 +515,7 @@ git commit -m "feat(config): graph_sync_mode と outbox_* 設定を追加"
 git push -u origin feat/outbox-config
 ```
 
-- [ ] **Step 7: Draft PR 作成**
+- [x] **Step 7: Draft PR 作成**
 
 ```bash
 gh pr create --draft --base feat/outbox-base --title "feat(config): graph_sync_mode と outbox 設定を追加" --body "$(cat <<'EOF'
@@ -550,7 +550,7 @@ PR URL を記録。
 - Modify: `src/context_store/storage/migrations/runner.py`
 - Modify: `tests/unit/test_migration_runner.py`
 
-- [ ] **Step 1: ブランチ作成と派生元検証**
+- [x] **Step 1: ブランチ作成と派生元検証**
 
 ```bash
 EXPECTED_BASE="feat/outbox-base"
@@ -563,7 +563,7 @@ git merge-base --is-ancestor "$EXPECTED_BASE" "$CURRENT_BRANCH" || {
 }
 ```
 
-- [ ] **Step 2: 失敗テストを書く (TDD - RED) - SQLite マイグレーション**
+- [x] **Step 2: 失敗テストを書く (TDD - RED) - SQLite マイグレーション**
 
 `tests/unit/test_migration_runner.py` に以下のテストを追記:
 
@@ -613,7 +613,7 @@ async def test_sqlite_baseline_includes_0003(tmp_path) -> None:
         assert "0003_graph_sync_outbox.sql" in applied
 ```
 
-- [ ] **Step 3: テスト実行 (RED)**
+- [x] **Step 3: テスト実行 (RED)**
 
 ```bash
 uv run pytest tests/unit/test_migration_runner.py::test_sqlite_migration_0003_creates_outbox_table -v
@@ -621,7 +621,7 @@ uv run pytest tests/unit/test_migration_runner.py::test_sqlite_migration_0003_cr
 
 Expected: FAIL（マイグレーションファイル不在）
 
-- [ ] **Step 4: SQLite マイグレーション作成**
+- [x] **Step 4: SQLite マイグレーション作成**
 
 `src/context_store/storage/migrations/sqlite/0003_graph_sync_outbox.sql`:
 
@@ -644,7 +644,7 @@ CREATE INDEX idx_outbox_status_retry ON graph_sync_outbox (status, next_retry_at
 CREATE INDEX idx_outbox_memory_id ON graph_sync_outbox (memory_id);
 ```
 
-- [ ] **Step 5: PostgreSQL マイグレーション作成**
+- [x] **Step 5: PostgreSQL マイグレーション作成**
 
 `src/context_store/storage/migrations/postgres/0003_graph_sync_outbox.sql`:
 
@@ -667,7 +667,7 @@ CREATE INDEX idx_outbox_status_retry ON graph_sync_outbox (status, next_retry_at
 CREATE INDEX idx_outbox_memory_id ON graph_sync_outbox (memory_id);
 ```
 
-- [ ] **Step 6: MigrationRunner.baseline に 0003 を追加**
+- [x] **Step 6: MigrationRunner.baseline に 0003 を追加**
 
 `src/context_store/storage/migrations/runner.py` の `_handle_baseline` 内 `requirements` を:
 
@@ -679,7 +679,7 @@ CREATE INDEX idx_outbox_memory_id ON graph_sync_outbox (memory_id);
         }
 ```
 
-- [ ] **Step 7: テスト実行 (GREEN)**
+- [x] **Step 7: テスト実行 (GREEN)**
 
 ```bash
 uv run pytest tests/unit/test_migration_runner.py -v
@@ -687,7 +687,7 @@ uv run pytest tests/unit/test_migration_runner.py -v
 
 Expected: 全 PASS
 
-- [ ] **Step 8: コミット & プッシュ**
+- [x] **Step 8: コミット & プッシュ**
 
 ```bash
 git add src/context_store/storage/migrations/postgres/0003_graph_sync_outbox.sql \
@@ -698,7 +698,7 @@ git commit -m "feat(storage): graph_sync_outbox テーブルのマイグレー�
 git push -u origin feat/outbox-storage-migrations
 ```
 
-- [ ] **Step 9: Draft PR 作成**
+- [x] **Step 9: Draft PR 作成**
 
 ```bash
 gh pr create --draft --base feat/outbox-base --title "feat(storage): graph_sync_outbox マイグレーションを追加" --body "$(cat <<'EOF'
@@ -734,7 +734,7 @@ PR URL を記録。
 - Create: `supabase/migrations/20260521000001_graph_sync_outbox.sql`
 - Modify: `tests/unit/test_storage_factory.py`（または既存の Supabase テスト）に基本検証を追記
 
-- [ ] **Step 1: ブランチ作成と派生元検証**
+- [x] **Step 1: ブランチ作成と派生元検証**
 
 ```bash
 EXPECTED_BASE="feat/outbox-base"
@@ -747,7 +747,7 @@ git merge-base --is-ancestor "$EXPECTED_BASE" "$CURRENT_BRANCH" || {
 }
 ```
 
-- [ ] **Step 2: マイグレーションファイル作成**
+- [x] **Step 2: マイグレーションファイル作成**
 
 `supabase/migrations/20260521000001_graph_sync_outbox.sql`:
 
@@ -945,7 +945,7 @@ GRANT EXECUTE ON FUNCTION fetch_pending_outbox(INT) TO service_role;
 GRANT EXECUTE ON FUNCTION reset_stuck_processing_outbox(INT, INT) TO service_role;
 ```
 
-- [ ] **Step 3: SQL 構文チェック**
+- [x] **Step 3: SQL 構文チェック**
 
 ```bash
 # Supabase ローカル環境がない場合は静的構文だけ確認
@@ -954,7 +954,7 @@ uv run python -c "import re, pathlib; sql = pathlib.Path('supabase/migrations/20
 
 Expected: `OK`
 
-- [ ] **Step 4: 既存の Supabase 関連 lint チェック**
+- [x] **Step 4: 既存の Supabase 関連 lint チェック**
 
 ```bash
 uv run ruff check src/ tests/
@@ -962,7 +962,7 @@ uv run ruff check src/ tests/
 
 Expected: PASS
 
-- [ ] **Step 5: コミット & プッシュ**
+- [x] **Step 5: コミット & プッシュ**
 
 ```bash
 git add supabase/migrations/20260521000001_graph_sync_outbox.sql
@@ -970,7 +970,7 @@ git commit -m "feat(supabase): graph_sync_outbox テーブルと RPC 関数を�
 git push -u origin feat/outbox-supabase-migrations
 ```
 
-- [ ] **Step 6: Draft PR 作成**
+- [x] **Step 6: Draft PR 作成**
 
 ```bash
 gh pr create --draft --base feat/outbox-base --title "feat(supabase): graph_sync_outbox マイグレーション + RPC" --body "$(cat <<'EOF'
@@ -985,7 +985,7 @@ gh pr create --draft --base feat/outbox-base --title "feat(supabase): graph_sync
 - すべて `SECURITY INVOKER` + `search_path = public` で定義し、`service_role` に EXECUTE 権限を付与。
 
 ## Test plan
-- [ ] 構文チェック PASS（実適用は Task 3.3 / Task 4.1 で行う）
+- [x] 構文チェック PASS（実適用は Task 3.3 / Task 4.1 で行う）
 EOF
 )"
 ```
@@ -1007,7 +1007,7 @@ PR URL を記録。
 - Create: `src/context_store/sync/outbox_writer.py`
 - Create: `tests/unit/sync/test_outbox_writer.py`
 
-- [ ] **Step 1: ブランチ作成と派生元検証**
+- [x] **Step 1: ブランチ作成と派生元検証**
 
 ```bash
 EXPECTED_BASE="feat/outbox-storage-migrations"
@@ -1020,7 +1020,7 @@ git merge-base --is-ancestor "$EXPECTED_BASE" "$CURRENT_BRANCH" || {
 }
 ```
 
-- [ ] **Step 2: 失敗テストを書く (RED)**
+- [x] **Step 2: 失敗テストを書く (RED)**
 
 `tests/unit/sync/test_outbox_writer.py`:
 
@@ -1101,7 +1101,7 @@ async def test_outbox_writer_rejects_invalid_event_type() -> None:
         )
 ```
 
-- [ ] **Step 3: テスト実行 (RED)**
+- [x] **Step 3: テスト実行 (RED)**
 
 ```bash
 uv run pytest tests/unit/sync/test_outbox_writer.py -v
@@ -1109,7 +1109,7 @@ uv run pytest tests/unit/sync/test_outbox_writer.py -v
 
 Expected: FAIL（モジュール未実装）
 
-- [ ] **Step 4: 実装 (GREEN)**
+- [x] **Step 4: 実装 (GREEN)**
 
 `src/context_store/sync/outbox_writer.py`:
 
@@ -1207,7 +1207,7 @@ class SqliteOutboxWriter:
         )
 ```
 
-- [ ] **Step 5: テスト実行 (GREEN)**
+- [x] **Step 5: テスト実行 (GREEN)**
 
 ```bash
 uv run pytest tests/unit/sync/test_outbox_writer.py -v
@@ -1216,7 +1216,7 @@ uv run mypy src/context_store/sync/outbox_writer.py
 
 Expected: 全 PASS
 
-- [ ] **Step 6: コミット & プッシュ**
+- [x] **Step 6: コミット & プッシュ**
 
 ```bash
 git add src/context_store/sync/outbox_writer.py tests/unit/sync/test_outbox_writer.py
@@ -1224,7 +1224,7 @@ git commit -m "feat(sync): OutboxWriter Protocol と Postgres/SQLite 実装を�
 git push -u origin feat/outbox-writer
 ```
 
-- [ ] **Step 7: Draft PR 作成**
+- [x] **Step 7: Draft PR 作成**
 
 ```bash
 gh pr create --draft --base feat/outbox-storage-migrations --title "feat(sync): OutboxWriter Protocol + 実装" --body "$(cat <<'EOF'
@@ -1259,7 +1259,7 @@ PR URL を記録。
 - Modify: `src/context_store/storage/neo4j.py`
 - Modify: `tests/unit/test_neo4j_storage.py`
 
-- [ ] **Step 1: ブランチ作成と派生元検証**
+- [x] **Step 1: ブランチ作成と派生元検証**
 
 ```bash
 EXPECTED_BASE="feat/outbox-base"
@@ -1272,7 +1272,7 @@ git merge-base --is-ancestor "$EXPECTED_BASE" "$CURRENT_BRANCH" || {
 }
 ```
 
-- [ ] **Step 2: 失敗テストを追記 (RED)**
+- [x] **Step 2: 失敗テストを追記 (RED)**
 
 `tests/unit/test_neo4j_storage.py` に追記:
 
@@ -1319,7 +1319,7 @@ async def test_neo4j_execute_write_logs_warning_on_failure(caplog) -> None:
             await adp.execute_write("MERGE (m:Memory {id:'x'})", {})
 ```
 
-- [ ] **Step 3: テスト実行 (RED)**
+- [x] **Step 3: テスト実行 (RED)**
 
 ```bash
 uv run pytest tests/unit/test_neo4j_storage.py -v -k execute_write
@@ -1327,7 +1327,7 @@ uv run pytest tests/unit/test_neo4j_storage.py -v -k execute_write
 
 Expected: FAIL（メソッド未実装）
 
-- [ ] **Step 4: 実装 (GREEN)**
+- [x] **Step 4: 実装 (GREEN)**
 
 `src/context_store/storage/neo4j.py` の `Neo4jGraphAdapter` クラス内に以下を追加（既存メソッドのインデント・スタイルに合わせる）:
 
@@ -1355,7 +1355,7 @@ Expected: FAIL（メソッド未実装）
 from context_store.storage.protocols import StorageError
 ```
 
-- [ ] **Step 5: テスト実行 (GREEN)**
+- [x] **Step 5: テスト実行 (GREEN)**
 
 ```bash
 uv run pytest tests/unit/test_neo4j_storage.py -v
@@ -1364,7 +1364,7 @@ uv run mypy src/context_store/storage/neo4j.py
 
 Expected: PASS
 
-- [ ] **Step 6: コミット & プッシュ**
+- [x] **Step 6: コミット & プッシュ**
 
 ```bash
 git add src/context_store/storage/neo4j.py tests/unit/test_neo4j_storage.py
@@ -1372,7 +1372,7 @@ git commit -m "feat(neo4j): execute_write メソッドを追加 (Outbox 共通�
 git push -u origin feat/outbox-neo4j-execute-write
 ```
 
-- [ ] **Step 7: Draft PR 作成**
+- [x] **Step 7: Draft PR 作成**
 
 ```bash
 gh pr create --draft --base feat/outbox-base --title "feat(neo4j): execute_write メソッドを追加" --body "$(cat <<'EOF'
@@ -1403,7 +1403,7 @@ PR URL を記録。
 - Create: `src/context_store/sync/graph_sync.py`
 - Create: `tests/unit/sync/test_graph_sync.py`
 
-- [ ] **Step 1: ブランチ作成と派生元検証**
+- [x] **Step 1: ブランチ作成と派生元検証**
 
 ```bash
 EXPECTED_BASE="feat/outbox-neo4j-execute-write"
@@ -1416,7 +1416,7 @@ git merge-base --is-ancestor "$EXPECTED_BASE" "$CURRENT_BRANCH" || {
 }
 ```
 
-- [ ] **Step 2: 失敗テストを書く (RED)**
+- [x] **Step 2: 失敗テストを書く (RED)**
 
 `tests/unit/sync/test_graph_sync.py`:
 
@@ -1523,7 +1523,7 @@ async def test_bulk_merge_memories_empty_list_is_noop() -> None:
     graph.execute_write.assert_not_called()
 ```
 
-- [ ] **Step 3: テスト実行 (RED)**
+- [x] **Step 3: テスト実行 (RED)**
 
 ```bash
 uv run pytest tests/unit/sync/test_graph_sync.py -v
@@ -1531,7 +1531,7 @@ uv run pytest tests/unit/sync/test_graph_sync.py -v
 
 Expected: FAIL（GraphSyncService 未実装）
 
-- [ ] **Step 4: 実装 (GREEN)**
+- [x] **Step 4: 実装 (GREEN)**
 
 `src/context_store/sync/graph_sync.py`:
 
@@ -1662,7 +1662,7 @@ def _sanitize_edge_type(edge_type: str) -> str:
     return edge_type
 ```
 
-- [ ] **Step 5: テスト実行 (GREEN)**
+- [x] **Step 5: テスト実行 (GREEN)**
 
 ```bash
 uv run pytest tests/unit/sync/test_graph_sync.py -v
@@ -1671,7 +1671,7 @@ uv run mypy src/context_store/sync/graph_sync.py
 
 Expected: PASS
 
-- [ ] **Step 6: コミット & プッシュ**
+- [x] **Step 6: コミット & プッシュ**
 
 ```bash
 git add src/context_store/sync/graph_sync.py tests/unit/sync/test_graph_sync.py
@@ -1679,7 +1679,7 @@ git commit -m "feat(sync): GraphSyncService を追加 (bulk_merge / bulk_delete 
 git push -u origin feat/outbox-graph-sync
 ```
 
-- [ ] **Step 7: Draft PR 作成**
+- [x] **Step 7: Draft PR 作成**
 
 ```bash
 gh pr create --draft --base feat/outbox-neo4j-execute-write --title "feat(sync): GraphSyncService - 共有 MERGE/DELETE ロジック" --body "$(cat <<'EOF'
@@ -1721,7 +1721,7 @@ PR URL を記録。
 - Modify: `src/context_store/storage/postgres.py`
 - Create: `tests/unit/storage/test_postgres_outbox.py`
 
-- [ ] **Step 1: ブランチ作成と派生元検証**
+- [x] **Step 1: ブランチ作成と派生元検証**
 
 ```bash
 EXPECTED_BASE="feat/outbox-writer"
@@ -1734,7 +1734,7 @@ git merge-base --is-ancestor "$EXPECTED_BASE" "$CURRENT_BRANCH" || {
 }
 ```
 
-- [ ] **Step 2: 失敗テストを書く (RED)**
+- [x] **Step 2: 失敗テストを書く (RED)**
 
 `tests/unit/storage/test_postgres_outbox.py`:
 
@@ -1803,7 +1803,7 @@ async def test_delete_memory_writes_delete_event_with_metadata() -> None:
     pass  # 実装時に展開
 ```
 
-- [ ] **Step 3: テスト実行 (RED)**
+- [x] **Step 3: テスト実行 (RED)**
 
 ```bash
 uv run pytest tests/unit/storage/test_postgres_outbox.py -v
@@ -1811,7 +1811,7 @@ uv run pytest tests/unit/storage/test_postgres_outbox.py -v
 
 Expected: FAIL
 
-- [ ] **Step 4: 実装 (GREEN)**
+- [x] **Step 4: 実装 (GREEN)**
 
 `src/context_store/storage/postgres.py` の `PostgresStorageAdapter.__init__` (または `create()`) に `outbox_writer` パラメータ受け入れを追加。`save_memory` を以下のように改修:
 
@@ -1859,7 +1859,7 @@ Expected: FAIL
 
 `__init__` 等で `self._outbox_writer: OutboxWriter | None = None` を初期化し、`create()` クラスメソッドに `outbox_writer` 引数を追加（既存のシグネチャは保持し、デフォルト None）。
 
-- [ ] **Step 5: テスト展開 + 実行 (GREEN)**
+- [x] **Step 5: テスト展開 + 実行 (GREEN)**
 
 「実装時に展開」とした 2 テストを完成させ、
 
@@ -1871,7 +1871,7 @@ uv run mypy src/context_store/storage/postgres.py
 
 Expected: 全 PASS
 
-- [ ] **Step 6: コミット & プッシュ**
+- [x] **Step 6: コミット & プッシュ**
 
 ```bash
 git add src/context_store/storage/postgres.py tests/unit/storage/test_postgres_outbox.py
@@ -1879,7 +1879,7 @@ git commit -m "feat(postgres): save/delete_memory に OutboxWriter 統合"
 git push -u origin feat/outbox-postgres-integration
 ```
 
-- [ ] **Step 7: Draft PR 作成**
+- [x] **Step 7: Draft PR 作成**
 
 ```bash
 gh pr create --draft --base feat/outbox-writer --title "feat(postgres): save/delete_memory に OutboxWriter を統合" --body "..."
@@ -1900,7 +1900,7 @@ PR URL を記録。
 - Modify: `src/context_store/storage/sqlite.py`
 - Create: `tests/unit/storage/test_sqlite_outbox.py`
 
-- [ ] **Step 1: ブランチ作成と派生元検証**
+- [x] **Step 1: ブランチ作成と派生元検証**
 
 ```bash
 EXPECTED_BASE="feat/outbox-writer"
@@ -1913,7 +1913,7 @@ git merge-base --is-ancestor "$EXPECTED_BASE" "$CURRENT_BRANCH" || {
 }
 ```
 
-- [ ] **Step 2: 失敗テスト (RED)**
+- [x] **Step 2: 失敗テスト (RED)**
 
 `tests/unit/storage/test_sqlite_outbox.py`:
 
@@ -1963,7 +1963,7 @@ async def test_sqlite_save_memory_writes_outbox(tmp_path, monkeypatch) -> None:
     await adp.dispose()
 ```
 
-- [ ] **Step 3: テスト実行 (RED)**
+- [x] **Step 3: テスト実行 (RED)**
 
 ```bash
 uv run pytest tests/unit/storage/test_sqlite_outbox.py -v
@@ -1971,14 +1971,14 @@ uv run pytest tests/unit/storage/test_sqlite_outbox.py -v
 
 Expected: FAIL
 
-- [ ] **Step 4: 実装 (GREEN)**
+- [x] **Step 4: 実装 (GREEN)**
 
 `src/context_store/storage/sqlite.py` で:
 1. `__init__` か `create()` に `outbox_writer` を受け入れ、属性 `self._outbox_writer: OutboxWriter | None = None`
 2. `save_memory` の BEGIN/COMMIT ブロック内で `await self._outbox_writer.enqueue_sync(conn=conn, memory_id=..., event_type="SYNC_MEMORY")` 追加
 3. `delete_memory` で削除前に `memory_type/tags/project` を SELECT、削除後 outbox に DELETE イベント
 
-- [ ] **Step 5: テスト実行 (GREEN)**
+- [x] **Step 5: テスト実行 (GREEN)**
 
 ```bash
 uv run pytest tests/unit/storage/test_sqlite_outbox.py -v
@@ -1987,7 +1987,7 @@ uv run pytest tests/unit/test_sqlite_storage.py -v  # regression
 
 Expected: PASS
 
-- [ ] **Step 6-7: コミット + Draft PR (派生元: `feat/outbox-writer`)**
+- [x] **Step 6-7: コミット + Draft PR (派生元: `feat/outbox-writer`)**
 
 ---
 
@@ -2002,7 +2002,7 @@ Expected: PASS
 - Modify: `src/context_store/storage/supabase.py`
 - Create: `tests/unit/storage/test_supabase_outbox.py`
 
-- [ ] **Step 1: ブランチ作成と派生元検証**
+- [x] **Step 1: ブランチ作成と派生元検証**
 
 ```bash
 EXPECTED_BASE="feat/outbox-supabase-migrations"
@@ -2015,7 +2015,7 @@ git merge-base --is-ancestor "$EXPECTED_BASE" "$CURRENT_BRANCH" || {
 }
 ```
 
-- [ ] **Step 2: 失敗テスト (RED)**
+- [x] **Step 2: 失敗テスト (RED)**
 
 `tests/unit/storage/test_supabase_outbox.py`:
 
@@ -2065,7 +2065,7 @@ async def test_supabase_delete_memory_uses_rpc_when_outbox_enabled() -> None:
     pass  # 実装時展開
 ```
 
-- [ ] **Step 3: テスト実行 (RED)**
+- [x] **Step 3: テスト実行 (RED)**
 
 ```bash
 uv run pytest tests/unit/storage/test_supabase_outbox.py -v
@@ -2073,7 +2073,7 @@ uv run pytest tests/unit/storage/test_supabase_outbox.py -v
 
 Expected: FAIL
 
-- [ ] **Step 4: 実装 (GREEN)**
+- [x] **Step 4: 実装 (GREEN)**
 
 `src/context_store/storage/supabase.py` に `_outbox_enabled: bool` フィールドを追加。`save_memory` を以下のように分岐:
 
@@ -2103,7 +2103,7 @@ Expected: FAIL
 
 `delete_memory` も同様に `delete_memory_with_outbox` を呼び出す分岐を追加。
 
-- [ ] **Step 5: テスト実行 (GREEN)**
+- [x] **Step 5: テスト実行 (GREEN)**
 
 ```bash
 uv run pytest tests/unit/storage/test_supabase_outbox.py -v
@@ -2112,7 +2112,7 @@ uv run pytest tests/unit -k "supabase" -v  # regression
 
 Expected: PASS
 
-- [ ] **Step 6-7: コミット + Draft PR (派生元: `feat/outbox-supabase-migrations`)**
+- [x] **Step 6-7: コミット + Draft PR (派生元: `feat/outbox-supabase-migrations`)**
 
 ---
 
@@ -2136,7 +2136,7 @@ Expected: PASS
 - Create: `src/context_store/sync/outbox_reader.py`（上記4成果物を1ファイルに集約）
 - Create: `tests/unit/sync/test_outbox_reader.py`（SQLite 実装の通常テスト + Supabase 実装の RPC スモークテスト）
 
-- [ ] **Step 1: ブランチ作成と派生元検証**
+- [x] **Step 1: ブランチ作成と派生元検証**
 
 ```bash
 EXPECTED_BASE="feat/outbox-storage-migrations"
@@ -2149,7 +2149,7 @@ git merge-base --is-ancestor "$EXPECTED_BASE" "$CURRENT_BRANCH" || {
 }
 ```
 
-- [ ] **Step 2: 失敗テスト (RED)**
+- [x] **Step 2: 失敗テスト (RED)**
 
 `tests/unit/sync/test_outbox_reader.py`:
 
@@ -2279,7 +2279,7 @@ async def test_reset_stuck_processing_marks_failed_at_max_retries(sqlite_db) -> 
             assert row[0] == "FAILED"
 ```
 
-- [ ] **Step 3: テスト実行 (RED)**
+- [x] **Step 3: テスト実行 (RED)**
 
 ```bash
 uv run pytest tests/unit/sync/test_outbox_reader.py -v
@@ -2287,7 +2287,7 @@ uv run pytest tests/unit/sync/test_outbox_reader.py -v
 
 Expected: FAIL
 
-- [ ] **Step 4: 実装 (GREEN)**
+- [x] **Step 4: 実装 (GREEN)**
 
 `src/context_store/sync/outbox_reader.py`:
 
@@ -2680,7 +2680,7 @@ def _supabase_row_to_event(row: dict[str, Any]) -> OutboxEvent:
     )
 ```
 
-- [ ] **Step 5: SupabaseOutboxReader のスモークテストを追加**
+- [x] **Step 5: SupabaseOutboxReader のスモークテストを追加**
 
 `tests/unit/sync/test_outbox_reader.py` の末尾に追加:
 
@@ -2736,7 +2736,7 @@ async def test_supabase_reader_reset_stuck_processing_calls_rpc() -> None:
     assert n == 2
 ```
 
-- [ ] **Step 6: テスト実行 (GREEN)**
+- [x] **Step 6: テスト実行 (GREEN)**
 
 ```bash
 uv run pytest tests/unit/sync/test_outbox_reader.py -v
@@ -2745,7 +2745,7 @@ uv run mypy src/context_store/sync/outbox_reader.py
 
 Expected: PASS
 
-- [ ] **Step 7: コミット + Draft PR (派生元: `feat/outbox-storage-migrations`)**
+- [x] **Step 7: コミット + Draft PR (派生元: `feat/outbox-storage-migrations`)**
 
 注: Supabase 環境で実際に動かすには Task 1.3 でマージされる `fetch_pending_outbox`
 / `reset_stuck_processing_outbox` RPC が必要。本 Task では Python 側のみを実装し、
@@ -2764,7 +2764,7 @@ Expected: PASS
 - Create: `src/context_store/sync/outbox_worker.py`
 - Create: `tests/unit/sync/test_outbox_worker.py`
 
-- [ ] **Step 1: ブランチ作成と派生元検証**
+- [x] **Step 1: ブランチ作成と派生元検証**
 
 ```bash
 EXPECTED_BASE="feat/outbox-graph-sync"
@@ -2784,7 +2784,7 @@ git merge --no-edit --no-commit origin/feat/outbox-reader || {
 git commit -m "merge: feat/outbox-reader into worker branch"
 ```
 
-- [ ] **Step 2: 失敗テスト (RED)**
+- [x] **Step 2: 失敗テスト (RED)**
 
 `tests/unit/sync/test_outbox_worker.py`:
 
@@ -3040,7 +3040,7 @@ async def test_worker_process_pending_once_returns_event_count() -> None:
     assert n == 1
 ```
 
-- [ ] **Step 3: テスト実行 (RED)**
+- [x] **Step 3: テスト実行 (RED)**
 
 ```bash
 uv run pytest tests/unit/sync/test_outbox_worker.py -v
@@ -3048,7 +3048,7 @@ uv run pytest tests/unit/sync/test_outbox_worker.py -v
 
 Expected: FAIL
 
-- [ ] **Step 4: 実装 (GREEN)**
+- [x] **Step 4: 実装 (GREEN)**
 
 `src/context_store/sync/outbox_worker.py`:
 
@@ -3217,7 +3217,7 @@ class OutboxWorker:
             )
 ```
 
-- [ ] **Step 5: テスト実行 (GREEN)**
+- [x] **Step 5: テスト実行 (GREEN)**
 
 ```bash
 uv run pytest tests/unit/sync/test_outbox_worker.py -v
@@ -3226,7 +3226,7 @@ uv run mypy src/context_store/sync/outbox_worker.py
 
 Expected: PASS
 
-- [ ] **Step 6-7: コミット + Draft PR (派生元: `feat/outbox-graph-sync`)**
+- [x] **Step 6-7: コミット + Draft PR (派生元: `feat/outbox-graph-sync`)**
 
 ---
 
@@ -3579,7 +3579,7 @@ class IngestionPipeline:
 - Modify: `pyproject.toml`（必要なら CLI エントリ追加）
 - Create: `tests/unit/sync/test_recovery_script.py`
 
-- [ ] **Step 1: ブランチ作成と派生元検証**
+- [x] **Step 1: ブランチ作成と派生元検証**
 
 ```bash
 EXPECTED_BASE="feat/outbox-graph-sync"
@@ -3592,7 +3592,7 @@ git merge-base --is-ancestor "$EXPECTED_BASE" "$CURRENT_BRANCH" || {
 }
 ```
 
-- [ ] **Step 2-4: 実装 + テスト**
+- [x] **Step 2-4: 実装 + テスト**
 
 `scripts/sync_storage_to_neo4j.py`:
 
@@ -3735,7 +3735,7 @@ if __name__ == "__main__":
 
 `tests/unit/sync/test_recovery_script.py`: `argparse` ベースのスモークテスト。
 
-- [ ] **Step 5: テスト実行**
+- [x] **Step 5: テスト実行**
 
 ```bash
 uv run pytest tests/unit/sync/test_recovery_script.py -v
@@ -3744,7 +3744,7 @@ uv run python scripts/sync_storage_to_neo4j.py --full --dry-run  # 動作確認
 
 Expected: 0 件処理を報告して正常終了
 
-- [ ] **Step 6-7: コミット + Draft PR (派生元: `feat/outbox-graph-sync`)**
+- [x] **Step 6-7: コミット + Draft PR (派生元: `feat/outbox-graph-sync`)**
 
 ---
 

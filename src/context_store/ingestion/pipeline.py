@@ -20,7 +20,7 @@ import weakref
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from context_store.config import Settings
@@ -94,10 +94,10 @@ class IngestionPipeline:
         embedding_provider: EmbeddingProvider,
         settings: Settings | None = None,
         chunker: Chunker | None = None,
-        graph_sync_mode: str = "sync",
+        graph_sync_mode: Literal["sync", "async_outbox"] = "sync",
     ) -> None:
         self._storage = storage
-        self._graph = graph
+        self._graph = None if graph_sync_mode == "async_outbox" else graph
         self._embedding_provider = embedding_provider
         self._settings = settings
 

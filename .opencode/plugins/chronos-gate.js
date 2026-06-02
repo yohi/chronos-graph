@@ -205,6 +205,28 @@ function checkAndStartGateway() {
       const errLog = fs.openSync(errLogPath, 'a');
 
       // Search for the project directory containing .env to resolve validation errors
+      // Priority: 1) CHRONOS_REPO_PATH env var, 2) well-known paths, 3) dynamic search
+      const searchDirs = [];
+      
+      // If CHRONOS_REPO_PATH is set, prioritize it
+      if (process.env.CHRONOS_REPO_PATH) {
+        const explicitDir = path.resolve(process.env.CHRONOS_REPO_PATH);
+        if (fs.existsSync(explicitDir)) {
+          searchDirs.push(explicitDir);
+        }
+      }
+      
+      // Well-known paths with chronos-graph prioritized
+      searchDirs.push(
+        path.join(process.env.HOME, 'program', 'chronos-graph'),
+        path.join(process.env.HOME, 'chronos-graph'),
+        globalDirectory,
+        process.cwd(),
+        process.env.PWD
+      );
+      
+      // Remove undefined/null entries
+      const validSearchDirs = searchDirs.filter(Boolean);
       const searchDirs = [
         path.join(process.env.HOME, 'program', 'chronos-graph'),
         path.join(process.env.HOME, 'chronos-graph'),

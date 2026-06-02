@@ -79,7 +79,9 @@ async def test_worker_retries_on_neo4j_failure_with_backoff() -> None:
 
     reader = MagicMock()
     reader.reset_stuck_processing = AsyncMock(return_value=0)
-    reader.fetch_pending = AsyncMock(side_effect=[[_evt(retry_count=2, event_id=e1_id, memory_id=m1_id)], []])
+    reader.fetch_pending = AsyncMock(
+        side_effect=[[_evt(retry_count=2, event_id=e1_id, memory_id=m1_id)], []]
+    )
     reader.reset_to_pending = AsyncMock()
 
     storage = MagicMock()
@@ -118,7 +120,9 @@ async def test_worker_marks_failed_after_max_retries() -> None:
 
     reader = MagicMock()
     reader.reset_stuck_processing = AsyncMock(return_value=0)
-    reader.fetch_pending = AsyncMock(side_effect=[[_evt(retry_count=5, event_id=e1_id, memory_id=m1_id)], []])
+    reader.fetch_pending = AsyncMock(
+        side_effect=[[_evt(retry_count=5, event_id=e1_id, memory_id=m1_id)], []]
+    )
     reader.mark_failed = AsyncMock()
 
     storage = MagicMock()
@@ -219,17 +223,21 @@ async def test_worker_run_catchup_processes_all_actionable() -> None:
     m2_id = uuid.uuid4()
 
     reader = MagicMock()
-    reader.fetch_all_actionable = AsyncMock(return_value=[
-        _evt(event_id=e1_id, memory_id=m1_id),
-        _evt(event_id=e2_id, memory_id=m2_id),
-    ])
+    reader.fetch_all_actionable = AsyncMock(
+        return_value=[
+            _evt(event_id=e1_id, memory_id=m1_id),
+            _evt(event_id=e2_id, memory_id=m2_id),
+        ]
+    )
     reader.delete_completed = AsyncMock()
 
     storage = MagicMock()
-    storage.get_memories_batch = AsyncMock(return_value=[
-        MagicMock(id=m1_id),
-        MagicMock(id=m2_id),
-    ])
+    storage.get_memories_batch = AsyncMock(
+        return_value=[
+            MagicMock(id=m1_id),
+            MagicMock(id=m2_id),
+        ]
+    )
     graph_sync = MagicMock()
     graph_sync.bulk_merge_memories = AsyncMock(return_value=1)
 

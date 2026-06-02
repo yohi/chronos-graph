@@ -97,7 +97,9 @@ class OutboxWorker:
                 if memories:
                     await self._graph_sync.bulk_merge_memories(memories)
                 completed_ids.extend(orphan_ids)
-                completed_ids.extend(str(e.id) for e in sync_events if str(e.memory_id) in found_ids)
+                completed_ids.extend(
+                    str(e.id) for e in sync_events if str(e.memory_id) in found_ids
+                )
             except Exception as exc:
                 await self._apply_backoff(sync_events, exc)
                 return

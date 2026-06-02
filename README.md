@@ -62,7 +62,7 @@ AIエージェントにセットアップを依頼する場合の詳細な手順
 - **時間的減衰** — 指数関数的減衰スコアで古い記憶を整理（明示的な `memory_prune` は現行実装では SQLite バックエンドのみ実行）
 - **重複排除** — Append-only 置換 + SUPERSEDES グラフエッジで変遷を追跡
 - **ライトウェイトモード** — SQLite + sqlite-vec でゼロ設定で起動
-- **スケーラブル** — PostgreSQL + Neo4j + Redis への切り替え対応、Supabase Data API による HTTPS 経由のアクセス（Supabase のグラフ機能は現時点で非対応）
+- **スケーラブル** — PostgreSQL + Neo4j + Redis への切り替え対応、Supabase Data API による HTTPS 経由のアクセス（Supabase + Neo4j Aura は `async_outbox` モードにより解禁）
 - **RL 拡張ポイント** — ActionLogger / RewardSignal / PolicyHook インターフェース
 - **Dashboard Web UI** — Cytoscape.js グラフ可視化・リアルタイムログストリーミング（React + FastAPI、SQLite read-only 中心）
 
@@ -469,7 +469,13 @@ ChronosGraph 本体およびセキュリティ判定エンジン（Universal Eva
 | `EMBEDDING_PROVIDER` | `local-model` | デフォルト可 | 埋め込みプロバイダー (`local-model` / `openai` / `litellm`) |
 | `LOCAL_MODEL_NAME` | `cl-nagoya/ruri-v3-310m` | デフォルト可 | ローカルモデル名 (768次元) |
 | `EMBEDDING_DIMENSION` | `768` | デフォルト可 | 埋め込みベクトル次元数 (例: 768) |
-| `GRAPH_ENABLED` | `false` | デフォルト可 | グラフ関係性機能の有効化。SQLite では内部グラフ、PostgreSQL では Neo4j を使用。Supabase では非対応 |
+| `GRAPH_ENABLED` | `false` | デフォルト可 | グラフ関係性機能の有効化。SQLite では内部グラフ、PostgreSQL では Neo4j を使用。Supabase では `graph_sync_mode=async_outbox` のみ対応 |
+| `GRAPH_SYNC_MODE` | `sync` | デフォルト可 | グラフの同期モード (`sync` = 直接同期 / `async_outbox` = Outbox を介した非同期同期) |
+| `OUTBOX_POLL_INTERVAL_SECONDS` | `5.0` | デフォルト可 | **[async_outbox用]** Outbox ワーカーのポーリング間隔秒数 |
+| `OUTBOX_BATCH_SIZE` | `100` | デフォルト可 | **[async_outbox用]** 1回のポーリングで処理する最大イベント数 |
+| `OUTBOX_MAX_RETRIES` | `10` | デフォルト可 | **[async_outbox用]** Neo4j 同期失敗時の最大リトライ回数 |
+| `OUTBOX_BACKOFF_BASE_SECONDS` | `1.0` | デフォルト可 | **[async_outbox用]** Exponential Backoff のベース待機秒数 |
+| `OUTBOX_BACKOFF_MAX_SECONDS` | `60.0` | デフォルト可 | **[async_outbox用]** Exponential Backoff の最大待機秒数 |
 | `CACHE_BACKEND` | `inmemory` | デフォルト可 | キャッシュバックエンド (`inmemory` / `redis`) |
 | `REDIS_URL` | `redis://localhost:6379` | **[Redis用]** 設定必須 | Redis 接続 URL。`CACHE_BACKEND=redis` のときのみ使用し、接続失敗時の暗黙フォールバックは行いません |
 

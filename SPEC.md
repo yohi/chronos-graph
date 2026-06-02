@@ -89,7 +89,7 @@ AIエージェント（Claude Code / Gemini CLI / Cursor 等）にセッショ�
 | SQLite + sqlite-vec | デフォルトの軽量DB。記憶本体・メタデータ・ベクトル・内部グラフ | 障害時は全機能停止 | 自動マイグレーション（SQLベース） |
 | PostgreSQL 16 + pgvector | 本番向けDB。記憶本体・メタデータ・ベクトル・FTS | 障害時は全機能停止 | 自動マイグレーション（SQLベース） |
 | Supabase (PostgREST) | HTTPS 経由のクラウド PostgreSQL バックエンド | 通信障害時はリトライ後 fail-soft/fail-fast を分類 | Supabase CLI 管理の SQL マイグレーション |
-| Neo4j 5.x | PostgreSQL 構成時の外部グラフDB。記憶間のリレーションシップ | 障害時はグラフ検索をスキップして継続 | (スキーマレス/Cypher初期化) |
+| Neo4j 5.x / Aura | PostgreSQL および Supabase 構成時の外部グラフDB。記憶間のリレーションシップ | 障害時はグラフ検索をスキップして継続。非同期モード時はワーカーがリトライ | (スキーマレス/Cypher初期化) |
 | Redis 7.x | 任意のキャッシュ。検索結果・埋め込みベクトル | 障害時はキャッシュなしで継続 | (キーベース) |
 
 ### 2.3 実装言語・フレームワーク
@@ -957,17 +957,17 @@ SQLファイルベースの軽量なマイグレーションシステムを備�
 
 ### 8.6 ストレージ選択ロジック
 
-`config.py` の `STORAGE_BACKEND` / `CACHE_BACKEND` に応じて、
+`config.py` の `STORAGE_BACKEND` / `CACHE_BACKEND` / `GRAPH_SYNC_MODE` に応じて、
 ファクトリ関数が適切なアダプターインスタンスを返す:
 
 | 設定値 | StorageAdapter | GraphAdapter | CacheAdapter |
 |---|---|---|---|
 | `sqlite` (デフォルト) | SQLiteStorageAdapter | `GRAPH_ENABLED=true` の場合 SQLiteGraphAdapter | `CACHE_BACKEND` に応じて InMemoryCacheAdapter または RedisCacheAdapter |
 | `postgres` | PostgresStorageAdapter | `GRAPH_ENABLED=true` の場合 Neo4jGraphAdapter* | `CACHE_BACKEND` に応じて InMemoryCacheAdapter または RedisCacheAdapter |
-| `supabase` | SupabaseStorageAdapter | (非対応)* | `CACHE_BACKEND` に応じて InMemoryCacheAdapter または RedisCacheAdapter |
+| `supabase` | SupabaseStorageAdapter | `graph_sync_mode=async_outbox` かつ `GRAPH_ENABLED=true` の場合 Neo4jGraphAdapter*。それ以外は非対応・バリデーションエラー | `CACHE_BACKEND` に応じて InMemoryCacheAdapter または RedisCacheAdapter |
 
 \* `GRAPH_ENABLED=false` の場合は GraphAdapter を None にする。Redis は `CACHE_BACKEND=redis` のときのみ使用し、接続失敗時の暗黙フォールバックは行わない。
-\* `supabase` バックエンドは現在グラフ機能をサポートしない（Neo4j Bolt を HTTPS 経由でカプセル化できないため）。
+\* `supabase` バックエンドは `graph_sync_mode=async_outbox` の場合のみグラフ機能（Neo4j Aura への非同期同期）をサポートします（同期の `sync` モードは Neo4j Bolt を HTTPS 経由でカプセル化できないため非対応）。
 
 > **注意**: `sqlite` モードでも `GRAPH_ENABLED=false` の場合は GraphAdapter を None にする。`GRAPH_ENABLED=true` の場合のみ SQLiteGraphAdapter を使用する。
 
@@ -1211,6 +1211,14 @@ SUPABASE_REQUEST_TIMEOUT_SECONDS=10.0   # Supabase Data API呼び出しのタイ
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=<secret>
+
+# === Graph Sync Mode (rev.11 Transactional Outbox) ===
+GRAPH_SYNC_MODE=sync                   # sync | async_outbox
+OUTBOX_POLL_INTERVAL_SECONDS=5.0
+OUTBOX_BATCH_SIZE=100
+OUTBOX_MAX_RETRIES=10
+OUTBOX_BACKOFF_BASE_SECONDS=1.0
+OUTBOX_BACKOFF_MAX_SECONDS=60.0
 
 # === Redis (CACHE_BACKEND=redis の場合) ===
 REDIS_URL=redis://localhost:6379
@@ -1641,6 +1649,196 @@ Universal LLM Evaluatorとして設計され、LiteLLM経由で任意のプロ�
 | E-5 | `Orchestrator.stats()` の `count_by_filter` 2 本を 1 RPC に統合 | active/archived のカウントで HTTPS 2 本発生。Supabase に `count_active_and_archived(p_project text)` RPC を追加し 1 ラウンドトリップに集約する。`head=True` で軽いが、ダッシュボード等で頻繁に呼ばれるケースで効く。 | Low | `src/context_store/orchestrator.py:394-414`, `src/context_store/storage/supabase.py:371-382` |
 | E-6 | InMemoryCacheAdapter の再起動時コールドスタート解消 | `cache_backend=inmemory` だとプロセスごとに分離・再起動でキャッシュ消失。マルチプロセス・再起動耐性が必要な本番では `cache_backend=redis` を既定推奨に格上げ、または起動時の warm-up（よく使われる project の `memory_search` を 1 度実行）を導入する。 | Low | `src/context_store/storage/inmemory.py`, `src/context_store/storage/factory.py:251-269` |
 | E-7 | ローカル埋め込みモデルの eager preload（MCP lifespan 連携） | Phase 1 では `LocalModelEmbeddingProvider.start()` を追加したが、Orchestrator は lazy 初期化のため auto-invoke しても初回ツール呼び出しの cold-start を実質削減できない。FastMCP の `lifespan` 起動フックで `EmbeddingProvider` を eager 構築・`start()` し、`ChronosServer._do_initialize` が再構築せず既存インスタンスを再利用する設計に切り替えれば、初回呼び出しのレイテンシからモデルロード時間（ruri-v3-310m で 5-10 秒）を完全に外せる。 | Medium | `src/context_store/server.py`, `src/context_store/orchestrator.py:474-611`, `src/context_store/embedding/local_model.py` |
+
+---
+
+## 17. Transactional Outbox Sync (非同期グラフ同期)
+
+### 17.1 目的とアプローチ
+
+ChronosGraph では、エージェントの応答レイテンシ向上と、Storage Layer (PostgreSQL/SQLite/Supabase) と Graph Layer (Neo4j) 間のトランザクション原子性（Atomicity）を保証するため、**Transactional Outbox Pattern** を採用する。
+
+`GRAPH_SYNC_MODE` 環境変数に `"async_outbox"` を指定した場合、Storage Layer への書き込みと同一トランザクション内で Outbox テーブル (`graph_sync_outbox`) にイベントを記録し、バックグラウンドの `OutboxWorker` が非同期に Neo4j へバルク同期する。
+
+#### Config 拡張とバリデーション
+
+`Settings` クラス（`src/context_store/config.py`）に以下の設定が追加され、相関バリデーションが行われる。
+
+- `graph_sync_mode`: グラフ同期モード (`"sync"` または `"async_outbox"`)。デフォルトは `"sync"`。
+- `outbox_poll_interval_seconds`: ポーリング間隔（デフォルト: 5.0秒）
+- `outbox_batch_size`: 1バッチの処理イベント数（デフォルト: 100）
+- `outbox_max_retries`: 最大リトライ回数（デフォルト: 10）
+- `outbox_backoff_base_seconds`: Exponential Backoff のベース待機秒数（デフォルト: 1.0秒）
+- `outbox_backoff_max_seconds`: Exponential Backoff の最大待機秒数（デフォルト: 60.0秒）
+
+**相関バリデーションルール:**
+1. `graph_sync_mode == "async_outbox"` の場合、`graph_enabled == true` が必須。
+2. `storage_backend == "supabase"` かつ `graph_enabled == true` の場合、`graph_sync_mode == "async_outbox"` が必須（Supabase 環境では Neo4j Bolt プロトコルの直接接続をブロックするファイアウォール制約を回避するため）。
+
+### 17.2 データモデル
+
+`graph_sync_outbox` テーブル構造:
+
+| カラム | PostgreSQL / Supabase 型 | SQLite 型 | 説明 |
+|---|---|---|---|
+| `id` | UUID PK | TEXT PK | イベント一意識別子 |
+| `event_type` | VARCHAR(20) CHECK | TEXT CHECK | `SYNC_MEMORY` / `DELETE_MEMORY` |
+| `memory_id` | UUID | TEXT | 対象メモリ ID（外部キー制約は不適用） |
+| `payload` | JSONB DEFAULT '{}' | TEXT DEFAULT '{}' | `DELETE_MEMORY` 時のメタデータなど |
+| `status` | VARCHAR(20) DEFAULT 'PENDING' | TEXT DEFAULT 'PENDING' | `PENDING` / `PROCESSING` / `FAILED` |
+| `retry_count` | INT DEFAULT 0 | INTEGER DEFAULT 0 | リトライ回数 |
+| `next_retry_at` | TIMESTAMPTZ | TEXT (ISO8601) | 次回リトライ可能時刻（Backoff 永続化） |
+| `error_message` | TEXT NULL | TEXT NULL | 最後のエラーメッセージ |
+| `created_at` | TIMESTAMPTZ | TEXT (ISO8601) | 作成日時 |
+| `updated_at` | TIMESTAMPTZ | TEXT (ISO8601) | 最終更新日時 |
+
+**インデックス:**
+- `idx_outbox_status_retry`: `(status, next_retry_at ASC)` — ワーカーの PENDING フェッチ高速化用
+- `idx_outbox_memory_id`: `(memory_id)` — 運用/調査クエリ用
+
+#### 外部キー（FK）制約を適用しない理由
+`DELETE_MEMORY` イベント処理時に、すでに Storage 上のメモリは削除されている。FK制約があると `memories` 削除に伴い Outbox レコードもカスケード削除され、ワーカーが Neo4j 側のノード削除（`DETACH DELETE`）を実行できなくなるため、あえて FK 制約は適用しない。
+
+#### OutboxWriter / OutboxReader プロトコル
+
+同期処理の結合度を下げるため、書き込み用および読み込み用のインターフェースを Protocol として定義する。
+
+**OutboxWriter (`src/context_store/sync/outbox_writer.py`):**
+```python
+class OutboxWriter(Protocol):
+    async def enqueue_sync(
+        self,
+        conn: Any,
+        memory_id: str,
+        event_type: str,
+        payload: dict | None = None,
+    ) -> None:
+        """Storage の同一トランザクション内で Outbox イベントをエンキューする"""
+        ...
+```
+
+**OutboxReader (`src/context_store/sync/outbox_reader.py`):**
+```python
+class OutboxReader(Protocol):
+    async def fetch_pending(self, limit: int) -> list[OutboxEvent]:
+        """PENDING 状態のイベントを limit 件フェッチし、PROCESSING に遷移させる"""
+        ...
+
+    async def delete_completed(self, event_ids: list[str]) -> None:
+        """処理完了したイベントを物理削除する"""
+        ...
+
+    async def mark_failed(self, event_id: str, error_message: str) -> None:
+        """リトライ上限に達したイベントを FAILED 状態にし、エラーログを記録する"""
+        ...
+
+    async def reset_to_pending(
+        self,
+        event_id: str,
+        retry_count: int,
+        next_retry_at: datetime,
+        error_message: str,
+    ) -> None:
+        """リトライ対象のイベントを PENDING に戻し、次回リトライ時刻と Backoff カウントを更新する"""
+        ...
+
+    async def fetch_all_actionable(self) -> list[OutboxEvent]:
+        """リカバリスクリプト向けに、PENDING / FAILED / PROCESSING の全イベントをフェッチする"""
+        ...
+
+    async def reset_stuck_processing(
+        self,
+        threshold_seconds: int = 300,
+        max_retries: int = 10,
+    ) -> int:
+        """スタックした PROCESSING イベントを検出し、リセットまたは FAILED 遷移を行う"""
+        ...
+```
+
+### 17.3 状態の収束契約（Deduplication at Convergence）
+同一 `memory_id` に対する複数の `SYNC_MEMORY` イベントが Outbox に並存することを許容する。ワーカーはイベント処理時に Storage から**現時点の最新レコード**をバッチ取得し、Neo4j 側に `UNWIND + MERGE` することによって状態を収束させる。UNIQUE 制約 + UPSERT は PROCESSING との競合や FAILED の残骸との衝突による副作用があるため採用しない。
+
+### 17.4 ワーカーの動作仕様と対障害性
+
+1. **フェッチとアトミックな状態遷移**:
+   - `OutboxReader.fetch_pending` により、`next_retry_at <= NOW()` である `PENDING` レコードを取得。
+   - 二重処理を防ぐため、フェッチと同時にステータスを `PROCESSING` に更新する（Postgres/Supabase は `FOR UPDATE SKIP LOCKED`、SQLite は `BEGIN IMMEDIATE` + ループ内 UPDATE を使用）。
+2. **バルク同期**:
+   - `SYNC_MEMORY` イベント: `StorageAdapter.get_memories_batch()` で最新メモリ状態を取得。存在しないものは "orphan"（孤児）として扱い同期せず Outbox から削除。存在するメモリを `GraphSyncService.bulk_merge_memories()` により Neo4j に一括 MERGE。
+   - `DELETE_MEMORY` イベント: `GraphSyncService.bulk_delete_nodes()` により Neo4j 側のノードを `DETACH DELETE`。
+   - 成功したイベントは `delete_completed()` により Outbox から物理削除。
+3. **Exponential Backoff**:
+   - Neo4j 接続失敗時、`min(base * (2^retry_count), max)` 秒のバックオフを計算し、`next_retry_at` に設定して status を `PENDING` に戻す。
+   - `retry_count` が上限（デフォルト: 10）を超過した場合は `FAILED` に移行。
+4. **クラッシュからのリカバリ**:
+   - ワーカー起動時、`reset_stuck_processing(threshold_seconds=300)` を実行し、`updated_at` が閾値を超えて `PROCESSING` のままスタックしているレコードを `PENDING`（リトライ回数上限を超えている場合は `FAILED`）に復旧させる。
+
+#### 読み取りフォールバックとログ出力仕様
+
+`async_outbox` モードの特性上、メモリ保存からグラフ反映までに数秒の遅延（ラグ）が生じる。このラグの間、`RetrievalPipeline.search()` における `GraphTraversal` が空（0件）の結果を返した場合、システムは以下の INFO ログを出力して、VectorSearch + KeywordSearch の RRF 融合で結果を補完する。
+
+```text
+Graph traversal returned empty results; outbox sync lag may be a factor.
+Falling back to vector+keyword fusion.
+```
+
+### 17.5 Supabase 向け RPC 制御と DDL
+
+Supabase（PostgREST）を使用する場合、アプリケーションクライアントからトランザクションの直接制御（`BEGIN/COMMIT` などのアドホックなトランザクション境界）を行うことができない。そのため、データベースの原子性（Atomicity）を保証する以下のPL/pgSQL RPC関数を定義・利用する。
+
+#### RPC 1: `upsert_memory_with_outbox`
+- **目的**: メモリのインサート（衝突時は `UPDATE`）と、同一トランザクション内での `SYNC_MEMORY` イベントの Outbox 挿入をアトミックに実行する。
+- **引数**:
+  - `p_id` UUID, `p_content` TEXT, `p_memory_type` VARCHAR, `p_source_type` VARCHAR, `p_source_metadata` JSONB, `p_embedding` vector(768), `p_semantic_relevance` FLOAT, `p_importance_score` FLOAT, `p_tags` TEXT[], `p_project` TEXT, `p_content_hash` TEXT
+- **戻り値**: 挿入された `UUID`。
+
+#### RPC 2: `delete_memory_with_outbox`
+- **目的**: メモリレコードを削除し、削除したレコードのメタデータ（`memory_type`, `tags`, `project`）を payload に含む `DELETE_MEMORY` イベントを Outbox にアトミックに記録する。
+- **引数**: `p_memory_id` UUID
+- **戻り値**: 削除に成功したか（`BOOLEAN`）。
+
+#### RPC 3: `fetch_pending_outbox`
+- **目的**: `PENDING` 状態のイベントを安全に一括フェッチしつつ、他ワーカーとの多重処理を避けるため、アトミックに `PROCESSING` に状態遷移させる。内部で `FOR UPDATE SKIP LOCKED` を含む `UPDATE ... RETURNING` クエリを使用する。
+- **引数**: `p_limit` INT
+- **戻り値**: 状態更新された `graph_sync_outbox` レコードのセット。
+
+#### RPC 4: `reset_stuck_processing_outbox`
+- **目的**: 起動時リカバリ用。一定時間 `PROCESSING` のまま更新がないスタックしたイベントを抽出し、リトライ上限超過なら `FAILED`、未満なら `retry_count` をインクリメントした上で `PENDING` にリセットする。
+- **引数**: `p_threshold_seconds` INT, `p_max_retries` INT
+- **戻り値**: 復旧処理したレコード件数（`INT`）。
+
+### 17.6 リカバリ・管理コマンドラインツール
+
+データベースと Neo4j Aura の不整合を手動で解消・修復するため、以下の管理コマンドラインツールを配置する。
+
+- **ファイル**: `scripts/sync_storage_to_neo4j.py`
+- **インターフェース**:
+  ```bash
+  uv run python scripts/sync_storage_to_neo4j.py [--full | --catchup] [--chunk-size N] [--dry-run] [--yes]
+  ```
+- **実行モード**:
+  - `--full`: Storage Layer に存在するすべてのメモリ・関係性情報をフルスキャンし、Neo4j 側に一括再構築（UNWIND + MERGE）する。メモリ枯渇・タイムアウト防止のため、`--chunk-size`（デフォルト 1000）でページネーションを行う。
+  - `--catchup`: `OutboxWorker` がポーリングするのと同じロジックで、Outbox 内のすべての未完了イベント（`PENDING`/`FAILED`、およびスタックしている `PROCESSING` イベント）を1回限り同期実行し、残存イベントを回収・クリーンアップする。
+  - `--dry-run`: 実際に Neo4j や Outbox に変更を適用せず、同期対象となる件数のみを出力する。
+
+#### `--full` モードの制約とダウンタイム
+
+`--full` モードは `MATCH (m:Memory) DETACH DELETE m` で Neo4j 側の全ノードをパージしてから再構築するため、実行中は一時的にグラフ検索が空の結果を返す状態が発生する。これに伴い、以下の運用制約を厳守すること。
+
+- **通常運用中の実行禁止**: データ破損からの復旧やスキーマ変更など、メンテナンス窓口内での実行を必須とする。
+- **事前承認プロンプト**: `--dry-run` で事前に処理件数を確認した上で実行する。`--yes`（非対話フラグ）が指定されていない場合は、オペレータに確認プロンプトを提示して承認を得ること。
+- **実行ログ記録**: 処理の開始時刻、終了時刻、処理件数を必ず `INFO` レベルのログに残すこと。
+- **差分再同期の将来計画**: ダウンタイムのない再同期（Storage と Neo4j の ID 集合の差分を取り、差分のみを MERGE/DELETE する機能）として、将来的に `--reconcile` モードの追加を検討する（本リリースには含まない）。
+
+### 17.7 マイグレーションベースラインへの統合
+
+SQLite および PostgreSQL でマイグレーションを適用する `MigrationRunner`（`src/context_store/storage/migrations/runner.py`）において、既存のデータベースに Outbox テーブルを適用するために、ベースライン要件マッピングに `0003` を追加している。
+
+```python
+"0003": ["graph_sync_outbox"]
+```
+
+これによって、移行前の既存 DB は安全にスキップされつつ、テーブルが存在しない場合は `0003_graph_sync_outbox.sql` が自動的に適用される。
 
 ---
 

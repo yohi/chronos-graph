@@ -260,6 +260,7 @@ class Settings(BaseSettings):
     outbox_max_retries: int = Field(default=10, ge=0)
     outbox_backoff_base_seconds: float = Field(default=1.0, gt=0.0)
     outbox_backoff_max_seconds: float = Field(default=60.0, gt=0.0)
+    outbox_stuck_threshold_seconds: int = Field(default=300, ge=1)
 
     @field_validator("url_allowed_content_types", mode="before")
     @classmethod

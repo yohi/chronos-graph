@@ -71,6 +71,7 @@ async def test_fetch_pending_marks_processing(sqlite_db) -> None:
             (m1_id,),
         ) as cur:
             row = await cur.fetchone()
+            assert row is not None
             assert row[0] == "PROCESSING"
 
 
@@ -99,6 +100,7 @@ async def test_reset_stuck_processing_resets_to_pending_below_max_retries(sqlite
             "SELECT status, retry_count FROM graph_sync_outbox WHERE id = ?", (eid,)
         ) as cur:
             row = await cur.fetchone()
+            assert row is not None
             assert row == ("PENDING", 4)
 
 
@@ -125,6 +127,7 @@ async def test_reset_stuck_processing_marks_failed_at_max_retries(sqlite_db) -> 
     async with aiosqlite.connect(sqlite_db) as conn:
         async with conn.execute("SELECT status FROM graph_sync_outbox WHERE id = ?", (eid,)) as cur:
             row = await cur.fetchone()
+            assert row is not None
             assert row[0] == "FAILED"
 
 

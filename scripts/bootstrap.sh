@@ -260,7 +260,9 @@ update_env_key() {
         return
     fi
     if grep -q "^#\?$key=" .env; then
-        "${SED_INPLACE[@]}" "s/^#\?$key=.*/$key=$val/" .env
+        local escaped_val
+        escaped_val=$(printf '%s' "$val" | sed 's/[&/\]/\\&/g')
+        "${SED_INPLACE[@]}" "s/^#\?$key=.*/$key=$escaped_val/" .env
     else
         echo "$key=$val" >> .env
     fi
@@ -268,6 +270,7 @@ update_env_key() {
 
 # Comment/Uncomment blocks
 if [ "$BACKEND" = "sqlite" ]; then
+    modify_var_status "SQLITE_" "uncomment"
     modify_var_status "POSTGRES_" "comment"
     modify_var_status "SUPABASE_" "comment"
 elif [ "$BACKEND" = "postgres" ]; then
@@ -330,12 +333,12 @@ else
 fi
 
 # Values update
-update_env_key "STORAGE_BACKEND" "$BACKEND"
-update_env_key "EMBEDDING_PROVIDER" "$EMBEDDING_PROVIDER"
-update_env_key "GRAPH_ENABLED" "$GRAPH_ENABLED"
-update_env_key "CACHE_BACKEND" "$CACHE_BACKEND"
-update_env_key "CHRONOS_INGESTION_MODE" "$INGESTION_MODE"
-update_env_key "GRAPH_SYNC_MODE" "$GRAPH_SYNC_MODE"
+if [ "$TYPE" = "mcp" ] || [[ -n "$BACKEND" ]]; then update_env_key "STORAGE_BACKEND" "$BACKEND"; fi
+if [ "$TYPE" = "mcp" ] || [[ -n "$EMBEDDING_PROVIDER" ]]; then update_env_key "EMBEDDING_PROVIDER" "$EMBEDDING_PROVIDER"; fi
+if [ "$TYPE" = "mcp" ] || [[ -n "$GRAPH_ENABLED" ]]; then update_env_key "GRAPH_ENABLED" "$GRAPH_ENABLED"; fi
+if [ "$TYPE" = "mcp" ] || [[ -n "$CACHE_BACKEND" ]]; then update_env_key "CACHE_BACKEND" "$CACHE_BACKEND"; fi
+if [ "$TYPE" = "mcp" ] || [[ -n "$INGESTION_MODE" ]]; then update_env_key "CHRONOS_INGESTION_MODE" "$INGESTION_MODE"; fi
+if [ "$TYPE" = "mcp" ] || [[ -n "$GRAPH_SYNC_MODE" ]]; then update_env_key "GRAPH_SYNC_MODE" "$GRAPH_SYNC_MODE"; fi
 
 if [[ -n "$DB_HOST" ]]; then update_env_key "POSTGRES_HOST" "$DB_HOST"; fi
 if [[ -n "$DB_PORT" ]]; then update_env_key "POSTGRES_PORT" "$DB_PORT"; fi
@@ -352,6 +355,8 @@ if [[ -n "$EMBEDDING_MODEL" ]]; then
         update_env_key "LITELLM_MODEL" "$EMBEDDING_MODEL"
     elif [ "$EMBEDDING_PROVIDER" = "custom-api" ]; then
         update_env_key "CUSTOM_API_MODEL_NAME" "$EMBEDDING_MODEL"
+    elif [ "$EMBEDDING_PROVIDER" = "openai" ]; then
+        update_env_key "OPENAI_EMBEDDING_MODEL" "$EMBEDDING_MODEL"
     fi
 fi
 
@@ -359,25 +364,27 @@ if [[ -n "$EVALUATOR_MODEL" ]]; then
     update_env_key "CHRONOS_EVALUATOR_MODEL" "$EVALUATOR_MODEL"
 fi
 
-for VAR in "POSTGRES_SSL" "POSTGRES_SSL_NO_VERIFY" "POSTGRES_STATEMENT_CACHE_SIZE"; do
-    case $VAR in
-        POSTGRES_SSL) VAL=$POSTGRES_SSL; EXPLICIT_VAR="POSTGRES_SSL" ;;
-        POSTGRES_SSL_NO_VERIFY) VAL=$POSTGRES_SSL_NO_VERIFY; EXPLICIT_VAR="POSTGRES_SSL_NO_VERIFY" ;;
-        POSTGRES_STATEMENT_CACHE_SIZE) VAL=$POSTGRES_STATEMENT_CACHE_SIZE; EXPLICIT_VAR="POSTGRES_STATEMENT_CACHE_SIZE" ;;
-    esac
-    if [[ -z "$VAL" ]]; then continue; fi
-    if grep -q "^#\?$VAR=" .env; then
-        CURRENT_VAL=$(grep "^#\?$VAR=" .env | cut -d'=' -f2)
-        if [[ "$CURRENT_VAL" != "$VAL" ]]; then
-            if [[ "$EXPLICIT_FLAGS" == *"$EXPLICIT_VAR"* || "$ENV_JUST_CREATED" == "true" ]]; then
-                echo -e "${BLUE}Updating $VAR in .env: $CURRENT_VAL -> $VAL${NC}"
-                "${SED_INPLACE[@]}" "s/^#\?$VAR=.*/$VAR=$VAL/" .env
+if [ "$BACKEND" = "postgres" ]; then
+    for VAR in "POSTGRES_SSL" "POSTGRES_SSL_NO_VERIFY" "POSTGRES_STATEMENT_CACHE_SIZE"; do
+        case $VAR in
+            POSTGRES_SSL) VAL=$POSTGRES_SSL; EXPLICIT_VAR="POSTGRES_SSL" ;;
+            POSTGRES_SSL_NO_VERIFY) VAL=$POSTGRES_SSL_NO_VERIFY; EXPLICIT_VAR="POSTGRES_SSL_NO_VERIFY" ;;
+            POSTGRES_STATEMENT_CACHE_SIZE) VAL=$POSTGRES_STATEMENT_CACHE_SIZE; EXPLICIT_VAR="POSTGRES_STATEMENT_CACHE_SIZE" ;;
+        esac
+        if [[ -z "$VAL" ]]; then continue; fi
+        if grep -q "^#\?$VAR=" .env; then
+            CURRENT_VAL=$(grep "^#\?$VAR=" .env | cut -d'=' -f2)
+            if [[ "$CURRENT_VAL" != "$VAL" ]]; then
+                if [[ "$EXPLICIT_FLAGS" == *"$EXPLICIT_VAR"* || "$ENV_JUST_CREATED" == "true" ]]; then
+                    echo -e "${BLUE}Updating $VAR in .env: $CURRENT_VAL -> $VAL${NC}"
+                    "${SED_INPLACE[@]}" "s/^#\?$VAR=.*/$VAR=$VAL/" .env
+                fi
             fi
+        else
+            echo "$VAR=$VAL" >> .env
         fi
-    else
-        echo "$VAR=$VAL" >> .env
-    fi
-done
+    done
+fi
 
 echo -e "${BLUE}NOTE: Please edit .env to add your API keys (e.g., OPENAI_API_KEY).${NC}"
 
@@ -517,17 +524,18 @@ EOF
 import json, os
 path = os.path.expanduser('~/.config/opencode/opencode.json')
 try:
-    with open(path, 'r') as f:
-        data = json.load(f)
-except Exception:
-    data = {}
-plugin_list = data.get('plugin', [])
-if '@yohi/opencode-plugin-chronos-gate' not in plugin_list:
-    plugin_list.append('@yohi/opencode-plugin-chronos-gate')
-    data['plugin'] = plugin_list
-    with open(path, 'w') as f:
-        json.dump(data, f, indent=2)
-    print('✅ Successfully added plugin to opencode.json')
+    try:
+        with open(path, 'r') as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+    plugin_list = data.get('plugins', [])
+    if '@yohi/opencode-plugin-chronos-gate' not in plugin_list:
+        plugin_list.append('@yohi/opencode-plugin-chronos-gate')
+        data['plugins'] = plugin_list
+        with open(path, 'w') as f:
+            json.dump(data, f, indent=2)
+        print('✅ Successfully added plugin to opencode.json')
 except Exception as e:
     print('⚠️ Failed to update opencode.json automatically:', e)
 "

@@ -43,16 +43,31 @@ while [[ "$#" -gt 0 ]]; do
     case $1 in
         --backend)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --backend requires a value (sqlite|postgres|supabase)"; exit 1; fi
-            BACKEND="$2"; EXPLICIT_FLAGS="$EXPLICIT_FLAGS STORAGE_BACKEND"; shift ;;
+            BACKEND="$2"
+            if [[ "$BACKEND" != "sqlite" && "$BACKEND" != "postgres" && "$BACKEND" != "supabase" ]]; then
+                echo "Error: --backend must be 'sqlite', 'postgres', or 'supabase'"
+                exit 1
+            fi
+            EXPLICIT_FLAGS="$EXPLICIT_FLAGS STORAGE_BACKEND"; shift ;;
         --embedding)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --embedding requires a value (openai|litellm|local|custom)"; exit 1; fi
-            EMBEDDING_PROVIDER="$2"; EXPLICIT_FLAGS="$EXPLICIT_FLAGS EMBEDDING_PROVIDER"; shift ;;
+            EMBEDDING_PROVIDER="$2"
+            if [[ "$EMBEDDING_PROVIDER" != "openai" && "$EMBEDDING_PROVIDER" != "litellm" && "$EMBEDDING_PROVIDER" != "local" && "$EMBEDDING_PROVIDER" != "custom" ]]; then
+                echo "Error: --embedding must be 'openai', 'litellm', 'local', or 'custom'"
+                exit 1
+            fi
+            EXPLICIT_FLAGS="$EXPLICIT_FLAGS EMBEDDING_PROVIDER"; shift ;;
         --skip-tests) SKIP_TESTS=true ;;
         --ssl) POSTGRES_SSL=true; POSTGRES_SSL_NO_VERIFY=false; POSTGRES_STATEMENT_CACHE_SIZE=256; EXPLICIT_FLAGS="$EXPLICIT_FLAGS POSTGRES_SSL POSTGRES_SSL_NO_VERIFY POSTGRES_STATEMENT_CACHE_SIZE" ;;
         --ssl-no-verify) POSTGRES_SSL=true; POSTGRES_SSL_NO_VERIFY=true; POSTGRES_STATEMENT_CACHE_SIZE=0; EXPLICIT_FLAGS="$EXPLICIT_FLAGS POSTGRES_SSL POSTGRES_SSL_NO_VERIFY POSTGRES_STATEMENT_CACHE_SIZE" ;;
         --cache)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --cache requires a value (inmemory|redis)"; exit 1; fi
-            CACHE_BACKEND="$2"; EXPLICIT_FLAGS="$EXPLICIT_FLAGS CACHE_BACKEND"; shift ;;
+            CACHE_BACKEND="$2"
+            if [[ "$CACHE_BACKEND" != "inmemory" && "$CACHE_BACKEND" != "redis" ]]; then
+                echo "Error: --cache must be 'inmemory' or 'redis'"
+                exit 1
+            fi
+            EXPLICIT_FLAGS="$EXPLICIT_FLAGS CACHE_BACKEND"; shift ;;
         --mcp-output)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --mcp-output requires a value (claude|cursor|generic)"; exit 1; fi
             MCP_OUTPUT="$2"; shift ;;
@@ -69,21 +84,47 @@ while [[ "$#" -gt 0 ]]; do
             UV_FROM="$2"; shift ;;
         --graph)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --graph requires a value (true|false)"; exit 1; fi
-            GRAPH_ENABLED="$2"; EXPLICIT_FLAGS="$EXPLICIT_FLAGS GRAPH_ENABLED"; shift ;;
+            GRAPH_ENABLED="$2"
+            if [[ "$GRAPH_ENABLED" != "true" && "$GRAPH_ENABLED" != "false" ]]; then
+                echo "Error: --graph must be 'true' or 'false'"
+                exit 1
+            fi
+            EXPLICIT_FLAGS="$EXPLICIT_FLAGS GRAPH_ENABLED"; shift ;;
         
         # New options
         --type)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --type requires a value (mcp|hook)"; exit 1; fi
-            TYPE="$2"; shift ;;
+            TYPE="$2"
+            if [[ "$TYPE" != "mcp" && "$TYPE" != "hook" ]]; then
+                echo "Error: --type must be 'mcp' or 'hook'"
+                exit 1
+            fi
+            shift ;;
         --mode)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --mode requires a value (production|dry-run)"; exit 1; fi
-            MODE="$2"; shift ;;
+            MODE="$2"
+            if [[ "$MODE" != "production" && "$MODE" != "dry-run" ]]; then
+                echo "Error: --mode must be 'production' or 'dry-run'"
+                exit 1
+            fi
+            shift ;;
         --source)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --source requires a value (remote|local)"; exit 1; fi
-            SOURCE="$2"; shift ;;
+            SOURCE="$2"
+            if [[ "$SOURCE" != "remote" && "$SOURCE" != "local" ]]; then
+                echo "Error: --source must be 'remote' or 'local'"
+                exit 1
+            fi
+            shift ;;
         --ingestion-mode)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --ingestion-mode requires a value (all|selective)"; exit 1; fi
-            INGESTION_MODE="$2"; shift ;;
+            INGESTION_MODE="$2"
+            if [[ "$INGESTION_MODE" != "all" && "$INGESTION_MODE" != "selective" ]]; then
+                echo "Error: --ingestion-mode must be 'all' or 'selective'"
+                exit 1
+            fi
+            EXPLICIT_FLAGS="$EXPLICIT_FLAGS CHRONOS_INGESTION_MODE"
+            shift ;;
         --agents)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --agents requires a value"; exit 1; fi
             AGENTS="$2"; shift ;;
@@ -116,7 +157,13 @@ while [[ "$#" -gt 0 ]]; do
             EMBEDDING_MODEL="$2"; shift ;;
         --graph-sync-mode)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --graph-sync-mode requires a value (sync|async_outbox)"; exit 1; fi
-            GRAPH_SYNC_MODE="$2"; shift ;;
+            GRAPH_SYNC_MODE="$2"
+            if [[ "$GRAPH_SYNC_MODE" != "sync" && "$GRAPH_SYNC_MODE" != "async_outbox" ]]; then
+                echo "Error: --graph-sync-mode must be 'sync' or 'async_outbox'"
+                exit 1
+            fi
+            EXPLICIT_FLAGS="$EXPLICIT_FLAGS GRAPH_SYNC_MODE"
+            shift ;;
 
         -h|--help)
             echo "Usage: $0 [options]"
@@ -283,7 +330,7 @@ elif [ "$BACKEND" = "supabase" ]; then
     modify_var_status "POSTGRES_" "comment"
 fi
 
-if [ "$GRAPH_ENABLED" = "true" ] && [ "$BACKEND" = "postgres" ]; then
+if [ "$GRAPH_ENABLED" = "true" ] && { [ "$BACKEND" = "postgres" ] || [ "$BACKEND" = "supabase" ]; }; then
     modify_var_status "NEO4J_" "uncomment"
 else
     modify_var_status "NEO4J_" "comment"
@@ -333,12 +380,12 @@ else
 fi
 
 # Values update
-if [ "$TYPE" = "mcp" ] || [[ -n "$BACKEND" ]]; then update_env_key "STORAGE_BACKEND" "$BACKEND"; fi
-if [ "$TYPE" = "mcp" ] || [[ -n "$EMBEDDING_PROVIDER" ]]; then update_env_key "EMBEDDING_PROVIDER" "$EMBEDDING_PROVIDER"; fi
-if [ "$TYPE" = "mcp" ] || [[ -n "$GRAPH_ENABLED" ]]; then update_env_key "GRAPH_ENABLED" "$GRAPH_ENABLED"; fi
-if [ "$TYPE" = "mcp" ] || [[ -n "$CACHE_BACKEND" ]]; then update_env_key "CACHE_BACKEND" "$CACHE_BACKEND"; fi
-if [ "$TYPE" = "mcp" ] || [[ -n "$INGESTION_MODE" ]]; then update_env_key "CHRONOS_INGESTION_MODE" "$INGESTION_MODE"; fi
-if [ "$TYPE" = "mcp" ] || [[ -n "$GRAPH_SYNC_MODE" ]]; then update_env_key "GRAPH_SYNC_MODE" "$GRAPH_SYNC_MODE"; fi
+if [ "$TYPE" = "mcp" ] || [ "$TYPE" = "hook" ] || [[ "$EXPLICIT_FLAGS" == *"STORAGE_BACKEND"* ]]; then update_env_key "STORAGE_BACKEND" "$BACKEND"; fi
+if [ "$TYPE" = "mcp" ] || [ "$TYPE" = "hook" ] || [[ "$EXPLICIT_FLAGS" == *"EMBEDDING_PROVIDER"* ]]; then update_env_key "EMBEDDING_PROVIDER" "$EMBEDDING_PROVIDER"; fi
+if [ "$TYPE" = "mcp" ] || [ "$TYPE" = "hook" ] || [[ "$EXPLICIT_FLAGS" == *"GRAPH_ENABLED"* ]]; then update_env_key "GRAPH_ENABLED" "$GRAPH_ENABLED"; fi
+if [ "$TYPE" = "mcp" ] || [ "$TYPE" = "hook" ] || [[ "$EXPLICIT_FLAGS" == *"CACHE_BACKEND"* ]]; then update_env_key "CACHE_BACKEND" "$CACHE_BACKEND"; fi
+if [ "$TYPE" = "mcp" ] || [ "$TYPE" = "hook" ] || [[ "$EXPLICIT_FLAGS" == *"CHRONOS_INGESTION_MODE"* ]]; then update_env_key "CHRONOS_INGESTION_MODE" "$INGESTION_MODE"; fi
+if [ "$TYPE" = "mcp" ] || [ "$TYPE" = "hook" ] || [[ "$EXPLICIT_FLAGS" == *"GRAPH_SYNC_MODE"* ]]; then update_env_key "GRAPH_SYNC_MODE" "$GRAPH_SYNC_MODE"; fi
 
 if [[ -n "$DB_HOST" ]]; then update_env_key "POSTGRES_HOST" "$DB_HOST"; fi
 if [[ -n "$DB_PORT" ]]; then update_env_key "POSTGRES_PORT" "$DB_PORT"; fi
@@ -485,7 +532,12 @@ EOF
                 cat << 'EOF' > "$EVAL_HOOK_FILE"
 @echo off
 rem Auto-generated by bootstrap.sh
-uv --directory "%~dp0\.." run python -m mcp_gateway evaluate --json-io --policy-path "%CHRONOS_EVALUATOR_POLICY_PATH%"
+where uv >nul 2>nul
+if %ERRORLEVEL% equ 0 (
+    uv --directory "%~dp0\.." run python -m mcp_gateway evaluate --json-io --policy-path "%CHRONOS_EVALUATOR_POLICY_PATH%"
+) else (
+    python -m mcp_gateway evaluate --json-io --policy-path "%CHRONOS_EVALUATOR_POLICY_PATH%"
+)
 EOF
             fi
             echo -e "${GREEN}Generated $EVAL_HOOK_FILE${NC}"
@@ -504,9 +556,15 @@ EOF
                 cat << 'EOF' > "$EVAL_HOOK_FILE"
 #!/usr/bin/env bash
 # Auto-generated by bootstrap.sh
-uv --directory "$(dirname "$0")/.." run python -m mcp_gateway evaluate \
-  --json-io \
-  --policy-path "${CHRONOS_EVALUATOR_POLICY_PATH:-$(dirname "$0")/../src/mcp_gateway/policies/intents.yaml}"
+if command -v uv &> /dev/null; then
+  uv --directory "$(dirname "$0")/.." run python -m mcp_gateway evaluate \
+    --json-io \
+    --policy-path "${CHRONOS_EVALUATOR_POLICY_PATH:-$(dirname "$0")/../src/mcp_gateway/policies/intents.yaml}"
+else
+  python -m mcp_gateway evaluate \
+    --json-io \
+    --policy-path "${CHRONOS_EVALUATOR_POLICY_PATH:-$(dirname "$0")/../src/mcp_gateway/policies/intents.yaml}"
+fi
 EOF
             fi
             chmod +x "$EVAL_HOOK_FILE"

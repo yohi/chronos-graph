@@ -151,9 +151,9 @@ master
 | 4.2 | feat/outbox-worker-loop | https://github.com/yohi/chronos-graph/pull/309 | ✅ Done |
 | 5.1 | feat/outbox-factory | https://github.com/yohi/chronos-graph/pull/312 | ✅ Done |
 | 5.2 | feat/outbox-orchestrator | https://github.com/yohi/chronos-graph/pull/313 | ✅ Done |
-| 5.3 | feat/outbox-pipeline |  |  |
+| 5.3 | feat/outbox-pipeline | https://github.com/yohi/chronos-graph/pull/314 | ✅ Done |
 | 6.1 | feat/outbox-recovery-script | https://github.com/yohi/chronos-graph/pull/310 | ✅ Done |
-| 6.2 | feat/outbox-e2e |  |  |
+| 6.2 | feat/outbox-e2e | https://github.com/yohi/chronos-graph/pull/315 | ✅ Done |
 
 ---
 

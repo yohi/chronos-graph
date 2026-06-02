@@ -33,7 +33,7 @@ class SqliteOutboxReader:
     async def fetch_pending(self, limit: int) -> list[OutboxEvent]:
         async with aiosqlite.connect(self._db_path) as conn:
             conn.row_factory = aiosqlite.Row
-            await conn.execute("BEGIN")
+            await conn.execute("BEGIN IMMEDIATE")
             try:
                 rows = await (
                     await conn.execute(
@@ -64,9 +64,10 @@ class SqliteOutboxReader:
     async def delete_completed(self, event_ids: list[str]) -> None:
         if not event_ids:
             return
+        placeholders = ",".join("?" for _ in event_ids)
+        sql = f"DELETE FROM graph_sync_outbox WHERE id IN ({placeholders})"  # noqa: S608  # nosec
         async with aiosqlite.connect(self._db_path) as conn:
-            for eid in event_ids:
-                await conn.execute("DELETE FROM graph_sync_outbox WHERE id = ?", (eid,))
+            await conn.execute(sql, event_ids)
             await conn.commit()
 
     async def mark_failed(self, event_id: str, error_message: str) -> None:
@@ -115,7 +116,7 @@ class SqliteOutboxReader:
         cutoff = (datetime.now(timezone.utc) - timedelta(seconds=threshold_seconds)).isoformat()
         async with aiosqlite.connect(self._db_path) as conn:
             conn.row_factory = aiosqlite.Row
-            await conn.execute("BEGIN")
+            await conn.execute("BEGIN IMMEDIATE")
             try:
                 rows = await (
                     await conn.execute(
@@ -251,30 +252,28 @@ class PostgresOutboxReader:
     ) -> int:
         async with self._pool.acquire() as conn:
             async with conn.transaction():
-                failed = await conn.execute(
+                failed_rows = await conn.fetch(
                     "UPDATE graph_sync_outbox "
                     "SET status='FAILED', "
                     "error_message='Recovered from stuck PROCESSING (max retries)', "
                     "updated_at=NOW() "
                     "WHERE status='PROCESSING' "
                     "AND updated_at < NOW() - ($1 || ' seconds')::interval "
-                    "AND retry_count + 1 > $2",
+                    "AND retry_count + 1 > $2 "
+                    "RETURNING id",
                     str(threshold_seconds),
                     max_retries,
                 )
-                pending = await conn.execute(
+                pending_rows = await conn.fetch(
                     "UPDATE graph_sync_outbox "
                     "SET status='PENDING', retry_count = retry_count + 1, updated_at=NOW() "
                     "WHERE status='PROCESSING' "
-                    "AND updated_at < NOW() - ($1 || ' seconds')::interval",
+                    "AND updated_at < NOW() - ($1 || ' seconds')::interval "
+                    "RETURNING id",
                     str(threshold_seconds),
                 )
 
-        def _count(tag: str) -> int:
-            parts = tag.split()
-            return int(parts[-1]) if parts and parts[-1].isdigit() else 0
-
-        return _count(failed) + _count(pending)
+        return len(failed_rows) + len(pending_rows)
 
 
 class SupabaseOutboxReader:
@@ -381,5 +380,5 @@ def _supabase_row_to_event(row: dict[str, Any]) -> OutboxEvent:
 
 def _parse_dt(s: str | None) -> datetime:
     if not s:
-        return datetime.now(timezone.utc)
+        raise ValueError("Datetime string cannot be None or empty")
     return datetime.fromisoformat(s.replace("Z", "+00:00"))

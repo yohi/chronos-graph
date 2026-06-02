@@ -6,6 +6,7 @@ Worker / リカバリスクリプト両方から使用。
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -75,7 +76,12 @@ class GraphSyncService:
         await self._graph.execute_write(_NODE_MERGE_CYPHER, {"batch": batch})
 
         memory_ids = [str(m.id) for m in memories]
-        edges = await self._storage.list_edges_for_memories(memory_ids)  # type: ignore[attr-defined]
+        from context_store.storage.protocols import GraphAdapter
+
+        if isinstance(self._storage, GraphAdapter):
+            edges = await self._storage.list_edges_for_memories(memory_ids)
+        else:
+            edges = []
 
         if not edges:
             return len(memories)
@@ -102,13 +108,24 @@ class GraphSyncService:
         await self._graph.execute_write(_DELETE_CYPHER, {"ids": list(memory_ids)})
         return len(memory_ids)
 
-    async def full_sync_from_storage(self, *, chunk_size: int = 1000) -> int:
+    async def full_sync_from_storage(
+        self, *, chunk_size: int = 1000, max_pages: int = 10000
+    ) -> int:
         """Storage 全体から Neo4j を再構築。chunk_size でページネーション。"""
         from context_store.storage.protocols import MemoryFilters
 
         total = 0
         offset = 0
+        pages_processed = 0
         while True:
+            if pages_processed >= max_pages:
+                logger.error(
+                    "GraphSyncService.full_sync_from_storage: exceeded max_pages limit (%d). "
+                    "Aborting sync to prevent infinite loop.",
+                    max_pages,
+                )
+                break
+
             filters = MemoryFilters(limit=chunk_size, offset=offset, order_by="id")
             page = await self._storage.list_by_filter(filters)
             if not page:
@@ -116,12 +133,21 @@ class GraphSyncService:
             n = await self.bulk_merge_memories(page)
             total += n
             offset += chunk_size
+            pages_processed += 1
             logger.info("GraphSyncService.full_sync_from_storage: synced %d so far", total)
         return total
 
 
+_EDGE_TYPE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
 def _sanitize_edge_type(edge_type: str) -> str:
-    """Cypher 注入を防ぐためエッジ種別を英数字+アンダースコアに限定。"""
-    if not edge_type.replace("_", "").isalnum():
+    """Cypher 注入を防ぐためエッジ種別を英数字+アンダースコアに限定。
+
+    先頭は英字かアンダースコアのみ許可。
+    """
+    if not edge_type:
+        raise ValueError("edge_type cannot be empty")
+    if not _EDGE_TYPE_RE.fullmatch(edge_type):
         raise ValueError(f"Invalid edge_type for Cypher: {edge_type!r}")
     return edge_type

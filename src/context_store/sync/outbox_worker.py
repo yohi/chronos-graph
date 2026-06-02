@@ -89,24 +89,24 @@ class OutboxWorker:
         completed_ids: list[str] = []
 
         if sync_events:
-            mids = [e.memory_id for e in sync_events]
+            mids = [str(e.memory_id) for e in sync_events]
             try:
                 memories = await self._storage.get_memories_batch(mids)  # type: ignore[attr-defined]
                 found_ids = {str(m.id) for m in memories}
-                orphan_ids = [e.id for e in sync_events if e.memory_id not in found_ids]
+                orphan_ids = [str(e.id) for e in sync_events if str(e.memory_id) not in found_ids]
                 if memories:
                     await self._graph_sync.bulk_merge_memories(memories)
                 completed_ids.extend(orphan_ids)
-                completed_ids.extend(e.id for e in sync_events if e.memory_id in found_ids)
+                completed_ids.extend(str(e.id) for e in sync_events if str(e.memory_id) in found_ids)
             except Exception as exc:
                 await self._apply_backoff(sync_events, exc)
                 return
 
         if del_events:
-            ids = [e.memory_id for e in del_events]
+            ids = [str(e.memory_id) for e in del_events]
             try:
                 await self._graph_sync.bulk_delete_nodes(ids)
-                completed_ids.extend(e.id for e in del_events)
+                completed_ids.extend(str(e.id) for e in del_events)
             except Exception as exc:
                 await self._apply_backoff(del_events, exc)
                 return
@@ -121,13 +121,13 @@ class OutboxWorker:
         for e in events:
             new_retry = e.retry_count + 1
             if new_retry > max_retries:
-                await self._reader.mark_failed(e.id, str(exc))
-                logger.error("OutboxWorker: event %s exceeded max retries", e.id)
+                await self._reader.mark_failed(str(e.id), str(exc))
+                logger.error("OutboxWorker: event %s exceeded max retries", str(e.id))
                 continue
             backoff = min(base * (2**new_retry), max_s)
             next_at = datetime.now(timezone.utc) + timedelta(seconds=backoff)
             await self._reader.reset_to_pending(
-                event_id=e.id,
+                event_id=str(e.id),
                 retry_count=new_retry,
                 next_retry_at=next_at,
                 error_message=str(exc),

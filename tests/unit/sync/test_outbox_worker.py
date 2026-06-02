@@ -67,7 +67,7 @@ async def test_worker_processes_pending_events_then_deletes() -> None:
     await task
 
     graph_sync.bulk_merge_memories.assert_awaited()
-    reader.delete_completed.assert_awaited_with([e1_id])
+    reader.delete_completed.assert_awaited_with([str(e1_id)])
 
 
 @pytest.mark.asyncio
@@ -210,7 +210,7 @@ async def test_worker_handles_orphaned_sync_event() -> None:
     await worker.stop()
     await task
 
-    reader.delete_completed.assert_awaited_with([e1_id])
+    reader.delete_completed.assert_awaited_with([str(e1_id)])
 
 
 @pytest.mark.asyncio

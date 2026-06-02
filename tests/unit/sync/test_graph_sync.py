@@ -110,7 +110,7 @@ async def test_bulk_merge_memories_with_edges() -> None:
 
     class MockStorageGraphAdapter(GraphAdapter):
         async def list_edges_for_memories(self, memory_ids: list[str]) -> list[Edge]:
-            pass
+            return []
 
     storage = MagicMock(spec=MockStorageGraphAdapter)
 
@@ -195,7 +195,7 @@ async def test_bulk_merge_invalid_edge_type_raises() -> None:
 
     class MockStorageGraphAdapter(GraphAdapter):
         async def list_edges_for_memories(self, memory_ids: list[str]) -> list[Edge]:
-            pass
+            return []
 
     storage = MagicMock(spec=MockStorageGraphAdapter)
     mem_a_id = str(uuid.uuid4())

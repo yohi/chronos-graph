@@ -25,13 +25,10 @@
 2. **実行モードの選択**:
    * `production` (本番モード: 実際に環境構築・ファイルの変更を行う)
    * `dry-run` (デバッグモード: ファイルを一切変更せず、シミュレーションと解説のみを行う)
-   * **判定条件**: 
-     - ローカルの `@README.md` などの参照から実行している場合は、必ず本質問で「本番かDry-runか」を確認・選択させてください。
-     - `https://raw.githubusercontent.com/...` 等のリモートファイルから直接ロードされている場合は、質問をスキップし、デフォルトで「本番モード（`production`）」として進行して構いません。
 
 ---
 
-### Phase 2: 詳細設定の確認とロックイン (BLOCKING STEP)
+### Phase 2: 詳細設定 of 確認とロックイン (BLOCKING STEP)
 
 #### 【ケース A】長期記憶MCPの場合
 以下の項目を `ask_question` 等を用いて一括でユーザーに提示し、回答を確定させてください。
@@ -47,39 +44,46 @@
    * `sqlite` (🌟推奨: ゼロ設定かつ軽量に動作)
    * `postgres` (本番用: pgvector が必要)
    * `supabase` (本番用: クラウドベースの Supabase Data API を経由)
-4. **PostgreSQL ベクトル検索前提確認 (PostgreSQL選択時のみ)**:
-   * `確認した` (pgvector拡張が有効であることを確認します)
-   * `該当なし` (PostgreSQLを選択していない場合)
-5. **Neo4j接続（グラフ関係性機能）**:
+4. **Neo4j接続（グラフ関係性機能）**:
    * `有効` (SQLiteは内部グラフ、Postgresは外部Neo4jを使用)
    * `無効` (🌟推奨: 高速かつシンプルな軽量構成)
-6. **キャッシュ**:
+5. **キャッシュ**:
    * `inmemory` (🌟推奨: プロセス内メモリで管理)
    * `redis` (本番用: 外部の Redis キャッシュサーバーを使用)
-7. **埋め込みベクトルモデル**:
-   * `cl-nagoya/ruri-v3-310m` (🌟推奨: 日本語に優れる標準モデル)
-   * `OpenAI` (OpenAI の Embedding API を利用)
-8. **OpenAIのモデル確認 (EmbeddingがOpenAIのときのみ)**:
-   * `text-embedding-3-small` / `text-embedding-3-large` / `text-embedding-ada-002` からモデル名を確認。
+6. **埋め込みベクトルモデル**:
+   * `local-model` (🌟推奨: ローカルのモデル `cl-nagoya/ruri-v3-310m` 等を使用)
+   * `openai` (OpenAI の Embedding API を利用)
+   * `litellm` (LiteLLM 経由でモデルを利用)
+   * `custom-api` (独自のカスタムAPIを利用)
+
+*(※追加情報の入力)*
+* **PostgreSQL選択時**: ベクトル検索（pgvector拡張）が有効であることを事前に確認します。
+* **local-model選択時**: ローカルモデル名（デフォルト: `cl-nagoya/ruri-v3-310m`）の入力を求めます。
+* **openai/litellm/custom-api選択時**: 使用する埋め込みモデル名（例: `text-embedding-3-small`）の入力を求めます。
 
 #### 【ケース B】安全評価Hookの場合
 以下の項目を `ask_question` 等を用いて一括でユーザーに提示し、回答を確定させてください。
 
-1. **安全評価を行うLLMモデル**:
-   * 使用する LLM モデル（例: `anthropic/claude-3-5-haiku-20241022` 等）を入力・確認。
-2. **起動方法 (Source)**:
+1. **起動方法 (Source)**:
    * `remote` (🌟推奨: リモートの GitHub から uvx 経由で評価コマンドを実行する)
    * `local` (ローカルのリポジトリを Python 経由で呼び出す)
+2. **安全評価を行うLLMモデル**:
+   * 使用する LLM モデル（例: `anthropic/claude-3-5-haiku-20241022` 等）を確認。
 
 ---
 
 ### Phase 3: パラメータの収集 (BLOCKING STEP)
-上記の回答結果に基づいて、**機密情報に該当しない追加のパラメータ** の入力を `ask_question` 等の入力ツールを用いてユーザーに求めてください。
+上記の回答結果に基づいて、必要なパラメータの入力を `ask_question` 等の入力ツールを用いてユーザーに求めてください。
+**注意**: セキュリティ保護のため、パスワード等の機密情報が含まれるURLを入力する際は、パスワード部分を `[YOUR-PASSWORD]` などのプレースホルダーにした状態で入力してもらい、Phase 6 で直接 `.env` に設定します。
 
-* **PostgreSQL選択時**: `ホスト名`、`ポート番号`、`データベース名`、`ユーザー名` の入力を求めます。（パスワードは機密情報のため収集しません）
-* **Neo4j接続（グラフ有効時）**: `Neo4j URI`、`ユーザー名` の入力を求めます。（パスワードは機密情報のため収集しません）
-* **Redis選択時**: `Redis 接続URL`（例: `redis://localhost:6379/0`）の入力を求めます。
-* **LiteLLM/Custom API選択時**: 埋め込みモデル名（`embedding-model`）の入力を求めます。
+#### 【ケース A】長期記憶MCPの場合
+* **Postgres接続URL**: `postgresql://postgres:[YOUR-PASSWORD]@localhost:5432/postgres` 等の形式（パスワードはプレースホルダー）。
+* **SupabaseプロジェクトURL**: `https://your-project.supabase.co` 形式の接続先URL（APIキーはPhase 6で設定）。
+* **Neo4j接続URI**: `neo4j+s://[YOUR-USER]:[YOUR-PASSWORD]@host` 等の形式。
+* **Redis接続URL**: `redis://default:[YOUR-PASSWORD]@host:port` 等の形式。
+
+#### 【ケース B】安全評価Hookの場合
+* （追加パラメータの収集は不要）
 
 ---
 
@@ -94,8 +98,7 @@
 
 ---
 
-### Phase 5: scripts/bootstrap.sh の実行と検証
-
+### Phase 5: scripts/bootstrap.sh の実行
 収集したパラメータに基づいて、`scripts/bootstrap.sh` を引数付きで呼び出します。AIエージェント自身でファイルを直接編集したり作成したりすることはせず、必ずこのスクリプトに実行を委ねてください。
 
 #### コマンド生成例：
@@ -110,26 +113,23 @@
   --source <source> \
   --ingestion-mode <ingestion-mode> \
   --agents <comma_separated_agents> \
-  [--graph-sync-mode <sync|async_outbox>] \
   [--evaluator-model <evaluator_model>] \
   [--db-host <db_host>] [--db-port <db_port>] [--db-name <db_name>] [--db-user <db_user>] \
   [--neo4j-uri <neo4j_uri>] [--neo4j-user <neo4j_user>] \
   [--redis-url <redis_url>] \
   [--embedding-model <embedding_model>]
 ```
-*(※ `storage_backend == "supabase"` かつ `graph_enabled == true` の場合は、`graph_sync_mode` は自動的に `async_outbox` に補正・設定されます)*
-
-このスクリプトを実行すると、自動的に以下の処理が機械的に行われます。
-1. 依存関係の解決 (`uv sync --all-extras`)
-2. `.env` の自動生成と、各ブロックのコメントアウト/アンコメントの制御 (不要設定のコメントアウトの自動徹底)
-3. テストの実行による整合性チェック
-4. `mcp_config.json` の生成 (mcp時)
-5. 接続確認疎通テストの実行 (mcp かつ local 時)
-6. 各エージェント用フックスクリプトの自動生成・配置、および OpenCode のプラグイン自動登録
-7. 安全評価テストの実行 (hook時)
 
 ---
 
-### Phase 6: 機密情報の入力と最終案内
-1. スクリプトの実行後、ユーザーに対し「`.env` ファイルにパスワードやAPIキーなどの機密情報を直接手動で入力してください」と求めてください。
-2. ユーザーから入力完了の報告を受けたら、自動セットアップは完了です。必要に応じてエージェントごとの追加手順（OpenCodeの npmrc 設定等）を表示して終了します。
+### Phase 6: 機密情報の入力
+1. スクリプトの実行後、ユーザーに対し「`.env` ファイルを開き、プレースホルダー（`[YOUR-PASSWORD]` 等）になっている部分のパスワードや、APIキー（`OPENAI_API_KEY`, `SUPABASE_KEY` など）を手動で直接入力してください」と求めます。
+2. ユーザーから入力完了の報告を受けたら、次のフェーズへ進みます。
+
+---
+
+### Phase 7: 接続テスト
+設定完了後、疎通確認と安全評価機能の正常動作を確認します。
+1. **MCP 疎通テスト**: MCPサーバーが正常に起動し、設定したデータベースやキャッシュに接続できるかテストします。
+2. **安全評価Hookテスト**: 登録したエージェントフックが機能し、評価エンジン（LLM）を通した動作確認テストを自動実行します。
+3. すべてクリアになれば、自動セットアップは完了です。

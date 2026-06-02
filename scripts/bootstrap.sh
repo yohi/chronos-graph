@@ -50,10 +50,10 @@ while [[ "$#" -gt 0 ]]; do
             fi
             EXPLICIT_FLAGS="$EXPLICIT_FLAGS STORAGE_BACKEND"; shift ;;
         --embedding)
-            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --embedding requires a value (openai|litellm|local|custom)"; exit 1; fi
+            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --embedding requires a value (openai|litellm|local|local-model|custom|custom-api)"; exit 1; fi
             EMBEDDING_PROVIDER="$2"
-            if [[ "$EMBEDDING_PROVIDER" != "openai" && "$EMBEDDING_PROVIDER" != "litellm" && "$EMBEDDING_PROVIDER" != "local" && "$EMBEDDING_PROVIDER" != "custom" ]]; then
-                echo "Error: --embedding must be 'openai', 'litellm', 'local', or 'custom'"
+            if [[ "$EMBEDDING_PROVIDER" != "openai" && "$EMBEDDING_PROVIDER" != "litellm" && "$EMBEDDING_PROVIDER" != "local" && "$EMBEDDING_PROVIDER" != "local-model" && "$EMBEDDING_PROVIDER" != "custom" && "$EMBEDDING_PROVIDER" != "custom-api" ]]; then
+                echo "Error: --embedding must be 'openai', 'litellm', 'local', 'local-model', 'custom', or 'custom-api'"
                 exit 1
             fi
             EXPLICIT_FLAGS="$EXPLICIT_FLAGS EMBEDDING_PROVIDER"; shift ;;
@@ -169,7 +169,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "Usage: $0 [options]"
             echo "Options:"
             echo "  --backend [sqlite|postgres|supabase] Set storage backend (default: sqlite)"
-            echo "  --embedding [openai|litellm|local|custom] Set embedding provider (default: openai)"
+            echo "  --embedding [openai|litellm|local|local-model|custom|custom-api] Set embedding provider (default: openai)"
             echo "  --skip-tests                      Skip running unit tests"
             echo "  --ssl                             Enable SSL for PostgreSQL"
             echo "  --ssl-no-verify                   Enable SSL without certificate verification (for Supabase/pgBouncer)"
@@ -277,8 +277,8 @@ fi
 
 # 2. Environment Configuration
 case $EMBEDDING_PROVIDER in
-    local) EMBEDDING_PROVIDER="local-model" ;;
-    custom) EMBEDDING_PROVIDER="custom-api" ;;
+    local|local-model) EMBEDDING_PROVIDER="local-model" ;;
+    custom|custom-api) EMBEDDING_PROVIDER="custom-api" ;;
 esac
 
 ENV_JUST_CREATED=false
@@ -293,9 +293,9 @@ modify_var_status() {
     local prefix=$1
     local action=$2 # "comment" or "uncomment"
     if [ "$action" = "comment" ]; then
-        "${SED_INPLACE[@]}" "s/^\($prefix[A-Z0-9_]*=\)/#\1/" .env
+        "${SED_INPLACE[@]}" "s/^\([[:space:]]*$prefix[A-Z0-9_]*=\)/# \1/" .env
     else
-        "${SED_INPLACE[@]}" "s/^#\($prefix[A-Z0-9_]*=\)/\1/" .env
+        "${SED_INPLACE[@]}" "s/^#[[:space:]]*\($prefix[A-Z0-9_]*=\)/\1/" .env
     fi
 }
 
@@ -306,10 +306,10 @@ update_env_key() {
     if [[ -z "$val" ]]; then
         return
     fi
-    if grep -q "^#\?$key=" .env; then
+    if grep -q "^#[[:space:]]*$key=\|^$key=" .env; then
         local escaped_val
         escaped_val=$(printf '%s' "$val" | sed 's/[&/\]/\\&/g')
-        "${SED_INPLACE[@]}" "s/^#\?$key=.*/$key=$escaped_val/" .env
+        "${SED_INPLACE[@]}" "s/^#[[:space:]]*$key=.*/$key=$escaped_val/; s/^$key=.*/$key=$escaped_val/" .env
     else
         echo "$key=$val" >> .env
     fi
@@ -366,9 +366,21 @@ fi
 
 if [ "$TYPE" = "hook" ]; then
     modify_var_status "CHRONOS_EVALUATOR_" "uncomment"
-    modify_var_status "MCP_GATEWAY_" "uncomment"
 else
     modify_var_status "CHRONOS_EVALUATOR_" "comment"
+fi
+
+if [ "$TYPE" = "hook" ] || [ "$INGESTION_MODE" = "all" ]; then
+    modify_var_status "MCP_GATEWAY_" "uncomment"
+    # pydantic-settings 向けにリスト型変数を JSON 配列形式に更新
+    update_env_key "MCP_GATEWAY_UPSTREAM_COMMAND" '["python", "-m", "context_store"]'
+    update_env_key "MCP_GATEWAY_UPSTREAM_ENV_PASSTHROUGH" '["OPENAI_API_KEY", "SQLITE_DB_PATH", "GRAPH_ENABLED", "EMBEDDING_PROVIDER", "CHRONOS_INGESTION_MODE"]'
+    
+    # 認証用のセキュアキーを自動ランダム生成（Pythonのsecretsモジュールを使用）
+    SECURE_KEY=$(python -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || echo "mcp-gateway-default-secret-key-token")
+    update_env_key "MCP_GATEWAY_API_KEYS_JSON" "{\"default\": \"$SECURE_KEY\"}"
+    update_env_key "MCP_GATEWAY_API_KEY" "$SECURE_KEY"
+else
     modify_var_status "MCP_GATEWAY_" "comment"
 fi
 
@@ -419,12 +431,12 @@ if [ "$BACKEND" = "postgres" ]; then
             POSTGRES_STATEMENT_CACHE_SIZE) VAL=$POSTGRES_STATEMENT_CACHE_SIZE; EXPLICIT_VAR="POSTGRES_STATEMENT_CACHE_SIZE" ;;
         esac
         if [[ -z "$VAL" ]]; then continue; fi
-        if grep -q "^#\?$VAR=" .env; then
-            CURRENT_VAL=$(grep "^#\?$VAR=" .env | cut -d'=' -f2)
+        if grep -q "^#[[:space:]]*$VAR=\|^$VAR=" .env; then
+            CURRENT_VAL=$(grep "^#[[:space:]]*$VAR=\|^$VAR=" .env | cut -d'=' -f2)
             if [[ "$CURRENT_VAL" != "$VAL" ]]; then
                 if [[ "$EXPLICIT_FLAGS" == *"$EXPLICIT_VAR"* || "$ENV_JUST_CREATED" == "true" ]]; then
                     echo -e "${BLUE}Updating $VAR in .env: $CURRENT_VAL -> $VAL${NC}"
-                    "${SED_INPLACE[@]}" "s/^#\?$VAR=.*/$VAR=$VAL/" .env
+                    "${SED_INPLACE[@]}" "s/^#[[:space:]]*$VAR=.*/$VAR=$VAL/; s/^$VAR=.*/$VAR=$VAL/" .env
                 fi
             fi
         else

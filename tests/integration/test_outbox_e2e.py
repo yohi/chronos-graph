@@ -48,52 +48,91 @@ async def test_outbox_full_cycle_sqlite(monkeypatch, tmp_path) -> None:
     storage, graph, cache, worker = await create_storage_with_outbox(settings)
     assert worker is not None
 
-    # 1. save_memory
-    from context_store.models.memory import Memory
+    try:
+        # 1. save_memory
+        from context_store.models.memory import Memory
 
-    mem = Memory(
-        id="77777777-7777-7777-7777-777777777777",
-        content="e2e",
-        memory_type="semantic",
-        source_type="manual",
-        source_metadata={},
-        embedding=[0.1] * 768,
-        semantic_relevance=0.5,
-        importance_score=0.5,
-        tags=["e2e"],
-        project="p",
-        content_hash="h",
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
-    )
-    await storage.save_memory(mem)
+        mem = Memory(
+            id="77777777-7777-7777-7777-777777777777",
+            content="e2e",
+            memory_type="semantic",
+            source_type="manual",
+            source_metadata={},
+            embedding=[0.1] * 768,
+            semantic_relevance=0.5,
+            importance_score=0.5,
+            tags=["e2e"],
+            project="p",
+            content_hash="h",
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        await storage.save_memory(mem)
 
-    # Outbox に PENDING あり
-    async with aiosqlite.connect(str(db_path)) as conn:
-        async with conn.execute(
-            "SELECT COUNT(*) FROM graph_sync_outbox WHERE status = 'PENDING'"
-        ) as cur:
-            row = await cur.fetchone()
-            assert row is not None
-            (cnt,) = row
-            assert cnt == 1
+        # Outbox に PENDING あり
+        async with aiosqlite.connect(str(db_path)) as conn:
+            async with conn.execute(
+                "SELECT COUNT(*) FROM graph_sync_outbox WHERE status = 'PENDING'"
+            ) as cur:
+                row = await cur.fetchone()
+                assert row is not None
+                (cnt,) = row
+                assert cnt == 1
 
-    # 2. Worker 1 サイクル
-    count = await worker.process_pending_once()
-    assert count == 1
+        # 2. Worker 1 サイクル
+        count = await worker.process_pending_once()
+        assert count == 1
 
-    # 3. Mock Neo4j に MERGE が走った
-    fake_graph.execute_write.assert_awaited()
+        # 3. Mock Neo4j に MERGE が走ったことを詳細に検証
+        fake_graph.execute_write.assert_awaited_once()
+        called_args, _ = fake_graph.execute_write.call_args
+        assert "MERGE (m:Memory" in called_args[0]
+        assert called_args[1]["batch"][0]["id"] == str(mem.id)
 
-    # 4. Outbox 空
-    async with aiosqlite.connect(str(db_path)) as conn:
-        async with conn.execute("SELECT COUNT(*) FROM graph_sync_outbox") as cur:
-            row = await cur.fetchone()
-            assert row is not None
-            (cnt,) = row
-            assert cnt == 0
+        # 4. Outbox 空
+        async with aiosqlite.connect(str(db_path)) as conn:
+            async with conn.execute("SELECT COUNT(*) FROM graph_sync_outbox") as cur:
+                row = await cur.fetchone()
+                assert row is not None
+                (cnt,) = row
+                assert cnt == 0
 
-    # cleanup
-    await storage.dispose()
-    await graph.dispose()
-    await cache.dispose()
+        # Mock をリセットして削除処理のテストへ
+        fake_graph.execute_write.reset_mock()
+
+        # 5. delete_memory
+        await storage.delete_memory(str(mem.id))
+
+        # Outbox に DELETE_MEMORY の PENDING イベントがあることを確認
+        async with aiosqlite.connect(str(db_path)) as conn:
+            async with conn.execute(
+                "SELECT COUNT(*) FROM graph_sync_outbox WHERE status = 'PENDING'"
+            ) as cur:
+                row = await cur.fetchone()
+                assert row is not None
+                (cnt,) = row
+                assert cnt == 1
+
+        # Worker 2 サイクル目
+        count = await worker.process_pending_once()
+        assert count == 1
+
+        # Mock Neo4j に DETACH DELETE が走ったことを詳細に検証
+        fake_graph.execute_write.assert_awaited_once()
+        called_args, _ = fake_graph.execute_write.call_args
+        assert "DETACH DELETE" in called_args[0]
+        assert str(mem.id) in called_args[1]["ids"]
+
+        # Outbox 空
+        async with aiosqlite.connect(str(db_path)) as conn:
+            async with conn.execute("SELECT COUNT(*) FROM graph_sync_outbox") as cur:
+                row = await cur.fetchone()
+                assert row is not None
+                (cnt,) = row
+                assert cnt == 0
+
+    finally:
+        # cleanup
+        await storage.dispose()
+        await graph.dispose()
+        await cache.dispose()

@@ -125,7 +125,6 @@ class GraphSyncService:
                     max_pages,
                 )
                 break
-
             filters = MemoryFilters(limit=chunk_size, offset=offset, order_by="id")
             page = await self._storage.list_by_filter(filters)
             if not page:

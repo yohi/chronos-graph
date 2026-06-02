@@ -43,6 +43,8 @@ if TYPE_CHECKING:
         MemoryFilters,
         StorageAdapter,
     )
+    from context_store.sync.outbox_worker import OutboxWorker
+    from context_store.sync.outbox_writer import OutboxWriter
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +215,7 @@ async def create_storage(
     settings: "Settings",
     *,
     read_only: bool = False,
+    outbox_writer: "OutboxWriter | None" = None,
 ) -> tuple["StorageAdapter", "GraphAdapter | None", "CacheAdapter"]:
     """Create storage, graph, and cache adapters from *settings*.
 
@@ -234,7 +237,9 @@ async def create_storage(
         cache_adp = await _create_cache_adapter(settings)
 
         try:
-            storage = await _create_storage_adapter(settings, read_only=read_only)
+            storage = await _create_storage_adapter(
+                settings, read_only=read_only, outbox_writer=outbox_writer
+            )
         except NotImplementedError as exc:
             # Re-raise unless we are in read-only mode (Dashboard needs to start)
             if read_only:
@@ -292,13 +297,18 @@ async def create_storage(
 
 
 async def _create_storage_adapter(
-    settings: "Settings", *, read_only: bool = False
+    settings: "Settings",
+    *,
+    read_only: bool = False,
+    outbox_writer: "OutboxWriter | None" = None,
 ) -> "StorageAdapter":
     """Instantiate the appropriate StorageAdapter."""
     if settings.storage_backend == "sqlite":
         from context_store.storage.sqlite import SQLiteStorageAdapter
 
-        return await SQLiteStorageAdapter.create(settings, read_only=read_only)
+        return await SQLiteStorageAdapter.create(
+            settings, read_only=read_only, outbox_writer=outbox_writer
+        )
 
     if settings.storage_backend == "postgres":
         from context_store.storage.postgres import PostgresStorageAdapter
@@ -307,7 +317,7 @@ async def _create_storage_adapter(
             raise NotImplementedError(
                 "read_only mode for postgres backend is not yet supported (Phase 6)"
             )
-        return await PostgresStorageAdapter.create(settings)
+        return await PostgresStorageAdapter.create(settings, outbox_writer=outbox_writer)
 
     if settings.storage_backend == "supabase":
         from context_store.storage.supabase import SupabaseStorageAdapter
@@ -357,9 +367,27 @@ async def _create_graph_adapter(
         )
 
     if settings.storage_backend == "supabase":
-        raise ValueError(
-            "Graph adapter is not supported for storage_backend=supabase "
-            "(Neo4j Bolt cannot be tunneled over HTTPS)"
+        if settings.graph_sync_mode != "async_outbox":
+            raise ValueError(
+                "Graph adapter is not supported for storage_backend=supabase "
+                "(Neo4j Bolt cannot be tunneled over HTTPS)"
+            )
+        from context_store.storage.neo4j import Neo4jGraphAdapter
+
+        if (
+            not settings.neo4j_uri
+            or not settings.neo4j_user
+            or not settings.neo4j_password.get_secret_value().strip()
+        ):
+            raise ValueError(
+                "Neo4j uri, user, and password must be provided "
+                "when graph is enabled with supabase backend."
+            )
+        return await Neo4jGraphAdapter.create(
+            uri=settings.neo4j_uri,
+            user=settings.neo4j_user,
+            password=settings.neo4j_password,
+            read_only=read_only,
         )
 
     raise ValueError(f"Unsupported storage_backend for graph: {settings.storage_backend!r}")
@@ -383,3 +411,89 @@ async def _create_cache_adapter(settings: "Settings") -> "CacheAdapter":
         )
 
     raise ValueError(f"Unsupported cache_backend: {settings.cache_backend!r}")
+
+
+async def create_storage_with_outbox(
+    settings: "Settings",
+    *,
+    read_only: bool = False,
+) -> tuple[
+    "StorageAdapter",
+    "GraphAdapter | None",
+    "CacheAdapter",
+    "OutboxWorker | None",
+]:
+    """async_outbox モード対応の Factory。Worker も生成して返す。"""
+    from context_store.sync.graph_sync import GraphSyncService
+    from context_store.sync.outbox_reader import (
+        OutboxReader,
+        PostgresOutboxReader,
+        SqliteOutboxReader,
+    )
+    from context_store.sync.outbox_worker import OutboxWorker
+    from context_store.sync.outbox_writer import (
+        PostgresOutboxWriter,
+        SqliteOutboxWriter,
+    )
+
+    writer: OutboxWriter | None = None
+    if settings.graph_sync_mode == "async_outbox":
+        if settings.storage_backend == "sqlite":
+            writer = SqliteOutboxWriter()
+        elif settings.storage_backend == "postgres":
+            writer = PostgresOutboxWriter()
+
+    storage, graph_adp, cache_adp = await create_storage(
+        settings, read_only=read_only, outbox_writer=writer
+    )
+
+    try:
+        if settings.graph_sync_mode != "async_outbox":
+            return storage, graph_adp, cache_adp, None
+
+        if graph_adp is None:
+            raise ValueError("async_outbox requires graph_enabled=true")
+
+        # Writer/Reader を Storage backend ごとに生成
+        reader: OutboxReader
+        if settings.storage_backend == "sqlite":
+            import os
+
+            db_path = os.path.expanduser(settings.sqlite_db_path)
+            reader = SqliteOutboxReader(db_path=db_path)
+        elif settings.storage_backend == "postgres":
+            reader = PostgresOutboxReader(pool=storage._pool)  # type: ignore[attr-defined]
+        elif settings.storage_backend == "supabase":
+            storage._outbox_enabled = True  # type: ignore[attr-defined]
+            # Supabase は asyncpg を直接使えないため、RPC を呼び出す SupabaseOutboxReader を使用する
+            from context_store.sync.outbox_reader import SupabaseOutboxReader
+
+            reader = SupabaseOutboxReader(client=storage._client)  # type: ignore[attr-defined]
+        else:
+            raise ValueError(f"Unsupported backend for outbox: {settings.storage_backend}")
+
+        graph_sync = GraphSyncService(graph_adapter=graph_adp, storage_adapter=storage)  # type: ignore[arg-type]
+        worker = OutboxWorker(
+            reader=reader,
+            storage_adapter=storage,
+            graph_sync=graph_sync,
+            settings=settings,
+        )
+        return storage, graph_adp, cache_adp, worker
+    except Exception:
+        if cache_adp:
+            try:
+                await cache_adp.dispose()
+            except Exception:
+                logger.exception("Failed to dispose cache_adp in error recovery")
+        if graph_adp:
+            try:
+                await graph_adp.dispose()
+            except Exception:
+                logger.exception("Failed to dispose graph_adp in error recovery")
+        if storage:
+            try:
+                await storage.dispose()
+            except Exception:
+                logger.exception("Failed to dispose storage in error recovery")
+        raise

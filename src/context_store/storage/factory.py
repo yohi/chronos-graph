@@ -11,7 +11,8 @@ Routing logic
 
 - GRAPH_ENABLED=true + STORAGE_BACKEND=sqlite → SQLiteGraphAdapter
 - GRAPH_ENABLED=true + STORAGE_BACKEND=postgres → Neo4jGraphAdapter (requires NEO4J_PASSWORD)
-- GRAPH_ENABLED=true + STORAGE_BACKEND=supabase → Not supported (raises ValueError)
+- GRAPH_ENABLED=true + STORAGE_BACKEND=supabase →
+  Neo4jGraphAdapter when async_outbox, else ValueError
 - GRAPH_ENABLED=false → None
 
 - CACHE_BACKEND=inmemory → InMemoryCacheAdapter  (+ SQLiteCacheCoherenceChecker for sqlite)
@@ -43,6 +44,9 @@ if TYPE_CHECKING:
         MemoryFilters,
         StorageAdapter,
     )
+    from context_store.sync.outbox_reader import OutboxReader
+    from context_store.sync.outbox_worker import OutboxWorker
+    from context_store.sync.outbox_writer import OutboxWriter
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +295,77 @@ async def create_storage(
         raise
 
 
+async def create_storage_with_outbox(
+    settings: "Settings",
+    *,
+    read_only: bool = False,
+    outbox_writer: "OutboxWriter | None" = None,
+) -> tuple[
+    "StorageAdapter",
+    "GraphAdapter | None",
+    "CacheAdapter",
+    "OutboxWorker | None",
+]:
+    """async_outbox モード対応の Factory。Worker も生成して返す。"""
+    from context_store.sync.graph_sync import GraphSyncService
+    from context_store.sync.outbox_reader import (
+        PostgresOutboxReader,
+        SqliteOutboxReader,
+        SupabaseOutboxReader,
+    )
+    from context_store.sync.outbox_worker import OutboxWorker
+    from context_store.sync.outbox_writer import (
+        PostgresOutboxWriter,
+        SqliteOutboxWriter,
+    )
+
+    # 通常の create_storage を呼び出す
+    storage, graph_adp, cache_adp = await create_storage(settings, read_only=read_only)
+
+    if settings.graph_sync_mode != "async_outbox":
+        return storage, graph_adp, cache_adp, None
+
+    if graph_adp is None:
+        raise ValueError("async_outbox requires graph_enabled=true")
+
+    # Writer/Reader を Storage backend ごとに生成
+    reader: "OutboxReader"
+    if settings.storage_backend == "sqlite":
+        import os
+
+        db_path = os.path.expanduser(settings.sqlite_db_path)
+        storage._outbox_writer = SqliteOutboxWriter()  # type: ignore[attr-defined]
+        reader = SqliteOutboxReader(db_path=db_path)
+    elif settings.storage_backend == "postgres":
+        storage._outbox_writer = PostgresOutboxWriter()  # type: ignore[attr-defined]
+        reader = PostgresOutboxReader(pool=storage._pool)  # type: ignore[attr-defined]
+    elif settings.storage_backend == "supabase":
+        storage._outbox_enabled = True  # type: ignore[attr-defined]
+        # Supabase は asyncpg を直接使えないため、Task 1.3 で定義した RPC を
+        # 呼び出す SupabaseOutboxReader を使用する（Python 実装は Task 4.1
+        # の `outbox_reader.py` 内で SqliteOutboxReader / PostgresOutboxReader
+        # と並んで提供される）。
+        reader = SupabaseOutboxReader(client=storage._client)  # type: ignore[attr-defined]
+    else:
+        raise ValueError(f"Unsupported backend for outbox: {settings.storage_backend}")
+
+    # GraphSyncService は Neo4jGraphAdapter を期待するためキャスト
+    from typing import cast
+
+    from context_store.storage.neo4j import Neo4jGraphAdapter
+
+    neo4j_adp = cast(Neo4jGraphAdapter, graph_adp)
+
+    graph_sync = GraphSyncService(graph_adapter=neo4j_adp, storage_adapter=storage)
+    worker = OutboxWorker(
+        reader=reader,
+        storage_adapter=storage,
+        graph_sync=graph_sync,
+        settings=settings,
+    )
+    return storage, graph_adp, cache_adp, worker
+
+
 async def _create_storage_adapter(
     settings: "Settings", *, read_only: bool = False
 ) -> "StorageAdapter":
@@ -357,9 +432,18 @@ async def _create_graph_adapter(
         )
 
     if settings.storage_backend == "supabase":
-        raise ValueError(
-            "Graph adapter is not supported for storage_backend=supabase "
-            "(Neo4j Bolt cannot be tunneled over HTTPS)"
+        if settings.graph_sync_mode != "async_outbox":
+            raise ValueError(
+                "Supabase + graph requires graph_sync_mode='async_outbox' "
+                "(Neo4j Bolt cannot be tunneled over HTTPS)"
+            )
+        from context_store.storage.neo4j import Neo4jGraphAdapter
+
+        return await Neo4jGraphAdapter.create(
+            uri=settings.neo4j_uri,
+            user=settings.neo4j_user,
+            password=settings.neo4j_password,
+            read_only=read_only,
         )
 
     raise ValueError(f"Unsupported storage_backend for graph: {settings.storage_backend!r}")

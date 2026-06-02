@@ -300,7 +300,7 @@ class TestSupabaseBackend:
         settings.storage_backend = "supabase"
         settings.graph_enabled = True
 
-        with pytest.raises(ValueError, match="not supported for storage_backend=supabase"):
+        with pytest.raises(ValueError, match="Supabase \\\u002b graph requires graph_sync_mode="):
             await _create_graph_adapter(settings)
 
 
@@ -325,3 +325,29 @@ class TestReturnTypes:
         assert isinstance(cache_adp, CacheAdapter)
 
         await dispose_adapters(storage, graph_adp, cache_adp)
+
+
+class TestOutboxFactory:
+    @pytest.mark.asyncio
+    async def test_factory_returns_outbox_writer_when_async_outbox(self, tmp_path: Path) -> None:
+        """async_outbox モード時、Storage に OutboxWriter が注入される."""
+        db_path = str(tmp_path / "test.db")
+        settings = make_settings(
+            storage_backend="sqlite",
+            sqlite_db_path=db_path,
+            graph_enabled=True,
+            graph_sync_mode="async_outbox",
+            neo4j_password="secret",
+            embedding_provider="local-model",
+        )
+
+        from context_store.storage.factory import create_storage_with_outbox
+        from context_store.sync.outbox_worker import OutboxWorker
+
+        storage, graph_adp, cache_adp, worker = await create_storage_with_outbox(settings)
+        try:
+            assert worker is not None
+            assert isinstance(worker, OutboxWorker)
+            assert getattr(storage, "_outbox_writer", None) is not None
+        finally:
+            await dispose_adapters(storage, graph_adp, cache_adp)

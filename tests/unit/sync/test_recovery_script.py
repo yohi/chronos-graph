@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+
 import pytest
 
 
@@ -11,7 +12,8 @@ def test_main_requires_mode_flag() -> None:
     import importlib
     import importlib.util
 
-    script_path = pathlib.Path(__file__).parent.parent.parent.parent / "scripts" / "sync_storage_to_neo4j.py"
+    root = pathlib.Path(__file__).resolve().parents[3]
+    script_path = root / "scripts" / "sync_storage_to_neo4j.py"
     spec = importlib.util.spec_from_file_location(
         "sync_storage_to_neo4j",
         str(script_path.resolve()),
@@ -27,7 +29,8 @@ def test_main_requires_mode_flag() -> None:
 def test_confirm_full_returns_true_with_yes_flag() -> None:
     import importlib.util
 
-    script_path = pathlib.Path(__file__).parent.parent.parent.parent / "scripts" / "sync_storage_to_neo4j.py"
+    root = pathlib.Path(__file__).resolve().parents[3]
+    script_path = root / "scripts" / "sync_storage_to_neo4j.py"
     spec = importlib.util.spec_from_file_location(
         "sync_storage_to_neo4j",
         str(script_path.resolve()),

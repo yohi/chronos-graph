@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.3.0](https://github.com/yohi/chronos-graph/compare/v1.2.0...v1.3.0) (2026-06-02)
+
+
+### Features
+
+* **config:** graph_sync_mode と outbox 設定を追加 ([#299](https://github.com/yohi/chronos-graph/issues/299)) ([953151b](https://github.com/yohi/chronos-graph/commit/953151b9f804c8cefb4ffa6125b5c6093f781ae1))
+* **factory:** async_outbox 対応の create_storage_with_outbox を追加 ([#312](https://github.com/yohi/chronos-graph/issues/312)) ([ce3719c](https://github.com/yohi/chronos-graph/commit/ce3719c8d62a4aa80dc9442a887db81eb37cb907))
+* **neo4j:** execute_write メソッドを追加 ([#302](https://github.com/yohi/chronos-graph/issues/302)) ([bf310e0](https://github.com/yohi/chronos-graph/commit/bf310e089e15906cae0789cefef19c599075240b))
+* **orchestrator:** OutboxWorker のライフサイクル統合 ([#313](https://github.com/yohi/chronos-graph/issues/313)) ([b715735](https://github.com/yohi/chronos-graph/commit/b715735aa0c779ef60f4035bacab71b6f9d978aa))
+* **outbox-pipeline:** IngestionPipeline の graph_sync_mode 対応 (Task 5.3) ([#314](https://github.com/yohi/chronos-graph/issues/314)) ([5479be6](https://github.com/yohi/chronos-graph/commit/5479be6c794b825cd544efa9d4d0cea5c3da196b))
+* **postgres:** save/delete_memory に OutboxWriter を統合 ([#306](https://github.com/yohi/chronos-graph/issues/306)) ([838d93e](https://github.com/yohi/chronos-graph/commit/838d93e026e004dbe1da25699550a66477e3c5f5))
+* **scripts:** sync_storage_to_neo4j.py リカバリ CLI ([#310](https://github.com/yohi/chronos-graph/issues/310)) ([0c8c5a9](https://github.com/yohi/chronos-graph/commit/0c8c5a936ab3862421e14a161e3734f1da0e01b2))
+* **setup:** 自動セットアップ処理をbootstrap.shに集約 ([#317](https://github.com/yohi/chronos-graph/issues/317)) ([6783a95](https://github.com/yohi/chronos-graph/commit/6783a95bbbf30be2bcee2356268027ed2b16728a))
+* **sqlite:** save/delete_memory に OutboxWriter を統合 ([#307](https://github.com/yohi/chronos-graph/issues/307)) ([617399e](https://github.com/yohi/chronos-graph/commit/617399e51b656ecad897841d07f89aa3a9d7f50e))
+* **storage:** graph_sync_outbox マイグレーションを追加 ([#300](https://github.com/yohi/chronos-graph/issues/300)) ([0dab0a5](https://github.com/yohi/chronos-graph/commit/0dab0a5f9d6d2b87b5863f298bd23c93787e377c))
+* **supabase:** graph_sync_outbox マイグレーション + RPC ([#301](https://github.com/yohi/chronos-graph/issues/301)) ([0ae2b61](https://github.com/yohi/chronos-graph/commit/0ae2b61fed0d0141b34c8c7486fa36d212c27755))
+* **supabase:** save/delete_memory に RPC outbox 切替を追加 ([#308](https://github.com/yohi/chronos-graph/issues/308)) ([c79f8b7](https://github.com/yohi/chronos-graph/commit/c79f8b714e3dd0e1a2c07c682428616990740ba0))
+* **sync:** GraphSyncService - 共有 MERGE/DELETE ロジック ([#304](https://github.com/yohi/chronos-graph/issues/304)) ([5ac0d02](https://github.com/yohi/chronos-graph/commit/5ac0d020d4b73ca7dec816619beacab24e858f2d))
+* **sync:** OutboxReader Protocol + 全バックエンド実装 ([#305](https://github.com/yohi/chronos-graph/issues/305)) ([f00fa01](https://github.com/yohi/chronos-graph/commit/f00fa011d9faa85ceac6e4d2d41e820c8dd4a806))
+* **sync:** OutboxWorker - ポーリングループ + Backoff + リカバリ ([#309](https://github.com/yohi/chronos-graph/issues/309)) ([a5b8c12](https://github.com/yohi/chronos-graph/commit/a5b8c127ccfd45d7b2ac98e49829b26057d3edee))
+* **sync:** OutboxWriter Protocol + 実装 ([#303](https://github.com/yohi/chronos-graph/issues/303)) ([c31b5ca](https://github.com/yohi/chronos-graph/commit/c31b5ca070977f7c5c43259b659b650662a76e5f))
+
 ## [1.2.0](https://github.com/yohi/chronos-graph/compare/v1.1.0...v1.2.0) (2026-05-31)
 
 

@@ -20,6 +20,7 @@ from context_store.config import Settings
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
 from context_store.storage.migrations.runner import MigrationRunner
 from context_store.storage.protocols import ALLOWED_SORT_COLUMNS, MemoryFilters, StorageError
+from context_store.sync.outbox_writer import OutboxWriter
 from context_store.utils.stale_lock import StaleAwareFileLock
 
 # ---------------------------------------------------------------------------
@@ -146,11 +147,19 @@ def _row_to_memory(row: dict[str, Any], embedding: list[float] | None = None) ->
 class SQLiteStorageAdapter:
     """StorageAdapter backed by SQLite with sqlite-vec vector search and FTS5."""
 
-    def __init__(self, db_path: str, settings: Settings, *, read_only: bool = False) -> None:
+    def __init__(
+        self,
+        db_path: str,
+        settings: Settings,
+        *,
+        read_only: bool = False,
+        outbox_writer: OutboxWriter | None = None,
+    ) -> None:
         self._db_path = db_path
         self._settings = settings
         self._read_only = read_only
         self._disposed = False
+        self._outbox_writer: OutboxWriter | None = outbox_writer
 
         # Back-pressure control
         self._semaphore = asyncio.Semaphore(settings.sqlite_max_concurrent_connections)
@@ -169,14 +178,20 @@ class SQLiteStorageAdapter:
     # ------------------------------------------------------------------
 
     @classmethod
-    async def create(cls, settings: Settings, *, read_only: bool = False) -> "SQLiteStorageAdapter":
+    async def create(
+        cls,
+        settings: Settings,
+        *,
+        read_only: bool = False,
+        outbox_writer: OutboxWriter | None = None,
+    ) -> "SQLiteStorageAdapter":
         """Create and initialise the adapter (runs schema migration)."""
         db_path = os.path.expanduser(settings.sqlite_db_path)
         if not read_only:
             os.makedirs(
                 os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True
             )
-        adapter = cls(db_path, settings, read_only=read_only)
+        adapter = cls(db_path, settings, read_only=read_only, outbox_writer=outbox_writer)
         try:
             if not read_only:
                 lock = StaleAwareFileLock(
@@ -389,6 +404,12 @@ class SQLiteStorageAdapter:
                         )
                         self._vector_dim = dim
 
+                if self._outbox_writer is not None:
+                    await self._outbox_writer.enqueue_sync(
+                        conn=conn,
+                        memory_id=str(memory.id),
+                        event_type="SYNC_MEMORY",
+                    )
                 await conn.commit()
             except aiosqlite.OperationalError as exc:
                 _raise_if_locked(exc)
@@ -469,6 +490,14 @@ class SQLiteStorageAdapter:
         """Delete a memory. Returns True if deleted, False if not found."""
         async with self._db() as conn:
             try:
+                if self._outbox_writer is not None:
+                    async with conn.execute(
+                        "SELECT memory_type, tags, project FROM memories WHERE id = ?",
+                        (memory_id,),
+                    ) as cur:
+                        meta_row = await cur.fetchone()
+                else:
+                    meta_row = None
                 async with conn.execute(
                     "SELECT id FROM memories WHERE id = ?", (memory_id,)
                 ) as cursor:
@@ -476,6 +505,26 @@ class SQLiteStorageAdapter:
                 if exists is None:
                     return False
                 await conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+                if self._outbox_writer is not None:
+                    try:
+                        tags = json.loads(meta_row[1]) if meta_row and meta_row[1] else []
+                    except (json.JSONDecodeError, TypeError):
+                        tags = []
+                    payload = (
+                        {
+                            "memory_type": meta_row[0],
+                            "tags": tags,
+                            "project": meta_row[2],
+                        }
+                        if meta_row
+                        else {}
+                    )
+                    await self._outbox_writer.enqueue_sync(
+                        conn=conn,
+                        memory_id=memory_id,
+                        event_type="DELETE_MEMORY",
+                        payload=payload,
+                    )
                 await conn.commit()
                 return True
             except aiosqlite.OperationalError as exc:

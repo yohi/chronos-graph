@@ -81,10 +81,11 @@ _MEMORY_BRIEF_COLUMNS = (
 class SupabaseStorageAdapter:
     """StorageAdapter implementation backed by Supabase Data API (HTTPS only)."""
 
-    def __init__(self, client: object) -> None:
+    def __init__(self, client: object, *, outbox_enabled: bool = False) -> None:
         self._client: Any = client
         self._cached_dimension: int | None = None
         self._dimension_lock = asyncio.Lock()
+        self._outbox_enabled: bool = outbox_enabled
 
     @classmethod
     async def create(cls, settings: "Settings") -> "SupabaseStorageAdapter":
@@ -99,7 +100,8 @@ class SupabaseStorageAdapter:
                 postgrest_client_timeout=settings.supabase_request_timeout_seconds,
             ),
         )
-        adapter = cls(client)
+        outbox_enabled = settings.graph_sync_mode == "async_outbox"
+        adapter = cls(client, outbox_enabled=outbox_enabled)
         try:
             actual_dim = await adapter.get_vector_dimension()
         except Exception as exc:
@@ -192,6 +194,34 @@ class SupabaseStorageAdapter:
         return StorageError(message, code="STORAGE_ERROR", recoverable=True)
 
     async def save_memory(self, memory: "Memory") -> str:
+        if self._outbox_enabled:
+            try:
+                response = await self._client.rpc(
+                    "upsert_memory_with_outbox",
+                    {
+                        "p_id": str(memory.id),
+                        "p_content": memory.content,
+                        "p_memory_type": memory.memory_type.value,
+                        "p_source_type": memory.source_type.value,
+                        "p_source_metadata": memory.source_metadata or {},
+                        "p_embedding": _embedding_to_pg(memory.embedding or []),
+                        "p_semantic_relevance": memory.semantic_relevance,
+                        "p_importance_score": memory.importance_score,
+                        "p_tags": list(memory.tags or []),
+                        "p_project": memory.project,
+                        "p_content_hash": _content_hash(memory.content),
+                    },
+                ).execute()
+            except Exception as exc:
+                raise self._map_to_storage_error(exc) from exc
+            if not response.data:
+                raise StorageError(
+                    "upsert_memory_with_outbox RPC returned no data",
+                    code="STORAGE_ERROR",
+                    recoverable=True,
+                )
+            return cast(str, response.data)
+
         row = {
             "content": memory.content,
             "memory_type": memory.memory_type.value,
@@ -279,6 +309,15 @@ class SupabaseStorageAdapter:
     async def delete_memory(self, memory_id: str) -> bool:
         if not _is_valid_uuid(memory_id):
             return False
+        if self._outbox_enabled:
+            try:
+                response = await self._client.rpc(
+                    "delete_memory_with_outbox",
+                    {"p_memory_id": memory_id},
+                ).execute()
+            except Exception as exc:
+                raise self._map_to_storage_error(exc) from exc
+            return bool(response.data)
         try:
             response = (
                 await self._client.table("memories")

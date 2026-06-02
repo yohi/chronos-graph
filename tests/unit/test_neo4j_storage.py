@@ -547,9 +547,7 @@ async def test_neo4j_execute_write_runs_cypher_with_parameters() -> None:
     cypher = "UNWIND $batch AS r MERGE (m:Memory {id:r.id})"
     await adp.execute_write(cypher, {"batch": [{"id": "x"}]})
 
-    fake_session.run.assert_awaited_once()
-    cypher_arg = fake_session.run.await_args.args[0]
-    assert "UNWIND" in cypher_arg
+    fake_session.run.assert_awaited_once_with(cypher, {"batch": [{"id": "x"}]})
 
 
 @pytest.mark.asyncio
@@ -562,8 +560,10 @@ async def test_neo4j_execute_write_raises_on_read_only() -> None:
     adp._driver = MagicMock()  # type: ignore[attr-defined]
     adp._read_only = True  # type: ignore[attr-defined]
 
-    with pytest.raises(StorageError):
+    with pytest.raises(StorageError) as excinfo:
         await adp.execute_write("MERGE (m:Memory {id:'x'})", {})
+    assert excinfo.value.code == "READ_ONLY"
+    assert excinfo.value.recoverable is False
 
 
 @pytest.mark.asyncio

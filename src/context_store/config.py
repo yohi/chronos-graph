@@ -253,6 +253,15 @@ class Settings(BaseSettings):
         default_factory=lambda: ["text/*", "application/json"]
     )
 
+    # --- Graph Sync (rev.11) ---
+    graph_sync_mode: Literal["sync", "async_outbox"] = "sync"
+    outbox_poll_interval_seconds: float = Field(default=5.0, gt=0.0)
+    outbox_batch_size: int = Field(default=100, ge=1)
+    outbox_max_retries: int = Field(default=10, ge=0)
+    outbox_backoff_base_seconds: float = Field(default=1.0, gt=0.0)
+    outbox_backoff_max_seconds: float = Field(default=60.0, gt=0.0)
+    outbox_stuck_threshold_seconds: int = Field(default=300, ge=1)
+
     @field_validator("url_allowed_content_types", mode="before")
     @classmethod
     def _parse_url_allowed_content_types(cls, v: Any) -> list[str]:
@@ -315,10 +324,10 @@ class Settings(BaseSettings):
 
             if not self.supabase_url.startswith("https://"):
                 raise ValueError("SUPABASE_URL は https:// で始まる必要があります。")
-            if self.graph_enabled:
+            if self.graph_enabled and not self.neo4j_password.get_secret_value().strip():
                 raise ValueError(
-                    "storage_backend=supabase は graph_enabled=true をサポートしません "
-                    "(Neo4j Bolt は HTTPS にカプセル化できないため)。"
+                    "NEO4J_PASSWORD は storage_backend=supabase かつ "
+                    "graph_enabled=true の場合に必須です。"
                 )
             if self.embedding_dimension != SUPABASE_VECTOR_DIM:
                 raise ValueError(
@@ -327,6 +336,32 @@ class Settings(BaseSettings):
                     "と一致しません。次元数を変更する場合は "
                     "supabase/migrations/ の SQL とこの定数を同時に更新してください。"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_outbox_backoff(self) -> "Settings":
+        if self.outbox_backoff_max_seconds < self.outbox_backoff_base_seconds:
+            raise ValueError(
+                "outbox_backoff_max_seconds は outbox_backoff_base_seconds "
+                "以上である必要があります。"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_graph_sync_mode(self) -> "Settings":
+        if self.graph_sync_mode == "async_outbox" and not self.graph_enabled:
+            raise ValueError(
+                "graph_sync_mode='async_outbox' は graph_enabled=true の場合のみ有効です。"
+            )
+        if (
+            self.storage_backend == "supabase"
+            and self.graph_enabled
+            and self.graph_sync_mode != "async_outbox"
+        ):
+            raise ValueError(
+                "Supabase + graph の組み合わせには graph_sync_mode='async_outbox' が必須です "
+                "(Neo4j Bolt は HTTPS にカプセル化できないため)。"
+            )
         return self
 
     @model_validator(mode="after")
@@ -362,9 +397,9 @@ class Settings(BaseSettings):
             return "disabled"
         if self.storage_backend == "sqlite":
             return "sqlite"
-        if self.storage_backend == "postgres":
+        if self.storage_backend in ("postgres", "supabase"):
             return "neo4j"
-        return "disabled"  # supabase
+        return "disabled"
 
     @computed_field  # type: ignore[prop-decorator]
     @property

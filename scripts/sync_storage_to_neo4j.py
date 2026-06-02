@@ -40,12 +40,24 @@ def _confirm_full(assume_yes: bool) -> bool:
 
 async def _run_full(chunk_size: int, dry_run: bool) -> int:
     from context_store.config import Settings
+    from context_store.storage.factory import create_storage_with_outbox
+    from context_store.storage.protocols import MemoryFilters
 
     settings = Settings()
     if dry_run:
-        logger.info("Dry run: full sync would process chunks of %d", chunk_size)
-        return 0
-    from context_store.storage.factory import create_storage_with_outbox
+        storage, graph, cache, _ = await create_storage_with_outbox(settings)
+        try:
+            total = await storage.count_by_filter(MemoryFilters())
+            logger.info(
+                "Dry run: full sync would process %d memories in chunks of %d", total, chunk_size
+            )
+            return total
+        finally:
+            await storage.dispose()
+            if graph:
+                await graph.dispose()
+            await cache.dispose()
+
     from context_store.storage.neo4j import Neo4jGraphAdapter
     from context_store.sync.graph_sync import GraphSyncService
 
@@ -98,14 +110,19 @@ def main() -> int:
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
 
+    if args.chunk_size <= 0:
+        parser.error("--chunk-size must be greater than 0")
+
     logging.basicConfig(level=args.log_level)
     if args.full:
         if not args.dry_run and not _confirm_full(assume_yes=args.yes):
             logger.info("--full を中止しました")
             return 1
-        asyncio.run(_run_full(args.chunk_size, args.dry_run))
+        total = asyncio.run(_run_full(args.chunk_size, args.dry_run))
+        logger.info("処理完了: %d 件", total)
     else:
-        asyncio.run(_run_catchup(args.dry_run))
+        total = asyncio.run(_run_catchup(args.dry_run))
+        logger.info("Catchup 完了: %d 件", total)
     return 0
 
 

@@ -447,34 +447,53 @@ async def create_storage_with_outbox(
         settings, read_only=read_only, outbox_writer=writer
     )
 
-    if settings.graph_sync_mode != "async_outbox":
-        return storage, graph_adp, cache_adp, None
+    try:
+        if settings.graph_sync_mode != "async_outbox":
+            return storage, graph_adp, cache_adp, None
 
-    if graph_adp is None:
-        raise ValueError("async_outbox requires graph_enabled=true")
+        if graph_adp is None:
+            raise ValueError("async_outbox requires graph_enabled=true")
 
-    # Writer/Reader を Storage backend ごとに生成
-    reader: OutboxReader
-    if settings.storage_backend == "sqlite":
-        import os
+        # Writer/Reader を Storage backend ごとに生成
+        reader: OutboxReader
+        if settings.storage_backend == "sqlite":
+            import os
 
-        db_path = os.path.expanduser(settings.sqlite_db_path)
-        reader = SqliteOutboxReader(db_path=db_path)
-    elif settings.storage_backend == "postgres":
-        reader = PostgresOutboxReader(pool=storage._pool)  # type: ignore[attr-defined]
-    elif settings.storage_backend == "supabase":
-        # Supabase は asyncpg を直接使えないため、RPC を呼び出す SupabaseOutboxReader を使用する
-        from context_store.sync.outbox_reader import SupabaseOutboxReader
+            db_path = os.path.expanduser(settings.sqlite_db_path)
+            reader = SqliteOutboxReader(db_path=db_path)
+        elif settings.storage_backend == "postgres":
+            reader = PostgresOutboxReader(pool=storage._pool)  # type: ignore[attr-defined]
+        elif settings.storage_backend == "supabase":
+            storage._outbox_enabled = True  # type: ignore[attr-defined]
+            # Supabase は asyncpg を直接使えないため、RPC を呼び出す SupabaseOutboxReader を使用する
+            from context_store.sync.outbox_reader import SupabaseOutboxReader
 
-        reader = SupabaseOutboxReader(client=storage._client)  # type: ignore[attr-defined]
-    else:
-        raise ValueError(f"Unsupported backend for outbox: {settings.storage_backend}")
+            reader = SupabaseOutboxReader(client=storage._client)  # type: ignore[attr-defined]
+        else:
+            raise ValueError(f"Unsupported backend for outbox: {settings.storage_backend}")
 
-    graph_sync = GraphSyncService(graph_adapter=graph_adp, storage_adapter=storage)  # type: ignore[arg-type]
-    worker = OutboxWorker(
-        reader=reader,
-        storage_adapter=storage,
-        graph_sync=graph_sync,
-        settings=settings,
-    )
-    return storage, graph_adp, cache_adp, worker
+        graph_sync = GraphSyncService(graph_adapter=graph_adp, storage_adapter=storage)  # type: ignore[arg-type]
+        worker = OutboxWorker(
+            reader=reader,
+            storage_adapter=storage,
+            graph_sync=graph_sync,
+            settings=settings,
+        )
+        return storage, graph_adp, cache_adp, worker
+    except Exception:
+        if cache_adp:
+            try:
+                await cache_adp.dispose()
+            except Exception:
+                logger.exception("Failed to dispose cache_adp in error recovery")
+        if graph_adp:
+            try:
+                await graph_adp.dispose()
+            except Exception:
+                logger.exception("Failed to dispose graph_adp in error recovery")
+        if storage:
+            try:
+                await storage.dispose()
+            except Exception:
+                logger.exception("Failed to dispose storage in error recovery")
+        raise

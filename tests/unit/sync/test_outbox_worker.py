@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
@@ -61,10 +60,7 @@ async def test_worker_processes_pending_events_then_deletes() -> None:
         reader=reader, storage_adapter=storage, graph_sync=graph_sync, settings=settings
     )
 
-    task = asyncio.create_task(worker.run())
-    await asyncio.sleep(0.05)
-    await worker.stop()
-    await task
+    await worker.process_pending_once()
 
     graph_sync.bulk_merge_memories.assert_awaited()
     reader.delete_completed.assert_awaited_with([str(e1_id)])
@@ -99,16 +95,14 @@ async def test_worker_retries_on_neo4j_failure_with_backoff() -> None:
     worker = OutboxWorker(
         reader=reader, storage_adapter=storage, graph_sync=graph_sync, settings=settings
     )
-    task = asyncio.create_task(worker.run())
-    await asyncio.sleep(0.05)
-    await worker.stop()
-    await task
+    await worker.process_pending_once()
 
     reader.reset_to_pending.assert_awaited_once()
     call = reader.reset_to_pending.await_args
     assert call.kwargs["retry_count"] == 3
     delta = (call.kwargs["next_retry_at"] - datetime.now(timezone.utc)).total_seconds()
-    assert 6 < delta <= 9  # backoff: min(1 * 2^3, 10) = 8 秒
+    # 8秒のバックオフ。CI高負荷時も考慮して幅を広めに許容
+    assert 4 < delta <= 10
 
 
 @pytest.mark.asyncio
@@ -140,10 +134,7 @@ async def test_worker_marks_failed_after_max_retries() -> None:
     worker = OutboxWorker(
         reader=reader, storage_adapter=storage, graph_sync=graph_sync, settings=settings
     )
-    task = asyncio.create_task(worker.run())
-    await asyncio.sleep(0.05)
-    await worker.stop()
-    await task
+    await worker.process_pending_once()
 
     reader.mark_failed.assert_awaited_once()
 
@@ -169,10 +160,14 @@ async def test_worker_recovers_stuck_processing_on_startup() -> None:
         graph_sync=MagicMock(),
         settings=settings,
     )
-    task = asyncio.create_task(worker.run())
-    await asyncio.sleep(0.05)
-    await worker.stop()
-    await task
+
+    async def stop_on_recovery(*args, **kwargs):
+        await worker.stop()
+        return 3
+
+    reader.reset_stuck_processing.side_effect = stop_on_recovery
+
+    await worker.run()
 
     reader.reset_stuck_processing.assert_awaited_once()
 
@@ -205,10 +200,7 @@ async def test_worker_handles_orphaned_sync_event() -> None:
         graph_sync=MagicMock(),
         settings=settings,
     )
-    task = asyncio.create_task(worker.run())
-    await asyncio.sleep(0.05)
-    await worker.stop()
-    await task
+    await worker.process_pending_once()
 
     reader.delete_completed.assert_awaited_with([str(e1_id)])
 

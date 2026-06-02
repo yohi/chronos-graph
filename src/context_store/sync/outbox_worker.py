@@ -34,9 +34,10 @@ class OutboxWorker:
         self._stop_event = asyncio.Event()
 
     async def run(self) -> None:
+        self._stop_event.clear()
         try:
             recovered = await self._reader.reset_stuck_processing(
-                threshold_seconds=300,
+                threshold_seconds=self._settings.outbox_stuck_threshold_seconds,
                 max_retries=self._settings.outbox_max_retries,
             )
             if recovered:
@@ -86,8 +87,6 @@ class OutboxWorker:
         sync_events = [e for e in events if e.event_type == "SYNC_MEMORY"]
         del_events = [e for e in events if e.event_type == "DELETE_MEMORY"]
 
-        completed_ids: list[str] = []
-
         if sync_events:
             mids = [str(e.memory_id) for e in sync_events]
             try:
@@ -96,10 +95,14 @@ class OutboxWorker:
                 orphan_ids = [str(e.id) for e in sync_events if str(e.memory_id) not in found_ids]
                 if memories:
                     await self._graph_sync.bulk_merge_memories(memories)
+
+                completed_ids = []
                 completed_ids.extend(orphan_ids)
                 completed_ids.extend(
                     str(e.id) for e in sync_events if str(e.memory_id) in found_ids
                 )
+                if completed_ids:
+                    await self._reader.delete_completed(completed_ids)
             except Exception as exc:
                 await self._apply_backoff(sync_events, exc)
                 return
@@ -108,13 +111,11 @@ class OutboxWorker:
             ids = [str(e.memory_id) for e in del_events]
             try:
                 await self._graph_sync.bulk_delete_nodes(ids)
-                completed_ids.extend(str(e.id) for e in del_events)
+                completed_ids = [str(e.id) for e in del_events]
+                await self._reader.delete_completed(completed_ids)
             except Exception as exc:
                 await self._apply_backoff(del_events, exc)
                 return
-
-        if completed_ids:
-            await self._reader.delete_completed(completed_ids)
 
     async def _apply_backoff(self, events: list[OutboxEvent], exc: Exception) -> None:
         base = self._settings.outbox_backoff_base_seconds

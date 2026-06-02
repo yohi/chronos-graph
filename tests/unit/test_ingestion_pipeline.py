@@ -695,3 +695,54 @@ async def test_ingest_propagates_embed_batch_failure() -> None:
 
     storage.save_memory.assert_not_called()
     embedding_provider.embed.assert_not_called()
+
+
+class TestGraphSyncMode:
+    """graph_sync_mode による GraphLinker 制御テスト。"""
+
+    @pytest.mark.asyncio
+    async def test_pipeline_skips_neo4j_write_in_async_outbox_mode(self) -> None:
+        """async_outbox モードでは GraphLinker に graph=None が渡される。"""
+        from unittest.mock import patch
+
+        storage = _make_mock_storage()
+        graph = _make_mock_graph()
+        embedding_provider = _make_mock_embedding_provider()
+
+        with patch("context_store.ingestion.pipeline.GraphLinker") as mock_linker_cls:
+            IngestionPipeline(
+                storage=storage,
+                graph=graph,
+                embedding_provider=embedding_provider,
+                settings=make_settings(),
+                graph_sync_mode="async_outbox",
+            )
+
+            # GraphLinker が graph=None で初期化されたことを確認
+            mock_linker_cls.assert_called_once()
+            call_kwargs = mock_linker_cls.call_args.kwargs
+            assert call_kwargs.get("graph") is None
+            assert call_kwargs.get("storage") is storage
+
+    @pytest.mark.asyncio
+    async def test_pipeline_passes_graph_in_sync_mode(self) -> None:
+        """sync モードでは GraphLinker に元の graph が渡される。"""
+        from unittest.mock import patch
+
+        storage = _make_mock_storage()
+        graph = _make_mock_graph()
+        embedding_provider = _make_mock_embedding_provider()
+
+        with patch("context_store.ingestion.pipeline.GraphLinker") as mock_linker_cls:
+            IngestionPipeline(
+                storage=storage,
+                graph=graph,
+                embedding_provider=embedding_provider,
+                settings=make_settings(),
+                graph_sync_mode="sync",
+            )
+
+            mock_linker_cls.assert_called_once()
+            call_kwargs = mock_linker_cls.call_args.kwargs
+            assert call_kwargs.get("graph") is graph
+            assert call_kwargs.get("storage") is storage

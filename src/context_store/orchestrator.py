@@ -564,6 +564,7 @@ async def create_orchestrator(
             graph=graph,
             embedding_provider=embedding_provider,
             settings=settings,
+            graph_sync_mode=settings.graph_sync_mode,
         )
 
         retrieval_pipeline = await RetrievalPipeline.create_from_parts(

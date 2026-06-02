@@ -419,6 +419,7 @@ async def create_storage_with_outbox(
     settings: "Settings",
     *,
     read_only: bool = False,
+    outbox_writer: "OutboxWriter | None" = None,
 ) -> tuple[
     "StorageAdapter",
     "GraphAdapter | None",
@@ -437,8 +438,8 @@ async def create_storage_with_outbox(
         SqliteOutboxWriter,
     )
 
-    writer: OutboxWriter | None = None
-    if settings.graph_sync_mode == "async_outbox":
+    writer = outbox_writer
+    if writer is None and settings.graph_sync_mode == "async_outbox":
         if settings.storage_backend == "sqlite":
             writer = SqliteOutboxWriter()
         elif settings.storage_backend == "postgres":
@@ -464,10 +465,15 @@ async def create_storage_with_outbox(
             import os
 
             db_path = os.path.expanduser(settings.sqlite_db_path)
+            if writer is not None:
+                storage._outbox_writer = writer  # type: ignore[attr-defined]
             reader = SqliteOutboxReader(db_path=db_path)
         elif settings.storage_backend == "postgres":
+            if writer is not None:
+                storage._outbox_writer = writer  # type: ignore[attr-defined]
             reader = PostgresOutboxReader(pool=storage._pool)  # type: ignore[attr-defined]
         elif settings.storage_backend == "supabase":
+            storage._outbox_enabled = True  # type: ignore[attr-defined]
             # Supabase は asyncpg を直接使えないため、RPC を呼び出す SupabaseOutboxReader を使用する
             from context_store.sync.outbox_reader import SupabaseOutboxReader
 
@@ -475,6 +481,8 @@ async def create_storage_with_outbox(
         else:
             raise ValueError(f"Unsupported backend for outbox: {settings.storage_backend}")
 
+        # GraphSyncService は Neo4jGraphAdapter を期待するためキャストまたは無視します
+        # SQLiteGraphAdapter も動作するため、厳格な Neo4j 判定は行いません。
         graph_sync = GraphSyncService(graph_adapter=graph_adp, storage_adapter=storage)  # type: ignore[arg-type]
         worker = OutboxWorker(
             reader=reader,

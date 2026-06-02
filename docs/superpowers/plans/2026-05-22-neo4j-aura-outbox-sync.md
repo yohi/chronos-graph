@@ -149,7 +149,7 @@ master
 | 3.3 | feat/outbox-supabase-integration | https://github.com/yohi/chronos-graph/pull/308 | ✅ Done |
 | 4.1 | feat/outbox-reader | https://github.com/yohi/chronos-graph/pull/305 | ✅ Done |
 | 4.2 | feat/outbox-worker-loop | https://github.com/yohi/chronos-graph/pull/309 | ✅ Done |
-| 5.1 | feat/outbox-factory |  |  |
+| 5.1 | feat/outbox-factory | https://github.com/yohi/chronos-graph/pull/312 | ✅ Done |
 | 5.2 | feat/outbox-orchestrator |  |  |
 | 5.3 | feat/outbox-pipeline |  |  |
 | 6.1 | feat/outbox-recovery-script | https://github.com/yohi/chronos-graph/pull/310 | ✅ Done |

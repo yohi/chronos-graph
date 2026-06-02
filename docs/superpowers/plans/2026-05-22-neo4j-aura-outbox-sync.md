@@ -150,7 +150,7 @@ master
 | 4.1 | feat/outbox-reader |  |  |
 | 4.2 | feat/outbox-worker-loop |  |  |
 | 5.1 | feat/outbox-factory | https://github.com/yohi/chronos-graph/pull/312 | ✅ Done |
-| 5.2 | feat/outbox-orchestrator |  |  |
+| 5.2 | feat/outbox-orchestrator | https://github.com/yohi/chronos-graph/pull/313 | ✅ Done |
 | 5.3 | feat/outbox-pipeline |  |  |
 | 6.1 | feat/outbox-recovery-script |  |  |
 | 6.2 | feat/outbox-e2e |  |  |

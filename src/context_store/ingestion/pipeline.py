@@ -94,6 +94,7 @@ class IngestionPipeline:
         embedding_provider: EmbeddingProvider,
         settings: Settings | None = None,
         chunker: Chunker | None = None,
+        graph_sync_mode: str = "sync",
     ) -> None:
         self._storage = storage
         self._graph = graph
@@ -103,7 +104,9 @@ class IngestionPipeline:
         self._chunker = chunker or Chunker(settings=settings)
         self._classifier = Classifier()
         self._deduplicator = Deduplicator(storage=storage)
-        self._graph_linker = GraphLinker(storage=storage, graph=graph)
+        # async_outbox モードでは GraphLinker に Neo4j を渡さず Storage 側だけ書く
+        graph_for_linker = None if graph_sync_mode == "async_outbox" else graph
+        self._graph_linker = GraphLinker(storage=storage, graph=graph_for_linker)
         self._conversation_adapter = ConversationAdapter(
             chunk_size=self._settings.conversation_chunk_size if self._settings else 5
         )

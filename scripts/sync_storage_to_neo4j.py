@@ -46,12 +46,13 @@ async def _run_full(chunk_size: int, dry_run: bool) -> int:
         logger.info("Dry run: full sync would process chunks of %d", chunk_size)
         return 0
     from context_store.storage.factory import create_storage_with_outbox
+    from context_store.storage.neo4j import Neo4jGraphAdapter
     from context_store.sync.graph_sync import GraphSyncService
 
     storage, graph, cache, _ = await create_storage_with_outbox(settings)
     try:
-        if graph is None:
-            raise RuntimeError("graph_enabled=true required for sync")
+        if not isinstance(graph, Neo4jGraphAdapter):
+            raise RuntimeError("Neo4j graph adapter is required for sync")
         svc = GraphSyncService(graph_adapter=graph, storage_adapter=storage)
         logger.warning("Full sync 開始: Neo4j を完全パージします")
         await graph.execute_write("MATCH (m:Memory) DETACH DELETE m", {})
@@ -67,10 +68,9 @@ async def _run_full(chunk_size: int, dry_run: bool) -> int:
 
 async def _run_catchup(dry_run: bool) -> int:
     from context_store.config import Settings
-
-    settings = Settings()
     from context_store.storage.factory import create_storage_with_outbox
 
+    settings = Settings()
     storage, graph, cache, worker = await create_storage_with_outbox(settings)
     try:
         if worker is None:

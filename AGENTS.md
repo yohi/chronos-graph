@@ -11,9 +11,9 @@
 ---
 
 ## 🗺️ Documentation Map (Progressive Disclosure)
-- [SPEC.md](file:///home/y_ohi/program/private/chronos-graph2/SPEC.md): Single Source of Truth for system architecture, database schema, and specifications.
-- [docs/agent-setup-protocol.md](file:///home/y_ohi/program/private/chronos-graph2/docs/agent-setup-protocol.md): Setup flow and environment variables validation rules.
-- [docs/agent-prompts/memory-save-system-prompt.md](file:///home/y_ohi/program/private/chronos-graph2/docs/agent-prompts/memory-save-system-prompt.md): Explicit instructions and format guidelines for the `memory_save` tool.
+- [SPEC.md](./SPEC.md): Single Source of Truth for system architecture, database schema, and specifications.
+- [docs/agent-setup-protocol.md](./docs/agent-setup-protocol.md): Setup flow and environment variables validation rules.
+- [docs/agent-prompts/memory-save-system-prompt.md](./docs/agent-prompts/memory-save-system-prompt.md): Explicit instructions and format guidelines for the `memory_save` tool.
 
 ---
 
@@ -38,6 +38,6 @@ Always run commands (tests, linting, formatting) inside the devcontainer.
 ---
 
 ## 🧠 Memory Management & Self-Awareness
-- **Memory Ingestion**: You must autonomously record key learnings or errors you've resolved. Follow the protocol in [memory-save-system-prompt.md](file:///home/y_ohi/program/private/chronos-graph2/docs/agent-prompts/memory-save-system-prompt.md) using the `memory_save` tool.
+- **Memory Ingestion**: You must autonomously record key learnings or errors you've resolved. Follow the protocol in [memory-save-system-prompt.md](./docs/agent-prompts/memory-save-system-prompt.md) using the `memory_save` tool.
 - **Rule Evolution**: If you discover a new codebase convention, update `AGENTS.md` or `SPEC.md` directly.
 - **Test-Driven**: Always write or update tests in `tests/` when modifying logic before completing your task.

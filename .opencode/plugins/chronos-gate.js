@@ -212,6 +212,12 @@ function checkAndStartGateway() {
         process.cwd(),
         process.env.PWD
       ].filter(Boolean);
+        path.join(process.env.HOME, 'program', 'chronos-graph'),
+        path.join(process.env.HOME, 'chronos-graph'),
+        globalDirectory,
+        process.cwd(),
+        process.env.PWD
+      ].filter(Boolean);
 
       let projectDir = null;
       let loadedEnv = {};

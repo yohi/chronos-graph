@@ -11,7 +11,8 @@ Routing logic
 
 - GRAPH_ENABLED=true + STORAGE_BACKEND=sqlite → SQLiteGraphAdapter
 - GRAPH_ENABLED=true + STORAGE_BACKEND=postgres → Neo4jGraphAdapter (requires NEO4J_PASSWORD)
-- GRAPH_ENABLED=true + STORAGE_BACKEND=supabase → Not supported (raises ValueError)
+- GRAPH_ENABLED=true + STORAGE_BACKEND=supabase →
+  Neo4jGraphAdapter when async_outbox, else ValueError
 - GRAPH_ENABLED=false → None
 
 - CACHE_BACKEND=inmemory → InMemoryCacheAdapter  (+ SQLiteCacheCoherenceChecker for sqlite)
@@ -43,6 +44,7 @@ if TYPE_CHECKING:
         MemoryFilters,
         StorageAdapter,
     )
+    from context_store.sync.outbox_reader import OutboxReader
     from context_store.sync.outbox_worker import OutboxWorker
     from context_store.sync.outbox_writer import OutboxWriter
 
@@ -369,7 +371,7 @@ async def _create_graph_adapter(
     if settings.storage_backend == "supabase":
         if settings.graph_sync_mode != "async_outbox":
             raise ValueError(
-                "Graph adapter is not supported for storage_backend=supabase "
+                "Supabase + graph requires graph_sync_mode='async_outbox' "
                 "(Neo4j Bolt cannot be tunneled over HTTPS)"
             )
         from context_store.storage.neo4j import Neo4jGraphAdapter
@@ -426,7 +428,6 @@ async def create_storage_with_outbox(
     """async_outbox モード対応の Factory。Worker も生成して返す。"""
     from context_store.sync.graph_sync import GraphSyncService
     from context_store.sync.outbox_reader import (
-        OutboxReader,
         PostgresOutboxReader,
         SqliteOutboxReader,
     )
@@ -451,6 +452,9 @@ async def create_storage_with_outbox(
         if settings.graph_sync_mode != "async_outbox":
             return storage, graph_adp, cache_adp, None
 
+        if isinstance(storage, ReadOnlyNoOpStorageAdapter):
+            raise ValueError("Outbox sync is not supported in read_only mode")
+
         if graph_adp is None:
             raise ValueError("async_outbox requires graph_enabled=true")
 
@@ -464,7 +468,6 @@ async def create_storage_with_outbox(
         elif settings.storage_backend == "postgres":
             reader = PostgresOutboxReader(pool=storage._pool)  # type: ignore[attr-defined]
         elif settings.storage_backend == "supabase":
-            storage._outbox_enabled = True  # type: ignore[attr-defined]
             # Supabase は asyncpg を直接使えないため、RPC を呼び出す SupabaseOutboxReader を使用する
             from context_store.sync.outbox_reader import SupabaseOutboxReader
 

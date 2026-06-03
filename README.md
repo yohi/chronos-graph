@@ -27,8 +27,7 @@ ChronosGraph は、AIエージェント（Claude Code / Gemini CLI / Cursor 等�
 > *※実際にファイルを変更せずに構成や手順だけを確認したい（デバッグしたい）場合は、プロンプトの最後に「デバッグモード（Dry-run）で実行してください」と書き添えてください。*
 
 ```text
-Install and configure ChronosGraph by following the instructions here:
-https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
+Install and configure ChronosGraph by strictly following the Agent Setup Protocol in docs/agent-setup-protocol.md.
 ```
 
 ---

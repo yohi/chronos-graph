@@ -18,7 +18,7 @@ CREATE TABLE graph_sync_outbox (
 
 CREATE INDEX idx_outbox_status_retry ON graph_sync_outbox (status, next_retry_at ASC);
 CREATE INDEX idx_outbox_memory_id ON graph_sync_outbox (memory_id);
-CREATE UNIQUE INDEX uq_outbox_pending_processing ON graph_sync_outbox (memory_id) WHERE status IN ('PENDING', 'PROCESSING');
+CREATE UNIQUE INDEX uq_outbox_pending ON graph_sync_outbox (memory_id) WHERE status = 'PENDING';
 
 ALTER TABLE graph_sync_outbox ENABLE ROW LEVEL SECURITY;
 
@@ -74,11 +74,11 @@ BEGIN
     IF v_memory_id IS NOT NULL THEN
         INSERT INTO graph_sync_outbox (event_type, memory_id)
         VALUES ('SYNC_MEMORY', v_memory_id)
-        ON CONFLICT (memory_id) WHERE status IN ('PENDING', 'PROCESSING') DO NOTHING;
+        ON CONFLICT (memory_id) WHERE status = 'PENDING' DO NOTHING;
     ELSE
         INSERT INTO graph_sync_outbox (event_type, memory_id)
         VALUES ('SYNC_MEMORY', p_id)
-        ON CONFLICT (memory_id) WHERE status IN ('PENDING', 'PROCESSING') DO NOTHING;
+        ON CONFLICT (memory_id) WHERE status = 'PENDING' DO NOTHING;
     END IF;
 
     RETURN p_id;
@@ -113,7 +113,7 @@ BEGIN
     IF affected > 0 THEN
         INSERT INTO graph_sync_outbox (event_type, memory_id, payload)
         VALUES ('DELETE_MEMORY', p_memory_id, COALESCE(v_meta, '{}'))
-        ON CONFLICT (memory_id) WHERE status IN ('PENDING', 'PROCESSING')
+        ON CONFLICT (memory_id) WHERE status = 'PENDING'
         DO UPDATE SET
             event_type = 'DELETE_MEMORY',
             payload = COALESCE(v_meta, '{}'),

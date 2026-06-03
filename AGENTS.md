@@ -22,6 +22,7 @@
 2. **No Dependency Bleed**: Keep `mcp_gateway/` (security/policy) strictly decoupled from `context_store/` (memory/storage). Do not cross-import modules between them.
 3. **No I/O Inside DB Locks**: NEVER execute `EmbeddingProvider.embed()` or other network/LLM I/O inside a database transaction lock (e.g. `save_memory`). This causes SQLite lock contention.
 4. **No Hardcoded DDL**: Raw schema modifications are forbidden. Always use migration files under `src/context_store/storage/migrations/` or `supabase/migrations/`.
+5. **Strict Setup Protocol**: Any setup, installation, or configuration tasks MUST strictly follow [docs/agent-setup-protocol.md](file:///home/y_ohi/program/private/chronos-graph/docs/agent-setup-protocol.md). You MUST load and read that file before running `scripts/bootstrap.sh` or making any configuration changes. You MUST use the `ask_question` tool to get user confirmation as defined in the protocol.
 
 ---
 
@@ -62,15 +63,20 @@ When performing tasks, actively invoke the `memory_save` tool according to the f
    - **Semantic (Concepts/Knowledge):** User preferences, project-specific architecture rules, environment-specific configuration values, or domain knowledge.
    - **Procedural (Steps/Solutions):** Root causes of complex errors and the specific steps taken to resolve them, or optimal command sets for specific tasks.
 
-3. **Tool Execution:**
+3. **Sanitization (CRITICAL SECURITY MANDATE):**
+   Before calling `memory_save` or `session_flush`, you must apply a pre-save filtering step (e.g., `sanitize_for_memory` logic) to strip or mask all secrets and Personally Identifiable Information (PII).
+   - Target Secrets: API keys (e.g., `sk-...`), DB passwords, connection strings, private credentials.
+   - Target PII: SSNs, emails, phone numbers, personal names, addresses.
+   - Requirement: You must verify that the content to be saved contains absolutely no unmasked secrets or PII. If the sanitizer detects unmasked secrets, the memory_save or session_flush tool call must be rejected or fail.
+
+4. **Tool Execution:**
    Immediately call the `memory_save` tool when a valuable memory is identified. The saved text must be a "specific, independent summary" that can be understood by yourself (or other agents) in the future without any context.
 
-4. **Batch Session Saving (session_flush):**
-   Invoke the `session_flush` tool to batch save the entire conversation log when:
-   - The total character count of the conversation log reaches 8,000.
-
-   Temporary conversation logs are automatically classified and saved as EPISODIC memories via `session_flush`, so manual saving via `memory_save` for general logs is unnecessary.
-   Pass the full conversation text to the `conversation_log` argument. The `session_id` is optional (it will be auto-generated).
+5. **Batch Session Saving (session_flush):**
+   Invoke the `session_flush` tool to batch save the conversation log.
+   - Trigger Condition: Do not trigger on absolute total log size on every turn to avoid duplicate saves. Instead, trigger ONLY when the character count of the conversation log has accumulated a difference of >= 8,000 characters since the last successful `session_flush` (or when the total length first exceeds 8,000 characters for the first flush in a session).
+   - State Tracking: Keep track of `last_flush_character_count` (or `last_flush_timestamp`) and perform the flush only if `(current_conversation_log_length - last_flush_character_count) >= 8000`.
+   - Pass the full conversation text to the `conversation_log` argument. The `session_id` is optional (it will be auto-generated).
 </instructions>
 
 <memory_rules>
@@ -102,11 +108,12 @@ After calling `memory_save` or `session_flush`, perform a self-verification usin
 1. **Justification for Tool Call:**
    - [ ] Does it meet the trigger conditions?
          - memory_save: Post-instruction completion or failure-to-success transition.
-         - session_flush: Reaching 8,000 characters.
+         - session_flush: Character count difference since last flush is >= 8,000 characters (or total length first exceeds 8,000 characters).
    - [ ] For memory_save: Does it follow the format requirements?
          - Semantic: `[🧠 Semantic]` prefix + "Subject" & "Fact/Rule/Value" pair.
          - Procedural: `[🕒 Procedural]` prefix + "Trigger" & "Numbered Steps" pair.
    - [ ] For session_flush: Is the full log passed to `conversation_log`?
+   - [ ] For both: Has the text been run through a sanitization step (e.g. `sanitize_for_memory` logic) and verified to contain absolutely NO unmasked API keys, DB passwords, connection strings, emails, names, or other secrets/PII?
 
 2. **Summary Self-Containment:**
    - [ ] Can the saved text be understood on its own without referring to context or history?

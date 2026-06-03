@@ -8,8 +8,9 @@ if [ ! -f "pyproject.toml" ]; then
 fi
 
 # Default options
-BACKEND="sqlite"
-EMBEDDING_PROVIDER="openai"
+BACKEND=""
+EMBEDDING_PROVIDER=""
+FORCE_DEFAULTS=false
 SKIP_TESTS=false
 MCP_OUTPUT="generic"
 MCP_METHOD="python"
@@ -17,6 +18,7 @@ UV_FROM=""
 GRAPH_ENABLED=true  # bootstrap.sh では利便性のためデフォルトで有効（アプリデフォルトは false）
 POSTGRES_SSL=false
 CACHE_BACKEND=""
+ROTATE_GATEWAY_KEYS=false
 
 # New options
 TYPE="mcp" # mcp | hook
@@ -41,6 +43,8 @@ EXPLICIT_FLAGS=""
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
     case $1 in
+        --non-interactive|-y|--yes)
+            FORCE_DEFAULTS=true ;;
         --backend)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --backend requires a value (sqlite|postgres|supabase)"; exit 1; fi
             BACKEND="$2"
@@ -164,12 +168,14 @@ while [[ "$#" -gt 0 ]]; do
             fi
             EXPLICIT_FLAGS="$EXPLICIT_FLAGS GRAPH_SYNC_MODE"
             shift ;;
+        --rotate-keys)
+            ROTATE_GATEWAY_KEYS="true" ;;
 
         -h|--help)
             echo "Usage: $0 [options]"
             echo "Options:"
             echo "  --backend [sqlite|postgres|supabase] Set storage backend (default: sqlite)"
-            echo "  --embedding [openai|litellm|local|local-model|custom|custom-api] Set embedding provider (default: openai)"
+            echo "  --embedding [openai|litellm|local|local-model|custom|custom-api] Set embedding provider (default: local-model)"
             echo "  --skip-tests                      Skip running unit tests"
             echo "  --ssl                             Enable SSL for PostgreSQL"
             echo "  --ssl-no-verify                   Enable SSL without certificate verification (for Supabase/pgBouncer)"
@@ -193,6 +199,8 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --redis-url [url]                 Redis connection URL"
             echo "  --embedding-model [model]         OpenAI/LiteLLM embedding model name"
             echo "  --graph-sync-mode [mode]          Set graph sync mode (sync|async_outbox)"
+            echo "  --rotate-keys                     Rotate MCP Gateway API keys (generate new keys even if they already exist)"
+            echo "  --non-interactive, -y, --yes      Run silently with default settings if parameters are missing"
             echo "  -h, --help                        Show this help message"
             exit 0
             ;;
@@ -200,6 +208,35 @@ while [[ "$#" -gt 0 ]]; do
     esac
     shift
 done
+
+# Check if required parameters are explicitly set or forced by defaults
+if [[ -z "$BACKEND" || -z "$EMBEDDING_PROVIDER" ]]; then
+    if [ "$FORCE_DEFAULTS" = "true" ]; then
+        BACKEND=${BACKEND:-"sqlite"}
+        EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-"local-model"}
+    elif [ -t 0 ] && [ -t 1 ]; then
+        echo -e "${BLUE}Required options (--backend and --embedding) are missing.${NC}"
+        echo "Default settings will be used:"
+        echo "  Backend: sqlite"
+        echo "  Embedding: local-model"
+        echo ""
+        # Ask for confirmation with a 10-second timeout to prevent hangs in pseudo-TTY agent execution
+        read -t 10 -p "Do you want to proceed with default settings? [y/N]: " CONFIRM || CONFIRM="n"
+        if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+            BACKEND="sqlite"
+            EMBEDDING_PROVIDER="local-model"
+        else
+            echo -e "\033[0;31mOperation aborted or timed out. Please specify parameters explicitly.\033[0m" >&2
+            exit 1
+        fi
+    else
+        echo -e "\033[0;31mError: Missing required parameters (--backend and --embedding).\033[0m" >&2
+        echo "AI agents must explicitly prompt the user for configuration and pass them as arguments." >&2
+        echo "Example: $0 --backend sqlite --embedding local-model" >&2
+        echo "If you want to run with default settings automatically, pass --non-interactive or -y." >&2
+        exit 1
+    fi
+fi
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -376,14 +413,23 @@ if [ "$TYPE" = "hook" ] || [ "$INGESTION_MODE" = "all" ]; then
     update_env_key "MCP_GATEWAY_UPSTREAM_COMMAND" '["python", "-m", "context_store"]'
     update_env_key "MCP_GATEWAY_UPSTREAM_ENV_PASSTHROUGH" '["OPENAI_API_KEY", "SQLITE_DB_PATH", "GRAPH_ENABLED", "EMBEDDING_PROVIDER", "CHRONOS_INGESTION_MODE"]'
     
-    # 認証用のセキュアキーを自動ランダム生成（Pythonのsecretsモジュールを使用）
-    SECURE_KEY=$(python -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null)
-    if [[ -z "$SECURE_KEY" ]]; then
-        echo "Error: Python is required to generate a secure key for MCP_GATEWAY_API_KEYS_JSON. Install Python and retry." >&2
-        exit 1
+    # Check if keys are already set in .env
+    EXISTING_KEYS_JSON=$(grep -E "^MCP_GATEWAY_API_KEYS_JSON=" .env | cut -d'=' -f2- || true)
+    EXISTING_KEY=$(grep -E "^MCP_GATEWAY_API_KEY=" .env | cut -d'=' -f2- || true)
+
+    if [[ -z "$EXISTING_KEYS_JSON" || -z "$EXISTING_KEY" || "$ROTATE_GATEWAY_KEYS" == "true" ]]; then
+        # 認証用のセキュアキーを自動ランダム生成（Pythonのsecretsモジュールを使用）
+        SECURE_KEY=$(python -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null)
+        if [[ -z "$SECURE_KEY" ]]; then
+            echo "Error: Python is required to generate a secure key for MCP_GATEWAY_API_KEYS_JSON. Install Python and retry." >&2
+            exit 1
+        fi
+        update_env_key "MCP_GATEWAY_API_KEYS_JSON" "{\"default\": \"$SECURE_KEY\"}"
+        update_env_key "MCP_GATEWAY_API_KEY" "$SECURE_KEY"
+        echo -e "${GREEN}Generated/Updated MCP Gateway API keys.${NC}"
+    else
+        echo -e "${BLUE}MCP Gateway API keys already set in .env. Skipping generation. Use --rotate-keys to rotate.${NC}"
     fi
-    update_env_key "MCP_GATEWAY_API_KEYS_JSON" "{\"default\": \"$SECURE_KEY\"}"
-    update_env_key "MCP_GATEWAY_API_KEY" "$SECURE_KEY"
 else
     modify_var_status "MCP_GATEWAY_" "comment"
 fi
@@ -518,7 +564,18 @@ if [[ -n "$AGENTS" ]]; then
             cat << 'EOF' > "$HOOK_FILE"
 @echo off
 rem Auto-generated by bootstrap.sh
-python "%~dp0\agent_turn_hook.py" %*
+set "SCRIPT_DIR=%~dp0"
+set "PROJECT_DIR=%SCRIPT_DIR%.."
+if exist "%PROJECT_DIR%\.venv\Scripts\python.exe" (
+    "%PROJECT_DIR%\.venv\Scripts\python.exe" "%SCRIPT_DIR%agent_turn_hook.py" %*
+) else (
+    where uv >nul 2>nul
+    if %ERRORLEVEL% equ 0 (
+        uv --directory "%PROJECT_DIR%" run python "%SCRIPT_DIR%agent_turn_hook.py" %*
+    ) else (
+        python "%SCRIPT_DIR%agent_turn_hook.py" %*
+    )
+)
 EOF
             echo -e "${GREEN}Generated $HOOK_FILE${NC}"
         else
@@ -526,7 +583,15 @@ EOF
             cat << 'EOF' > "$HOOK_FILE"
 #!/usr/bin/env bash
 # Auto-generated by bootstrap.sh
-python "$(dirname "$0")/agent_turn_hook.py" "$@"
+SCRIPT_DIR="$(dirname "$0")"
+PROJECT_DIR="$SCRIPT_DIR/.."
+if [ -f "$PROJECT_DIR/.venv/bin/python" ]; then
+  "$PROJECT_DIR/.venv/bin/python" "$SCRIPT_DIR/agent_turn_hook.py" "$@"
+elif command -v uv &> /dev/null; then
+  uv --directory "$PROJECT_DIR" run python "$SCRIPT_DIR/agent_turn_hook.py" "$@"
+else
+  python "$SCRIPT_DIR/agent_turn_hook.py" "$@"
+fi
 EOF
             chmod +x "$HOOK_FILE"
             echo -e "${GREEN}Generated $HOOK_FILE and granted execution permission.${NC}"

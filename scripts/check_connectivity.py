@@ -42,15 +42,20 @@ async def check_connectivity() -> None:
     settings = Settings()
     print(f"Checking connectivity for storage_backend={settings.storage_backend}...")
 
-    # 1. Check for placeholders in configuration
+    # 1. Check for placeholders or unset values in configuration
     has_placeholder = False
     if settings.storage_backend == "postgres":
-        if is_placeholder(settings.postgres_dsn):
-            print("⚠️ Storage (postgres) check skipped: Connection string contains placeholders.")
+        postgres_dsn = settings.postgres_dsn
+        if is_placeholder(postgres_dsn) or not postgres_dsn:
+            print(
+                "⚠️ Storage (postgres) check skipped: "
+                "Connection string contains placeholders or is empty."
+            )
             has_placeholder = True
     elif settings.storage_backend == "supabase":
-        if is_placeholder(settings.supabase_key.get_secret_value()):
-            print("⚠️ Storage (supabase) check skipped: API key contains placeholders.")
+        supabase_key = settings.supabase_key.get_secret_value() if settings.supabase_key else ""
+        if is_placeholder(supabase_key) or not supabase_key:
+            print("⚠️ Storage (supabase) check skipped: API key contains placeholders or is empty.")
             has_placeholder = True
 
     if settings.graph_enabled:
@@ -58,13 +63,20 @@ async def check_connectivity() -> None:
             neo4j_password = (
                 settings.neo4j_password.get_secret_value() if settings.neo4j_password else ""
             )
-            if is_placeholder(settings.neo4j_uri) or is_placeholder(neo4j_password):
-                print("⚠️ Graph (neo4j) check skipped: Connection details contain placeholders.")
+            neo4j_uri = settings.neo4j_uri
+            is_uri_invalid = is_placeholder(neo4j_uri) or not neo4j_uri
+            is_pwd_invalid = is_placeholder(neo4j_password) or not neo4j_password
+            if is_uri_invalid or is_pwd_invalid:
+                print(
+                    "⚠️ Graph (neo4j) check skipped: "
+                    "Connection details contain placeholders or are empty."
+                )
                 has_placeholder = True
 
     if settings.cache_backend == "redis":
-        if is_placeholder(settings.redis_url):
-            print("⚠️ Cache (redis) check skipped: Redis URL contains placeholders.")
+        redis_url = settings.redis_url
+        if is_placeholder(redis_url) or not redis_url:
+            print("⚠️ Cache (redis) check skipped: Redis URL contains placeholders or is empty.")
             has_placeholder = True
 
     if has_placeholder:

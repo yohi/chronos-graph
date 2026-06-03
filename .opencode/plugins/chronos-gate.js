@@ -89,6 +89,50 @@ function loadEnvFile(envPath) {
 }
 
 
+// Helper to get prioritized list of directories to look for .env
+function getChronosSearchDirs(directory = null) {
+  const searchDirs = [];
+  
+  // 1. If CHRONOS_REPO_PATH is set, prioritize it
+  if (process.env.CHRONOS_REPO_PATH) {
+    const explicitDir = path.resolve(process.env.CHRONOS_REPO_PATH);
+    if (fs.existsSync(explicitDir)) {
+      searchDirs.push(explicitDir);
+    }
+  }
+  
+  // 2. Add requested and global directory
+  if (directory) searchDirs.push(directory);
+  if (globalDirectory) searchDirs.push(globalDirectory);
+  
+  // 3. Current working directory
+  searchDirs.push(process.cwd());
+  if (process.env.PWD) searchDirs.push(process.env.PWD);
+  
+  // 4. Well-known paths
+  searchDirs.push(
+    path.join(process.env.HOME, 'program', 'chronos-graph'),
+    path.join(process.env.HOME, 'chronos-graph')
+  );
+  
+  // Clean up: filter falsy and return unique resolved absolute paths
+  const uniqueDirs = [];
+  for (const dir of searchDirs) {
+    if (!dir) continue;
+    try {
+      const resolved = path.resolve(dir);
+      if (fs.existsSync(resolved) && !uniqueDirs.includes(resolved)) {
+        uniqueDirs.push(resolved);
+      }
+    } catch (e) {
+      // Ignore resolution errors for invalid paths
+    }
+  }
+  
+  return uniqueDirs;
+}
+
+
 // Core logic for tool evaluation
 async function evaluateTool(toolCall) {
   return new Promise((resolve, reject) => {
@@ -205,28 +249,7 @@ function checkAndStartGateway() {
       const errLog = fs.openSync(errLogPath, 'a');
 
       // Search for the project directory containing .env to resolve validation errors
-      // Priority: 1) CHRONOS_REPO_PATH env var, 2) well-known paths, 3) dynamic search
-      const searchDirs = [];
-      
-      // If CHRONOS_REPO_PATH is set, prioritize it
-      if (process.env.CHRONOS_REPO_PATH) {
-        const explicitDir = path.resolve(process.env.CHRONOS_REPO_PATH);
-        if (fs.existsSync(explicitDir)) {
-          searchDirs.push(explicitDir);
-        }
-      }
-      
-      // Well-known paths with chronos-graph prioritized
-      searchDirs.push(
-        path.join(process.env.HOME, 'program', 'chronos-graph'),
-        path.join(process.env.HOME, 'chronos-graph'),
-        globalDirectory,
-        process.cwd(),
-        process.env.PWD
-      );
-      
-      // Remove undefined/null entries
-      const validSearchDirs = searchDirs.filter(Boolean);
+      const validSearchDirs = getChronosSearchDirs();
 
       let projectDir = null;
       let loadedEnv = {};
@@ -339,16 +362,9 @@ async function handleEvent(event) {
             }
           }
 
-          const searchDirs = [
-            event.directory,
-            globalDirectory,
-            process.cwd(),
-            process.env.PWD,
-            path.join(process.env.HOME, 'program', 'chronos-graph'),
-            path.join(process.env.HOME, 'chronos-graph')
-          ].filter(Boolean);
+          const validSearchDirs = getChronosSearchDirs(event.directory || globalDirectory);
 
-          for (const dir of searchDirs) {
+          for (const dir of validSearchDirs) {
             const envPath = path.join(dir, '.env');
             if (fs.existsSync(envPath)) {
               const tempEnv = loadEnvFile(envPath);
@@ -537,14 +553,7 @@ async function handleEvent(event) {
         })
         .join("\n\n");
 
-      // Search for the project directory containing .env
-      const searchDirs = [
-        globalDirectory,
-        process.cwd(),
-        process.env.PWD,
-        path.join(process.env.HOME, 'program', 'chronos-graph'),
-        path.join(process.env.HOME, 'chronos-graph')
-      ].filter(Boolean);
+      const validSearchDirs = getChronosSearchDirs(event.directory || globalDirectory);
 
       let projectDir = path.join(__dirname, "..", "..");
       const dirVal = globalDirectory || event.directory;
@@ -556,7 +565,7 @@ async function handleEvent(event) {
       }
 
       let loadedEnv = {};
-      for (const dir of searchDirs) {
+      for (const dir of validSearchDirs) {
         const envPath = path.join(dir, '.env');
         if (fs.existsSync(envPath)) {
           const tempEnv = loadEnvFile(envPath);

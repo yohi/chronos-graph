@@ -223,8 +223,8 @@ if [[ -z "$BACKEND" || -z "$EMBEDDING_PROVIDER" ]]; then
         # Ask for confirmation with a 10-second timeout to prevent hangs in pseudo-TTY agent execution
         read -t 10 -p "Do you want to proceed with default settings? [y/N]: " CONFIRM || CONFIRM="n"
         if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
-            BACKEND="sqlite"
-            EMBEDDING_PROVIDER="local-model"
+            BACKEND=${BACKEND:-"sqlite"}
+            EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-"local-model"}
         else
             echo -e "\033[0;31mOperation aborted or timed out. Please specify parameters explicitly.\033[0m" >&2
             exit 1

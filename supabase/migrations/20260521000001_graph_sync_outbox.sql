@@ -112,7 +112,12 @@ BEGIN
 
     IF affected > 0 THEN
         INSERT INTO graph_sync_outbox (event_type, memory_id, payload)
-        VALUES ('DELETE_MEMORY', p_memory_id, COALESCE(v_meta, '{}'));
+        VALUES ('DELETE_MEMORY', p_memory_id, COALESCE(v_meta, '{}'))
+        ON CONFLICT (memory_id) WHERE status IN ('PENDING', 'PROCESSING')
+        DO UPDATE SET
+            event_type = 'DELETE_MEMORY',
+            payload = COALESCE(v_meta, '{}'),
+            updated_at = NOW();
     END IF;
 
     RETURN affected > 0;

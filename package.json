@@ -21,7 +21,5 @@
   "scripts": {
     "build": "echo 'No build step required'"
   },
-  "dependencies": {},
-  "devDependencies": {}
+  "dependencies": {}
 }
-

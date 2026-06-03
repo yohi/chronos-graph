@@ -27,8 +27,7 @@ ChronosGraph は、AIエージェント（Claude Code / Gemini CLI / Cursor 等�
 > *※実際にファイルを変更せずに構成や手順だけを確認したい（デバッグしたい）場合は、プロンプトの最後に「デバッグモード（Dry-run）で実行してください」と書き添えてください。*
 
 ```text
-Install and configure ChronosGraph by following the instructions here:
-https://raw.githubusercontent.com/yohi/chronos-graph/refs/heads/master/README.md
+Install and configure ChronosGraph by strictly following the Agent Setup Protocol in docs/agent-setup-protocol.md.
 ```
 
 ---
@@ -467,7 +466,7 @@ ChronosGraph 本体およびセキュリティ判定エンジン（Universal Eva
 | `SUPABASE_URL` | `""` | **[Supabase用]** 設定必須 | Supabase プロジェクト URL |
 | `SUPABASE_KEY` | `""` | **[Supabase用]** 設定必須 | Supabase Service Role Key (機密情報のため厳重管理) |
 | `SUPABASE_REQUEST_TIMEOUT_SECONDS` | `10.0` | デフォルト可 | **[Supabase用]** Supabase Data API 呼び出しのタイムアウト秒数 |
-| `EMBEDDING_PROVIDER` | `local-model` | デフォルト可 | 埋め込みプロバイダー (`local-model` / `openai` / `litellm`) |
+| `EMBEDDING_PROVIDER` | `local-model` | デフォルト可 | 埋め込みプロバイダー (`local-model` / `openai` / `litellm` / `custom-api`) |
 | `LOCAL_MODEL_NAME` | `cl-nagoya/ruri-v3-310m` | デフォルト可 | ローカルモデル名 (768次元) |
 | `EMBEDDING_DIMENSION` | `768` | デフォルト可 | 埋め込みベクトル次元数 (例: 768) |
 | `GRAPH_ENABLED` | `false` | デフォルト可 | グラフ関係性機能の有効化。SQLite では内部グラフ、PostgreSQL では Neo4j を使用。Supabase では `graph_sync_mode=async_outbox` のみ対応 |

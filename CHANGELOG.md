@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/yohi/chronos-graph/compare/v1.3.0...v1.3.1) (2026-06-03)
+
+
+### Bug Fixes
+
+* trigger release ([#319](https://github.com/yohi/chronos-graph/issues/319)) ([e8566e1](https://github.com/yohi/chronos-graph/commit/e8566e1ad05202d55782d90970631f35201be3df))
+
 ## [1.3.0](https://github.com/yohi/chronos-graph/compare/v1.2.0...v1.3.0) (2026-06-02)
 
 

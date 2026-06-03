@@ -28,7 +28,7 @@
 
 ---
 
-### Phase 2: 詳細設定 of 確認とロックイン (BLOCKING STEP)
+### Phase 2: 詳細設定の確認とロックイン (BLOCKING STEP)
 
 #### 【ケース A】長期記憶MCPの場合
 以下の項目を `ask_question` 等を用いて一括でユーザーに提示し、回答を確定させてください。

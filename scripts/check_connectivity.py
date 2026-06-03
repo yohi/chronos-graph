@@ -55,9 +55,8 @@ async def check_connectivity() -> None:
 
     if settings.graph_enabled:
         if settings.storage_backend in ("postgres", "supabase"):
-            if is_placeholder(settings.neo4j_uri) or is_placeholder(
-                settings.neo4j_password.get_secret_value()
-            ):
+            neo4j_password = settings.neo4j_password.get_secret_value() if settings.neo4j_password else ""
+            if is_placeholder(settings.neo4j_uri) or is_placeholder(neo4j_password):
                 print("⚠️ Graph (neo4j) check skipped: Connection details contain placeholders.")
                 has_placeholder = True
 

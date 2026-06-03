@@ -377,7 +377,11 @@ if [ "$TYPE" = "hook" ] || [ "$INGESTION_MODE" = "all" ]; then
     update_env_key "MCP_GATEWAY_UPSTREAM_ENV_PASSTHROUGH" '["OPENAI_API_KEY", "SQLITE_DB_PATH", "GRAPH_ENABLED", "EMBEDDING_PROVIDER", "CHRONOS_INGESTION_MODE"]'
     
     # 認証用のセキュアキーを自動ランダム生成（Pythonのsecretsモジュールを使用）
-    SECURE_KEY=$(python -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || echo "mcp-gateway-default-secret-key-token")
+    SECURE_KEY=$(python -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null || python3 -c "import secrets; print(secrets.token_hex(16))" 2>/dev/null)
+    if [[ -z "$SECURE_KEY" ]]; then
+        echo "Error: Python is required to generate a secure key for MCP_GATEWAY_API_KEYS_JSON. Install Python and retry." >&2
+        exit 1
+    fi
     update_env_key "MCP_GATEWAY_API_KEYS_JSON" "{\"default\": \"$SECURE_KEY\"}"
     update_env_key "MCP_GATEWAY_API_KEY" "$SECURE_KEY"
 else

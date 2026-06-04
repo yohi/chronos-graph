@@ -485,6 +485,7 @@ ChronosGraph 本体およびセキュリティ判定エンジン（Universal Eva
 |---|---|---|---|
 | `CHRONOS_EVALUATOR_API_KEY` | 未設定 | **LLM使用時必須** | 未設定なら LLM 評価をスキップ。LiteLLM 経由で任意プロバイダの API キーを設定 |
 | `CHRONOS_EVALUATOR_MODEL` | `anthropic/claude-haiku-4-5-20251001` | デフォルト可 | LiteLLM model identifier (例: `openai/gpt-4o-mini`, `anthropic/claude-3-5-haiku-20241022` のように完全な識別子を指定) |
+| `CHRONOS_EVALUATOR_API_ACCOUNT_ID` | 未設定 | **Cloudflare利用時必須** | Cloudflare Workers AI等の一部プロバイダを使用する際に必要な API アカウント ID |
 | `CHRONOS_EVALUATOR_MAX_TOKENS` | `1536` | デフォルト可 | 出力 token 上限。不正値・非正値は警告 + デフォルトへフォールバック (fail-soft) |
 | `CHRONOS_EVALUATOR_TIMEOUT_SECONDS` | `10.0` | デフォルト可 | LLM タイムアウト。不正値・非正値は警告 + デフォルトへフォールバック (fail-soft) |
 | `CHRONOS_EVALUATOR_FALLBACK` | `allow` | **`ask` を強く推奨** | LLM 未構成時の挙動。未設定時のリスク防止のため、本番環境では `ask` 推奨 |
@@ -509,6 +510,19 @@ ChronosGraph 本体およびセキュリティ判定エンジン（Universal Eva
 > - `ANTHROPIC_API_KEY` は使用しません。代わりに `CHRONOS_EVALUATOR_API_KEY` を設定してください。
 > - `CHRONOS_EVALUATOR_THINKING_BUDGET` は削除されました。Anthropic Extended Thinking を使いたい場合は LiteLLM `extra_body` 経由で再構成してください（本リファクタのスコープ外）。
 > - `CHRONOS_EVALUATOR_MAX_TOKENS` / `CHRONOS_EVALUATOR_TIMEOUT_SECONDS` の解釈 (不正値・非正値は警告 + デフォルト) は **v2.x と同一** です。設定バリデーション厳格化は別 PR で予定。
+
+#### 💡 プロバイダ別 `CHRONOS_EVALUATOR_API_ACCOUNT_ID` の要否マッピング
+
+LiteLLM を介してモデルを呼び出す際、API キー以外にアカウント ID やプロジェクト ID 等の設定が要求されるプロバイダは以下の通りです。
+
+| プロバイダ種別 | アカウントIDの要否 | 対応する環境変数 | 説明 |
+|---|---|---|---|
+| **Cloudflare Workers AI** | **必須** | `CHRONOS_EVALUATOR_API_ACCOUNT_ID` | API 接続 URL（`/accounts/{account_id}/ai/run/`）の構築にアカウントIDが必須です。 |
+| **Google Vertex AI** | **必須** | `CHRONOS_EVALUATOR_API_ACCOUNT_ID` | Google Cloud のプロジェクトID (`VERTEXAI_PROJECT`) として解釈され、リソース特定に必須です。 |
+| **IBM watsonx.ai** | **必須** | `CHRONOS_EVALUATOR_API_ACCOUNT_ID` | watsonx.ai 用の `WATSONX_PROJECT_ID` として解釈され、必須です。 |
+| **Azure OpenAI** | 不要 (※) | (使用しません) | `AZURE_API_BASE` もしくは `api_base` に直接リソースサブドメインを指定します。 |
+| **OpenAI / Anthropic** | 任意 (オプション) | `CHRONOS_EVALUATOR_API_ACCOUNT_ID` | 組織ID (`OPENAI_ORG_ID` 等) として解釈され、請求先組織を明示的に分けたい場合のみ指定します。 |
+| **Gemini (AI Studio) / Groq / mistral / deepseek** | 不要 | (使用しません) | APIキーのみで動作します。 |
 
 ### 3. Ingestion & フック (Hybrid Ingestion Mode) 設定
 

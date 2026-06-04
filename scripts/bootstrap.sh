@@ -36,6 +36,7 @@ NEO4J_USER=""
 REDIS_URL=""
 EMBEDDING_MODEL=""
 GRAPH_SYNC_MODE="sync" # sync | async_outbox
+EVALUATOR_API_ACCOUNT_ID=""
 
 # Track which flags were explicitly set to allow overwriting .env
 EXPLICIT_FLAGS=""
@@ -135,6 +136,9 @@ while [[ "$#" -gt 0 ]]; do
         --evaluator-model)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --evaluator-model requires a value"; exit 1; fi
             EVALUATOR_MODEL="$2"; shift ;;
+        --evaluator-api-account-id)
+            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --evaluator-api-account-id requires a value"; exit 1; fi
+            EVALUATOR_API_ACCOUNT_ID="$2"; shift ;;
         --db-host)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --db-host requires a value"; exit 1; fi
             DB_HOST="$2"; shift ;;
@@ -190,6 +194,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --ingestion-mode [all|selective]  Set memory ingestion mode (default: selective)"
             echo "  --agents [list]                   Comma-separated list of agents to configure hooks for"
             echo "  --evaluator-model [model]         Evaluator model name for hook setup"
+            echo "  --evaluator-api-account-id [id]   API Account ID for LLM Evaluator"
             echo "  --db-host [host]                  Database host for postgres"
             echo "  --db-port [port]                  Database port for postgres"
             echo "  --db-name [name]                  Database name for postgres"
@@ -277,6 +282,7 @@ if [ "$MODE" = "dry-run" ]; then
     if [[ -n "$REDIS_URL" ]]; then echo -e "   - Set REDIS_URL=$REDIS_URL"; fi
     if [[ -n "$EMBEDDING_MODEL" ]]; then echo -e "   - Set OpenAI/Embedding model to $EMBEDDING_MODEL"; fi
     if [[ -n "$EVALUATOR_MODEL" ]]; then echo -e "   - Set CHRONOS_EVALUATOR_MODEL=$EVALUATOR_MODEL"; fi
+    if [[ -n "$EVALUATOR_API_ACCOUNT_ID" ]]; then echo -e "   - Set CHRONOS_EVALUATOR_API_ACCOUNT_ID=$EVALUATOR_API_ACCOUNT_ID"; fi
     echo -e "   - Set GRAPH_SYNC_MODE=$GRAPH_SYNC_MODE"
     echo -e "3. Run unit tests to verify installation (unless skip-tests is set)"
     if [ "$TYPE" = "mcp" ] && [ "$SOURCE" = "local" ]; then
@@ -412,6 +418,7 @@ if [ "$TYPE" = "hook" ] || [ "$INGESTION_MODE" = "all" ]; then
     # pydantic-settings 向けにリスト型変数を JSON 配列形式に更新
     update_env_key "MCP_GATEWAY_UPSTREAM_COMMAND" '["python", "-m", "context_store"]'
     update_env_key "MCP_GATEWAY_UPSTREAM_ENV_PASSTHROUGH" '["OPENAI_API_KEY", "SQLITE_DB_PATH", "GRAPH_ENABLED", "EMBEDDING_PROVIDER", "CHRONOS_INGESTION_MODE"]'
+    update_env_key "MCP_GATEWAY_POLICY_PATH" "./intents.yaml"
     
     # Check if keys are already set in .env
     EXISTING_KEYS_JSON=$(grep -E "^MCP_GATEWAY_API_KEYS_JSON=" .env | cut -d'=' -f2- || true)
@@ -471,6 +478,10 @@ fi
 
 if [[ -n "$EVALUATOR_MODEL" ]]; then
     update_env_key "CHRONOS_EVALUATOR_MODEL" "$EVALUATOR_MODEL"
+fi
+
+if [[ -n "$EVALUATOR_API_ACCOUNT_ID" ]]; then
+    update_env_key "CHRONOS_EVALUATOR_API_ACCOUNT_ID" "$EVALUATOR_API_ACCOUNT_ID"
 fi
 
 if [ "$BACKEND" = "postgres" ]; then
@@ -683,6 +694,48 @@ except Exception as e:
         else
             echo -e "⚠️ opencode.json not found in $OPCODE_CONFIG_DIR."
         fi
+
+        # Ensure ~/.config/opencode/intents.yaml exists
+        if [ ! -f "$OPCODE_CONFIG_DIR/intents.yaml" ]; then
+            echo -e "${GREEN}Copying intents.yaml to $OPCODE_CONFIG_DIR/intents.yaml...${NC}"
+            cp intents.yaml "$OPCODE_CONFIG_DIR/intents.yaml"
+        fi
+        # Ensure 'bash' is in allowed_tools and 'OpenCode' is in agents list
+        python -c "
+import yaml, os
+path = os.path.expanduser('~/.config/opencode/intents.yaml')
+try:
+    with open(path, 'r') as f:
+        data = yaml.safe_load(f) or {}
+    intents = data.setdefault('intents', {})
+    default_intent = intents.setdefault('default', {})
+    allowed_tools = default_intent.setdefault('allowed_tools', [])
+    if 'bash' not in allowed_tools:
+        allowed_tools.append('bash')
+        
+    agents = data.setdefault('agents', {})
+    opencode_agent = agents.setdefault('OpenCode', {})
+    allowed_intents = opencode_agent.setdefault('allowed_intents', [])
+    if 'default' not in allowed_intents:
+        allowed_intents.append('default')
+        
+    with open(path, 'w') as f:
+        yaml.safe_dump(data, f, default_flow_style=False)
+    print('✅ Successfully updated intents.yaml for OpenCode and bash tool')
+except Exception as e:
+    print('⚠️ Failed to update intents.yaml:', e)
+" 2>/dev/null || true
+
+        # Generate global config ~/.config/opencode/chronos-gate.env
+        GATE_ENV_FILE="$OPCODE_CONFIG_DIR/chronos-gate.env"
+        echo "CHRONOS_REPO_PATH=$PWD" > "$GATE_ENV_FILE"
+        echo "MCP_GATEWAY_POLICY_PATH=$OPCODE_CONFIG_DIR/intents.yaml" >> "$GATE_ENV_FILE"
+        if [[ -n "$SECURE_KEY" ]]; then
+            echo "MCP_GATEWAY_API_KEY=$SECURE_KEY" >> "$GATE_ENV_FILE"
+        elif [[ -n "$EXISTING_KEY" ]]; then
+            echo "MCP_GATEWAY_API_KEY=$EXISTING_KEY" >> "$GATE_ENV_FILE"
+        fi
+        echo -e "${GREEN}Generated global chronos-gate config in $GATE_ENV_FILE${NC}"
         
         echo -e "\n${BLUE}--- OpenCode Setup Steps ---${NC}"
         echo -e "1. Add GitHub Packages registry to your ~/.npmrc:"

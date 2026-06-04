@@ -142,39 +142,50 @@ Any other output will be treated as a parse failure and downgraded to "ask".
 
 def _parse_decision(text: str) -> Decision:
     stripped = text.strip()
-    if not stripped.startswith("{") or not stripped.endswith("}"):
-        raise ResponseParseError("non-JSON response")
 
-    try:
-        parsed = cast(object, json.loads(stripped))
-    except json.JSONDecodeError as exc:
-        raise ResponseParseError(f"invalid JSON: {exc}") from exc
+    # Try parsing as JSON first
+    if stripped.startswith("{") and stripped.endswith("}"):
+        try:
+            parsed = cast(object, json.loads(stripped))
+            if isinstance(parsed, dict):
+                obj = cast(Mapping[str, object], parsed)
+                decision = obj.get("decision")
+                if decision == "allow":
+                    return Decision(decision="allow")
+                elif decision == "deny":
+                    reason = obj.get("reason")
+                    if isinstance(reason, str) and reason.strip():
+                        return Decision(decision="deny", reason=reason[:_REASON_MAX])
+                    raise ResponseParseError(
+                        "JSON response missing or invalid 'reason' for 'deny' decision"
+                    )
+                elif decision == "ask":
+                    ask_message = obj.get("ask_message")
+                    if isinstance(ask_message, str) and ask_message.strip():
+                        return Decision(decision="ask", ask_message=ask_message[:_ASK_MESSAGE_MAX])
+                    raise ResponseParseError(
+                        "JSON response missing or invalid 'ask_message' for 'ask' decision"
+                    )
+                else:
+                    raise ResponseParseError(f"JSON response has unknown decision: {decision!r}")
+            else:
+                raise ResponseParseError("JSON response is not a dictionary object")
+        except (json.JSONDecodeError, ValueError) as e:
+            raise ResponseParseError(f"Failed to parse JSON response: {e}") from e
 
-    if not isinstance(parsed, dict):
-        raise ResponseParseError(f"top-level must be object, got {type(parsed).__name__}")
-
-    obj = cast(Mapping[str, object], parsed)
-    decision = obj.get("decision")
-    if decision == "allow":
+    # Fallback to plain text parsing for safety guardrail models like Llama Guard
+    normalized = stripped.lower()
+    if "safe" in normalized and "unsafe" not in normalized:
         return Decision(decision="allow")
-    if decision == "deny":
-        reason = obj.get("reason")
-        if not isinstance(reason, str) or not reason.strip():
-            raise ResponseParseError("deny requires non-empty 'reason'")
-        truncated_reason = reason[:_REASON_MAX]
-        if not truncated_reason.strip():
-            raise ResponseParseError("deny requires non-empty 'reason' after truncation")
-        return Decision(decision="deny", reason=truncated_reason)
-    if decision == "ask":
-        ask_message = obj.get("ask_message")
-        if not isinstance(ask_message, str) or not ask_message.strip():
-            raise ResponseParseError("ask requires non-empty 'ask_message'")
-        truncated_ask = ask_message[:_ASK_MESSAGE_MAX]
-        if not truncated_ask.strip():
-            raise ResponseParseError("ask requires non-empty 'ask_message' after truncation")
-        return Decision(decision="ask", ask_message=truncated_ask)
+    if "unsafe" in normalized:
+        lines = stripped.split("\n")
+        # Extract categories if available (e.g. S1, S2, S3...)
+        reason = "unsafe"
+        if len(lines) > 1:
+            reason = f"unsafe: {', '.join(lines[1:])}"
+        return Decision(decision="deny", reason=reason[:_REASON_MAX])
 
-    raise ResponseParseError("unknown decision")
+    raise ResponseParseError("non-JSON response and could not parse as safety label")
 
 
 def _build_user_prompt(
@@ -240,6 +251,9 @@ class LlmEvaluator:
         extra_args: dict[str, object] | None = None,
     ) -> None:
         self._api_key: str = api_key
+        # For backward compatibility, normalize 'cloudflare-workers-ai/' prefix to 'cloudflare/'
+        if model.startswith("cloudflare-workers-ai/"):
+            model = model.replace("cloudflare-workers-ai/", "cloudflare/", 1)
         self._model: str = model
         self._timeout_seconds: float = timeout_seconds
         self._max_tokens: int = max_tokens
@@ -255,12 +269,13 @@ class LlmEvaluator:
             return None
 
         extra_args: dict[str, object] = {}
-        if settings.cloudflare_account_id:
-            account_id = settings.cloudflare_account_id.get_secret_value()
-            extra_args["api_base"] = (
-                f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
-            )
-            if settings.model.startswith("anthropic/"):
+        if settings.api_account_id:
+            account_id = settings.api_account_id.get_secret_value()
+            if settings.model.startswith("cloudflare/"):
+                extra_args["api_base"] = (
+                    f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
+                )
+            elif settings.model.startswith("anthropic/"):
                 logger.warning(
                     "Cloudflare account ID is set, but CHRONOS_EVALUATOR_MODEL (%r) "
                     "starts with 'anthropic/'. "
@@ -293,13 +308,27 @@ class LlmEvaluator:
         user_prompt = _build_user_prompt(
             input_=input_, rules=rules, memories=memories, intent_name=intent_name
         )
+        # Cloudflare Workers AI の一部モデルは system ロールをサポートしないため
+        # 'cloudflare/' の場合は system メッセージを user メッセージの先頭に結合する
+        if "cloudflare/" in self._model:
+            messages = [
+                {
+                    "role": "user",
+                    "content": (
+                        f"{SYSTEM_PROMPT}\n\nEvaluate the following request:\n\n{user_prompt}"
+                    ),
+                }
+            ]
+        else:
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ]
+
         try:
             response = await litellm_client.acompletion(
                 model=self._model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
+                messages=messages,
                 max_tokens=self._max_tokens,
                 timeout=self._timeout_seconds,
                 api_key=self._api_key,

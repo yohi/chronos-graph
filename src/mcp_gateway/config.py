@@ -9,7 +9,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import Field, SecretStr, SerializationInfo, field_validator, model_serializer
+from pydantic import (
+    AliasChoices,
+    Field,
+    SecretStr,
+    SerializationInfo,
+    field_validator,
+    model_serializer,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from chronos_shared.ingestion_mode import (
@@ -114,7 +121,13 @@ class EvaluatorSettings(BaseSettings):
 
     api_key: SecretStr | None = None
     model: str = "anthropic/claude-haiku-4-5-20251001"
-    cloudflare_account_id: SecretStr | None = None
+    api_account_id: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "CHRONOS_EVALUATOR_API_ACCOUNT_ID",
+            "CHRONOS_EVALUATOR_CLOUDFLARE_ACCOUNT_ID",
+        ),
+    )
 
     @model_serializer(mode="wrap")
     def _mask_secrets(self, handler: Any, info: SerializationInfo) -> dict[str, Any]:

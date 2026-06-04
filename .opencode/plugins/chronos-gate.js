@@ -1,6 +1,7 @@
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
 
 const gatewayPort = process.env.MCP_GATEWAY_PORT || '9100';
 
@@ -56,12 +57,15 @@ function logDebug(msg) {
   }
 
   try {
-    fs.appendFileSync(path.join(process.env.HOME, '.config', 'opencode', 'chronos-gate-debug.log'), `[${new Date().toISOString()}] ${output}\n`);
+    const logDir = path.resolve(os.homedir() || process.env.HOME || '', '.config', 'opencode');
+    const logPath = path.resolve(logDir, 'chronos-gate-debug.log');
+    fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${output}\n`);
   } catch {}
 }
 
 // Load global config from ~/.config/opencode/chronos-gate.env
-const globalEnvPath = path.join(process.env.HOME, '.config', 'opencode', 'chronos-gate.env');
+const homeDirectory = os.homedir() || process.env.HOME || '';
+const globalEnvPath = path.resolve(homeDirectory, '.config', 'opencode', 'chronos-gate.env');
 if (fs.existsSync(globalEnvPath)) {
   const globalEnv = loadEnvFile(globalEnvPath);
   logDebug(`Loaded global config from ${globalEnvPath}`);
@@ -395,8 +399,10 @@ async function handleEvent(event) {
             }
           }
           if (projectDir === (event.directory || globalDirectory || path.join(__dirname, "..", "..")) && process.env.CHRONOS_REPO_PATH) {
-            projectDir = process.env.CHRONOS_REPO_PATH;
-            const repoEnvPath = path.join(projectDir, '.env');
+            const rawRepoPath = process.env.CHRONOS_REPO_PATH;
+            const resolvedRepoPath = path.resolve(rawRepoPath);
+            projectDir = resolvedRepoPath;
+            const repoEnvPath = path.resolve(resolvedRepoPath, '.env');
             if (fs.existsSync(repoEnvPath)) {
               loadedEnv = loadEnvFile(repoEnvPath);
             }

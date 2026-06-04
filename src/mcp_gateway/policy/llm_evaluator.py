@@ -152,16 +152,26 @@ def _parse_decision(text: str) -> Decision:
                 decision = obj.get("decision")
                 if decision == "allow":
                     return Decision(decision="allow")
-                if decision == "deny":
+                elif decision == "deny":
                     reason = obj.get("reason")
                     if isinstance(reason, str) and reason.strip():
                         return Decision(decision="deny", reason=reason[:_REASON_MAX])
-                if decision == "ask":
+                    raise ResponseParseError(
+                        "JSON response missing or invalid 'reason' for 'deny' decision"
+                    )
+                elif decision == "ask":
                     ask_message = obj.get("ask_message")
                     if isinstance(ask_message, str) and ask_message.strip():
                         return Decision(decision="ask", ask_message=ask_message[:_ASK_MESSAGE_MAX])
-        except (json.JSONDecodeError, ValueError):
-            pass
+                    raise ResponseParseError(
+                        "JSON response missing or invalid 'ask_message' for 'ask' decision"
+                    )
+                else:
+                    raise ResponseParseError(f"JSON response has unknown decision: {decision!r}")
+            else:
+                raise ResponseParseError("JSON response is not a dictionary object")
+        except (json.JSONDecodeError, ValueError) as e:
+            raise ResponseParseError(f"Failed to parse JSON response: {e}") from e
 
     # Fallback to plain text parsing for safety guardrail models like Llama Guard
     normalized = stripped.lower()
@@ -261,10 +271,11 @@ class LlmEvaluator:
         extra_args: dict[str, object] = {}
         if settings.api_account_id:
             account_id = settings.api_account_id.get_secret_value()
-            extra_args["api_base"] = (
-                f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/"
-            )
-            if settings.model.startswith("anthropic/"):
+            if settings.model.startswith("cloudflare/"):
+                extra_args["api_base"] = (
+                    f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
+                )
+            elif settings.model.startswith("anthropic/"):
                 logger.warning(
                     "Cloudflare account ID is set, but CHRONOS_EVALUATOR_MODEL (%r) "
                     "starts with 'anthropic/'. "

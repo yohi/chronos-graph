@@ -34,7 +34,7 @@ function sanitizeMessagesData(data) {
 
 // Debug log helper
 function logDebug(msg) {
-  const isDebug = true;
+  const isDebug = !!(process.env.CHRONOS_GATE_DEBUG || process.env.NODE_DEBUG);
   if (!isDebug) return;
 
   let output = msg;
@@ -85,13 +85,14 @@ function loadEnvFile(envPath) {
       if (match) {
         const key = match[1].trim();
         let val = match[2].trim();
-        // Remove inline comments
-        const commentIndex = val.indexOf('#');
-        if (commentIndex !== -1) {
-          val = val.substring(0, commentIndex).trim();
-        }
         if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
           val = val.substring(1, val.length - 1);
+        } else {
+          // Remove inline comments
+          const commentIndex = val.indexOf('#');
+          if (commentIndex !== -1) {
+            val = val.substring(0, commentIndex).trim();
+          }
         }
         env[key] = val;
       }
@@ -150,7 +151,7 @@ function getChronosSearchDirs(directory = null) {
 
 // Core logic for tool evaluation
 async function evaluateTool(toolCall) {
-  logDebug(`evaluateTool API key is: ${process.env.MCP_GATEWAY_API_KEY}`);
+  logDebug("evaluateTool started");
   return new Promise((resolve, reject) => {
     const http = require('node:http');
     const postData = JSON.stringify(toolCall);

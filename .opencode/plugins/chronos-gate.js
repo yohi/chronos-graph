@@ -34,7 +34,7 @@ function sanitizeMessagesData(data) {
 
 // Debug log helper
 function logDebug(msg) {
-  const isDebug = process.env.CHRONOS_GATE_DEBUG || process.env.NODE_DEBUG;
+  const isDebug = true;
   if (!isDebug) return;
 
   let output = msg;
@@ -60,6 +60,16 @@ function logDebug(msg) {
   } catch {}
 }
 
+// Load global config from ~/.config/opencode/chronos-gate.env
+const globalEnvPath = path.join(process.env.HOME, '.config', 'opencode', 'chronos-gate.env');
+if (fs.existsSync(globalEnvPath)) {
+  const globalEnv = loadEnvFile(globalEnvPath);
+  logDebug(`Loaded global config from ${globalEnvPath}`);
+  for (const [k, v] of Object.entries(globalEnv)) {
+    process.env[k] = v;
+  }
+}
+
 logDebug("Plugin script loaded (evaluated).");
 
 // Helper to manually parse a .env file and return key-value pairs
@@ -75,6 +85,11 @@ function loadEnvFile(envPath) {
       if (match) {
         const key = match[1].trim();
         let val = match[2].trim();
+        // Remove inline comments
+        const commentIndex = val.indexOf('#');
+        if (commentIndex !== -1) {
+          val = val.substring(0, commentIndex).trim();
+        }
         if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
           val = val.substring(1, val.length - 1);
         }
@@ -135,6 +150,7 @@ function getChronosSearchDirs(directory = null) {
 
 // Core logic for tool evaluation
 async function evaluateTool(toolCall) {
+  logDebug(`evaluateTool API key is: ${process.env.MCP_GATEWAY_API_KEY}`);
   return new Promise((resolve, reject) => {
     const http = require('node:http');
     const postData = JSON.stringify(toolCall);
@@ -146,7 +162,8 @@ async function evaluateTool(toolCall) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData)
+        'Content-Length': Buffer.byteLength(postData),
+        ...(process.env.MCP_GATEWAY_API_KEY ? { 'Authorization': `Bearer ${process.env.MCP_GATEWAY_API_KEY}` } : {})
       },
       timeout: 45000
     };
@@ -271,8 +288,8 @@ function checkAndStartGateway() {
       }
 
       if (!projectDir) {
-        logDebug("Warning: Could not locate chronos-graph project directory with .env file.");
-        projectDir = process.cwd() || process.env.HOME;
+        logDebug("Warning: Could not locate chronos-graph project directory with .env file. Falling back to CHRONOS_REPO_PATH or CWD.");
+        projectDir = process.env.CHRONOS_REPO_PATH || process.cwd() || process.env.HOME;
       }
 
       // Resolve executable: prefer local venv, fallback to uv run, then uvx
@@ -363,6 +380,7 @@ async function handleEvent(event) {
           }
 
           const validSearchDirs = getChronosSearchDirs(event.directory || globalDirectory);
+          let loadedEnv = {};
 
           for (const dir of validSearchDirs) {
             const envPath = path.join(dir, '.env');
@@ -370,9 +388,21 @@ async function handleEvent(event) {
               const tempEnv = loadEnvFile(envPath);
               if (tempEnv.STORAGE_BACKEND || tempEnv.MCP_GATEWAY_PORT || tempEnv.CHRONOS_INGESTION_MODE) {
                 projectDir = dir;
+                loadedEnv = tempEnv;
                 break;
               }
             }
+          }
+          if (projectDir === (event.directory || globalDirectory || path.join(__dirname, "..", "..")) && process.env.CHRONOS_REPO_PATH) {
+            projectDir = process.env.CHRONOS_REPO_PATH;
+            const repoEnvPath = path.join(projectDir, '.env');
+            if (fs.existsSync(repoEnvPath)) {
+              loadedEnv = loadEnvFile(repoEnvPath);
+            }
+          }
+          // Merge loaded env keys into process.env so they are available in evaluateTool
+          for (const [k, v] of Object.entries(loadedEnv)) {
+            process.env[k] = v;
           }
 
           const contextObj = {
@@ -574,6 +604,13 @@ async function handleEvent(event) {
             loadedEnv = tempEnv;
             break;
           }
+        }
+      }
+      if (loadedEnv && Object.keys(loadedEnv).length === 0 && process.env.CHRONOS_REPO_PATH) {
+        projectDir = process.env.CHRONOS_REPO_PATH;
+        const repoEnvPath = path.join(projectDir, '.env');
+        if (fs.existsSync(repoEnvPath)) {
+          loadedEnv = loadEnvFile(repoEnvPath);
         }
       }
 

@@ -1,16 +1,85 @@
 version: 1
+
 output_filters:
-  default_filter:
-    type: "none"
+  recall_safe:
+    type: structural_allowlist
+    schemas:
+      memory_search:
+        results: [id, content, created_at]
+      memory_search_graph:
+        nodes: [id, label]
+        edges: [source, target, relation]
+
+  full_access:
+    type: none
+
 intents:
+  # デフォルトインテント（OpenCode等の評価用）
   default:
-    description: "Default intent"
-    allowed_tools: ["bash"]
-    output_filter: "default_filter"
+    description: "Default developer access for trusted agents."
+    allowed_tools: [memory_search, memory_search_graph, memory_stats, memory_save, memory_delete, memory_prune, memory.ingest, bash]
+    output_filter: full_access
+    guardrails:
+      bash:
+        requires_approval: false
+        params:
+          command:
+            type: string
+            max_length: 1024
+      memory_delete:
+        requires_approval: true
+      memory_prune:
+        requires_approval: true
+
+  # AIの記憶の読み込み（検索）専用インテント
+  read_only_recall:
+    description: "Search and summarize past memories. Cannot write or delete."
+    allowed_tools: [memory_search, memory_search_graph, memory_stats]
+    output_filter: recall_safe
+    guardrails:
+      memory_search:
+        params:
+          query:
+            type: string
+            max_length: 256
+            pattern: "^[^<>{};]*$" # インジェクション対策としてメタ文字を除外
+
+  # 記憶の編集・整理インテント（破壊的操作には承認を強制）
+  curate_memories:
+    description: "Curate own working memory. Allowed to save/delete with approval."
+    allowed_tools: [memory_save, memory_delete, memory_prune]
+    output_filter: full_access
+    guardrails:
+      memory_save:
+        requires_approval: false
+      memory_delete:
+        requires_approval: true
+      memory_prune:
+        requires_approval: true
+
+  # ターンエンドでの自動記憶保存インテント
   memory.ingest:
-    description: "Ingest memory"
-    allowed_tools: ["memory_save", "context-store_memory_save"]
-    output_filter: "default_filter"
+    description: "Turn-end automatic conversation ingestion from trusted client hooks."
+    allowed_tools: [memory_save]
+    output_filter: full_access
+
+  # 開発やシステム操作用インテント
+  developer_access:
+    description: "Allowed to run CLI commands and setup scripts."
+    allowed_tools: [bash]
+    output_filter: full_access
+    guardrails:
+      bash:
+        requires_approval: false
+        params:
+          command:
+            type: string
+            max_length: 1024
+
 agents:
   OpenCode:
-    allowed_intents: ["default", "memory.ingest"]
+    allowed_intents: [default, read_only_recall, curate_memories, memory.ingest, developer_access]
+  claude-code:
+    allowed_intents: [default, read_only_recall, curate_memories, memory.ingest, developer_access]
+  gemini-cli:
+    allowed_intents: [default, read_only_recall, curate_memories, memory.ingest, developer_access]

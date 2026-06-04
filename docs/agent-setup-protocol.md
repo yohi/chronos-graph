@@ -83,7 +83,7 @@
 * **Redis接続URL**: `redis://default:[YOUR-PASSWORD]@host:port` 等の形式。
 
 #### 【ケース B】安全評価Hookの場合
-* （追加パラメータの収集は不要）
+* **LLMアカウントID (オプション)**: Cloudflare Workers AI 等のアカウントIDが必要な LLM プロバイダを利用する場合のみ入力します（`CHRONOS_EVALUATOR_API_ACCOUNT_ID` にマッピングされます）。不要なプロバイダの場合は空のままで進めます。
 
 ---
 
@@ -114,6 +114,7 @@
   --ingestion-mode <ingestion-mode> \
   --agents <comma_separated_agents> \
   [--evaluator-model <evaluator_model>] \
+  [--evaluator-api-account-id <api_account_id>] \
   [--db-host <db_host>] [--db-port <db_port>] [--db-name <db_name>] [--db-user <db_user>] \
   [--neo4j-uri <neo4j_uri>] [--neo4j-user <neo4j_user>] \
   [--redis-url <redis_url>] \

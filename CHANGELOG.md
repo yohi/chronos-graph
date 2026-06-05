@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/yohi/chronos-graph/compare/v1.3.1...v1.4.0) (2026-06-04)
+
+
+### Features
+
+* **evaluator:** evaluator共通の api_account_id 環境変数の導入および関連ドキュメント・スクリプトの更新 ([#321](https://github.com/yohi/chronos-graph/issues/321)) ([a57df6d](https://github.com/yohi/chronos-graph/commit/a57df6d5cbb163f9decac515808c5c32df516b37))
+
 ## [1.3.1](https://github.com/yohi/chronos-graph/compare/v1.3.0...v1.3.1) (2026-06-03)
 
 

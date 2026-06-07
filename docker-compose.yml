@@ -109,6 +109,21 @@ services:
         condition: service_healthy
     profiles:
       - dashboard
+  opensandbox:
+    image: opensandbox/opensandbox-server:latest
+    # WARNING: Mounting docker.sock allows container escape / privilege escalation.
+    # This service is protected by 'profiles: [sandbox]' and only run when debugging sandboxes.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./.devcontainer/opensandbox/sandbox.yaml:/etc/opensandbox/config.yaml:ro
+      - .:/project:ro
+    environment:
+      OSB_RUNTIME: docker
+      OSB_CONFIG_PATH: /etc/opensandbox/config.yaml
+    ports:
+      - "127.0.0.1:8090:8080"
+    profiles:
+      - sandbox
 
 volumes:
   postgres_data:

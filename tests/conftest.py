@@ -158,11 +158,16 @@ def sandbox_egress_allowlist(sandbox_profile: str) -> list[str]:
 
 
 def _expand_env_default(value: str) -> str:
-    match = re.fullmatch(r"\$\{([^:}]+):-([^}]+)\}", value)
-    if not match:
-        return value
-    name, default = match.groups()
-    return os.environ.get(name, default)
+    def replace(match: re.Match[str]) -> str:
+        name, default = match.groups()
+        return os.environ.get(name, default)
+
+    return re.sub(r"\$\{([^:}]+):-([^}]+)\}", replace, value)
+
+
+@pytest.fixture
+def sandbox_aware_sqlite_env() -> None:
+    return None
 
 
 @pytest.fixture(scope="session")
@@ -174,7 +179,7 @@ def sandbox_resource_limits(sandbox_profile: str) -> dict[str, str]:
 
 
 @pytest.fixture(autouse=True)
-def _sandbox_aware_sqlite(tmp_path, monkeypatch):
+def _sandbox_aware_sqlite(tmp_path, monkeypatch, sandbox_aware_sqlite_env):
     """OpenSandbox 内で実行される場合、SQLite DB パスを一時ディレクトリに切り替える。
 
     OPENSANDBOX=1 の場合のみ発火し、ホスト環境の既存 DB ファイルを汚染しない。

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12, OpenSandbox Python SDK, Docker, uv, pnpm, pytest
 
-**Design Document:** [`docs/superpowers/specs/2026-06-07-opensandbox-integration-design.md`](file:///home/y_ohi/program/chronos-graph/docs/superpowers/specs/2026-06-07-opensandbox-integration-design.md)
+**Design Document:** [`docs/superpowers/specs/2026-06-07-opensandbox-integration-design.md`](../specs/2026-06-07-opensandbox-integration-design.md)
 
 ---
 
@@ -696,7 +696,7 @@ Expected: No errors.
 - [ ] **Step 7: Run TypeScript check**
 
 ```bash
-cd frontend && npx tsc --noEmit
+cd frontend && pnpm exec tsc --noEmit
 ```
 
 Expected: No errors.
@@ -731,10 +731,17 @@ Modify `docker/postgres/init.sql` to add test database creation before the schem
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_bigm;
 
+-- Apply schema to default database
+\i /docker-entrypoint-initdb.d/schema.sql
+
 -- Test database for sandbox integration tests
 CREATE DATABASE context_store_test;
 GRANT ALL PRIVILEGES ON DATABASE context_store_test TO context_store;
 
+-- Switch to test database and apply the same schema
+\c context_store_test
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_bigm;
 \i /docker-entrypoint-initdb.d/schema.sql
 ```
 
@@ -783,21 +790,27 @@ import os
 def test_sandbox_aware_sqlite_activates(tmp_path, monkeypatch):
     """OPENSANDBOX=1 の場合、SQLITE_DB_PATH と SQLITE_GRAPH_PATH が tmp_path に設定される。"""
     monkeypatch.setenv("OPENSANDBOX", "1")
+    monkeypatch.delenv("SQLITE_DB_PATH", raising=False)
+    monkeypatch.delenv("SQLITE_GRAPH_PATH", raising=False)
 
-    # fixture を手動でシミュレート（autouse fixture は conftest.py で既に適用済み）
-    if os.environ.get("OPENSANDBOX") == "1":
-        monkeypatch.setenv("SQLITE_DB_PATH", str(tmp_path / "test.db"))
-        monkeypatch.setenv("SQLITE_GRAPH_PATH", str(tmp_path / "test_graph.db"))
+    # conftest.py の実際のヘルパー関数を呼び出してフィクスチャロジックを検証
+    from conftest import _apply_sandbox_sqlite_paths
+
+    _apply_sandbox_sqlite_paths(tmp_path, monkeypatch)
 
     assert os.environ["SQLITE_DB_PATH"] == str(tmp_path / "test.db")
     assert os.environ["SQLITE_GRAPH_PATH"] == str(tmp_path / "test_graph.db")
 
 
-def test_sandbox_aware_sqlite_inactive_without_env(monkeypatch):
+def test_sandbox_aware_sqlite_inactive_without_env(tmp_path, monkeypatch):
     """OPENSANDBOX が未設定の場合、SQLITE パスは変更されない。"""
     monkeypatch.delenv("OPENSANDBOX", raising=False)
     monkeypatch.delenv("SQLITE_DB_PATH", raising=False)
     monkeypatch.delenv("SQLITE_GRAPH_PATH", raising=False)
+
+    from conftest import _apply_sandbox_sqlite_paths
+
+    _apply_sandbox_sqlite_paths(tmp_path, monkeypatch)
 
     assert os.environ.get("SQLITE_DB_PATH") is None
     assert os.environ.get("SQLITE_GRAPH_PATH") is None
@@ -806,23 +819,28 @@ def test_sandbox_aware_sqlite_inactive_without_env(monkeypatch):
 - [ ] **Step 2: Run the tests to verify baseline**
 
 Run: `uv run pytest tests/unit/test_conftest_sandbox.py -v`
-Expected: Both tests PASS (baseline behavior verification).
+Expected: Both tests FAIL — `ImportError: cannot import name '_apply_sandbox_sqlite_paths' from 'conftest'`. This is expected (TDD Red phase); the helper function will be added in Step 3.
 
 - [ ] **Step 3: Add the fixture to conftest.py**
 
-Add `import os` to the top of `tests/conftest.py` (after the existing imports), and append the fixture after the existing `anyio_backend` fixture:
+Add `import os` to the top of `tests/conftest.py` (after the existing imports), and append the helper function and fixture after the existing `anyio_backend` fixture:
 
 ```python
 import os
 
 # ... existing code ...
 
-@pytest.fixture(autouse=True)
-def _sandbox_aware_sqlite(tmp_path, monkeypatch):
-    """Ensure SQLite tests use temp paths inside sandbox."""
+def _apply_sandbox_sqlite_paths(tmp_path, monkeypatch):
+    """Apply sandbox-aware SQLite paths when running in OpenSandbox."""
     if os.environ.get("OPENSANDBOX") == "1":
         monkeypatch.setenv("SQLITE_DB_PATH", str(tmp_path / "test.db"))
         monkeypatch.setenv("SQLITE_GRAPH_PATH", str(tmp_path / "test_graph.db"))
+
+
+@pytest.fixture(autouse=True)
+def _sandbox_aware_sqlite(tmp_path, monkeypatch):
+    """Ensure SQLite tests use temp paths inside sandbox."""
+    _apply_sandbox_sqlite_paths(tmp_path, monkeypatch)
 ```
 
 - [ ] **Step 4: Run full test suite for regression**

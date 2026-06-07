@@ -233,7 +233,7 @@ python scripts/sandbox_runner.py --profile integration -- uv run pytest tests/in
 
 # Frontend tasks
 python scripts/sandbox_runner.py -- bash -c "cd frontend && pnpm install && pnpm lint"
-python scripts/sandbox_runner.py -- bash -c "cd frontend && npx tsc --noEmit"
+python scripts/sandbox_runner.py -- bash -c "cd frontend && pnpm exec tsc --noEmit"
 ```
 
 ### 4.2 Responsibilities
@@ -401,12 +401,17 @@ if __name__ == "__main__":
 Add sandbox-aware fixture to `tests/conftest.py`:
 
 ```python
-@pytest.fixture(autouse=True)
-def _sandbox_aware_sqlite(tmp_path, monkeypatch):
-    """Ensure SQLite tests use temp paths inside sandbox."""
+def _apply_sandbox_sqlite_paths(tmp_path, monkeypatch):
+    """Apply sandbox-aware SQLite paths when running in OpenSandbox."""
     if os.environ.get("OPENSANDBOX") == "1":
         monkeypatch.setenv("SQLITE_DB_PATH", str(tmp_path / "test.db"))
         monkeypatch.setenv("SQLITE_GRAPH_PATH", str(tmp_path / "test_graph.db"))
+
+
+@pytest.fixture(autouse=True)
+def _sandbox_aware_sqlite(tmp_path, monkeypatch):
+    """Ensure SQLite tests use temp paths inside sandbox."""
+    _apply_sandbox_sqlite_paths(tmp_path, monkeypatch)
 ```
 
 - Only activates when `OPENSANDBOX=1` is set (no impact on existing tests)
@@ -441,6 +446,12 @@ To prevent sandbox tests from polluting development databases:
 -- Test database for sandbox integration tests
 CREATE DATABASE context_store_test;
 GRANT ALL PRIVILEGES ON DATABASE context_store_test TO context_store;
+
+-- Switch to test database and apply the same schema
+\c context_store_test
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_bigm;
+\i /docker-entrypoint-initdb.d/schema.sql
 ```
 
 - **Neo4j**: Community Edition single-DB — rely on test setup/teardown for cleanup (existing pattern)

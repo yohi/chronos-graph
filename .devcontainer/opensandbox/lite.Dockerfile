@@ -20,9 +20,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && corepack enable && corepack prepare pnpm@9.15.4 --activate \
     && rm -rf /var/lib/apt/lists/*
 
+# Validate tools as root
+RUN uv --version && uvx --version && node -v && npm -v && pnpm -v
+
 RUN groupadd -g 1000 sandbox && \
     useradd -m -u 1000 -g sandbox -s /bin/bash sandbox
 USER sandbox
+
+# Validate tools as sandbox user to check permissions and symlinks
+RUN uv --version && uvx --version && node -v && npm -v && pnpm -v
 
 WORKDIR /workspace
 CMD ["bash"]

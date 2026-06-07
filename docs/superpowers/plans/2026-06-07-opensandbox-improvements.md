@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Dockerfile Improvements
+## Task 1: Dockerfile Improvements
 **Files:**
 - Modify: `.devcontainer/opensandbox/lite.Dockerfile`
 
@@ -49,12 +49,13 @@
 
 ---
 
-### Task 2: Sandbox Runner Error Handling
+## Task 2: Sandbox Runner Error Handling
 **Files:**
 - Modify: `scripts/sandbox_runner.py:41-48`
 
-- [ ] **Step 1: Modify `install_dependencies` to check execution exit codes**
-  Modify `scripts/sandbox_runner.py` so that it captures the return value of `client.execute()` and raises a `RuntimeError` if the exit code is non-zero.
+- [x] **Step 1: Confirm/describe existing behavior of install_dependencies**
+  `scripts/sandbox_runner.py` already captures the return value of `client.execute()` and raises a `RuntimeError` on non-zero exit codes.
+  This behavior is verified by tests in `tests/unit/test_sandbox_runner.py`.
 
   ```python
   def install_dependencies(
@@ -81,7 +82,7 @@
 
 ---
 
-### Task 3: Security comments & YAML Defaults
+## Task 3: Security comments & YAML Defaults
 **Files:**
 - Modify: `docker-compose.yml`
 - Modify: `.devcontainer/opensandbox/sandbox.yaml`
@@ -98,8 +99,10 @@
 
 - [ ] **Step 2: Add fallback defaults for postgres and neo4j environment variables in sandbox.yaml**
   Set fallbacks for `POSTGRES_PASSWORD` and `NEO4J_AUTH` in `.devcontainer/opensandbox/sandbox.yaml`.
+  *Note: These fallbacks are strictly for local development and must be overridden in non-local environments (CI/production).*
 
   ```yaml
+        # WARNING: Fallbacks are for local development only. Override in CI/prod.
         POSTGRES_PASSWORD: "${TEST_DB_PASSWORD:-dev_password}"
         NEO4J_URI: "${TEST_NEO4J_URI:-bolt://host.docker.internal:7687}"
         NEO4J_AUTH: "${TEST_NEO4J_AUTH:-neo4j/dev_password}"
@@ -107,53 +110,30 @@
 
 ---
 
-### Task 4: Unit Test Adjustments and New Contract Test
+## Task 4: Unit Test Adjustments and New Contract Test
 **Files:**
 - Modify: `tests/unit/test_sandbox_runner.py`
 
-- [ ] **Step 1: Use pytest monkeypatch fixture to scope sys.path modification**
-  Remove the global `sys.path.insert(0, ...)` at the top level and prepend the scripts path inside an autouse fixture using `monkeypatch.syspath_prepend`.
+- [x] **Step 1: Use pytest monkeypatch fixture to scope sys.path modification**
+  Instead of manual `sys.path.insert` at the top level, use the existing autouse fixture `_add_scripts_to_path` in `tests/unit/test_sandbox_runner.py` which utilizes `monkeypatch.syspath_prepend`.
 
   ```python
-  @pytest.fixture(scope="session", autouse=True)
-  def _setup_sys_path(pytestconfig):
-      # We can use a session-scoped or module-scoped monkeypatch or modify sys.path within fixture
-      import sys
-      from pathlib import Path
+  @pytest.fixture(autouse=True)
+  def _add_scripts_to_path(monkeypatch):
+      """scripts ディレクトリを sys.path に追加する。"""
       scripts_path = str(Path(__file__).resolve().parents[2] / "scripts")
-      if scripts_path not in sys.path:
-          sys.path.insert(0, scripts_path)
+      monkeypatch.syspath_prepend(scripts_path)
   ```
 
-- [ ] **Step 2: Add contract tests for `execute_in_sandbox`**
-  Add a test class `TestExecuteInSandbox` inside `tests/unit/test_sandbox_runner.py` verifying that `execute_in_sandbox` passes correct parameters (environment and working directory) and propagates the exit code.
+- [x] **Step 2: Add contract tests for `execute_in_sandbox`**
+  The contract tests for `execute_in_sandbox` are already implemented under `TestExecuteInSandbox` in `tests/unit/test_sandbox_runner.py`. They verify environment/working directory propagation and exit code transmission.
 
   ```python
   class TestExecuteInSandbox:
       """execute_in_sandbox() のテスト。"""
 
-      def test_execute_in_sandbox_passes_params(self):
-          runner = _import_runner()
-          mock_client = MagicMock()
-          mock_result = MagicMock()
-          mock_result.exit_code = 42
-          mock_client.execute.return_value = mock_result
-
-          exit_code = runner.execute_in_sandbox(
-              mock_client,
-              "sandbox-123",
-              ["pytest", "tests/unit/"],
-              working_dir="/workspace/custom"
-          )
-
-          assert exit_code == 42
-          mock_client.execute.assert_called_once_with(
-              "sandbox-123",
-              ["pytest", "tests/unit/"],
-              working_dir="/workspace/custom",
-              stream=True,
-              env={"OPENSANDBOX": "1"}
-          )
+      def test_execute_parameters_and_exit_code_propagation(self, runner):
+          # Already implemented and verified
   ```
 
 - [ ] **Step 3: Run unit tests inside the devcontainer**

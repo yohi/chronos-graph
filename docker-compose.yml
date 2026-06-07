@@ -111,6 +111,8 @@ services:
       - dashboard
   opensandbox:
     image: opensandbox/opensandbox-server:latest
+    # WARNING: Mounting docker.sock allows container escape / privilege escalation.
+    # This service is protected by 'profiles: [sandbox]' and only run when debugging sandboxes.
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./.devcontainer/opensandbox/sandbox.yaml:/etc/opensandbox/config.yaml:ro

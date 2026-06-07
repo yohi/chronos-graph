@@ -39,13 +39,17 @@ def install_dependencies(
     cmd_str = " ".join(command)
 
     if any(kw in cmd_str for kw in ["ruff", "mypy", "pytest", "uv"]):
-        client.execute(sandbox_id, ["uv", "sync", "--frozen", "--all-extras"])
+        result = client.execute(sandbox_id, ["uv", "sync", "--frozen", "--all-extras"])
+        if result.exit_code != 0:
+            raise RuntimeError(f"[sandbox] uv sync failed (exit {result.exit_code})")
 
     if any(kw in cmd_str for kw in ["pnpm", "tsc", "eslint", "frontend"]):
-        client.execute(
+        result = client.execute(
             sandbox_id,
             ["bash", "-c", "cd /workspace/frontend && pnpm install --frozen-lockfile"],
         )
+        if result.exit_code != 0:
+            raise RuntimeError(f"[sandbox] pnpm install failed (exit {result.exit_code})")
 
 
 def setup_sandbox(client: SandboxClient, profile: str) -> str:

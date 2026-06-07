@@ -81,8 +81,11 @@ def execute_in_sandbox(
 def teardown_sandbox(client: SandboxClient, sandbox_id: str) -> None:
     try:
         client.destroy(sandbox_id)
-    except Exception:
-        print(f"[sandbox] Warning: failed to destroy {sandbox_id}", file=sys.stderr)
+    except Exception as exc:
+        print(
+            f"[sandbox] Warning: failed to destroy {sandbox_id}: {exc}",
+            file=sys.stderr,
+        )
 
 
 def main() -> int:

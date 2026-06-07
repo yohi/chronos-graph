@@ -6,7 +6,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import random
+import re
+import socket
+import urllib.error
+import urllib.request
 from typing import TYPE_CHECKING
 
 import pytest
@@ -65,8 +70,6 @@ def sandbox_container(sandbox_profile: str, sandbox_api_base: str) -> dict[str, 
     OpenSandbox サーバーが localhost:8090 で起動している場合、テストセッション開始時に
     コンテナを起動し、テストセッション終了時に停止・削除する。
     """
-    import urllib.request
-
     # サーバーが起動しているか確認
     try:
         req = urllib.request.Request(  # noqa: S310
@@ -75,8 +78,11 @@ def sandbox_container(sandbox_profile: str, sandbox_api_base: str) -> dict[str, 
         with urllib.request.urlopen(req, timeout=2) as resp:  # noqa: S310
             if resp.status == 200:
                 return {"profile": sandbox_profile, "api_base": sandbox_api_base}
-    except Exception:
-        logging.debug("OpenSandbox health check failed, assuming server not running")
+    except (urllib.error.URLError, socket.timeout, TimeoutError) as e:
+        logging.debug(
+            "OpenSandbox health check failed, assuming server not running: %s",
+            e,
+        )
 
     # サーバーが起動していない場合は skip
     pytest.skip("OpenSandbox server is not running; skip sandbox integration tests")
@@ -89,8 +95,6 @@ def mock_sandbox_api(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[dict]]:
     Returns:
         呼び出し履歴を保持する dict。キー 'calls' にリクエスト dict のリストが入る。
     """
-    import urllib.request
-
     calls: list[dict] = []
 
     def mock_urlopen(req, *args, **kwargs):
@@ -126,21 +130,39 @@ def mock_sandbox_api(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[dict]]:
 @pytest.fixture(scope="session")
 def sandbox_egress_allowlist(sandbox_profile: str) -> list[str]:
     """OpenSandbox プロファイルの egress 許可リストを返す session-scope fixture。"""
-    # sandbox.yaml の内容に合わせて定義
-    if sandbox_profile == "lite":
-        return [
-            "pypi.org",
-            "files.pythonhosted.org",
-            "registry.npmjs.org",
+    import yaml
+
+    config_path = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        ".devcontainer",
+        "opensandbox",
+        "sandbox.yaml",
+    )
+    with open(config_path, encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+
+    profiles = config.get("profiles", {})
+    profile = profiles.get(sandbox_profile, {})
+    allowlist = list(profile.get("egress", {}).get("allow", []))
+
+    parent = profile.get("extends")
+    if parent:
+        parent_profile = profiles.get(parent, {})
+        allowlist = [
+            *parent_profile.get("egress", {}).get("allow", []),
+            *allowlist,
         ]
-    elif sandbox_profile == "integration":
-        return [
-            "pypi.org",
-            "files.pythonhosted.org",
-            "registry.npmjs.org",
-            "host.docker.internal",
-        ]
-    return []
+
+    return [_expand_env_default(host) for host in allowlist]
+
+
+def _expand_env_default(value: str) -> str:
+    match = re.fullmatch(r"\$\{([^:}]+):-([^}]+)\}", value)
+    if not match:
+        return value
+    name, default = match.groups()
+    return os.environ.get(name, default)
 
 
 @pytest.fixture(scope="session")

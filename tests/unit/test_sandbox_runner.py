@@ -199,3 +199,4 @@ class TestTeardownSandbox:
         runner.teardown_sandbox(mock_client, "sandbox-123")
         captured = capsys.readouterr()
         assert "Warning" in captured.err
+        assert "destroy failed" in captured.err

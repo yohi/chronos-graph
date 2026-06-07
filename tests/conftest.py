@@ -171,3 +171,14 @@ def sandbox_resource_limits(sandbox_profile: str) -> dict[str, str]:
     if sandbox_profile == "lite":
         return {"cpu": "2", "memory": "2Gi"}
     return {}
+
+
+@pytest.fixture(autouse=True)
+def _sandbox_aware_sqlite(tmp_path, monkeypatch):
+    """OpenSandbox 内で実行される場合、SQLite DB パスを一時ディレクトリに切り替える。
+
+    OPENSANDBOX=1 の場合のみ発火し、ホスト環境の既存 DB ファイルを汚染しない。
+    """
+    if os.environ.get("OPENSANDBOX") == "1":
+        monkeypatch.setenv("SQLITE_DB_PATH", str(tmp_path / "test.db"))
+        monkeypatch.setenv("SQLITE_GRAPH_PATH", str(tmp_path / "test_graph.db"))

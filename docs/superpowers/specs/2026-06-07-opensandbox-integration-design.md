@@ -89,10 +89,10 @@ Routing logic in `sandbox_runner.py`:
 
 ```python
 ROUTING_RULES: list[tuple[str, str]] = [
-    (r"tests/integration",  "integration"),
-    (r"test_postgres",      "integration"),
-    (r"test_neo4j",         "integration"),
-    (r"test_redis",         "integration"),
+    (r"tests/integration",   "integration"),
+    (r"\btest_postgres\b",   "integration"),
+    (r"\btest_neo4j\b",      "integration"),
+    (r"\btest_redis\b",      "integration"),
 ]
 DEFAULT_PROFILE = "lite"
 ```
@@ -170,11 +170,15 @@ profiles:
 
   integration:
     extends: lite
+    # Constraint: All test DB services MUST be reachable via a single host
+    # (default: host.docker.internal). If TEST_DB_HOST is overridden,
+    # TEST_NEO4J_URI and TEST_REDIS_URL MUST point to the same host.
     egress:
       default: deny
       allow:
         - pypi.org
         - files.pythonhosted.org
+        - registry.npmjs.org
         - "${TEST_DB_HOST:-host.docker.internal}"
     env:
       OPENSANDBOX: "1"
@@ -251,16 +255,15 @@ import re
 import signal
 import sys
 import time
-from dataclasses import dataclass
 
 from opensandbox import SandboxClient
 
 
 ROUTING_RULES: list[tuple[str, str]] = [
-    (r"tests/integration",  "integration"),
-    (r"test_postgres",      "integration"),
-    (r"test_neo4j",         "integration"),
-    (r"test_redis",         "integration"),
+    (r"tests/integration",   "integration"),
+    (r"\btest_postgres\b",   "integration"),
+    (r"\btest_neo4j\b",      "integration"),
+    (r"\btest_redis\b",      "integration"),
 ]
 DEFAULT_PROFILE = "lite"
 MAX_RETRIES = 2
@@ -315,9 +318,15 @@ def execute_in_sandbox(
     command: list[str],
     working_dir: str = "/workspace",
 ) -> int:
-    """Execute command in sandbox, stream output, return exit code."""
+    """Execute command in sandbox, stream output, return exit code.
+
+    The runner guarantees OPENSANDBOX=1 in the process environment so
+    Phase 2 test hooks in tests/conftest.py (_sandbox_aware_sqlite) will
+    activate inside the sandbox.
+    """
     result = client.execute(
         sandbox_id, command, working_dir=working_dir, stream=True,
+        env={"OPENSANDBOX": "1"},
     )
     return result.exit_code
 
@@ -352,9 +361,12 @@ def main() -> int:
 
     client = SandboxClient(base_url=args.server_url)
     sandbox_id: str | None = None
+    _cleaned_up = False
 
     def _cleanup(signum: int, frame: object) -> None:
-        if sandbox_id:
+        nonlocal _cleaned_up
+        if sandbox_id and not _cleaned_up:
+            _cleaned_up = True
             teardown_sandbox(client, sandbox_id)
         sys.exit(128 + signum)
 
@@ -366,7 +378,8 @@ def main() -> int:
         install_dependencies(client, sandbox_id, command)
         return execute_in_sandbox(client, sandbox_id, command)
     finally:
-        if sandbox_id:
+        if sandbox_id and not _cleaned_up:
+            _cleaned_up = True
             teardown_sandbox(client, sandbox_id)
 
 
@@ -397,7 +410,7 @@ def _sandbox_aware_sqlite(tmp_path, monkeypatch):
 ```
 
 - Only activates when `OPENSANDBOX=1` is set (no impact on existing tests)
-- `sandbox_runner.py` auto-injects this env var for all sandbox executions
+- `sandbox_runner.py` guarantees `OPENSANDBOX=1` in the process environment for **all** sandbox executions (both `lite` and `integration` profiles) via the `env` parameter passed to `client.execute()`
 
 ### 5.2 DB Connection for Integration Tests
 
@@ -497,6 +510,8 @@ Manual validation steps after implementation:
 2. **Dependency management**: Backend uses `uv` exclusively (never `pip`). Frontend uses `pnpm`.
 3. **Statelessness**: Lite containers hold no state. Cleanup (container destroy) is guaranteed via `finally` + signal handlers + server timeout.
 4. **No dependency bleed**: `mcp_gateway/` and `context_store/` remain decoupled. Sandbox runner is a standalone script in `scripts/`.
+5. **Docker socket security**: The `/var/run/docker.sock` mount is restricted to the `sandbox` profile with `127.0.0.1` binding. It is intended for local development only and MUST NOT be used in production or shared environments.
+6. **Single DB host for integration**: All test DB services (Postgres, Neo4j, Redis) MUST be reachable via a single host (default: `host.docker.internal`) to match the egress allow list. Splitting services across multiple hosts requires updating `egress.allow` in `sandbox.yaml`.
 
 ### Non-Goals
 

@@ -37,6 +37,12 @@ Install and configure ChronosGraph by strictly following the Agent Setup Protoco
 AIエージェントにセットアップを依頼する場合の詳細な手順と制約は、[Agent Setup Protocol](docs/agent-setup-protocol.md) を参照してください。
 AIエージェントはユーザーに必要な設定事項を質問し、その結果を引数として `scripts/bootstrap.sh` に渡して機械的にセットアップを実行します。これにより、環境依存による設定のブレを防ぎます。
 
+### OpenSandbox 利用時の注意
+
+`docker compose --profile sandbox up` で起動する OpenSandbox サーバーは、サンドボックス用コンテナを作成するためにホストの Docker ソケット (`/var/run/docker.sock`) をマウントします。このマウントは Docker API への完全アクセスを許可するため、コンテナ内プロセスがホスト上のコンテナを起動・停止・削除でき、実質的にホスト権限へ昇格できるリスクがあります。
+
+このプロファイルは信頼できるローカル開発・デバッグ用途に限定し、未検証のイメージや共有環境では有効化しないでください。
+
 
 ## 🧠 Agent Identity & Memory Protocol
 

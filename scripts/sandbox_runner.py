@@ -1,5 +1,3 @@
-"""OpenSandbox runner for AI agent task execution."""
-
 import argparse
 import os
 import re
@@ -20,7 +18,6 @@ MAX_RETRIES = 2
 
 
 def resolve_profile(command: list[str], explicit: str | None) -> str:
-    """Resolve sandbox profile from command pattern or explicit override."""
     if explicit:
         return explicit
     cmd_str = " ".join(command)
@@ -35,7 +32,6 @@ def install_dependencies(
     sandbox_id: str,
     command: list[str],
 ) -> None:
-    """Install project dependencies based on the command context."""
     cmd_str = " ".join(command)
 
     if any(kw in cmd_str for kw in ["ruff", "mypy", "pytest", "uv"]):
@@ -53,7 +49,6 @@ def install_dependencies(
 
 
 def setup_sandbox(client: SandboxClient, profile: str) -> str:
-    """Acquire a sandbox from the pool with retry on pool exhaustion."""
     for attempt in range(MAX_RETRIES + 1):
         try:
             return client.create(profile=profile)
@@ -64,7 +59,6 @@ def setup_sandbox(client: SandboxClient, profile: str) -> str:
                 time.sleep(wait)
             else:
                 raise
-    # Unreachable, but satisfies type checker
     raise RuntimeError("Failed to acquire sandbox")  # pragma: no cover
 
 
@@ -74,12 +68,6 @@ def execute_in_sandbox(
     command: list[str],
     working_dir: str = "/workspace",
 ) -> int:
-    """Execute command in sandbox, stream output, return exit code.
-
-    The runner guarantees OPENSANDBOX=1 in the process environment so
-    Phase 2 test hooks in tests/conftest.py (_sandbox_aware_sqlite) will
-    activate inside the sandbox.
-    """
     result = client.execute(
         sandbox_id,
         command,
@@ -91,11 +79,13 @@ def execute_in_sandbox(
 
 
 def teardown_sandbox(client: SandboxClient, sandbox_id: str) -> None:
-    """Destroy sandbox (stateless guarantee)."""
     try:
         client.destroy(sandbox_id)
-    except Exception:
-        print(f"[sandbox] Warning: failed to destroy {sandbox_id}", file=sys.stderr)
+    except Exception as exc:
+        print(
+            f"[sandbox] Warning: failed to destroy {sandbox_id}: {exc}",
+            file=sys.stderr,
+        )
 
 
 def main() -> int:

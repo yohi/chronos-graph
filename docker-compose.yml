@@ -28,6 +28,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./docker/postgres/zz-apply-schema.sh:/docker-entrypoint-initdb.d/zz-apply-schema.sh
       - ./docker/postgres/schema.sql:/docker-entrypoint-initdb.d/schema.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U context_store -d context_store"]

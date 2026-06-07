@@ -1,5 +1,3 @@
-"""Unit tests for scripts/sandbox_runner.py."""
-
 from __future__ import annotations
 
 import sys
@@ -11,14 +9,12 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _add_scripts_to_path(monkeypatch):
-    """scripts ディレクトリを sys.path に追加する。"""
     scripts_path = str(Path(__file__).resolve().parents[2] / "scripts")
     monkeypatch.syspath_prepend(scripts_path)
 
 
 @pytest.fixture(autouse=True)
 def _mock_opensandbox_import():
-    """opensandbox パッケージが未インストールでもテスト可能にする。"""
     mock_module = MagicMock()
     mock_module.SandboxClient = MagicMock
     with patch.dict("sys.modules", {"opensandbox": mock_module}):
@@ -26,7 +22,6 @@ def _mock_opensandbox_import():
 
 
 def _import_runner():
-    """テストごとにモジュールをリロードする。"""
     import importlib
 
     if "sandbox_runner" in sys.modules:
@@ -36,13 +31,10 @@ def _import_runner():
 
 @pytest.fixture
 def runner():
-    """sandbox_runner モジュールを提供するフィクスチャ。"""
     return _import_runner()
 
 
 class TestResolveProfile:
-    """resolve_profile() のテスト。"""
-
     def test_default_profile(self, runner):
         result = runner.resolve_profile(["ruff", "check", "src/"], None)
         assert result == "lite"
@@ -75,8 +67,6 @@ class TestResolveProfile:
 
 
 class TestInstallDependencies:
-    """install_dependencies() のテスト。"""
-
     def test_python_keywords_trigger_uv_sync(self, runner):
         mock_client = MagicMock()
         mock_client.execute.return_value.exit_code = 0
@@ -131,8 +121,6 @@ class TestInstallDependencies:
 
 
 class TestSetupSandbox:
-    """setup_sandbox() のテスト。"""
-
     def test_success_first_try(self, runner):
         mock_client = MagicMock()
         mock_client.create.return_value = "sandbox-abc"
@@ -160,8 +148,6 @@ class TestSetupSandbox:
 
 
 class TestExecuteInSandbox:
-    """execute_in_sandbox() のテスト。"""
-
     def test_execute_parameters_and_exit_code_propagation(self, runner):
         mock_client = MagicMock()
         mock_client.execute.return_value.exit_code = 42
@@ -202,8 +188,6 @@ class TestExecuteInSandbox:
 
 
 class TestTeardownSandbox:
-    """teardown_sandbox() のテスト。"""
-
     def test_successful_teardown(self, runner):
         mock_client = MagicMock()
         runner.teardown_sandbox(mock_client, "sandbox-123")
@@ -215,3 +199,4 @@ class TestTeardownSandbox:
         runner.teardown_sandbox(mock_client, "sandbox-123")
         captured = capsys.readouterr()
         assert "Warning" in captured.err
+        assert "destroy failed" in captured.err

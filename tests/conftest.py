@@ -186,4 +186,3 @@ def _sandbox_aware_sqlite(tmp_path, monkeypatch, sandbox_aware_sqlite_env):
     """
     if os.environ.get("OPENSANDBOX") == "1":
         monkeypatch.setenv("SQLITE_DB_PATH", str(tmp_path / "test.db"))
-        monkeypatch.setenv("SQLITE_GRAPH_PATH", str(tmp_path / "test_graph.db"))

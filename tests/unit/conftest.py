@@ -1,3 +1,4 @@
+import os
 from typing import Any
 
 import pytest
@@ -7,9 +8,19 @@ from context_store.config import Settings
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """テスト実行前に設定関連の環境変数をクリアする。"""
+    """テスト実行前に設定関連の環境変数をクリアする。
+
+    ただし OPENSANDBOX=1 の場合、ルート conftest の _sandbox_aware_sqlite が
+    設定する SQLITE_DB_PATH は削除しない。delenv するとサンドボックス用の
+    一時 DB パス切り替えが打ち消されてしまうため(fixture 実行順序に依存しない
+    ようここで明示的に除外する)。
+    """
+    sandbox_mode = os.environ.get("OPENSANDBOX") == "1"
     for field_name in Settings.model_fields.keys():
-        monkeypatch.delenv(field_name.upper(), raising=False)
+        env_name = field_name.upper()
+        if sandbox_mode and env_name == "SQLITE_DB_PATH":
+            continue
+        monkeypatch.delenv(env_name, raising=False)
 
 
 def make_settings(**kwargs: Any) -> Settings:

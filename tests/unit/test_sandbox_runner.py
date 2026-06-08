@@ -29,16 +29,43 @@ def _mock_opensandbox_import():
         working_directory: str = ""
         envs: dict = field(default_factory=dict)
 
+    @dataclass
+    class _Host:
+        path: str
+
+    @dataclass
+    class _NetworkRule:
+        action: str
+        target: str
+
+    @dataclass
+    class _NetworkPolicy:
+        defaultAction: str = "deny"
+        egress: list[_NetworkRule] | None = None
+
+    @dataclass
+    class _Volume:
+        name: str
+        host: _Host | None
+        mountPath: str
+        readOnly: bool = False
+
     mock_opensandbox = MagicMock()
     mock_config_sync = MagicMock()
     mock_models_execd = MagicMock()
+    mock_models_sandboxes = MagicMock()
     mock_models_execd.RunCommandOpts.side_effect = _RunCommandOpts
+    mock_models_sandboxes.Host = _Host
+    mock_models_sandboxes.NetworkPolicy = _NetworkPolicy
+    mock_models_sandboxes.NetworkRule = _NetworkRule
+    mock_models_sandboxes.Volume = _Volume
     mock_modules = {
         "opensandbox": mock_opensandbox,
         "opensandbox.config": MagicMock(),
         "opensandbox.config.connection_sync": mock_config_sync,
         "opensandbox.models": MagicMock(),
         "opensandbox.models.execd": mock_models_execd,
+        "opensandbox.models.sandboxes": mock_models_sandboxes,
     }
     with patch.dict("sys.modules", mock_modules):
         yield
@@ -150,7 +177,68 @@ class TestSetupSandbox:
         assert result is mock_sandbox
         mock_create.assert_called_once_with(
             image=runner.PROFILE_IMAGES["lite"],
+            env={"OPENSANDBOX": "1"},
             metadata={"profile": "lite"},
+            resource={"cpu": "2", "memory": "2Gi"},
+            network_policy=runner.NetworkPolicy(
+                defaultAction="deny",
+                egress=[
+                    runner.NetworkRule(action="allow", target="pypi.org"),
+                    runner.NetworkRule(action="allow", target="files.pythonhosted.org"),
+                    runner.NetworkRule(action="allow", target="registry.npmjs.org"),
+                ],
+            ),
+            volumes=[
+                runner.Volume(
+                    name="workspace",
+                    host=runner.Host(path=runner.resolve_project_root()),
+                    mountPath="/workspace",
+                    readOnly=False,
+                )
+            ],
+            connection_config=mock_cfg,
+        )
+
+    def test_integration_profile_expands_db_env_and_network_policy(self, runner):
+        mock_sandbox = MagicMock()
+        mock_cfg = MagicMock()
+        with patch.object(runner.SandboxSync, "create", return_value=mock_sandbox) as mock_create:
+            result = runner.setup_sandbox(mock_cfg, "integration")
+
+        assert result is mock_sandbox
+        mock_create.assert_called_once_with(
+            image=runner.PROFILE_IMAGES["integration"],
+            env={
+                "OPENSANDBOX": "1",
+                "POSTGRES_HOST": "host.docker.internal",
+                "POSTGRES_PORT": "5435",
+                "POSTGRES_DB": "context_store_test",
+                "POSTGRES_USER": "context_store",
+                "POSTGRES_PASSWORD": "dev_password",
+                "NEO4J_URI": "bolt://host.docker.internal:7687",
+                "NEO4J_USER": "neo4j",
+                "NEO4J_PASSWORD": "dev_password",
+                "REDIS_URL": "redis://host.docker.internal:6379",
+            },
+            metadata={"profile": "integration"},
+            resource={"cpu": "2", "memory": "2Gi"},
+            network_policy=runner.NetworkPolicy(
+                defaultAction="deny",
+                egress=[
+                    runner.NetworkRule(action="allow", target="pypi.org"),
+                    runner.NetworkRule(action="allow", target="files.pythonhosted.org"),
+                    runner.NetworkRule(action="allow", target="registry.npmjs.org"),
+                    runner.NetworkRule(action="allow", target="host.docker.internal"),
+                ],
+            ),
+            volumes=[
+                runner.Volume(
+                    name="workspace",
+                    host=runner.Host(path=runner.resolve_project_root()),
+                    mountPath="/workspace",
+                    readOnly=False,
+                )
+            ],
             connection_config=mock_cfg,
         )
 

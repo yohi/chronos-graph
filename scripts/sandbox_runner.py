@@ -33,6 +33,7 @@ BASE_EGRESS_ALLOWLIST = [
     "registry.npmjs.org",
 ]
 RESOURCE_LIMITS = {"cpu": "2", "memory": "2Gi"}
+UV_RUN_COMMANDS = {"ruff", "mypy", "pytest"}
 
 
 def resolve_profile(command: list[str], explicit: str | None) -> str:
@@ -90,7 +91,7 @@ def build_profile_env(profile: str) -> dict[str, str]:
             "NEO4J_URI": os.environ.get("TEST_NEO4J_URI", "bolt://host.docker.internal:7687"),
             "NEO4J_USER": os.environ.get("TEST_NEO4J_USER", "neo4j"),
             "NEO4J_PASSWORD": os.environ.get("TEST_NEO4J_PASSWORD", "dev_password"),
-            "REDIS_URL": os.environ.get("TEST_REDIS_URL", "redis://host.docker.internal:6379"),
+            "REDIS_URL": os.environ.get("TEST_REDIS_URL", "redis://host.docker.internal:6379/1"),
         }
     )
     return env
@@ -149,13 +150,33 @@ def execute_in_sandbox(
     working_dir: str = "/workspace",
 ) -> int:
     result = sandbox.commands.run(
-        shlex.join(command),
+        shlex.join(normalize_command(command)),
         opts=RunCommandOpts(
             working_directory=working_dir,
             envs={"OPENSANDBOX": "1"},
         ),
     )
+    forward_command_output(result)
     return result.exit_code if result.exit_code is not None else 1
+
+
+def normalize_command(command: list[str]) -> list[str]:
+    if command and command[0] in UV_RUN_COMMANDS:
+        return ["uv", "run", *command]
+    return command
+
+
+def forward_command_output(result: object) -> None:
+    stdout = getattr(result, "stdout", None)
+    stderr = getattr(result, "stderr", None)
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode()
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode()
+    if isinstance(stdout, str) and stdout:
+        print(stdout, end="")
+    if isinstance(stderr, str) and stderr:
+        print(stderr, end="", file=sys.stderr)
 
 
 def teardown_sandbox(sandbox: SandboxSync) -> None:

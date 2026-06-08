@@ -218,7 +218,7 @@ class TestSetupSandbox:
                 "NEO4J_URI": "bolt://host.docker.internal:7687",
                 "NEO4J_USER": "neo4j",
                 "NEO4J_PASSWORD": "dev_password",
-                "REDIS_URL": "redis://host.docker.internal:6379",
+                "REDIS_URL": "redis://host.docker.internal:6379/1",
             },
             metadata={"profile": "integration"},
             resource={"cpu": "2", "memory": "2Gi"},
@@ -268,6 +268,33 @@ class TestSetupSandbox:
 
 
 class TestExecuteInSandbox:
+    def test_direct_python_tool_commands_run_through_uv(self, runner):
+        mock_sandbox = MagicMock()
+        mock_sandbox.commands.run.return_value.exit_code = 0
+
+        runner.execute_in_sandbox(mock_sandbox, ["ruff", "check", "src/"])
+
+        mock_sandbox.commands.run.assert_called_once_with(
+            "uv run ruff check src/",
+            opts=runner.RunCommandOpts(
+                working_directory="/workspace",
+                envs={"OPENSANDBOX": "1"},
+            ),
+        )
+
+    def test_execute_forwards_stdout_and_stderr(self, runner, capsys):
+        mock_sandbox = MagicMock()
+        mock_sandbox.commands.run.return_value.exit_code = 0
+        mock_sandbox.commands.run.return_value.stdout = "command output\n"
+        mock_sandbox.commands.run.return_value.stderr = "command warning\n"
+
+        exit_code = runner.execute_in_sandbox(mock_sandbox, ["echo", "test"])
+
+        captured = capsys.readouterr()
+        assert exit_code == 0
+        assert captured.out == "command output\n"
+        assert captured.err == "command warning\n"
+
     def test_execute_parameters_and_exit_code_propagation(self, runner):
         mock_sandbox = MagicMock()
         mock_sandbox.commands.run.return_value.exit_code = 42

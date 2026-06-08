@@ -15,9 +15,20 @@ def _add_scripts_to_path(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _mock_opensandbox_import():
-    mock_module = MagicMock()
-    mock_module.SandboxClient = MagicMock
-    with patch.dict("sys.modules", {"opensandbox": mock_module}):
+    # Mock the top-level package and all submodules imported by sandbox_runner.
+    # CI may not have 'opensandbox' installed as a proper package, so we stub
+    # every dotted path the script imports at module level.
+    mock_opensandbox = MagicMock()
+    mock_config_sync = MagicMock()
+    mock_models_execd = MagicMock()
+    mock_modules = {
+        "opensandbox": mock_opensandbox,
+        "opensandbox.config": MagicMock(),
+        "opensandbox.config.connection_sync": mock_config_sync,
+        "opensandbox.models": MagicMock(),
+        "opensandbox.models.execd": mock_models_execd,
+    }
+    with patch.dict("sys.modules", mock_modules):
         yield
 
 
@@ -68,135 +79,137 @@ class TestResolveProfile:
 
 class TestInstallDependencies:
     def test_python_keywords_trigger_uv_sync(self, runner):
-        mock_client = MagicMock()
-        mock_client.execute.return_value.exit_code = 0
-        runner.install_dependencies(
-            mock_client, "sandbox-123", ["uv", "run", "pytest", "tests/unit/"]
-        )
-        mock_client.execute.assert_called_once_with(
-            "sandbox-123", ["uv", "sync", "--frozen", "--all-extras"]
+        mock_sandbox = MagicMock()
+        mock_sandbox.commands.run.return_value.exit_code = 0
+        runner.install_dependencies(mock_sandbox, ["uv", "run", "pytest", "tests/unit/"])
+        mock_sandbox.commands.run.assert_called_once_with(
+            "uv sync --frozen --all-extras",
+            opts=runner.RunCommandOpts(working_directory="/workspace"),
         )
 
     def test_frontend_keywords_trigger_pnpm_install(self, runner):
-        mock_client = MagicMock()
-        mock_client.execute.return_value.exit_code = 0
+        mock_sandbox = MagicMock()
+        mock_sandbox.commands.run.return_value.exit_code = 0
         runner.install_dependencies(
-            mock_client,
-            "sandbox-123",
+            mock_sandbox,
             ["bash", "-c", "cd frontend && pnpm lint"],
         )
-        mock_client.execute.assert_called_once_with(
-            "sandbox-123",
-            ["bash", "-c", "cd /workspace/frontend && pnpm install --frozen-lockfile"],
+        mock_sandbox.commands.run.assert_called_once_with(
+            "bash -c 'cd /workspace/frontend && pnpm install --frozen-lockfile'",
+            opts=runner.RunCommandOpts(working_directory="/workspace"),
         )
 
     def test_ruff_triggers_uv_sync(self, runner):
-        mock_client = MagicMock()
-        mock_client.execute.return_value.exit_code = 0
-        runner.install_dependencies(mock_client, "sandbox-123", ["ruff", "check", "src/"])
-        mock_client.execute.assert_called_once_with(
-            "sandbox-123", ["uv", "sync", "--frozen", "--all-extras"]
+        mock_sandbox = MagicMock()
+        mock_sandbox.commands.run.return_value.exit_code = 0
+        runner.install_dependencies(mock_sandbox, ["ruff", "check", "src/"])
+        mock_sandbox.commands.run.assert_called_once_with(
+            "uv sync --frozen --all-extras",
+            opts=runner.RunCommandOpts(working_directory="/workspace"),
         )
 
     def test_uv_sync_failure_raises_runtime_error(self, runner):
-        mock_client = MagicMock()
-        mock_client.execute.return_value.exit_code = 1
+        mock_sandbox = MagicMock()
+        mock_sandbox.commands.run.return_value.exit_code = 1
         with pytest.raises(RuntimeError, match=r"uv sync failed"):
-            runner.install_dependencies(mock_client, "sandbox-123", ["ruff", "check", "src/"])
+            runner.install_dependencies(mock_sandbox, ["ruff", "check", "src/"])
 
     def test_pnpm_install_failure_raises_runtime_error(self, runner):
-        mock_client = MagicMock()
-        mock_client.execute.return_value.exit_code = 1
+        mock_sandbox = MagicMock()
+        mock_sandbox.commands.run.return_value.exit_code = 1
         with pytest.raises(RuntimeError, match=r"pnpm install failed"):
             runner.install_dependencies(
-                mock_client,
-                "sandbox-123",
+                mock_sandbox,
                 ["bash", "-c", "cd frontend && pnpm lint"],
             )
 
     def test_no_matching_keywords(self, runner):
-        mock_client = MagicMock()
-        runner.install_dependencies(mock_client, "sandbox-123", ["echo", "hello"])
-        mock_client.execute.assert_not_called()
-
+        mock_sandbox = MagicMock()
+        runner.install_dependencies(mock_sandbox, ["echo", "hello"])
+        mock_sandbox.commands.run.assert_not_called()
 
 class TestSetupSandbox:
     def test_success_first_try(self, runner):
-        mock_client = MagicMock()
-        mock_client.create.return_value = "sandbox-abc"
-        result = runner.setup_sandbox(mock_client, "lite")
-        assert result == "sandbox-abc"
-        mock_client.create.assert_called_once_with(profile="lite")
+        mock_sandbox = MagicMock()
+        mock_cfg = MagicMock()
+        with patch.object(runner.SandboxSync, "create", return_value=mock_sandbox) as mock_create:
+            result = runner.setup_sandbox(mock_cfg, "lite")
+        assert result is mock_sandbox
+        mock_create.assert_called_once_with(
+            image=runner.PROFILE_IMAGES["lite"],
+            metadata={"profile": "lite"},
+            connection_config=mock_cfg,
+        )
 
     def test_retry_on_pool_exhaustion(self, runner):
-        mock_client = MagicMock()
-        mock_client.create.side_effect = [
-            RuntimeError("pool exhausted"),
-            "sandbox-xyz",
-        ]
-        with patch("sandbox_runner.time.sleep"):
-            result = runner.setup_sandbox(mock_client, "lite")
-        assert result == "sandbox-xyz"
-        assert mock_client.create.call_count == 2
+        mock_sandbox = MagicMock()
+        mock_cfg = MagicMock()
+        with patch.object(
+            runner.SandboxSync,
+            "create",
+            side_effect=[RuntimeError("pool exhausted"), mock_sandbox],
+        ) as mock_create:
+            with patch("sandbox_runner.time.sleep"):
+                result = runner.setup_sandbox(mock_cfg, "lite")
+        assert result is mock_sandbox
+        assert mock_create.call_count == 2
 
     def test_raises_after_max_retries(self, runner):
-        mock_client = MagicMock()
-        mock_client.create.side_effect = RuntimeError("pool exhausted")
-        with patch("sandbox_runner.time.sleep"), pytest.raises(RuntimeError, match="pool"):
-            runner.setup_sandbox(mock_client, "lite")
-        assert mock_client.create.call_count == runner.MAX_RETRIES + 1
-
+        mock_cfg = MagicMock()
+        with patch.object(
+            runner.SandboxSync,
+            "create",
+            side_effect=RuntimeError("pool exhausted"),
+        ) as mock_create:
+            with patch("sandbox_runner.time.sleep"), pytest.raises(RuntimeError, match="pool"):
+                runner.setup_sandbox(mock_cfg, "lite")
+        assert mock_create.call_count == runner.MAX_RETRIES + 1
 
 class TestExecuteInSandbox:
     def test_execute_parameters_and_exit_code_propagation(self, runner):
-        mock_client = MagicMock()
-        mock_client.execute.return_value.exit_code = 42
+        mock_sandbox = MagicMock()
+        mock_sandbox.commands.run.return_value.exit_code = 42
 
         exit_code = runner.execute_in_sandbox(
-            mock_client,
-            "sandbox-123",
+            mock_sandbox,
             ["echo", "test"],
             working_dir="/workspace/subdir",
         )
 
         assert exit_code == 42
-        mock_client.execute.assert_called_once_with(
-            "sandbox-123",
-            ["echo", "test"],
-            working_dir="/workspace/subdir",
-            stream=True,
-            env={"OPENSANDBOX": "1"},
+        mock_sandbox.commands.run.assert_called_once_with(
+            "echo test",
+            opts=runner.RunCommandOpts(
+                working_directory="/workspace/subdir",
+                envs={"OPENSANDBOX": "1"},
+            ),
         )
 
     def test_execute_default_working_dir(self, runner):
-        mock_client = MagicMock()
-        mock_client.execute.return_value.exit_code = 0
+        mock_sandbox = MagicMock()
+        mock_sandbox.commands.run.return_value.exit_code = 0
 
-        runner.execute_in_sandbox(
-            mock_client,
-            "sandbox-123",
-            ["echo", "test"],
+        runner.execute_in_sandbox(mock_sandbox, ["echo", "test"])
+
+        mock_sandbox.commands.run.assert_called_once_with(
+            "echo test",
+            opts=runner.RunCommandOpts(
+                working_directory="/workspace",
+                envs={"OPENSANDBOX": "1"},
+            ),
         )
-
-        mock_client.execute.assert_called_once_with(
-            "sandbox-123",
-            ["echo", "test"],
-            working_dir="/workspace",
-            stream=True,
-            env={"OPENSANDBOX": "1"},
-        )
-
 
 class TestTeardownSandbox:
     def test_successful_teardown(self, runner):
-        mock_client = MagicMock()
-        runner.teardown_sandbox(mock_client, "sandbox-123")
-        mock_client.destroy.assert_called_once_with("sandbox-123")
+        mock_sandbox = MagicMock()
+        runner.teardown_sandbox(mock_sandbox)
+        mock_sandbox.kill.assert_called_once_with()
 
     def test_teardown_failure_does_not_raise(self, runner, capsys):
-        mock_client = MagicMock()
-        mock_client.destroy.side_effect = RuntimeError("destroy failed")
-        runner.teardown_sandbox(mock_client, "sandbox-123")
+        mock_sandbox = MagicMock()
+        mock_sandbox.kill.side_effect = RuntimeError("kill failed")
+        mock_sandbox.id = "sandbox-123"
+        runner.teardown_sandbox(mock_sandbox)
         captured = capsys.readouterr()
         assert "Warning" in captured.err
-        assert "destroy failed" in captured.err
+        assert "kill failed" in captured.err

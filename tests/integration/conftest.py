@@ -6,6 +6,7 @@ Requires: docker compose up -d postgres
 
 from __future__ import annotations
 
+import logging
 import os
 
 import asyncpg
@@ -59,7 +60,10 @@ async def neo4j_driver():
     """Neo4j async driver fixture."""
     driver = AsyncGraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
     yield driver
-    await driver.close()
+    try:
+        await driver.close()
+    except Exception as exc:  # noqa: S110
+        logging.warning("Neo4j driver close failed during teardown: %s", exc)
 
 
 @pytest_asyncio.fixture
@@ -67,4 +71,7 @@ async def redis_client():
     """Redis async client fixture."""
     client = redis_asyncio.from_url(REDIS_URL)
     yield client
-    await client.aclose()
+    try:
+        await client.aclose()
+    except Exception as exc:  # noqa: S110
+        logging.warning("Redis client close failed during teardown: %s", exc)

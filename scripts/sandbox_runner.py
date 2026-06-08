@@ -94,7 +94,6 @@ def build_profile_env(profile: str) -> dict[str, str]:
             "REDIS_URL": os.environ.get("TEST_REDIS_URL", "redis://host.docker.internal:6379/1"),
         }
     )
-    return env
     _validate_db_host_consistency(env)
     return env
 

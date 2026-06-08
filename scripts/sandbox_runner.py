@@ -1,6 +1,7 @@
 import argparse
 import os
 import re
+import shlex
 import signal
 import sys
 import time
@@ -47,16 +48,18 @@ def install_dependencies(
             "uv sync --frozen --all-extras",
             opts=RunCommandOpts(working_directory="/workspace"),
         )
-        if (result.exit_code or 0) != 0:
-            raise RuntimeError(f"[sandbox] uv sync failed (exit {result.exit_code})")
+        exit_code = result.exit_code
+        if exit_code is None or exit_code != 0:
+            raise RuntimeError(f"[sandbox] uv sync failed (exit {exit_code})")
 
     if any(kw in cmd_str for kw in ["pnpm", "tsc", "eslint", "frontend"]):
         result = sandbox.commands.run(
             "bash -c 'cd /workspace/frontend && pnpm install --frozen-lockfile'",
             opts=RunCommandOpts(working_directory="/workspace"),
         )
-        if (result.exit_code or 0) != 0:
-            raise RuntimeError(f"[sandbox] pnpm install failed (exit {result.exit_code})")
+        exit_code = result.exit_code
+        if exit_code is None or exit_code != 0:
+            raise RuntimeError(f"[sandbox] pnpm install failed (exit {exit_code})")
 
 
 def setup_sandbox(connection_config: ConnectionConfigSync, profile: str) -> SandboxSync:
@@ -84,7 +87,7 @@ def execute_in_sandbox(
     working_dir: str = "/workspace",
 ) -> int:
     result = sandbox.commands.run(
-        " ".join(command),
+        shlex.join(command),
         opts=RunCommandOpts(
             working_directory=working_dir,
             envs={"OPENSANDBOX": "1"},

@@ -18,7 +18,7 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     sandbox_mode = os.environ.get("OPENSANDBOX") == "1"
     for field_name in Settings.model_fields.keys():
         env_name = field_name.upper()
-        if sandbox_mode and env_name == "SQLITE_DB_PATH":
+        if sandbox_mode and field_name == "sqlite_db_path":
             continue
         monkeypatch.delenv(env_name, raising=False)
 

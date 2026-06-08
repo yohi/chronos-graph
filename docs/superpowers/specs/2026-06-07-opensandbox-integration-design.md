@@ -188,7 +188,8 @@ profiles:
       POSTGRES_USER: "${TEST_DB_USER:-context_store}"
       POSTGRES_PASSWORD: "${TEST_DB_PASSWORD}"
       NEO4J_URI: "${TEST_NEO4J_URI:-bolt://host.docker.internal:7687}"
-      NEO4J_AUTH: "${TEST_NEO4J_AUTH}"
+      NEO4J_USER: "${TEST_NEO4J_USER:-neo4j}"
+      NEO4J_PASSWORD: "${TEST_NEO4J_PASSWORD:-dev_password}"
       REDIS_URL: "${TEST_REDIS_URL:-redis://host.docker.internal:6379}"
 ```
 

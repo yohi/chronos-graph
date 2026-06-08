@@ -10,6 +10,8 @@ import os
 
 import asyncpg
 import pytest_asyncio
+import redis.asyncio as redis_asyncio
+from neo4j import AsyncGraphDatabase
 
 PG_HOST = os.getenv("POSTGRES_HOST", os.getenv("PG_HOST", "localhost"))
 PG_PORT = int(os.getenv("POSTGRES_PORT", os.getenv("PG_PORT", "5435")))
@@ -43,3 +45,26 @@ async def db_session(postgres_pool):
     yield conn
     await tx.rollback()
     await postgres_pool.release(conn)
+
+
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "dev_password")
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/1")
+
+
+@pytest_asyncio.fixture
+async def neo4j_driver():
+    """Neo4j async driver fixture."""
+    driver = AsyncGraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+    yield driver
+    await driver.close()
+
+
+@pytest_asyncio.fixture
+async def redis_client():
+    """Redis async client fixture."""
+    client = redis_asyncio.from_url(REDIS_URL)
+    yield client
+    await client.aclose()

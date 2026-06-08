@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -18,9 +19,20 @@ def _mock_opensandbox_import():
     # Mock the top-level package and all submodules imported by sandbox_runner.
     # CI may not have 'opensandbox' installed as a proper package, so we stub
     # every dotted path the script imports at module level.
+    #
+    # RunCommandOpts uses a real dataclass-like factory via side_effect so that
+    # each call produces a distinct object whose fields can be compared by value.
+    # Without this, MagicMock.__call__ always returns the same return_value,
+    # making opts= comparisons vacuously true regardless of the arguments passed.
+    @dataclass
+    class _RunCommandOpts:
+        working_directory: str = ""
+        envs: dict = field(default_factory=dict)
+
     mock_opensandbox = MagicMock()
     mock_config_sync = MagicMock()
     mock_models_execd = MagicMock()
+    mock_models_execd.RunCommandOpts.side_effect = _RunCommandOpts
     mock_modules = {
         "opensandbox": mock_opensandbox,
         "opensandbox.config": MagicMock(),

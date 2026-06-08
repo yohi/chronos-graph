@@ -90,7 +90,7 @@ def execute_in_sandbox(
             envs={"OPENSANDBOX": "1"},
         ),
     )
-    return result.exit_code or 1
+    return result.exit_code if result.exit_code is not None else 1
 
 
 def teardown_sandbox(sandbox: SandboxSync) -> None:

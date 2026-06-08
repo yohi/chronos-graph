@@ -199,7 +199,17 @@ class TestSetupSandbox:
             connection_config=mock_cfg,
         )
 
-    def test_integration_profile_expands_db_env_and_network_policy(self, runner):
+    def test_integration_profile_expands_db_env_and_network_policy(self, runner, monkeypatch):
+        monkeypatch.delenv("TEST_DB_HOST", raising=False)
+        monkeypatch.delenv("TEST_DB_PORT", raising=False)
+        monkeypatch.delenv("TEST_DB_NAME", raising=False)
+        monkeypatch.delenv("TEST_DB_USER", raising=False)
+        monkeypatch.delenv("TEST_DB_PASSWORD", raising=False)
+        monkeypatch.delenv("TEST_NEO4J_URI", raising=False)
+        monkeypatch.delenv("TEST_NEO4J_USER", raising=False)
+        monkeypatch.delenv("TEST_NEO4J_PASSWORD", raising=False)
+        monkeypatch.delenv("TEST_REDIS_URL", raising=False)
+
         mock_sandbox = MagicMock()
         mock_cfg = MagicMock()
         with patch.object(runner.SandboxSync, "create", return_value=mock_sandbox) as mock_create:

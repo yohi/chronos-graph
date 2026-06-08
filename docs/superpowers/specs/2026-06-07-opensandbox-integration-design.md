@@ -225,7 +225,7 @@ Added to root `docker-compose.yml` under `sandbox` profile (does not affect exis
 
 ```bash
 # Auto-detect profile
-python scripts/sandbox_runner.py -- ruff check src/ tests/
+python scripts/sandbox_runner.py -- uv run ruff check src/ tests/
 python scripts/sandbox_runner.py -- uv run pytest tests/unit/ -v
 python scripts/sandbox_runner.py -- uv run pytest tests/integration/ -v
 

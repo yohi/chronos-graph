@@ -401,21 +401,22 @@ if __name__ == "__main__":
 Add sandbox-aware fixture to `tests/conftest.py`:
 
 ```python
-def _apply_sandbox_sqlite_paths(tmp_path, monkeypatch):
-    """Apply sandbox-aware SQLite paths when running in OpenSandbox."""
+@pytest.fixture(autouse=True)
+def _sandbox_aware_sqlite(tmp_path, monkeypatch, sandbox_aware_sqlite_env):
+    """Ensure SQLite tests use temp paths inside sandbox."""
     if os.environ.get("OPENSANDBOX") == "1":
         monkeypatch.setenv("SQLITE_DB_PATH", str(tmp_path / "test.db"))
-        monkeypatch.setenv("SQLITE_GRAPH_PATH", str(tmp_path / "test_graph.db"))
-
-
-@pytest.fixture(autouse=True)
-def _sandbox_aware_sqlite(tmp_path, monkeypatch):
-    """Ensure SQLite tests use temp paths inside sandbox."""
-    _apply_sandbox_sqlite_paths(tmp_path, monkeypatch)
 ```
 
 - Only activates when `OPENSANDBOX=1` is set (no impact on existing tests)
-- `sandbox_runner.py` guarantees `OPENSANDBOX=1` in the process environment for **all** sandbox executions (both `lite` and `integration` profiles) via the `env` parameter passed to `client.execute()`
+- NOTE: Only `SQLITE_DB_PATH` is set. The SQLite backend stores both memories
+  and the internal graph in a SINGLE file (`Settings.sqlite_db_path`); there is
+  no separate `sqlite_graph_path` field, so a `SQLITE_GRAPH_PATH` env var would
+  be a no-op and is intentionally NOT set.
+- `tests/unit/conftest.py::clean_env` skips deleting `SQLITE_DB_PATH` when
+  `OPENSANDBOX=1`, so this path switch is not clobbered regardless of autouse
+  fixture ordering.
+- `sandbox_runner.py` guarantees `OPENSANDBOX=1` in the process environment for **all** sandbox executions (both `lite` and `integration` profiles) via the `envs` parameter passed to `sandbox.commands.run()` (real SDK: `SandboxSync` / `RunCommandOpts`, not a `SandboxClient.execute()` call)
 
 ### 5.2 DB Connection for Integration Tests
 

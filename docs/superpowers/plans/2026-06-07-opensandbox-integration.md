@@ -245,6 +245,13 @@ PR: `feat/opensandbox-p1-task2` → `feat/opensandbox-phase1` (Draft)
 
 Create `scripts/sandbox_runner.py`:
 
+> NOTE: The pseudo-code below uses an illustrative `SandboxClient` API. The actual
+> implementation uses the real OpenSandbox SDK: `SandboxSync` /
+> `ConnectionConfigSync` / `RunCommandOpts`, with `SandboxSync.create(image=,
+> metadata={"profile":...}, connection_config=...)`, `sandbox.commands.run(cmd,
+> opts=RunCommandOpts(working_directory=, envs={"OPENSANDBOX":"1"}))`, and
+> `sandbox.kill()`. See `scripts/sandbox_runner.py` for the source of truth.
+
 ```python
 """OpenSandbox runner for AI agent task execution."""
 
@@ -727,22 +734,20 @@ PR: `feat/opensandbox-p2-task1` → `feat/opensandbox-phase2` (Draft)
 
 Modify `docker/postgres/init.sql` to add test database creation before the schema import:
 
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-CREATE EXTENSION IF NOT EXISTS pg_bigm;
+Test database creation cannot live in the static `docker/postgres/init.sql`
+(plain SQL run by psql cannot read the `TEST_DB_NAME` env var). The actual
+implementation keeps `init.sql` minimal (extensions only) and delegates DB
+creation + schema application to `docker/postgres/zz-apply-schema.sh`, which
+honors `TEST_DB_NAME` (default `context_store_test`):
 
--- Apply schema to default database
-\i /docker-entrypoint-initdb.d/schema.sql
-
--- Test database for sandbox integration tests
-CREATE DATABASE context_store_test;
-GRANT ALL PRIVILEGES ON DATABASE context_store_test TO context_store;
+```bash
+# docker/postgres/zz-apply-schema.sh (excerpt)
+apply_schema "${POSTGRES_DB:-context_store}"
+ensure_database "${TEST_DB_NAME:-context_store_test}"
+apply_schema "${TEST_DB_NAME:-context_store_test}"
 
 -- Switch to test database and apply the same schema
-\c context_store_test
-CREATE EXTENSION IF NOT EXISTS vector;
-CREATE EXTENSION IF NOT EXISTS pg_bigm;
-\i /docker-entrypoint-initdb.d/schema.sql
+```
 ```
 
 - [ ] **Step 2: Verify SQL syntax**
@@ -786,40 +791,40 @@ from __future__ import annotations
 
 import os
 
-
-def test_sandbox_aware_sqlite_activates(tmp_path, monkeypatch):
-    """OPENSANDBOX=1 の場合、SQLITE_DB_PATH と SQLITE_GRAPH_PATH が tmp_path に設定される。"""
-    monkeypatch.setenv("OPENSANDBOX", "1")
-    monkeypatch.delenv("SQLITE_DB_PATH", raising=False)
-    monkeypatch.delenv("SQLITE_GRAPH_PATH", raising=False)
-
-    # conftest.py の実際のヘルパー関数を呼び出してフィクスチャロジックを検証
-    from conftest import _apply_sandbox_sqlite_paths
-
-    _apply_sandbox_sqlite_paths(tmp_path, monkeypatch)
-
-    assert os.environ["SQLITE_DB_PATH"] == str(tmp_path / "test.db")
-    assert os.environ["SQLITE_GRAPH_PATH"] == str(tmp_path / "test_graph.db")
+import pytest
 
 
-def test_sandbox_aware_sqlite_inactive_without_env(tmp_path, monkeypatch):
-    """OPENSANDBOX が未設定の場合、SQLITE パスは変更されない。"""
-    monkeypatch.delenv("OPENSANDBOX", raising=False)
-    monkeypatch.delenv("SQLITE_DB_PATH", raising=False)
-    monkeypatch.delenv("SQLITE_GRAPH_PATH", raising=False)
+    @pytest.fixture
+    def sandbox_aware_sqlite_env(
+    clean_env,
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+    ) -> None:
+    if request.node.name == "test_sandbox_aware_sqlite_activates":
+        monkeypatch.setenv("OPENSANDBOX", "1")
+    else:
+        monkeypatch.delenv("OPENSANDBOX", raising=False)
 
-    from conftest import _apply_sandbox_sqlite_paths
 
-    _apply_sandbox_sqlite_paths(tmp_path, monkeypatch)
+class TestSandboxAwareSqlite:
+    def test_sandbox_aware_sqlite_activates(self, tmp_path):
+        """OPENSANDBOX=1 の場合、SQLITE_DB_PATH が tmp_path に設定される。"""
+        assert os.environ["SQLITE_DB_PATH"] == str(tmp_path / "test.db")
 
-    assert os.environ.get("SQLITE_DB_PATH") is None
-    assert os.environ.get("SQLITE_GRAPH_PATH") is None
+    def test_sandbox_aware_sqlite_inactive_without_env(self, tmp_path):
+        """OPENSANDBOX が未設定の場合、SQLITE パスは変更されない。"""
+        assert os.environ.get("SQLITE_DB_PATH") is None
 ```
+
+- NOTE: The autouse `_sandbox_aware_sqlite` fixture lives in the root
+  `tests/conftest.py`; this test drives it via a local `sandbox_aware_sqlite_env`
+  override (which depends on `clean_env` to force ordering). Only `SQLITE_DB_PATH`
+  is asserted — `SQLITE_GRAPH_PATH` is not used by the codebase (single SQLite file).
 
 - [ ] **Step 2: Run the tests to verify baseline**
 
 Run: `uv run pytest tests/unit/test_conftest_sandbox.py -v`
-Expected: Both tests FAIL — `ImportError: cannot import name '_apply_sandbox_sqlite_paths' from 'conftest'`. This is expected (TDD Red phase); the helper function will be added in Step 3.
+Expected: Tests PASS once the root fixture below is in place.
 
 - [ ] **Step 3: Add the fixture to conftest.py**
 
@@ -830,18 +835,17 @@ import os
 
 # ... existing code ...
 
-def _apply_sandbox_sqlite_paths(tmp_path, monkeypatch):
-    """Apply sandbox-aware SQLite paths when running in OpenSandbox."""
+@pytest.fixture(autouse=True)
+def _sandbox_aware_sqlite(tmp_path, monkeypatch, sandbox_aware_sqlite_env):
+    """Ensure SQLite tests use temp paths inside sandbox (OPENSANDBOX=1 only)."""
     if os.environ.get("OPENSANDBOX") == "1":
         monkeypatch.setenv("SQLITE_DB_PATH", str(tmp_path / "test.db"))
-        monkeypatch.setenv("SQLITE_GRAPH_PATH", str(tmp_path / "test_graph.db"))
-
-
-@pytest.fixture(autouse=True)
-def _sandbox_aware_sqlite(tmp_path, monkeypatch):
-    """Ensure SQLite tests use temp paths inside sandbox."""
-    _apply_sandbox_sqlite_paths(tmp_path, monkeypatch)
 ```
+
+Also update `tests/unit/conftest.py::clean_env` to skip deleting `SQLITE_DB_PATH`
+when `OPENSANDBOX=1`, so the path switch survives regardless of fixture order.
+Only `SQLITE_DB_PATH` is set; there is no `sqlite_graph_path` Settings field, so
+`SQLITE_GRAPH_PATH` would be a no-op and is intentionally omitted.
 
 - [ ] **Step 4: Run full test suite for regression**
 

@@ -18,6 +18,7 @@ def no_sandbox_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """OPENSANDBOX が未設定の状態を保証するフィクスチャ。"""
     monkeypatch.delenv("OPENSANDBOX", raising=False)
 
+
 class TestSandboxAwareSqlite:
     """_sandbox_aware_sqlite fixture の振る舞いを検証する。"""
 

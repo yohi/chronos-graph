@@ -128,6 +128,7 @@ class TestInstallDependencies:
         runner.install_dependencies(mock_sandbox, ["echo", "hello"])
         mock_sandbox.commands.run.assert_not_called()
 
+
 class TestSetupSandbox:
     def test_success_first_try(self, runner):
         mock_sandbox = MagicMock()
@@ -165,6 +166,7 @@ class TestSetupSandbox:
                 runner.setup_sandbox(mock_cfg, "lite")
         assert mock_create.call_count == runner.MAX_RETRIES + 1
 
+
 class TestExecuteInSandbox:
     def test_execute_parameters_and_exit_code_propagation(self, runner):
         mock_sandbox = MagicMock()
@@ -198,6 +200,7 @@ class TestExecuteInSandbox:
                 envs={"OPENSANDBOX": "1"},
             ),
         )
+
 
 class TestTeardownSandbox:
     def test_successful_teardown(self, runner):

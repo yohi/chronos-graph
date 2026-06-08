@@ -1,11 +1,15 @@
 import argparse
 import os
 import re
+import shlex
 import signal
 import sys
 import time
+from urllib.parse import urlparse
 
-from opensandbox import SandboxClient
+from opensandbox import SandboxSync
+from opensandbox.config.connection_sync import ConnectionConfigSync
+from opensandbox.models.execd import RunCommandOpts
 
 ROUTING_RULES: list[tuple[str, str]] = [
     (r"tests/integration", "integration"),
@@ -15,6 +19,12 @@ ROUTING_RULES: list[tuple[str, str]] = [
 ]
 DEFAULT_PROFILE = "lite"
 MAX_RETRIES = 2
+
+# Maps sandbox.yaml profile names to their container image references.
+PROFILE_IMAGES: dict[str, str] = {
+    "lite": "chronos-graph-sandbox-lite:latest",
+    "integration": "chronos-graph-sandbox-lite:latest",
+}
 
 
 def resolve_profile(command: list[str], explicit: str | None) -> str:
@@ -28,30 +38,39 @@ def resolve_profile(command: list[str], explicit: str | None) -> str:
 
 
 def install_dependencies(
-    client: SandboxClient,
-    sandbox_id: str,
+    sandbox: SandboxSync,
     command: list[str],
 ) -> None:
     cmd_str = " ".join(command)
 
     if any(kw in cmd_str for kw in ["ruff", "mypy", "pytest", "uv"]):
-        result = client.execute(sandbox_id, ["uv", "sync", "--frozen", "--all-extras"])
-        if result.exit_code != 0:
-            raise RuntimeError(f"[sandbox] uv sync failed (exit {result.exit_code})")
+        result = sandbox.commands.run(
+            "uv sync --frozen --all-extras",
+            opts=RunCommandOpts(working_directory="/workspace"),
+        )
+        exit_code = result.exit_code
+        if exit_code is None or exit_code != 0:
+            raise RuntimeError(f"[sandbox] uv sync failed (exit {exit_code})")
 
     if any(kw in cmd_str for kw in ["pnpm", "tsc", "eslint", "frontend"]):
-        result = client.execute(
-            sandbox_id,
-            ["bash", "-c", "cd /workspace/frontend && pnpm install --frozen-lockfile"],
+        result = sandbox.commands.run(
+            "bash -c 'cd /workspace/frontend && pnpm install --frozen-lockfile'",
+            opts=RunCommandOpts(working_directory="/workspace"),
         )
-        if result.exit_code != 0:
-            raise RuntimeError(f"[sandbox] pnpm install failed (exit {result.exit_code})")
+        exit_code = result.exit_code
+        if exit_code is None or exit_code != 0:
+            raise RuntimeError(f"[sandbox] pnpm install failed (exit {exit_code})")
 
 
-def setup_sandbox(client: SandboxClient, profile: str) -> str:
+def setup_sandbox(connection_config: ConnectionConfigSync, profile: str) -> SandboxSync:
+    image = PROFILE_IMAGES.get(profile, PROFILE_IMAGES[DEFAULT_PROFILE])
     for attempt in range(MAX_RETRIES + 1):
         try:
-            return client.create(profile=profile)
+            return SandboxSync.create(
+                image=image,
+                metadata={"profile": profile},
+                connection_config=connection_config,
+            )
         except Exception as exc:
             if "pool" in str(exc).lower() and attempt < MAX_RETRIES:
                 wait = 2**attempt
@@ -63,27 +82,26 @@ def setup_sandbox(client: SandboxClient, profile: str) -> str:
 
 
 def execute_in_sandbox(
-    client: SandboxClient,
-    sandbox_id: str,
+    sandbox: SandboxSync,
     command: list[str],
     working_dir: str = "/workspace",
 ) -> int:
-    result = client.execute(
-        sandbox_id,
-        command,
-        working_dir=working_dir,
-        stream=True,
-        env={"OPENSANDBOX": "1"},
+    result = sandbox.commands.run(
+        shlex.join(command),
+        opts=RunCommandOpts(
+            working_directory=working_dir,
+            envs={"OPENSANDBOX": "1"},
+        ),
     )
-    return result.exit_code
+    return result.exit_code if result.exit_code is not None else 1
 
 
-def teardown_sandbox(client: SandboxClient, sandbox_id: str) -> None:
+def teardown_sandbox(sandbox: SandboxSync) -> None:
     try:
-        client.destroy(sandbox_id)
+        sandbox.kill()
     except Exception as exc:
         print(
-            f"[sandbox] Warning: failed to destroy {sandbox_id}: {exc}",
+            f"[sandbox] Warning: failed to destroy {sandbox.id}: {exc}",
             file=sys.stderr,
         )
 
@@ -108,28 +126,33 @@ def main() -> int:
     profile = resolve_profile(command, args.profile)
     print(f"[sandbox] Profile: {profile}", file=sys.stderr)
 
-    client = SandboxClient(base_url=args.server_url)
-    sandbox_id: str | None = None
+    parsed = urlparse(args.server_url)
+    connection_config = ConnectionConfigSync(
+        domain=parsed.netloc,
+        protocol=parsed.scheme or "http",
+    )
+
+    sandbox: SandboxSync | None = None
     _cleaned_up = False
 
     def _cleanup(signum: int, frame: object) -> None:
         nonlocal _cleaned_up
-        if sandbox_id and not _cleaned_up:
+        if sandbox and not _cleaned_up:
             _cleaned_up = True
-            teardown_sandbox(client, sandbox_id)
+            teardown_sandbox(sandbox)
         sys.exit(128 + signum)
 
     signal.signal(signal.SIGTERM, _cleanup)
     signal.signal(signal.SIGINT, _cleanup)
 
     try:
-        sandbox_id = setup_sandbox(client, profile)
-        install_dependencies(client, sandbox_id, command)
-        return execute_in_sandbox(client, sandbox_id, command)
+        sandbox = setup_sandbox(connection_config, profile)
+        install_dependencies(sandbox, command)
+        return execute_in_sandbox(sandbox, command)
     finally:
-        if sandbox_id and not _cleaned_up:
+        if sandbox and not _cleaned_up:
             _cleaned_up = True
-            teardown_sandbox(client, sandbox_id)
+            teardown_sandbox(sandbox)
 
 
 if __name__ == "__main__":

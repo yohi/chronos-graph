@@ -63,6 +63,15 @@ def install_dependencies(
 
 
 def setup_sandbox(connection_config: ConnectionConfigSync, profile: str) -> SandboxSync:
+    # WARNING: profile (lite/integration) is passed ONLY as metadata, plus the
+    # image. The sandbox.yaml profile config (mounts of the project into
+    # /workspace, egress allow-lists, and the integration env block with
+    # POSTGRES_*/NEO4J_*/REDIS_URL) is applied by the OpenSandbox server, which
+    # must resolve these from the mounted config.yaml. If the server does NOT
+    # auto-apply the profile by image/metadata, then /workspace will be empty
+    # and integration DB env vars will be missing. Verify end-to-end via the
+    # plan's Verification Checklist (docs/superpowers/plans/2026-06-07-opensandbox-integration.md)
+    # before relying on integration runs.
     image = PROFILE_IMAGES.get(profile, PROFILE_IMAGES[DEFAULT_PROFILE])
     for attempt in range(MAX_RETRIES + 1):
         try:

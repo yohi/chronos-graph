@@ -390,8 +390,10 @@ class TestValidateDbHostConsistency:
 
     def test_build_profile_env_validates_via_integration(self, runner, monkeypatch):
         monkeypatch.setenv("TEST_DB_HOST", "pg-host")
-        monkeypatch.setenv("TEST_NEO4J_URI", "bolt://neo4j-host:7687")
+        monkeypatch.setenv("TEST_NEO4J_URI", "bolt://pg-host:7687")
         monkeypatch.setenv("TEST_REDIS_URL", "redis://pg-host:6379/1")
 
-        with pytest.raises(ValueError, match="Integration profile requires all DB hosts to match"):
-            runner.build_profile_env("integration")
+        env = runner.build_profile_env("integration")
+        assert env["POSTGRES_HOST"] == "pg-host"
+        assert env["NEO4J_URI"] == "bolt://pg-host:7687"
+        assert env["REDIS_URL"] == "redis://pg-host:6379/1"

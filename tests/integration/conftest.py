@@ -62,7 +62,7 @@ async def neo4j_driver():
     yield driver
     try:
         await driver.close()
-    except Exception as exc:  # noqa: S110
+    except Exception as exc:  # noqa: BLE001
         logging.warning("Neo4j driver close failed during teardown: %s", exc)
 
 
@@ -73,5 +73,5 @@ async def redis_client():
     yield client
     try:
         await client.aclose()
-    except Exception as exc:  # noqa: S110
+    except Exception as exc:  # noqa: BLE001
         logging.warning("Redis client close failed during teardown: %s", exc)

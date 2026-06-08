@@ -4,6 +4,7 @@ exclude_paths:
   - "src/context_store/storage/migrations/sqlite/*.sql"
   - "src/context_store/storage/migrations/postgres/*.sql"
   - "AGENTS.md"
+  - "tests/unit/test_integration_conftest_env.py"
 
 engines:
   ai-inventory:

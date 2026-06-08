@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from opensandbox import SandboxSync
 from opensandbox.config.connection_sync import ConnectionConfigSync
 from opensandbox.models.execd import RunCommandOpts
+from opensandbox.models.sandboxes import Host, NetworkPolicy, NetworkRule, Volume
 
 ROUTING_RULES: list[tuple[str, str]] = [
     (r"tests/integration", "integration"),
@@ -25,6 +26,14 @@ PROFILE_IMAGES: dict[str, str] = {
     "lite": "chronos-graph-sandbox-lite:latest",
     "integration": "chronos-graph-sandbox-lite:latest",
 }
+
+BASE_EGRESS_ALLOWLIST = [
+    "pypi.org",
+    "files.pythonhosted.org",
+    "registry.npmjs.org",
+]
+RESOURCE_LIMITS = {"cpu": "2", "memory": "2Gi"}
+UV_RUN_COMMANDS = {"ruff", "mypy", "pytest"}
 
 
 def resolve_profile(command: list[str], explicit: str | None) -> str:
@@ -62,22 +71,67 @@ def install_dependencies(
             raise RuntimeError(f"[sandbox] pnpm install failed (exit {exit_code})")
 
 
+def resolve_project_root() -> str:
+    return os.environ.get("PROJECT_ROOT", os.getcwd())
+
+
+def build_profile_env(profile: str) -> dict[str, str]:
+    env = {"OPENSANDBOX": "1"}
+    if profile != "integration":
+        return env
+
+    test_db_host = os.environ.get("TEST_DB_HOST", "host.docker.internal")
+    env.update(
+        {
+            "POSTGRES_HOST": test_db_host,
+            "POSTGRES_PORT": os.environ.get("TEST_DB_PORT", "5435"),
+            "POSTGRES_DB": os.environ.get("TEST_DB_NAME", "context_store_test"),
+            "POSTGRES_USER": os.environ.get("TEST_DB_USER", "context_store"),
+            "POSTGRES_PASSWORD": os.environ.get("TEST_DB_PASSWORD", "dev_password"),
+            "NEO4J_URI": os.environ.get("TEST_NEO4J_URI", "bolt://host.docker.internal:7687"),
+            "NEO4J_USER": os.environ.get("TEST_NEO4J_USER", "neo4j"),
+            "NEO4J_PASSWORD": os.environ.get("TEST_NEO4J_PASSWORD", "dev_password"),
+            "REDIS_URL": os.environ.get("TEST_REDIS_URL", "redis://host.docker.internal:6379/1"),
+        }
+    )
+    return env
+
+
+def build_network_policy(profile: str) -> NetworkPolicy:
+    allowlist = [*BASE_EGRESS_ALLOWLIST]
+    if profile == "integration":
+        allowlist.append(os.environ.get("TEST_DB_HOST", "host.docker.internal"))
+    return NetworkPolicy(
+        defaultAction="deny",
+        egress=[NetworkRule(action="allow", target=target) for target in allowlist],
+    )
+
+
+def build_workspace_volumes() -> list[Volume]:
+    return [
+        Volume(
+            name="workspace",
+            host=Host(path=resolve_project_root()),
+            mountPath="/workspace",
+            readOnly=False,
+        )
+    ]
+
+
 def setup_sandbox(connection_config: ConnectionConfigSync, profile: str) -> SandboxSync:
-    # WARNING: profile (lite/integration) is passed ONLY as metadata, plus the
-    # image. The sandbox.yaml profile config (mounts of the project into
-    # /workspace, egress allow-lists, and the integration env block with
-    # POSTGRES_*/NEO4J_*/REDIS_URL) is applied by the OpenSandbox server, which
-    # must resolve these from the mounted config.yaml. If the server does NOT
-    # auto-apply the profile by image/metadata, then /workspace will be empty
-    # and integration DB env vars will be missing. Verify end-to-end via the
-    # plan's Verification Checklist (docs/superpowers/plans/2026-06-07-opensandbox-integration.md)
-    # before relying on integration runs.
     image = PROFILE_IMAGES.get(profile, PROFILE_IMAGES[DEFAULT_PROFILE])
+    env = build_profile_env(profile)
+    network_policy = build_network_policy(profile)
+    volumes = build_workspace_volumes()
     for attempt in range(MAX_RETRIES + 1):
         try:
             return SandboxSync.create(
                 image=image,
+                env=env,
                 metadata={"profile": profile},
+                resource=RESOURCE_LIMITS,
+                network_policy=network_policy,
+                volumes=volumes,
                 connection_config=connection_config,
             )
         except Exception as exc:
@@ -96,13 +150,33 @@ def execute_in_sandbox(
     working_dir: str = "/workspace",
 ) -> int:
     result = sandbox.commands.run(
-        shlex.join(command),
+        shlex.join(normalize_command(command)),
         opts=RunCommandOpts(
             working_directory=working_dir,
             envs={"OPENSANDBOX": "1"},
         ),
     )
+    forward_command_output(result)
     return result.exit_code if result.exit_code is not None else 1
+
+
+def normalize_command(command: list[str]) -> list[str]:
+    if command and command[0] in UV_RUN_COMMANDS:
+        return ["uv", "run", *command]
+    return command
+
+
+def forward_command_output(result: object) -> None:
+    stdout = getattr(result, "stdout", None)
+    stderr = getattr(result, "stderr", None)
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode()
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode()
+    if isinstance(stdout, str) and stdout:
+        print(stdout, end="")
+    if isinstance(stderr, str) and stderr:
+        print(stderr, end="", file=sys.stderr)
 
 
 def teardown_sandbox(sandbox: SandboxSync) -> None:

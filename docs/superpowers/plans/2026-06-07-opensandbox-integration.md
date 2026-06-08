@@ -90,26 +90,34 @@ Create `.devcontainer/opensandbox/lite.Dockerfile`:
 
 ```dockerfile
 # syntax=docker/dockerfile:1
+FROM node:22.11.0-slim AS node_source
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_PROJECT_ENVIRONMENT=/tmp/.venv
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uvx /usr/local/bin/uvx
+COPY --from=ghcr.io/astral-sh/uv:0.5.0 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.5.0 /uvx /usr/local/bin/uvx
+
+# Copy Node.js from node_source instead of downloading via curl | bash.
+COPY --from=node_source /usr/local/bin/node /usr/local/bin/node
+COPY --from=node_source /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
+    ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && corepack enable && corepack prepare pnpm@latest --activate \
-    && apt-get purge -y curl \
+        ca-certificates \
+    && corepack enable && corepack prepare pnpm@9.15.4 --activate \
     && rm -rf /var/lib/apt/lists/*
+
+RUN uv --version && uvx --version && node -v && npm -v && pnpm -v
 
 RUN groupadd -g 1000 sandbox && \
     useradd -m -u 1000 -g sandbox -s /bin/bash sandbox
 USER sandbox
+
+RUN uv --version && uvx --version && node -v && npm -v && pnpm -v
 
 WORKDIR /workspace
 CMD ["bash"]
@@ -158,11 +166,11 @@ profiles:
       POSTGRES_PORT: "${TEST_DB_PORT:-5435}"
       POSTGRES_DB: "${TEST_DB_NAME:-context_store_test}"
       POSTGRES_USER: "${TEST_DB_USER:-context_store}"
-      POSTGRES_PASSWORD: "${TEST_DB_PASSWORD}"
+      POSTGRES_PASSWORD: "${TEST_DB_PASSWORD:-dev_password}"
       NEO4J_URI: "${TEST_NEO4J_URI:-bolt://host.docker.internal:7687}"
       NEO4J_USER: "${TEST_NEO4J_USER:-neo4j}"
       NEO4J_PASSWORD: "${TEST_NEO4J_PASSWORD:-dev_password}"
-      REDIS_URL: "${TEST_REDIS_URL:-redis://host.docker.internal:6379}"
+      REDIS_URL: "${TEST_REDIS_URL:-redis://host.docker.internal:6379/1}"
 ```
 
 - [ ] **Step 4: Verify Dockerfile builds**
@@ -246,38 +254,50 @@ PR: `feat/opensandbox-p1-task2` → `feat/opensandbox-phase1` (Draft)
 
 Create `scripts/sandbox_runner.py`:
 
-> NOTE: The pseudo-code below uses an illustrative `SandboxClient` API. The actual
-> implementation uses the real OpenSandbox SDK: `SandboxSync` /
-> `ConnectionConfigSync` / `RunCommandOpts`, with `SandboxSync.create(image=,
-> metadata={"profile":...}, connection_config=...)`, `sandbox.commands.run(cmd,
-> opts=RunCommandOpts(working_directory=, envs={"OPENSANDBOX":"1"}))`, and
-> `sandbox.kill()`. See `scripts/sandbox_runner.py` for the source of truth.
-
+> NOTE: The code below reflects the actual implementation using the real OpenSandbox
+> SDK (`SandboxSync` / `ConnectionConfigSync` / `RunCommandOpts`). The source of truth
+> is `scripts/sandbox_runner.py`; if any discrepancy exists, the source file wins.
 ```python
 """OpenSandbox runner for AI agent task execution."""
 
 import argparse
 import os
 import re
+import shlex
 import signal
 import sys
 import time
+from urllib.parse import urlparse
 
-from opensandbox import SandboxClient
-
+from opensandbox import SandboxSync
+from opensandbox.config.connection_sync import ConnectionConfigSync
+from opensandbox.models.execd import RunCommandOpts
+from opensandbox.models.sandboxes import Host, NetworkPolicy, NetworkRule, Volume
 
 ROUTING_RULES: list[tuple[str, str]] = [
-    (r"tests/integration",   "integration"),
-    (r"\btest_postgres\b",   "integration"),
-    (r"\btest_neo4j\b",      "integration"),
-    (r"\btest_redis\b",      "integration"),
+    (r"tests/integration", "integration"),
+    (r"\btest_postgres\b", "integration"),
+    (r"\btest_neo4j\b", "integration"),
+    (r"\btest_redis\b", "integration"),
 ]
 DEFAULT_PROFILE = "lite"
 MAX_RETRIES = 2
 
+PROFILE_IMAGES: dict[str, str] = {
+    "lite": "chronos-graph-sandbox-lite:latest",
+    "integration": "chronos-graph-sandbox-lite:latest",
+}
+
+BASE_EGRESS_ALLOWLIST = [
+    "pypi.org",
+    "files.pythonhosted.org",
+    "registry.npmjs.org",
+]
+RESOURCE_LIMITS = {"cpu": "2", "memory": "2Gi"}
+UV_RUN_COMMANDS = {"ruff", "mypy", "pytest"}
+
 
 def resolve_profile(command: list[str], explicit: str | None) -> str:
-    """Resolve sandbox profile from command pattern or explicit override."""
     if explicit:
         return explicit
     cmd_str = " ".join(command)
@@ -288,64 +308,147 @@ def resolve_profile(command: list[str], explicit: str | None) -> str:
 
 
 def install_dependencies(
-    client: SandboxClient,
-    sandbox_id: str,
+    sandbox: SandboxSync,
     command: list[str],
 ) -> None:
-    """Install project dependencies based on the command context."""
     cmd_str = " ".join(command)
 
     if any(kw in cmd_str for kw in ["ruff", "mypy", "pytest", "uv"]):
-        client.execute(sandbox_id, ["uv", "sync", "--frozen", "--all-extras"])
+        result = sandbox.commands.run(
+            "uv sync --frozen --all-extras",
+            opts=RunCommandOpts(working_directory="/workspace"),
+        )
+        exit_code = result.exit_code
+        if exit_code is None or exit_code != 0:
+            raise RuntimeError(f"[sandbox] uv sync failed (exit {exit_code})")
 
     if any(kw in cmd_str for kw in ["pnpm", "tsc", "eslint", "frontend"]):
-        client.execute(
-            sandbox_id,
-            ["bash", "-c", "cd /workspace/frontend && pnpm install --frozen-lockfile"],
+        result = sandbox.commands.run(
+            "bash -c 'cd /workspace/frontend && pnpm install --frozen-lockfile'",
+            opts=RunCommandOpts(working_directory="/workspace"),
         )
+        exit_code = result.exit_code
+        if exit_code is None or exit_code != 0:
+            raise RuntimeError(f"[sandbox] pnpm install failed (exit {exit_code})")
 
 
-def setup_sandbox(client: SandboxClient, profile: str) -> str:
-    """Acquire a sandbox from the pool with retry on pool exhaustion."""
+def resolve_project_root() -> str:
+    return os.environ.get("PROJECT_ROOT", os.getcwd())
+
+
+def build_profile_env(profile: str) -> dict[str, str]:
+    env = {"OPENSANDBOX": "1"}
+    if profile != "integration":
+        return env
+
+    test_db_host = os.environ.get("TEST_DB_HOST", "host.docker.internal")
+    env.update(
+        {
+            "POSTGRES_HOST": test_db_host,
+            "POSTGRES_PORT": os.environ.get("TEST_DB_PORT", "5435"),
+            "POSTGRES_DB": os.environ.get("TEST_DB_NAME", "context_store_test"),
+            "POSTGRES_USER": os.environ.get("TEST_DB_USER", "context_store"),
+            "POSTGRES_PASSWORD": os.environ.get("TEST_DB_PASSWORD", "dev_password"),
+            "NEO4J_URI": os.environ.get("TEST_NEO4J_URI", "bolt://host.docker.internal:7687"),
+            "NEO4J_USER": os.environ.get("TEST_NEO4J_USER", "neo4j"),
+            "NEO4J_PASSWORD": os.environ.get("TEST_NEO4J_PASSWORD", "dev_password"),
+            "REDIS_URL": os.environ.get("TEST_REDIS_URL", "redis://host.docker.internal:6379/1"),
+        }
+    )
+    return env
+
+
+def build_network_policy(profile: str) -> NetworkPolicy:
+    allowlist = [*BASE_EGRESS_ALLOWLIST]
+    if profile == "integration":
+        allowlist.append(os.environ.get("TEST_DB_HOST", "host.docker.internal"))
+    return NetworkPolicy(
+        defaultAction="deny",
+        egress=[NetworkRule(action="allow", target=target) for target in allowlist],
+    )
+
+
+def build_workspace_volumes() -> list[Volume]:
+    return [
+        Volume(
+            name="workspace",
+            host=Host(path=resolve_project_root()),
+            mountPath="/workspace",
+            readOnly=False,
+        )
+    ]
+
+
+def setup_sandbox(connection_config: ConnectionConfigSync, profile: str) -> SandboxSync:
+    image = PROFILE_IMAGES.get(profile, PROFILE_IMAGES[DEFAULT_PROFILE])
+    env = build_profile_env(profile)
+    network_policy = build_network_policy(profile)
+    volumes = build_workspace_volumes()
     for attempt in range(MAX_RETRIES + 1):
         try:
-            return client.create(profile=profile)
+            return SandboxSync.create(
+                image=image,
+                env=env,
+                metadata={"profile": profile},
+                resource=RESOURCE_LIMITS,
+                network_policy=network_policy,
+                volumes=volumes,
+                connection_config=connection_config,
+            )
         except Exception as exc:
             if "pool" in str(exc).lower() and attempt < MAX_RETRIES:
-                wait = 2 ** attempt
+                wait = 2**attempt
                 print(f"[sandbox] Pool exhausted, retry in {wait}s", file=sys.stderr)
                 time.sleep(wait)
             else:
                 raise
-    # Unreachable, but satisfies type checker
     raise RuntimeError("Failed to acquire sandbox")  # pragma: no cover
 
 
+def normalize_command(command: list[str]) -> list[str]:
+    """Prefix bare Python tool commands with `uv run`."""
+    if command and command[0] in UV_RUN_COMMANDS:
+        return ["uv", "run", *command]
+    return command
+
+
+def forward_command_output(result: object) -> None:
+    stdout = getattr(result, "stdout", None)
+    stderr = getattr(result, "stderr", None)
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode()
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode()
+    if isinstance(stdout, str) and stdout:
+        print(stdout, end="")
+    if isinstance(stderr, str) and stderr:
+        print(stderr, end="", file=sys.stderr)
+
+
 def execute_in_sandbox(
-    client: SandboxClient,
-    sandbox_id: str,
+    sandbox: SandboxSync,
     command: list[str],
     working_dir: str = "/workspace",
 ) -> int:
-    """Execute command in sandbox, stream output, return exit code.
-
-    The runner guarantees OPENSANDBOX=1 in the process environment so
-    Phase 2 test hooks in tests/conftest.py (_sandbox_aware_sqlite) will
-    activate inside the sandbox.
-    """
-    result = client.execute(
-        sandbox_id, command, working_dir=working_dir, stream=True,
-        env={"OPENSANDBOX": "1"},
+    result = sandbox.commands.run(
+        shlex.join(normalize_command(command)),
+        opts=RunCommandOpts(
+            working_directory=working_dir,
+            envs={"OPENSANDBOX": "1"},
+        ),
     )
-    return result.exit_code
+    forward_command_output(result)
+    return result.exit_code if result.exit_code is not None else 1
 
 
-def teardown_sandbox(client: SandboxClient, sandbox_id: str) -> None:
-    """Destroy sandbox (stateless guarantee)."""
+def teardown_sandbox(sandbox: SandboxSync) -> None:
     try:
-        client.destroy(sandbox_id)
-    except Exception:
-        print(f"[sandbox] Warning: failed to destroy {sandbox_id}", file=sys.stderr)
+        sandbox.kill()
+    except Exception as exc:
+        print(
+            f"[sandbox] Warning: failed to destroy {sandbox.id}: {exc}",
+            file=sys.stderr,
+        )
 
 
 def main() -> int:
@@ -368,28 +471,33 @@ def main() -> int:
     profile = resolve_profile(command, args.profile)
     print(f"[sandbox] Profile: {profile}", file=sys.stderr)
 
-    client = SandboxClient(base_url=args.server_url)
-    sandbox_id: str | None = None
+    parsed = urlparse(args.server_url)
+    connection_config = ConnectionConfigSync(
+        domain=parsed.netloc,
+        protocol=parsed.scheme or "http",
+    )
+
+    sandbox: SandboxSync | None = None
     _cleaned_up = False
 
     def _cleanup(signum: int, frame: object) -> None:
         nonlocal _cleaned_up
-        if sandbox_id and not _cleaned_up:
+        if sandbox and not _cleaned_up:
             _cleaned_up = True
-            teardown_sandbox(client, sandbox_id)
+            teardown_sandbox(sandbox)
         sys.exit(128 + signum)
 
     signal.signal(signal.SIGTERM, _cleanup)
     signal.signal(signal.SIGINT, _cleanup)
 
     try:
-        sandbox_id = setup_sandbox(client, profile)
-        install_dependencies(client, sandbox_id, command)
-        return execute_in_sandbox(client, sandbox_id, command)
+        sandbox = setup_sandbox(connection_config, profile)
+        install_dependencies(sandbox, command)
+        return execute_in_sandbox(sandbox, command)
     finally:
-        if sandbox_id and not _cleaned_up:
+        if sandbox and not _cleaned_up:
             _cleaned_up = True
-            teardown_sandbox(client, sandbox_id)
+            teardown_sandbox(sandbox)
 
 
 if __name__ == "__main__":
@@ -437,174 +545,336 @@ Create `tests/unit/test_sandbox_runner.py`:
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-# sandbox_runner.py は src/ パッケージ外のスクリプトなので sys.path に追加
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+
+@pytest.fixture(autouse=True)
+def _add_scripts_to_path(monkeypatch):
+    scripts_path = str(Path(__file__).resolve().parents[2] / "scripts")
+    monkeypatch.syspath_prepend(scripts_path)
 
 
 @pytest.fixture(autouse=True)
 def _mock_opensandbox_import():
-    """opensandbox パッケージが未インストールでもテスト可能にする。"""
-    mock_module = MagicMock()
-    mock_module.SandboxClient = MagicMock
-    with patch.dict("sys.modules", {"opensandbox": mock_module}):
+    # Mock the top-level package and all submodules imported by sandbox_runner.
+    # CI may not have 'opensandbox' installed as a proper package, so we stub
+    # every dotted path the script imports at module level.
+    @dataclass
+    class _RunCommandOpts:
+        working_directory: str = ""
+        envs: dict = field(default_factory=dict)
+
+    @dataclass
+    class _Host:
+        path: str
+
+    @dataclass
+    class _NetworkRule:
+        action: str
+        target: str
+
+    @dataclass
+    class _NetworkPolicy:
+        defaultAction: str = "deny"
+        egress: list[_NetworkRule] | None = None
+
+    @dataclass
+    class _Volume:
+        name: str
+        host: _Host | None
+        mountPath: str
+        readOnly: bool = False
+
+    mock_opensandbox = MagicMock()
+    mock_config_sync = MagicMock()
+    mock_models_execd = MagicMock()
+    mock_models_sandboxes = MagicMock()
+    mock_models_execd.RunCommandOpts.side_effect = _RunCommandOpts
+    mock_models_sandboxes.Host = _Host
+    mock_models_sandboxes.NetworkPolicy = _NetworkPolicy
+    mock_models_sandboxes.NetworkRule = _NetworkRule
+    mock_models_sandboxes.Volume = _Volume
+    mock_modules = {
+        "opensandbox": mock_opensandbox,
+        "opensandbox.config": MagicMock(),
+        "opensandbox.config.connection_sync": mock_config_sync,
+        "opensandbox.models": MagicMock(),
+        "opensandbox.models.execd": mock_models_execd,
+        "opensandbox.models.sandboxes": mock_models_sandboxes,
+    }
+    with patch.dict("sys.modules", mock_modules):
         yield
 
 
 def _import_runner():
-    """テストごとにモジュールをリロードする。"""
     import importlib
+
     if "sandbox_runner" in sys.modules:
         return importlib.reload(sys.modules["sandbox_runner"])
     return importlib.import_module("sandbox_runner")
 
 
-class TestResolveProfile:
-    """resolve_profile() のテスト。"""
+@pytest.fixture
+def runner():
+    return _import_runner()
 
-    def test_default_profile(self):
-        runner = _import_runner()
+
+class TestResolveProfile:
+    def test_default_profile(self, runner):
         result = runner.resolve_profile(["ruff", "check", "src/"], None)
         assert result == "lite"
 
-    def test_integration_path(self):
-        runner = _import_runner()
-        result = runner.resolve_profile(
-            ["uv", "run", "pytest", "tests/integration/", "-v"], None
-        )
+    def test_integration_path(self, runner):
+        result = runner.resolve_profile(["uv", "run", "pytest", "tests/integration/", "-v"], None)
         assert result == "integration"
 
-    def test_integration_test_postgres(self):
-        runner = _import_runner()
+    def test_integration_test_postgres(self, runner):
         result = runner.resolve_profile(
             ["uv", "run", "pytest", "tests/unit/test_postgres.py"], None
         )
         assert result == "integration"
 
-    def test_integration_test_neo4j(self):
-        runner = _import_runner()
-        result = runner.resolve_profile(
-            ["uv", "run", "pytest", "tests/unit/test_neo4j.py"], None
-        )
+    def test_integration_test_neo4j(self, runner):
+        result = runner.resolve_profile(["uv", "run", "pytest", "tests/unit/test_neo4j.py"], None)
         assert result == "integration"
 
-    def test_integration_test_redis(self):
-        runner = _import_runner()
-        result = runner.resolve_profile(
-            ["uv", "run", "pytest", "tests/unit/test_redis.py"], None
-        )
+    def test_integration_test_redis(self, runner):
+        result = runner.resolve_profile(["uv", "run", "pytest", "tests/unit/test_redis.py"], None)
         assert result == "integration"
 
-    def test_explicit_override(self):
-        runner = _import_runner()
+    def test_explicit_override(self, runner):
         result = runner.resolve_profile(["ruff", "check", "src/"], "integration")
         assert result == "integration"
 
-    def test_explicit_override_lite(self):
-        runner = _import_runner()
-        result = runner.resolve_profile(
-            ["uv", "run", "pytest", "tests/integration/"], "lite"
-        )
+    def test_explicit_override_lite(self, runner):
+        result = runner.resolve_profile(["uv", "run", "pytest", "tests/integration/"], "lite")
         assert result == "lite"
 
 
 class TestInstallDependencies:
-    """install_dependencies() のテスト。"""
-
-    def test_python_keywords_trigger_uv_sync(self):
-        runner = _import_runner()
-        mock_client = MagicMock()
-        runner.install_dependencies(
-            mock_client, "sandbox-123", ["uv", "run", "pytest", "tests/unit/"]
-        )
-        mock_client.execute.assert_called_once_with(
-            "sandbox-123", ["uv", "sync", "--frozen", "--all-extras"]
+    def test_python_keywords_trigger_uv_sync(self, runner):
+        mock_sandbox = MagicMock()
+        mock_sandbox.commands.run.return_value.exit_code = 0
+        runner.install_dependencies(mock_sandbox, ["uv", "run", "pytest", "tests/unit/"])
+        mock_sandbox.commands.run.assert_called_once_with(
+            "uv sync --frozen --all-extras",
+            opts=runner.RunCommandOpts(working_directory="/workspace"),
         )
 
-    def test_frontend_keywords_trigger_pnpm_install(self):
-        runner = _import_runner()
-        mock_client = MagicMock()
+    def test_frontend_keywords_trigger_pnpm_install(self, runner):
+        mock_sandbox = MagicMock()
+        mock_sandbox.commands.run.return_value.exit_code = 0
         runner.install_dependencies(
-            mock_client,
-            "sandbox-123",
+            mock_sandbox,
             ["bash", "-c", "cd frontend && pnpm lint"],
         )
-        mock_client.execute.assert_called_once_with(
-            "sandbox-123",
-            ["bash", "-c", "cd /workspace/frontend && pnpm install --frozen-lockfile"],
+        mock_sandbox.commands.run.assert_called_once_with(
+            "bash -c 'cd /workspace/frontend && pnpm install --frozen-lockfile'",
+            opts=runner.RunCommandOpts(working_directory="/workspace"),
         )
 
-    def test_ruff_triggers_uv_sync(self):
-        runner = _import_runner()
-        mock_client = MagicMock()
-        runner.install_dependencies(
-            mock_client, "sandbox-123", ["ruff", "check", "src/"]
-        )
-        mock_client.execute.assert_called_once_with(
-            "sandbox-123", ["uv", "sync", "--frozen", "--all-extras"]
+    def test_ruff_triggers_uv_sync(self, runner):
+        mock_sandbox = MagicMock()
+        mock_sandbox.commands.run.return_value.exit_code = 0
+        runner.install_dependencies(mock_sandbox, ["ruff", "check", "src/"])
+        mock_sandbox.commands.run.assert_called_once_with(
+            "uv sync --frozen --all-extras",
+            opts=runner.RunCommandOpts(working_directory="/workspace"),
         )
 
-    def test_no_matching_keywords(self):
-        runner = _import_runner()
-        mock_client = MagicMock()
-        runner.install_dependencies(
-            mock_client, "sandbox-123", ["echo", "hello"]
-        )
-        mock_client.execute.assert_not_called()
+    def test_uv_sync_failure_raises_runtime_error(self, runner):
+        mock_sandbox = MagicMock()
+        mock_sandbox.commands.run.return_value.exit_code = 1
+        with pytest.raises(RuntimeError, match=r"uv sync failed"):
+            runner.install_dependencies(mock_sandbox, ["ruff", "check", "src/"])
+
+    def test_pnpm_install_failure_raises_runtime_error(self, runner):
+        mock_sandbox = MagicMock()
+        mock_sandbox.commands.run.return_value.exit_code = 1
+        with pytest.raises(RuntimeError, match=r"pnpm install failed"):
+            runner.install_dependencies(
+                mock_sandbox,
+                ["bash", "-c", "cd frontend && pnpm lint"],
+            )
+
+    def test_no_matching_keywords(self, runner):
+        mock_sandbox = MagicMock()
+        runner.install_dependencies(mock_sandbox, ["echo", "hello"])
+        mock_sandbox.commands.run.assert_not_called()
 
 
 class TestSetupSandbox:
-    """setup_sandbox() のテスト。"""
+    def test_success_first_try(self, runner):
+        mock_sandbox = MagicMock()
+        mock_cfg = MagicMock()
+        with patch.object(runner.SandboxSync, "create", return_value=mock_sandbox) as mock_create:
+            result = runner.setup_sandbox(mock_cfg, "lite")
+        assert result is mock_sandbox
+        mock_create.assert_called_once_with(
+            image=runner.PROFILE_IMAGES["lite"],
+            env={"OPENSANDBOX": "1"},
+            metadata={"profile": "lite"},
+            resource={"cpu": "2", "memory": "2Gi"},
+            network_policy=runner.NetworkPolicy(
+                defaultAction="deny",
+                egress=[
+                    runner.NetworkRule(action="allow", target="pypi.org"),
+                    runner.NetworkRule(action="allow", target="files.pythonhosted.org"),
+                    runner.NetworkRule(action="allow", target="registry.npmjs.org"),
+                ],
+            ),
+            volumes=[
+                runner.Volume(
+                    name="workspace",
+                    host=runner.Host(path=runner.resolve_project_root()),
+                    mountPath="/workspace",
+                    readOnly=False,
+                )
+            ],
+            connection_config=mock_cfg,
+        )
 
-    def test_success_first_try(self):
-        runner = _import_runner()
-        mock_client = MagicMock()
-        mock_client.create.return_value = "sandbox-abc"
-        result = runner.setup_sandbox(mock_client, "lite")
-        assert result == "sandbox-abc"
-        mock_client.create.assert_called_once_with(profile="lite")
+    def test_integration_profile_expands_db_env_and_network_policy(self, runner):
+        mock_sandbox = MagicMock()
+        mock_cfg = MagicMock()
+        with patch.object(runner.SandboxSync, "create", return_value=mock_sandbox) as mock_create:
+            result = runner.setup_sandbox(mock_cfg, "integration")
 
-    def test_retry_on_pool_exhaustion(self):
-        runner = _import_runner()
-        mock_client = MagicMock()
-        mock_client.create.side_effect = [
-            RuntimeError("pool exhausted"),
-            "sandbox-xyz",
-        ]
-        with patch("sandbox_runner.time.sleep"):
-            result = runner.setup_sandbox(mock_client, "lite")
-        assert result == "sandbox-xyz"
-        assert mock_client.create.call_count == 2
+        assert result is mock_sandbox
+        mock_create.assert_called_once_with(
+            image=runner.PROFILE_IMAGES["integration"],
+            env={
+                "OPENSANDBOX": "1",
+                "POSTGRES_HOST": "host.docker.internal",
+                "POSTGRES_PORT": "5435",
+                "POSTGRES_DB": "context_store_test",
+                "POSTGRES_USER": "context_store",
+                "POSTGRES_PASSWORD": "dev_password",
+                "NEO4J_URI": "bolt://host.docker.internal:7687",
+                "NEO4J_USER": "neo4j",
+                "NEO4J_PASSWORD": "dev_password",
+                "REDIS_URL": "redis://host.docker.internal:6379/1",
+            },
+            metadata={"profile": "integration"},
+            resource={"cpu": "2", "memory": "2Gi"},
+            network_policy=runner.NetworkPolicy(
+                defaultAction="deny",
+                egress=[
+                    runner.NetworkRule(action="allow", target="pypi.org"),
+                    runner.NetworkRule(action="allow", target="files.pythonhosted.org"),
+                    runner.NetworkRule(action="allow", target="registry.npmjs.org"),
+                    runner.NetworkRule(action="allow", target="host.docker.internal"),
+                ],
+            ),
+            volumes=[
+                runner.Volume(
+                    name="workspace",
+                    host=runner.Host(path=runner.resolve_project_root()),
+                    mountPath="/workspace",
+                    readOnly=False,
+                )
+            ],
+            connection_config=mock_cfg,
+        )
 
-    def test_raises_after_max_retries(self):
-        runner = _import_runner()
-        mock_client = MagicMock()
-        mock_client.create.side_effect = RuntimeError("pool exhausted")
-        with patch("sandbox_runner.time.sleep"), pytest.raises(RuntimeError, match="pool"):
-            runner.setup_sandbox(mock_client, "lite")
-        assert mock_client.create.call_count == runner.MAX_RETRIES + 1
+    def test_retry_on_pool_exhaustion(self, runner):
+        mock_sandbox = MagicMock()
+        mock_cfg = MagicMock()
+        with patch.object(
+            runner.SandboxSync,
+            "create",
+            side_effect=[RuntimeError("pool exhausted"), mock_sandbox],
+        ) as mock_create:
+            with patch("sandbox_runner.time.sleep"):
+                result = runner.setup_sandbox(mock_cfg, "lite")
+        assert result is mock_sandbox
+        assert mock_create.call_count == 2
+
+    def test_raises_after_max_retries(self, runner):
+        mock_cfg = MagicMock()
+        with patch.object(
+            runner.SandboxSync,
+            "create",
+            side_effect=RuntimeError("pool exhausted"),
+        ) as mock_create:
+            with patch("sandbox_runner.time.sleep"), pytest.raises(RuntimeError, match="pool"):
+                runner.setup_sandbox(mock_cfg, "lite")
+        assert mock_create.call_count == runner.MAX_RETRIES + 1
+
+
+class TestExecuteInSandbox:
+    def test_direct_python_tool_commands_run_through_uv(self, runner):
+        mock_sandbox = MagicMock()
+        mock_sandbox.commands.run.return_value.exit_code = 0
+
+        runner.execute_in_sandbox(mock_sandbox, ["ruff", "check", "src/"])
+
+        mock_sandbox.commands.run.assert_called_once_with(
+            "uv run ruff check src/",
+            opts=runner.RunCommandOpts(
+                working_directory="/workspace",
+                envs={"OPENSANDBOX": "1"},
+            ),
+        )
+
+    def test_execute_forwards_stdout_and_stderr(self, runner, capsys):
+        mock_sandbox = MagicMock()
+        mock_sandbox.commands.run.return_value.exit_code = 0
+        mock_sandbox.commands.run.return_value.stdout = "command output\n"
+        mock_sandbox.commands.run.return_value.stderr = "command warning\n"
+
+        exit_code = runner.execute_in_sandbox(mock_sandbox, ["echo", "test"])
+
+        captured = capsys.readouterr()
+        assert exit_code == 0
+        assert captured.out == "command output\n"
+        assert captured.err == "command warning\n"
+
+    def test_execute_parameters_and_exit_code_propagation(self, runner):
+        mock_sandbox = MagicMock()
+        mock_sandbox.commands.run.return_value.exit_code = 42
+
+        exit_code = runner.execute_in_sandbox(
+            mock_sandbox,
+            ["echo", "test"],
+            working_dir="/workspace/subdir",
+        )
+
+        assert exit_code == 42
+
+    def test_execute_default_working_dir(self, runner):
+        mock_sandbox = MagicMock()
+        mock_sandbox.commands.run.return_value.exit_code = 0
+
+        runner.execute_in_sandbox(mock_sandbox, ["echo", "test"])
+
+        mock_sandbox.commands.run.assert_called_once_with(
+            "echo test",
+            opts=runner.RunCommandOpts(
+                working_directory="/workspace",
+                envs={"OPENSANDBOX": "1"},
+            ),
+        )
 
 
 class TestTeardownSandbox:
-    """teardown_sandbox() のテスト。"""
+    def test_successful_teardown(self, runner):
+        mock_sandbox = MagicMock()
+        runner.teardown_sandbox(mock_sandbox)
+        mock_sandbox.kill.assert_called_once_with()
 
-    def test_successful_teardown(self):
-        runner = _import_runner()
-        mock_client = MagicMock()
-        runner.teardown_sandbox(mock_client, "sandbox-123")
-        mock_client.destroy.assert_called_once_with("sandbox-123")
-
-    def test_teardown_failure_does_not_raise(self, capsys):
-        runner = _import_runner()
-        mock_client = MagicMock()
-        mock_client.destroy.side_effect = RuntimeError("destroy failed")
-        runner.teardown_sandbox(mock_client, "sandbox-123")
+    def test_teardown_failure_does_not_raise(self, runner, capsys):
+        mock_sandbox = MagicMock()
+        mock_sandbox.kill.side_effect = RuntimeError("kill failed")
+        mock_sandbox.id = "sandbox-123"
+        runner.teardown_sandbox(mock_sandbox)
         captured = capsys.readouterr()
         assert "Warning" in captured.err
+        assert "kill failed" in captured.err
 ```
 
 - [ ] **Step 2: Run tests to verify they pass**

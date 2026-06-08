@@ -44,4 +44,4 @@ profiles:
       # 個別に読む。結合形式の NEO4J_AUTH は読まれないため分割して渡すこと。
       NEO4J_USER: "${TEST_NEO4J_USER:-neo4j}"
       NEO4J_PASSWORD: "${TEST_NEO4J_PASSWORD:-dev_password}"
-      REDIS_URL: "${TEST_REDIS_URL:-redis://host.docker.internal:6379}"
+      REDIS_URL: "${TEST_REDIS_URL:-redis://host.docker.internal:6379/1}"

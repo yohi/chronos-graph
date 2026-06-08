@@ -353,3 +353,39 @@ class TestTeardownSandbox:
         captured = capsys.readouterr()
         assert "Warning" in captured.err
         assert "kill failed" in captured.err
+
+
+class TestValidateDbHostConsistency:
+    def test_all_default_hosts_match(self, runner, monkeypatch):
+        monkeypatch.delenv("TEST_DB_HOST", raising=False)
+        monkeypatch.delenv("TEST_NEO4J_URI", raising=False)
+        monkeypatch.delenv("TEST_REDIS_URL", raising=False)
+
+        env = runner.build_profile_env("integration")
+        runner._validate_db_host_consistency(env)
+
+    def test_all_custom_hosts_match(self, runner, monkeypatch):
+        monkeypatch.setenv("TEST_DB_HOST", "my-host")
+        monkeypatch.setenv("TEST_NEO4J_URI", "bolt://my-host:7687")
+        monkeypatch.setenv("TEST_REDIS_URL", "redis://my-host:6379/1")
+
+        env = runner.build_profile_env("integration")
+        runner._validate_db_host_consistency(env)
+
+    def test_mismatch_postgres_neo4j_raises(self, runner, monkeypatch):
+        monkeypatch.setenv("TEST_DB_HOST", "pg-host")
+        monkeypatch.setenv("TEST_NEO4J_URI", "bolt://neo4j-host:7687")
+        monkeypatch.setenv("TEST_REDIS_URL", "redis://pg-host:6379/1")
+
+        env = runner.build_profile_env("integration")
+        with pytest.raises(ValueError, match="Integration profile requires all DB hosts to match"):
+            runner._validate_db_host_consistency(env)
+
+    def test_mismatch_postgres_redis_raises(self, runner, monkeypatch):
+        monkeypatch.setenv("TEST_DB_HOST", "pg-host")
+        monkeypatch.setenv("TEST_NEO4J_URI", "bolt://pg-host:7687")
+        monkeypatch.setenv("TEST_REDIS_URL", "redis://redis-host:6379/1")
+
+        env = runner.build_profile_env("integration")
+        with pytest.raises(ValueError, match="Integration profile requires all DB hosts to match"):
+            runner._validate_db_host_consistency(env)

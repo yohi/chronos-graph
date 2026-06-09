@@ -94,7 +94,29 @@ def build_profile_env(profile: str) -> dict[str, str]:
             "REDIS_URL": os.environ.get("TEST_REDIS_URL", "redis://host.docker.internal:6379/1"),
         }
     )
+    _validate_db_host_consistency(env)
     return env
+
+
+def _validate_db_host_consistency(env: dict[str, str]) -> None:
+    """Validate that all integration DB hosts point to the same host.
+    Raises ValueError if POSTGRES_HOST, NEO4J_URI hostname, and REDIS_URL
+    hostname are not identical.
+    """
+    pg_host = env.get("POSTGRES_HOST")
+    neo4j_uri = env.get("NEO4J_URI", "")
+    redis_url = env.get("REDIS_URL", "")
+
+    neo4j_host = urlparse(neo4j_uri).hostname if neo4j_uri else None
+    redis_host = urlparse(redis_url).hostname if redis_url else None
+
+    hosts = {h for h in (pg_host, neo4j_host, redis_host) if h}
+    if len(hosts) > 1:
+        raise ValueError(
+            f"Integration profile requires all DB hosts to match. "
+            f"Found: POSTGRES_HOST={pg_host}, NEO4J_HOST={neo4j_host}, "
+            f"REDIS_HOST={redis_host}",
+        )
 
 
 def build_network_policy(profile: str) -> NetworkPolicy:

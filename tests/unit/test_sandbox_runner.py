@@ -47,7 +47,7 @@ def _mock_opensandbox_import():
     class _Volume:
         name: str
         host: _Host | None
-        mountPath: str
+        mount_path: str
         readOnly: bool = False
 
     mock_opensandbox = MagicMock()
@@ -192,7 +192,7 @@ class TestSetupSandbox:
                 runner.Volume(
                     name="workspace",
                     host=runner.Host(path=runner.resolve_project_root()),
-                    mountPath="/workspace",
+                    mount_path="/workspace",
                     readOnly=False,
                 )
             ],
@@ -245,7 +245,7 @@ class TestSetupSandbox:
                 runner.Volume(
                     name="workspace",
                     host=runner.Host(path=runner.resolve_project_root()),
-                    mountPath="/workspace",
+                    mount_path="/workspace",
                     readOnly=False,
                 )
             ],

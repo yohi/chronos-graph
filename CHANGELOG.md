@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.5.0](https://github.com/yohi/chronos-graph/compare/v1.4.0...v1.5.0) (2026-06-09)
+
+
+### Features
+
+* **opensandbox:** Phase 2 - 統合テスト対応 & pnpm移行 ([#334](https://github.com/yohi/chronos-graph/issues/334)) ([732fffe](https://github.com/yohi/chronos-graph/commit/732fffe2dbf026a1289cfc44372a4083be56c8af))
+* **sandbox:** Phase 1 - OpenSandbox Infrastructure & Runner ([#329](https://github.com/yohi/chronos-graph/issues/329)) ([c1f5585](https://github.com/yohi/chronos-graph/commit/c1f5585f3921c8122d8eb65e472d747262e49191))
+
+
+### Bug Fixes
+
+* **sandbox:** OpenSandbox integrationの乖離を修正 ([#339](https://github.com/yohi/chronos-graph/issues/339)) ([38473d1](https://github.com/yohi/chronos-graph/commit/38473d19322656fa60c8bca8b7e26c529cd0d334))
+* **sandbox:** OpenSandboxプロファイル設定を明示適用 ([#338](https://github.com/yohi/chronos-graph/issues/338)) ([019879d](https://github.com/yohi/chronos-graph/commit/019879d6fe9ebcfada219a6e3159a2d5f0c7b17d))
+* **sandbox:** 設計乖離の修正 - SQLiteパス切替fixture + テストDBスキーマ適用 ([#336](https://github.com/yohi/chronos-graph/issues/336)) ([7497593](https://github.com/yohi/chronos-graph/commit/74975931ee3f9ef54f48caf9d947ffd534b1c954))
+* **sandbox:** 設計乖離の修正 - コード・ドキュメントの整合 ([#337](https://github.com/yohi/chronos-graph/issues/337)) ([393dbc7](https://github.com/yohi/chronos-graph/commit/393dbc72522729e6d2052de9d119fa8c572a9e72))
+
 ## [1.4.0](https://github.com/yohi/chronos-graph/compare/v1.3.1...v1.4.0) (2026-06-04)
 
 

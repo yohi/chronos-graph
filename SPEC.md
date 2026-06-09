@@ -1842,6 +1842,202 @@ SQLite および PostgreSQL でマイグレーションを適用する `Migratio
 
 ---
 
+## 18. 開発・テストサンドボックス (OpenSandbox)
+
+> **実装状態**: 実装済み（Phase 1 & 2 完了、2026-06-07）
+
+### 18.1 概要
+
+[OpenSandbox](https://github.com/opensandbox-group/OpenSandbox) を導入し、AIエージェント（Gemini / OpenCode 等）がテスト・静的解析を実行する際に、セキュアで使い捨て（Ephemeral）なサンドボックス環境を利用できるようにする。テスト・Lint は人間の Devcontainer 内では実行せず、必ず OpenSandbox 上で実行する。
+
+| 項目 | 内容 |
+|---|---|
+| フェーズ1 | 静的解析（ruff / mypy / tsc / eslint）と DB 非依存の単体テストを `lite` サンドボックスで実行 |
+| フェーズ2 | 結合テスト（Postgres / Neo4j / Redis 依存）を `integration` サンドボックスから Devcontainer の DB サービスへ接続して実行 |
+| スコープ外 | Phase 3（E2E / Heavy Dockerfile / Headless Chrome）、MCP Gateway へのサンドボックスツール統合、Kubernetes ランタイム、CI/CD パイプライン統合 |
+
+**設計判断:**
+
+| 決定事項 | 選択 | 理由 |
+|---|---|---|
+| アプローチ | 薄いラッパースクリプト + 宣言的プロファイル | シンプル・段階的拡張が可能 |
+| Python | 3.12 | `pyproject.toml` の `requires-python = ">=3.12"` に準拠 |
+| フロントエンド PM | pnpm | npm → pnpm 移行を含む |
+| ランタイム | Docker（ローカル） | Kubernetes は将来スコープ |
+| 利用者 | AIエージェント | OpenSandbox Python SDK 経由でプログラマティックに操作 |
+
+### 18.2 実行フロー
+
+```text
+(Host) AI Agent
+  └─ scripts/sandbox_runner.py
+       └─ OpenSandbox Python SDK (SandboxSync)
+            └─ OpenSandbox Server (Docker Runtime, 127.0.0.1:8090)
+                 └─ Lite Pool (warm standby): python:3.12 + uv + pnpm
+```
+
+1. AIエージェントが lint / テスト実行を指示する
+2. `sandbox_runner.py` がコマンド文字列からプロファイルを判定（lite / integration）
+3. SDK で Lite Pool からサンドボックスを取得（または新規作成）
+4. 依存インストール（`uv sync` / `pnpm install`）後にコマンドを実行
+5. 標準出力 / 標準エラーをホストへ転送し、終了コードを伝播（None → 1 のフェイルセーフ）
+6. サンドボックスを破棄（Stateless 原則）
+
+### 18.3 プロファイルルーティング
+
+`scripts/sandbox_runner.py` の `resolve_profile()` がコマンド文字列からプロファイルを自動選択する。
+
+| Task | Profile | DB 接続 | Egress |
+|---|---|---|---|
+| `ruff` / `mypy` / `tsc` / `eslint` | `lite` | なし | pypi.org, npmjs.org |
+| `pytest tests/unit/` | `lite` | In-memory SQLite | pypi.org |
+| `pytest tests/integration/` | `integration` | Postgres / Neo4j / Redis | pypi.org + DB ホスト |
+
+ルーティング規則（先頭一致優先、未一致時は `lite`。`--profile` 明示指定は正規表現より優先）:
+
+```python
+ROUTING_RULES = [
+    (r"tests/integration", "integration"),
+    (r"\btest_postgres\b", "integration"),
+    (r"\btest_neo4j\b",    "integration"),
+    (r"\btest_redis\b",    "integration"),
+]
+DEFAULT_PROFILE = "lite"
+```
+
+### 18.4 サンドボックスインフラ
+
+| ファイル | 役割 |
+|---|---|
+| `.devcontainer/opensandbox/lite.Dockerfile` | Lite イメージ定義 |
+| `.devcontainer/opensandbox/sandbox.yaml` | プロファイル定義（lite / integration） |
+| `docker-compose.yml` の `opensandbox` サービス | OpenSandbox サーバー（`sandbox` プロファイル） |
+
+**Lite イメージ（`lite.Dockerfile`）の要点:**
+
+- ベース: `python:3.12-slim` + マルチステージ `node:22.11.0-slim`（`curl | bash` を排除）
+- バージョン固定: `uv 0.5.0`、Node.js 22 LTS、`pnpm 9.15.4`（corepack 経由）
+- ビルドツール非搭載（`build-essential` / `git` / `gcc` なし）
+- 非 root ユーザー `sandbox`（UID 1000）
+- venv: `UV_PROJECT_ENVIRONMENT=/tmp/.venv`（Ephemeral、権限問題を回避）
+- `USER sandbox` 切替の前後で `uv / uvx / node / npm / pnpm` のバージョン検証を二重実行
+
+**`sandbox.yaml` プロファイル定義の要点:**
+
+- `lite`: リソース上限 `cpu: 2` / `memory: 2Gi`、`timeout: 300`（5 分でサーバーが強制回収）、プール設定 `min_ready: 1` / `max_instances: 3` / `idle_timeout: 600`、egress 許可 `pypi.org` / `files.pythonhosted.org` / `registry.npmjs.org`
+- `integration`: `lite` を継承（`extends: lite`。コンテナイメージも `lite` を再利用する）。egress に DB ホスト（既定 `host.docker.internal`）を追加し、`POSTGRES_*` / `NEO4J_USER` / `NEO4J_PASSWORD` / `REDIS_URL` を環境変数として定義
+- NEO4J は本体 Settings（`src/context_store/config.py`）が `NEO4J_USER` / `NEO4J_PASSWORD` を個別に読むため、結合形式の `NEO4J_AUTH` ではなく分割して渡す
+- フォールバック既定値（`dev_password` 等）はローカル開発専用。CI / 本番環境では `TEST_DB_PASSWORD` 等を必ずオーバーライドする
+
+**docker-compose `opensandbox` サービス:**
+
+- `image: opensandbox/opensandbox-server:latest`、`profiles: [sandbox]`（`docker compose --profile sandbox up opensandbox` が必要）
+- `/var/run/docker.sock` をマウント（DinD によるコンテナ管理）
+- `127.0.0.1:8090:8080` バインド（ローカルアクセスのみ）
+
+> **二重定義の注意（sandbox.yaml ⇔ sandbox_runner.py）**: `sandbox_runner.py` は egress ルールと DB 環境変数を SDK パラメータ（`build_network_policy()` / `build_profile_env()`）として直接渡し、`SandboxSync.create()` 時にサーバー側プロファイルを実行時オーバーライドする。`sandbox.yaml` の値は直接 API 利用や手動 `docker compose` 起動時のサーバー側デフォルトとして機能する。DB 接続・egress 設定を変更する際は `sandbox.yaml` と `sandbox_runner.py` の両方を更新して同期を保つこと。
+
+### 18.5 サンドボックスランナー (`scripts/sandbox_runner.py`)
+
+`mcp_gateway` / `context_store` に非依存なスタンドアロンスクリプト。プロファイル自動選択・依存インストール・コマンド実行・破棄のライフサイクルを一元管理する。
+
+```bash
+# プロファイル自動判定
+python scripts/sandbox_runner.py -- uv run ruff check src/ tests/
+python scripts/sandbox_runner.py -- uv run pytest tests/unit/ -v
+python scripts/sandbox_runner.py -- uv run pytest tests/integration/ -v
+
+# 明示指定
+python scripts/sandbox_runner.py --profile integration -- uv run pytest tests/integration/ -v
+
+# フロントエンド
+python scripts/sandbox_runner.py -- bash -c "cd frontend && pnpm install && pnpm lint"
+```
+
+**主要関数:**
+
+| 関数 | 役割 |
+|---|---|
+| `resolve_profile()` | `--profile` 明示 > `ROUTING_RULES` 正規表現 > `lite` の順でプロファイル決定 |
+| `normalize_command()` | bare ツール（`ruff` / `mypy` / `pytest`）を `uv run` 前置で仮想環境解決 |
+| `install_dependencies()` | コマンドに応じ `uv sync --frozen --all-extras` / `pnpm install --frozen-lockfile` を実行。失敗時は `RuntimeError` |
+| `build_profile_env()` | `OPENSANDBOX=1` を常時設定。`integration` 時は DB 接続環境変数を追加し `_validate_db_host_consistency()` を実行 |
+| `build_network_policy()` | egress allowlist を構築。`integration` 時は DB ホストを追加 |
+| `_validate_db_host_consistency()` | `integration` の全 DB ホスト（Postgres / Neo4j / Redis）が単一ホストを指すことを検証。不一致時は `ValueError` |
+| `setup_sandbox()` | プール枯渇時に指数バックオフで最大 2 回リトライしてサンドボックス取得 |
+| `execute_in_sandbox()` | `RunCommandOpts(envs={"OPENSANDBOX": "1"})` でコマンド実行・出力転送・終了コード伝播 |
+| `teardown_sandbox()` | `sandbox.kill()` で破棄（失敗してもエラーを握りつぶす） |
+
+**OPENSANDBOX=1 の二重設定（belt-and-suspenders）**: ランナーは全実行（lite / integration 両方）で `OPENSANDBOX=1` を保証する。設定箇所は 2 点 — (1) コンテナ生成時 `build_profile_env()` → `SandboxSync.create(env=...)`、(2) コマンド実行時 `RunCommandOpts(envs=...)`。これによりコンテナの entrypoint の環境変数継承方法に依存せず、Phase 2 のテストフック（§18.6）が確実に発火する。
+
+**エラーハンドリング**: プール枯渇は指数バックオフ（最大 2 回）／タイムアウトは `sandbox.yaml` の `timeout: 300`（5 分でサーバーが強制回収）／`SIGTERM`・`SIGINT` で `teardown_sandbox` 実行／`finally` で破棄を保証。
+
+### 18.6 Phase 2: 結合テストの標準化
+
+**SQLite 一時パス切替（`tests/conftest.py`）:**
+`_sandbox_aware_sqlite`（autouse fixture）が `OPENSANDBOX=1` のときのみ `SQLITE_DB_PATH` を一時ディレクトリへ切り替える。
+
+```python
+@pytest.fixture(autouse=True)
+def _sandbox_aware_sqlite(tmp_path, monkeypatch, sandbox_aware_sqlite_env):
+    if os.environ.get("OPENSANDBOX") == "1":
+        monkeypatch.setenv("SQLITE_DB_PATH", str(tmp_path / "test.db"))
+```
+
+- SQLite バックエンドは記憶・内部グラフを単一ファイル（`Settings.sqlite_db_path`）に保存するため、`SQLITE_DB_PATH` のみ設定する（`SQLITE_GRAPH_PATH` は存在せず no-op のため設定しない）。
+- `tests/unit/conftest.py::clean_env` は `OPENSANDBOX=1` のとき `sqlite_db_path` の削除をスキップし、autouse fixture の実行順序に依存せずパス切替が保持される。
+
+**DB 接続（`integration` プロファイル）:**
+サンドボックスは `host.docker.internal`（Docker ブリッジゲートウェイ）経由で Devcontainer の DB へ接続する。Devcontainer 側は既にホストへポート公開済み（Postgres `5435:5432` / Neo4j `7474`,`7687` / Redis `6379`）。`build_profile_env()` が `POSTGRES_*` / `NEO4J_*` / `REDIS_URL` を設定し、`Settings`（`env_prefix=""`）が直接読み取る。
+
+**テスト DB 分離（`docker/postgres/`）:**
+開発 DB（`context_store`）の汚染を防ぐため、テスト専用 DB `context_store_test` を用意する。静的 SQL（`init.sql`）は `TEST_DB_NAME` 環境変数を読めないため、`init.sql` は拡張作成のみに留め、DB 作成 + スキーマ適用は `docker/postgres/zz-apply-schema.sh`（`zz-` 接頭辞で初期化時に最後に実行）へ委譲する。
+
+```bash
+# zz-apply-schema.sh（抜粋）
+apply_schema "${POSTGRES_DB:-context_store}"
+ensure_database "${TEST_DB_NAME:-context_store_test}"   # CREATE DATABASE + GRANT
+apply_schema "${TEST_DB_NAME:-context_store_test}"
+```
+
+- Neo4j: Community Edition の単一 DB のため、テストの setup/teardown でクリーンアップ（既存パターン）。
+- Redis: `SELECT 1`（DB 番号 1）で開発データ（DB 番号 0）から分離。
+
+**Egress 制御（`integration`）:** `pypi.org` / `files.pythonhosted.org` / `host.docker.internal` のみ許可し、それ以外の外向き通信はすべてブロックする。
+
+### 18.7 pnpm 移行
+
+フロントエンドのパッケージマネージャを npm から pnpm へ移行済み:
+
+- `frontend/package-lock.json` を削除し `frontend/pnpm-lock.yaml` を生成（`pnpm import`）
+- `frontend/.npmrc` に `shamefully-hoist=true`（React / Vite 互換性）
+- `frontend/playwright.config.ts` の `command: 'npm run dev'` → `'pnpm dev'`
+- `package.json` の scripts は変更不要（pnpm は npm scripts をネイティブ実行）
+
+### 18.8 制約
+
+1. **実行隔離**: テスト・Lint は人間の Devcontainer 内で実行しない。常に OpenSandbox を使用する。
+2. **依存管理**: バックエンドは `uv` 専用（`pip` は使わない）。フロントエンドは `pnpm`。
+3. **Statelessness**: Lite コンテナは状態を持たない。破棄は `finally` + シグナルハンドラ + サーバータイムアウトで保証する。
+4. **依存の分離**: `mcp_gateway/` と `context_store/` は分離を維持する。ランナーは `scripts/` 配下のスタンドアロンスクリプト。
+5. **Docker socket セキュリティ**: `/var/run/docker.sock` マウントは Docker API への完全アクセスを許可しホスト権限昇格リスクがあるため、`sandbox` プロファイル + `127.0.0.1` バインドに限定する。ローカル開発専用で、本番・共有環境では有効化しない。
+6. **単一 DB ホスト**: 結合テストの全 DB サービス（Postgres / Neo4j / Redis）は単一ホスト（既定 `host.docker.internal`）経由で到達可能であること。複数ホストへ分割する場合は `sandbox.yaml` の `egress.allow` 更新が必要（§18.6）。
+
+**関連ファイル一覧:**
+
+| ファイル | 役割 |
+|---|---|
+| `.devcontainer/opensandbox/lite.Dockerfile` | Lite サンドボックスイメージ |
+| `.devcontainer/opensandbox/sandbox.yaml` | プロファイル定義（lite / integration） |
+| `docker-compose.yml`（`opensandbox` サービス） | OpenSandbox サーバー（sandbox profile） |
+| `docker/postgres/init.sql` / `zz-apply-schema.sh` | テスト DB `context_store_test` 作成 |
+| `scripts/sandbox_runner.py` | サンドボックスランナー（ルーティング + ライフサイクル） |
+| `tests/conftest.py` / `tests/unit/conftest.py` | `OPENSANDBOX` 対応 SQLite パス切替 |
+| `tests/unit/test_sandbox_runner.py` / `test_conftest_sandbox.py` | ユニットテスト |
+| `pyproject.toml` | `opensandbox>=0.1.0`（dev 依存） |
+
+---
+
 ## 参考文献
 
 - [sui-memory](https://zenn.dev/noprogllama/articles/7c24b2c2410213) — SQLite + FTS5 + Ruri v3 によるローカル長期記憶

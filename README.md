@@ -37,12 +37,33 @@ Install and configure ChronosGraph by strictly following the Agent Setup Protoco
 AIエージェントにセットアップを依頼する場合の詳細な手順と制約は、[Agent Setup Protocol](docs/agent-setup-protocol.md) を参照してください。
 AIエージェントはユーザーに必要な設定事項を質問し、その結果を引数として `scripts/bootstrap.sh` に渡して機械的にセットアップを実行します。これにより、環境依存による設定のブレを防ぎます。
 
-### OpenSandbox 利用時の注意
+### OpenSandbox（テスト・静的解析サンドボックス）
 
-`docker compose --profile sandbox up` で起動する OpenSandbox サーバーは、サンドボックス用コンテナを作成するためにホストの Docker ソケット (`/var/run/docker.sock`) をマウントします。このマウントは Docker API への完全アクセスを許可するため、コンテナ内プロセスがホスト上のコンテナを起動・停止・削除でき、実質的にホスト権限へ昇格できるリスクがあります。
+AIエージェント（Gemini / OpenCode 等）が、テストや静的解析（ruff / mypy / tsc / eslint）を人間の Devcontainer から隔離されたセキュアで使い捨て（Ephemeral）なサンドボックス上で実行するための仕組みです。`scripts/sandbox_runner.py` がタスク種別からプロファイル（`lite` / `integration`）を自動判定し、依存インストール・実行・破棄のライフサイクルを管理します。
 
-このプロファイルは信頼できるローカル開発・デバッグ用途に限定し、未検証のイメージや共有環境では有効化しないでください。
+> [!NOTE]
+> 設計・アーキテクチャの詳細は [SPEC.md §18](SPEC.md) を参照してください。
 
+#### クイックスタート
+
+```bash
+# 1. Lite イメージをビルド
+docker build -f .devcontainer/opensandbox/lite.Dockerfile -t chronos-graph-sandbox-lite:latest .
+
+# 2. OpenSandbox サーバーを起動（sandbox プロファイル）
+docker compose --profile sandbox up opensandbox -d
+
+# 3. サンドボックス内で lint / テストを実行（プロファイルは自動判定）
+python scripts/sandbox_runner.py -- uv run ruff check src/
+python scripts/sandbox_runner.py -- uv run pytest tests/unit/ -v
+python scripts/sandbox_runner.py --profile integration -- uv run pytest tests/integration/ -v
+
+# フロントエンド（pnpm）
+python scripts/sandbox_runner.py -- bash -c "cd frontend && pnpm install && pnpm lint"
+```
+
+> [!CAUTION]
+> `docker compose --profile sandbox up` で起動する OpenSandbox サーバーは、サンドボックス用コンテナを作成するためにホストの Docker ソケット (`/var/run/docker.sock`) をマウントします。このマウントは Docker API への完全アクセスを許可するため、コンテナ内プロセスがホスト上のコンテナを起動・停止・削除でき、実質的にホスト権限へ昇格できるリスクがあります。このプロファイルは信頼できるローカル開発・デバッグ用途に限定し、未検証のイメージや共有環境では有効化しないでください。
 
 ## 🧠 Agent Identity & Memory Protocol
 

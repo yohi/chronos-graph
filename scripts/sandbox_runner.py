@@ -134,7 +134,7 @@ def build_workspace_volumes() -> list[Volume]:
         Volume(
             name="workspace",
             host=Host(path=resolve_project_root()),
-            mountPath="/workspace",
+            mount_path="/workspace",
             readOnly=False,
         )
     ]

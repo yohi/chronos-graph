@@ -35,6 +35,7 @@ import aiosqlite
 
 from context_store.models.graph import Edge, GraphResult
 from context_store.storage.migrations.runner import MigrationRunner
+from context_store.storage.postgres_helpers import _json_default
 from context_store.utils.sqlite_interrupt import SafeSqliteInterruptCtx
 from context_store.utils.stale_lock import StaleAwareFileLock
 
@@ -131,7 +132,7 @@ class SQLiteGraphAdapter:
 
     async def create_node(self, memory_id: str, metadata: dict[str, Any]) -> None:
         """Create or upsert a graph node."""
-        meta_json = json.dumps(metadata)
+        meta_json = json.dumps(metadata, default=_json_default)
         async with self._connect() as conn:
             await conn.execute(
                 """
@@ -153,7 +154,7 @@ class SQLiteGraphAdapter:
 
         Requires both nodes to exist (enforced by FOREIGN KEY constraints).
         """
-        props_json = json.dumps(props)
+        props_json = json.dumps(props, default=_json_default)
         async with self._connect() as conn:
             await conn.execute(
                 """
@@ -177,7 +178,7 @@ class SQLiteGraphAdapter:
                 e["from_id"],
                 e["to_id"],
                 e["edge_type"],
-                json.dumps(e.get("props") or {}),
+                json.dumps(e.get("props") or {}, default=_json_default),
             )
             for e in edges
         ]

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime
+from enum import Enum
 from typing import Any
+from uuid import UUID
 
 from context_store.models.memory import Memory, MemoryType, SourceType
 
@@ -13,6 +16,25 @@ def _content_hash(content: str) -> str:
     """Create the canonical content hash stored in PostgreSQL."""
     return hashlib.sha256(content.encode()).hexdigest()
 
+
+def _json_default(obj: Any) -> Any:
+    """JSON serialization fallback for datetime, UUID, Enum, and bytes.
+
+    Use as ``json.dumps(data, default=_json_default)`` anywhere
+    a dict value may contain non-primitive Python objects.
+    """
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, UUID):
+        return str(obj)
+    if isinstance(obj, Enum):
+        return obj.value
+    if isinstance(obj, bytes):
+        try:
+            return obj.decode("utf-8")
+        except UnicodeDecodeError:
+            return obj.hex()
+    return str(obj)
 
 def _parse_embedding(raw: object) -> list[float]:
     """Parse a pgvector value returned by a PostgreSQL client into list[float]."""

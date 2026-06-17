@@ -19,6 +19,7 @@ import aiosqlite
 from context_store.config import Settings
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
 from context_store.storage.migrations.runner import MigrationRunner
+from context_store.storage.postgres_helpers import _json_default
 from context_store.storage.protocols import ALLOWED_SORT_COLUMNS, MemoryFilters, StorageError
 from context_store.sync.outbox_writer import OutboxWriter
 from context_store.utils.stale_lock import StaleAwareFileLock
@@ -376,7 +377,7 @@ class SQLiteStorageAdapter:
                         memory.content,
                         memory.memory_type.value,
                         memory.source_type.value,
-                        json.dumps(memory.source_metadata),
+                        json.dumps(memory.source_metadata, default=_json_default),
                         memory.semantic_relevance,
                         memory.importance_score,
                         memory.access_count,
@@ -610,7 +611,7 @@ class SQLiteStorageAdapter:
                             code="INVALID_PARAMETER",
                         )
                     try:
-                        val = json.dumps(val)
+                        val = json.dumps(val, default=_json_default)
                     except (TypeError, ValueError) as exc:
                         raise StorageError(
                             f"Failed to serialise {col}: {exc}",

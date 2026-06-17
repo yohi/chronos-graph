@@ -6,6 +6,7 @@ import json
 import uuid
 from typing import Any, Protocol, get_args
 
+from context_store.storage.postgres_helpers import _json_default
 from context_store.sync.models import EventType
 
 _ALLOWED_EVENT_TYPES = frozenset(get_args(EventType))
@@ -64,7 +65,7 @@ class PostgresOutboxWriter:
             self._SQL,
             event_type,
             memory_id,
-            json.dumps(payload or {}),
+            json.dumps(payload or {}, default=_json_default),
         )
 
 
@@ -92,6 +93,6 @@ class SqliteOutboxWriter:
                 str(uuid.uuid4()),
                 event_type,
                 memory_id,
-                json.dumps(payload or {}),
+                json.dumps(payload or {}, default=_json_default),
             ),
         )

@@ -14,6 +14,7 @@ from context_store.storage.migrations.runner import MigrationRunner
 from context_store.storage.postgres_helpers import (
     _content_hash,
     _embedding_to_pg,
+    _json_default,
     _record_to_memory,
 )
 from context_store.storage.protocols import ALLOWED_SORT_COLUMNS, MemoryFilters, StorageError
@@ -107,7 +108,7 @@ class PostgresStorageAdapter:
                         memory.content,
                         memory.memory_type.value,
                         memory.source_type.value,
-                        json.dumps(memory.source_metadata),
+                        json.dumps(memory.source_metadata, default=_json_default),
                         embedding_str,
                         memory.semantic_relevance,
                         memory.importance_score,
@@ -231,7 +232,7 @@ class PostgresStorageAdapter:
                 set_parts.append(f"{col} = ${len(params)}::vector")
                 continue
             if col == "source_metadata" and isinstance(val, dict):
-                val = json.dumps(val)
+                val = json.dumps(val, default=_json_default)
                 params.append(val)
                 set_parts.append(f"{col} = ${len(params)}::jsonb")
                 continue

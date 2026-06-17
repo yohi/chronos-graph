@@ -36,6 +36,7 @@ def _json_default(obj: Any) -> Any:
             return obj.hex()
     return str(obj)
 
+
 def _parse_embedding(raw: object) -> list[float]:
     """Parse a pgvector value returned by a PostgreSQL client into list[float]."""
     if raw is None:

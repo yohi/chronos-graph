@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1](https://github.com/yohi/chronos-graph/compare/v1.5.0...v1.5.1) (2026-06-17)
+
+
+### Bug Fixes
+
+* source_metadataのdatetimeシリアライズ失敗を修正 ([#341](https://github.com/yohi/chronos-graph/issues/341)) ([b978e70](https://github.com/yohi/chronos-graph/commit/b978e70edab88e992243f6264a6e7d6537ee6099))
+
 ## [1.5.0](https://github.com/yohi/chronos-graph/compare/v1.4.0...v1.5.0) (2026-06-09)
 
 

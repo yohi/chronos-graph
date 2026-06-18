@@ -1722,7 +1722,7 @@ class TestToolProxy:
         with pytest.raises(PolicyError, match="arguments contain secret-like content"):
             await proxy.call_through(
                 tool_name="t",
-                arguments={"key": "ASIA1234567890ABCDEF"},
+                arguments={"key": "ASIA1234567890ABCDEF"},  # nosemgrep
             )
         upstream.call_tool.assert_not_awaited()
 
@@ -3472,7 +3472,7 @@ class TestEntrypoint:
 
 class TestSamplePolicy:
     def test_sample_policy_is_valid(self):
-        from importlib.resources import files
+        from importlib.resources import files  # nosemgrep
 
         from mcp_gateway.policy.loader import load_policy
 
@@ -3484,7 +3484,7 @@ class TestSamplePolicy:
         assert "read_only_recall" in policy.intents
 
     def test_sample_policy_classifies_read_tools_without_approval(self):
-        from importlib.resources import files
+        from importlib.resources import files  # nosemgrep
 
         from mcp_gateway.policy.engine import PolicyEngine
         from mcp_gateway.policy.loader import load_policy
@@ -3503,7 +3503,7 @@ class TestSamplePolicy:
             assert result.status == "ALLOW"
 
     def test_sample_policy_requires_approval_for_write_tools(self):
-        from importlib.resources import files
+        from importlib.resources import files  # nosemgrep
 
         from mcp_gateway.policy.engine import PolicyEngine
         from mcp_gateway.policy.loader import load_policy

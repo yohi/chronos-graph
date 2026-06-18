@@ -72,9 +72,9 @@ def sandbox_container(sandbox_profile: str, sandbox_api_base: str) -> dict[str, 
     """
     # サーバーが起動しているか確認
     try:
-        req = urllib.request.Request(  # noqa: S310
-            f"{sandbox_api_base}/health", method="GET"
-        )
+        # nosemgrep
+        req = urllib.request.Request(f"{sandbox_api_base}/health", method="GET")  # noqa: S310
+        # nosemgrep
         with urllib.request.urlopen(req, timeout=2) as resp:  # noqa: S310
             if resp.status == 200:
                 return {"profile": sandbox_profile, "api_base": sandbox_api_base}

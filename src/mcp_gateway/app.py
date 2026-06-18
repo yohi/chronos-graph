@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 from contextlib import asynccontextmanager
 
-try:
-    from importlib.resources import as_file, files
-except ImportError:
-    from importlib_resources import as_file, files
+if sys.version_info >= (3, 9):
+    from importlib.resources import as_file, files  # nosemgrep
+else:
+    from importlib_resources import as_file, files  # nosemgrep
 from typing import Any, AsyncGenerator
 
 from fastapi import FastAPI

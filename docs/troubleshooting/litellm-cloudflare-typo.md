@@ -35,11 +35,16 @@ Cloudflare 向けの LLM 呼び出しを実行すると、`APIConnectionError` �
 
 ### 1. 自動修正コマンド (Recommended)
 
-プロジェクトのルートディレクトリ（仮想環境が有効な状態）で以下のコマンドを実行してください。
+プロジェクトのルートディレクトリ（仮想環境が有効な状態）で、OSに合わせて以下のコマンドを実行してください。
 
+**Linux (GNU sed):**
 ```bash
-# Linux / macOS
 sed -i 's/apbplication/application/g' .venv/lib/python3.12/site-packages/litellm/llms/cloudflare/chat/transformation.py
+```
+
+**macOS (BSD sed):**
+```bash
+sed -i '' 's/apbplication/application/g' .venv/lib/python3.12/site-packages/litellm/llms/cloudflare/chat/transformation.py
 ```
 *(※ Python のバージョンに合わせてパスを調整してください)*
 

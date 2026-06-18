@@ -274,8 +274,10 @@ class LlmEvaluator:
         account_id: str | None = None
         if settings.api_account_id:
             account_id = settings.api_account_id.get_secret_value()
-            if settings.model.startswith("cloudflare/") or (
-                settings.model.startswith("openai/") and "@cf/" in settings.model
+            if (
+                settings.model.startswith("cloudflare/")
+                or settings.model.startswith("cloudflare-workers-ai/")
+                or (settings.model.startswith("openai/") and "@cf/" in settings.model)
             ):
                 extra_args["api_base"] = (
                     f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"

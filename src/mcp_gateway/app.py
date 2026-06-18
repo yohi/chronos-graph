@@ -6,7 +6,11 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
-from importlib.resources import as_file, files
+
+try:
+    from importlib.resources import as_file, files
+except ImportError:
+    from importlib_resources import as_file, files
 from typing import Any, AsyncGenerator
 
 from fastapi import FastAPI

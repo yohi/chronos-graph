@@ -632,10 +632,12 @@ class SQLiteStorageAdapter:
                 updated = 0
                 if set_parts:
                     params.append(memory_id)
-                    async with conn.execute(
-                        f"UPDATE memories SET {', '.join(set_parts)} WHERE id = ?",  # noqa: S608
-                        params,
-                    ) as cursor:
+                    async with (
+                        conn.execute(
+                            f"UPDATE memories SET {', '.join(set_parts)} WHERE id = ?",  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query # noqa: S608, E501
+                            params,
+                        ) as cursor
+                    ):
                         updated = cursor.rowcount
 
                     if updated == 0:
@@ -1096,7 +1098,7 @@ class SQLiteStorageAdapter:
                         "SET access_count = access_count + 1, "
                         "    last_accessed_at = ?, "
                         "    updated_at = ? " + where_clause
-                    )  # noqa: S608 - IN placeholders are generated, values stay parameterized
+                    )  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query # noqa: S608, E501
                     params: list[Any] = [now, now, *list(chunk)]
                     async with conn.execute(sql, params) as cursor:
                         updated_count: int = max(cursor.rowcount, 0)

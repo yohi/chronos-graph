@@ -21,5 +21,16 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     exclude: [...configDefaults.exclude, 'e2e/**'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json', 'html', 'lcov'],
+      exclude: [
+        ...configDefaults.exclude,
+        'e2e/**',
+        'src/main.tsx',
+        'src/App.tsx',
+        '**/*.d.ts',
+      ],
+    },
   },
 })

@@ -249,6 +249,7 @@ class LlmEvaluator:
         timeout_seconds: float = 10.0,
         max_tokens: int = 1536,
         extra_args: dict[str, object] | None = None,
+        api_account_id: str | None = None,
     ) -> None:
         self._api_key: str = api_key
         # For backward compatibility, normalize 'cloudflare-workers-ai/' prefix to 'cloudflare/'
@@ -258,6 +259,7 @@ class LlmEvaluator:
         self._timeout_seconds: float = timeout_seconds
         self._max_tokens: int = max_tokens
         self._extra_args: dict[str, object] = extra_args or {}
+        self._api_account_id: str | None = api_account_id
 
     @classmethod
     def from_env(cls) -> LlmEvaluator | None:
@@ -269,9 +271,12 @@ class LlmEvaluator:
             return None
 
         extra_args: dict[str, object] = {}
+        account_id: str | None = None
         if settings.api_account_id:
             account_id = settings.api_account_id.get_secret_value()
-            if settings.model.startswith("cloudflare/"):
+            if settings.model.startswith("cloudflare/") or (
+                settings.model.startswith("openai/") and "@cf/" in settings.model
+            ):
                 extra_args["api_base"] = (
                     f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
                 )
@@ -291,6 +296,7 @@ class LlmEvaluator:
             timeout_seconds=_parse_float_env("CHRONOS_EVALUATOR_TIMEOUT_SECONDS", 10.0),
             max_tokens=_parse_int_env("CHRONOS_EVALUATOR_MAX_TOKENS", 1536),
             extra_args=extra_args,
+            api_account_id=account_id,
         )
 
     async def judge(
@@ -310,7 +316,7 @@ class LlmEvaluator:
         )
         # Cloudflare Workers AI の一部モデルは system ロールをサポートしないため
         # 'cloudflare/' の場合は system メッセージを user メッセージの先頭に結合する
-        if "cloudflare/" in self._model:
+        if "cloudflare/" in self._model or "@cf/" in self._model:
             messages = [
                 {
                     "role": "user",

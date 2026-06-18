@@ -1,0 +1,14 @@
+# Ignore third-party libraries
+node_modules/
+.venv/
+__pycache__/
+dist/
+
+# Ignore pnpm lock file to avoid timeout
+frontend/pnpm-lock.yaml
+
+# Ignore specific storage implementations where dynamic SQL is used by design
+# and security is handled via parameterization.
+src/context_store/storage/sqlite.py
+src/context_store/storage/sqlite_graph.py
+src/context_store/sync/outbox_reader.py

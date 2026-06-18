@@ -65,7 +65,7 @@ class SqliteOutboxReader:
         if not event_ids:
             return
         placeholders = ",".join("?" for _ in event_ids)
-        sql = f"DELETE FROM graph_sync_outbox WHERE id IN ({placeholders})"  # noqa: S608  # nosec
+        sql = f"DELETE FROM graph_sync_outbox WHERE id IN ({placeholders})"  # noqa: S608
         async with aiosqlite.connect(self._db_path) as conn:
             await conn.execute(sql, event_ids)
             await conn.commit()

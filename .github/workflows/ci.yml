@@ -11,13 +11,15 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
 
       - name: Install uv
-        uses: astral-sh/setup-uv@1edb52594c857e2b5b13128931090f0640537287 # v5.3.0
+        uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
 
@@ -25,7 +27,21 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --extra storage-postgres --extra storage-supabase --extra embedding-openai --extra embedding-litellm --extra dashboard --extra evaluator --dev
+        run: uv sync --extra all --dev
+
+      - name: Run Semgrep
+        run: |
+          uv run semgrep --config auto --error .
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          hide-progress: false
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
 
       - name: Run ruff check
         run: uv run ruff check src/ tests/
@@ -37,6 +53,41 @@ jobs:
         run: uv run mypy src/
 
       - name: Run unit tests
-        run: uv run pytest tests/unit -v --cov=src/context_store --cov=src/mcp_gateway --cov-report=term-missing
+        run: uv run pytest tests/unit -v --cov=src/context_store --cov=src/mcp_gateway --cov-report=xml
         env:
           OPENAI_API_KEY: sk-dummy-key-for-ci-validation
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install
+
+      - name: Run frontend lint
+        working-directory: frontend
+        run: pnpm run lint
+
+      - name: Run frontend unit tests
+        working-directory: frontend
+        run: pnpm run test:unit -- --coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml,./frontend/coverage/lcov.info
+          fail_ci_if_error: false
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

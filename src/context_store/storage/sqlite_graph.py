@@ -439,9 +439,7 @@ class SQLiteGraphAdapter:
         cursor = None
 
         try:
-            async with (
-                conn.execute(sql, params) as cursor
-            ):  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query # noqa: S608, E501
+            async with conn.execute(sql, params) as cursor:  # noqa: S608
                 async for row in cursor:
                     rows.append(row)
                     # Regularly update partial result if requested
@@ -523,7 +521,7 @@ class SQLiteGraphAdapter:
                     SELECT from_id, to_id, edge_type, props
                     FROM memory_edges
                     WHERE from_id IN ({placeholders})
-                """  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query # noqa: S608, E501
+                """  # noqa: S608
                 async with conn.execute(query, chunk) as cursor:
                     rows = await cursor.fetchall()
 

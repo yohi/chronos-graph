@@ -759,6 +759,12 @@ CHRONOS_EVALUATOR_MODEL="ollama/llama3"
 
 ---
 
+---
+
+## 🛠 トラブルシューティング
+
+- [LiteLLM Cloudflare 接続エラー (Typo Bug) の修正方法](docs/troubleshooting/litellm-cloudflare-typo.md)
+
 ## ライセンス
 
 MIT License — [LICENSE](LICENSE)

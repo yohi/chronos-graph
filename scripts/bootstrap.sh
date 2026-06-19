@@ -392,10 +392,7 @@ fi
 
 if [ "$INGESTION_MODE" = "all" ]; then
     modify_var_status "MCP_GATEWAY_" "uncomment"
-    # pydantic-settings 向けにリスト型変数を JSON 配列形式に更新
-    update_env_key "MCP_GATEWAY_UPSTREAM_COMMAND" '["python", "-m", "context_store"]'
-    update_env_key "MCP_GATEWAY_UPSTREAM_ENV_PASSTHROUGH" '["OPENAI_API_KEY", "SQLITE_DB_PATH", "GRAPH_ENABLED", "EMBEDDING_PROVIDER", "CHRONOS_INGESTION_MODE"]'
-    
+
     # Check if keys are already set in .env
     EXISTING_KEYS_JSON=$(grep -E "^MCP_GATEWAY_API_KEYS_JSON=" .env | cut -d'=' -f2- || true)
     EXISTING_KEY=$(grep -E "^MCP_GATEWAY_API_KEY=" .env | cut -d'=' -f2- || true)

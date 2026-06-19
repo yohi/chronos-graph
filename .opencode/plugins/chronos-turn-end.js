@@ -176,7 +176,7 @@ async function handleEvent(event) {
         const envPath = path.join(dir, '.env');
         if (fs.existsSync(envPath)) {
           const tempEnv = loadEnvFile(envPath);
-          if (tempEnv.STORAGE_BACKEND || tempEnv.MCP_GATEWAY_PORT || tempEnv.CHRONOS_INGESTION_MODE) {
+          if (tempEnv.STORAGE_BACKEND || tempEnv.CHRONOS_INGESTION_MODE) {
             projectDir = dir;
             loadedEnv = tempEnv;
             break;

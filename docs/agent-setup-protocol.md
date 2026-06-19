@@ -21,7 +21,7 @@
 
 1. **セットアップ対象の選択**:
    * `mcp` (長期記憶MCP: MCPサーバーとしての起動・登録)
-   * `hook` (安全評価Hook: ツール実行前保護フックの登録)
+   * ツール実行前の安全評価Hookを設定したい場合は、このプロトコルではなく独立リポジトリ ChronosGate のセットアップ手順を使用してください。
 2. **実行モードの選択**:
    * `production` (本番モード: 実際に環境構築・ファイルの変更を行う)
    * `dry-run` (デバッグモード: ファイルを一切変更せず、シミュレーションと解説のみを行う)
@@ -32,7 +32,7 @@
 
 #### 【ケース A】長期記憶MCPの場合
 以下の項目を `ask_question` 等を用いて一括でユーザーに提示し、回答を確定させてください。
-*(※長期記憶MCPの場合、LLM評価（Evaluator）の設定は不要です)*
+*(※ChronosGraph の長期記憶MCP設定では、LLM評価（Evaluator）の設定は不要です。安全評価は ChronosGate 側で扱います。)*
 
 1. **配置・起動方法 (Source)**:
    * `remote` (🌟推奨: リポジトリをクローンせず `uvx` を用いてオンザフライで起動・実行する)
@@ -62,13 +62,7 @@
 * **openai/litellm/custom-api選択時**: 使用する埋め込みモデル名（例: `text-embedding-3-small`）の入力を求めます。
 
 #### 【ケース B】安全評価Hookの場合
-以下の項目を `ask_question` 等を用いて一括でユーザーに提示し、回答を確定させてください。
-
-1. **起動方法 (Source)**:
-   * `remote` (🌟推奨: リモートの GitHub から uvx 経由で評価コマンドを実行する)
-   * `local` (ローカルのリポジトリを Python 経由で呼び出す)
-2. **安全評価を行うLLMモデル**:
-   * 使用する LLM モデル（例: `anthropic/claude-3-5-haiku-20241022` 等）を確認。
+ChronosGraph 本体では安全評価Hookをセットアップしません。ユーザーが安全評価Hookを求めている場合は、ChronosGate リポジトリの README / setup protocol を参照するよう案内し、この `scripts/bootstrap.sh` は実行しないでください。
 
 ---
 
@@ -83,7 +77,7 @@
 * **Redis接続URL**: `redis://default:[YOUR-PASSWORD]@host:port` 等の形式。
 
 #### 【ケース B】安全評価Hookの場合
-* **LLMアカウントID (オプション)**: Cloudflare Workers AI 等のアカウントIDが必要な LLM プロバイダを利用する場合のみ入力します（`CHRONOS_EVALUATOR_API_ACCOUNT_ID` にマッピングされます）。不要なプロバイダの場合は空のままで進めます。
+ChronosGate 側の手順に委譲します。このプロトコルでは、ChronosGraph の `.env` に `CHRONOS_EVALUATOR_*` 系の設定を書き込みません。
 
 ---
 
@@ -113,8 +107,6 @@
   --source <source> \
   --ingestion-mode <ingestion-mode> \
   --agents <comma_separated_agents> \
-  [--evaluator-model <evaluator_model>] \
-  [--evaluator-api-account-id <api_account_id>] \
   [--db-host <db_host>] [--db-port <db_port>] [--db-name <db_name>] [--db-user <db_user>] \
   [--neo4j-uri <neo4j_uri>] [--neo4j-user <neo4j_user>] \
   [--redis-url <redis_url>] \
@@ -130,7 +122,7 @@
 ---
 
 ### Phase 7: 接続テスト
-設定完了後、疎通確認と安全評価機能の正常動作を確認します。
+設定完了後、疎通確認と turn-end ingestion の正常動作を確認します。
 1. **MCP 疎通テスト**: MCPサーバーが正常に起動し、設定したデータベースやキャッシュに接続できるかテストします。
-2. **安全評価Hookテスト**: 登録したエージェントフックが機能し、評価エンジン（LLM）を通した動作確認テストを自動実行します。
+2. **Turn-end ingestion テスト**: `CHRONOS_INGESTION_MODE=all` を選んだ場合、登録したエージェントの turn-end hook / plugin が会話ログをバックグラウンド保存できるか確認します。
 3. すべてクリアになれば、自動セットアップは完了です。

@@ -1,7 +1,7 @@
 # ChronosGraph Agent Instructions
 
 ## 🎯 Welcome & Project Overview
-**ChronosGraph** is an MCP server providing persistent, multi-layered long-term memory for AI agents using a temporal knowledge graph, paired with a Universal Evaluator Gateway for security.
+**ChronosGraph** is an MCP server providing persistent, multi-layered long-term memory for AI agents using a temporal knowledge graph. Tool-call security evaluation is provided by the separate ChronosGate repository.
 
 ## 🏗️ Architecture & Tech Stack
 - **Backend**: Python 3.12+ (managed by `uv`), FastMCP, FastAPI, LiteLLM, asyncpg, aiosqlite, tenacity.
@@ -18,11 +18,11 @@
 ---
 
 ## 🚨 Critical Constraints (DO NOT VIOLATE)
-1. **Strict Stdout Pureness**: **NEVER** print debug statements to stdout in `mcp_gateway` (especially in `cli.py` or MCP entrypoints). Stdout must only output JSON messages for MCP transport. Log diagnostics to `sys.stderr` via python `logging`.
-2. **No Dependency Bleed**: Keep `mcp_gateway/` (security/policy) strictly decoupled from `context_store/` (memory/storage). Do not cross-import modules between them.
+1. **ChronosGate Separation**: Do not reintroduce `mcp_gateway/` into ChronosGraph. Security/policy gateway code belongs in the separate ChronosGate repository.
+2. **No Dependency Bleed**: Keep `context_store/` focused on memory/storage. ChronosGraph may expose shared primitives such as `chronos_shared`, but it must not depend on ChronosGate.
 3. **No I/O Inside DB Locks**: NEVER execute `EmbeddingProvider.embed()` or other network/LLM I/O inside a database transaction lock (e.g. `save_memory`). This causes SQLite lock contention.
 4. **No Hardcoded DDL**: Raw schema modifications are forbidden. Always use migration files under `src/context_store/storage/migrations/` or `supabase/migrations/`.
-5. **Strict Setup Protocol**: Any setup, installation, or configuration tasks MUST strictly follow [docs/agent-setup-protocol.md](file:///home/y_ohi/program/private/chronos-graph/docs/agent-setup-protocol.md). You MUST load and read that file before running `scripts/bootstrap.sh` or making any configuration changes. You MUST use the `ask_question` tool to get user confirmation as defined in the protocol.
+5. **Strict Setup Protocol**: Any setup, installation, or configuration tasks MUST strictly follow [docs/agent-setup-protocol.md](./docs/agent-setup-protocol.md). You MUST load and read that file before running `scripts/bootstrap.sh` or making any configuration changes. You MUST use the `ask_question` tool to get user confirmation as defined in the protocol.
 
 ---
 
@@ -126,4 +126,3 @@ After calling `memory_save` or `session_flush`, perform a self-verification usin
 
 If any item fails, cancel the save or correct the content before finalizing.
 </quick_rubric>
-

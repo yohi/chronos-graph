@@ -1,14 +1,14 @@
 {
-  "name": "@yohi/opencode-plugin-chronos-gate",
-  "version": "1.6.0",
+  "name": "@yohi/opencode-plugin-chronos-turn-end",
+  "version": "1.0.0",
   "private": false,
   "repository": {
     "type": "git",
     "url": "git+https://github.com/yohi/chronos-graph.git"
   },
-  "main": "./.opencode/plugins/chronos-gate.js",
+  "main": "./.opencode/plugins/chronos-turn-end.js",
   "files": [
-    ".opencode/plugins/chronos-gate.js",
+    ".opencode/plugins/chronos-turn-end.js",
     "README.md",
     "LICENSE"
   ],

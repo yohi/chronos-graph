@@ -98,6 +98,9 @@ cd "$TMPDIR/chronos-graph-for-extract"
 
 - [ ] **Step 2: `git filter-repo` で履歴抽出**
 
+> [!WARNING]
+> `git filter-repo` を実行する前に、移行元の `chronos-graph` の過去のコミット履歴（または一時ブランチ）に `src/mcp_gateway/` などのファイル群が存在していることを確認してください。もし現在のアクティブなワーキングツリー上でこれらのファイルが削除済みである場合は、対象ファイルが存在していた過去のコミットを起点に抽出処理を実行するか、履歴が存在するリポジトリの状態を保持した状態で実行する必要があります。
+
 抽出対象パス:
 - `src/mcp_gateway/`
 - `tests/unit/test_mcp_gateway*.py`
@@ -181,7 +184,7 @@ version = "1.0.0"
 description = "Universal security evaluator gateway for AI agent tool calls"
 requires-python = ">=3.12"
 dependencies = [
-    "chronos-graph @ git+https://github.com/yohi/chronos-graph.git",
+    "chronos-graph @ git+https://github.com/yohi/chronos-graph.git#subdirectory=src/chronos_shared",
     "mcp[cli]>=1.0.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
@@ -240,7 +243,7 @@ disallow_untyped_decorators = false
 ```
 
 
-- [ ] **Step 5: テストを実行してリネーム漏れを確認**
+- [ ] **Step 4: テストを実行してリネーム漏れを確認**
 
 ```bash
 uv sync --all-extras
@@ -325,7 +328,7 @@ git commit -m "feat: re-namespace mcp_gateway to chronos_gate and add packaging"
 - Delete: `scripts/chronos-evaluator-hook.sh`
 - Delete: `scripts/check_evaluator.sh`
 - Delete: `.opencode/plugins/chronos-gate.js`
-- Delete: `package.json`
+- Delete: `package.json` (※一旦モノレポ構成用のルート設定を削除します)
 - Delete: `.github/workflows/release.yml`
 - Modify: `pyproject.toml`
 - Modify: `scripts/bootstrap.sh`
@@ -366,6 +369,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+shared-only = []
 # evaluator extra は削除または chronos-gate に委譲
 ```
 
@@ -410,7 +414,10 @@ uv run mypy src/
 
 `.opencode/plugins/chronos-gate.js` から `session.idle` イベントハンドラを抽出し、`.opencode/plugins/chronos-turn-end.js` として新規作成。
 
-- [ ] **Step 2: `chronos-graph` 用の `package.json` を作成**
+- [ ] **Step 2: `chronos-graph` 用の `package.json` をルートに作成**
+
+> [!NOTE]
+> ルートの `package.json` は Task 5 Step 1 で削除されたため、新しく作成するプラグイン `@yohi/opencode-plugin-chronos-turn-end` を配信するためにルートに再度作成します。
 
 ```json
 {

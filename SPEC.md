@@ -1382,7 +1382,7 @@ MCP Gateway は、エージェントへの過剰権限付与を防ぐための�
 
 ChronosGate は、ChronosGraph から分離された独立リポジトリで、AI エージェントのツール実行前にセキュリティ評価（IBAC / Guardrails / LLM Evaluator）を行います。ChronosGraph 本体は ChronosGate からの記憶検索リクエストに応答する長期記憶サーバーとして振る舞います。
 
-詳細な仕様・構築手順は [ChronosGate リポジトリ](https://github.com/yohi/chronos-gate)を参照してください。
+詳細な仕様・構築手順は [ChronosGate リポジトリ](https://github.com/yohi/chronos-gate)（※プライベートリポジトリ）を参照してください。
 
 ### 15.1 連携インターフェース
 

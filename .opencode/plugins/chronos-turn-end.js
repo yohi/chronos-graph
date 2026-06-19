@@ -84,8 +84,8 @@ function getChronosSearchDirs(directory = null) {
   if (process.env.PWD) searchDirs.push(process.env.PWD);
 
   searchDirs.push(
-    path.join(process.env.HOME, 'program', 'chronos-graph'),
-    path.join(process.env.HOME, 'chronos-graph')
+    path.join(os.homedir() || process.env.HOME || '', 'program', 'chronos-graph'),
+    path.join(os.homedir() || process.env.HOME || '', 'chronos-graph')
   );
 
   const uniqueDirs = [];
@@ -176,7 +176,7 @@ async function handleEvent(event) {
         const envPath = path.join(dir, '.env');
         if (fs.existsSync(envPath)) {
           const tempEnv = loadEnvFile(envPath);
-          if (tempEnv.STORAGE_BACKEND || tempEnv.CHRONOS_INGESTION_MODE) {
+          if (tempEnv.STORAGE_BACKEND || tempEnv.CHRONOS_INGESTION_MODE || tempEnv.MCP_GATEWAY_API_KEY) {
             projectDir = dir;
             loadedEnv = tempEnv;
             break;
@@ -201,20 +201,21 @@ async function handleEvent(event) {
         pythonPath = localVenvPython;
         logDebug(`Using venv python for hook: ${pythonPath}`);
       } else {
-        const localBinUv = path.join(process.env.HOME, '.local', 'bin', 'uv');
+        const localBinUv = path.join(os.homedir() || process.env.HOME || '', '.local', 'bin', 'uv');
         const uvPath = fs.existsSync(localBinUv) ? localBinUv : 'uv';
         pythonPath = uvPath;
         spawnArgs = ["run", "python", script];
         logDebug(`Using uv python fallback for hook: ${pythonPath} run python`);
       }
 
-      const localBinDir = path.join(process.env.HOME, '.local', 'bin');
+      const localBinDir = path.join(os.homedir() || process.env.HOME || '', '.local', 'bin');
       const currentPath = process.env.PATH || '';
       const newPath = currentPath.includes(localBinDir) ? currentPath : `${localBinDir}:${currentPath}`;
 
+      let errLog = null;
       try {
-        const errLogPath = path.join(process.env.HOME, '.config', 'opencode', 'turn-end-spawn-error.log');
-        const errLog = fs.openSync(errLogPath, 'a');
+        const errLogPath = path.join(os.homedir() || process.env.HOME || '', '.config', 'opencode', 'turn-end-spawn-error.log');
+        errLog = fs.openSync(errLogPath, 'a');
 
         const child = spawn(pythonPath, spawnArgs, {
           cwd: projectDir,
@@ -228,12 +229,18 @@ async function handleEvent(event) {
         });
         child.on("error", (err) => {
           logDebug(`agent_turn_hook spawn error event: ${err.message}`);
+          if (errLog !== null) {
+            try { fs.closeSync(errLog); errLog = null; } catch {}
+          }
         });
         child.on("close", (code) => {
           if (code === 0) {
             logDebug("Log ingestion process completed successfully.");
           } else {
             logDebug(`Log ingestion process exited with code ${code}.`);
+          }
+          if (errLog !== null) {
+            try { fs.closeSync(errLog); errLog = null; } catch {}
           }
         });
         child.stdin.write(text, "utf-8");
@@ -242,6 +249,9 @@ async function handleEvent(event) {
         logDebug("Log ingestion process spawned successfully.");
       } catch (spawnError) {
         logDebug(`Failed to spawn agent_turn_hook.py: ${spawnError.message}`);
+        if (errLog !== null) {
+          try { fs.closeSync(errLog); errLog = null; } catch {}
+        }
       }
     }
   } catch (eventError) {

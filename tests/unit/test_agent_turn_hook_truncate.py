@@ -132,7 +132,7 @@ async def test_main_async_skips_send_in_selective_mode(
 ) -> None:
     mod = _load_hook_module()
     monkeypatch.delenv("CHRONOS_INGESTION_MODE", raising=False)
-    monkeypatch.delenv("MCP_GATEWAY_API_KEY", raising=False)
+    monkeypatch.setenv("MCP_GATEWAY_API_KEY", "test-key")
 
     async def fail_send(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("_send must not be called unless CHRONOS_INGESTION_MODE=all")

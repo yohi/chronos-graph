@@ -11,7 +11,7 @@
     # (transcript_path / transcriptPath フィールドが自動的に解釈される)
     python scripts/agent_turn_hook.py --client claude-code &
 
-設計書: docs/superpowers/specs/2026-05-27-hybrid-ingestion-mode-design.md
+設計書: SPEC.md §4.1.1 (Hybrid Ingestion Mode)
 """
 
 from __future__ import annotations

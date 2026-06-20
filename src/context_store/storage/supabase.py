@@ -1,6 +1,6 @@
 """Supabase Data API (PostgREST)-backed Storage Adapter.
 
-設計仕様: docs/superpowers/specs/2026-05-18-supabase-storage-adapter-design.md
+設計仕様: SPEC.md §8.7 (Supabase Storage Adapter 設計)
 """
 
 from __future__ import annotations

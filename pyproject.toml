@@ -54,6 +54,7 @@ embedding-litellm = [
 all = [
     "context-store-mcp[storage-postgres,storage-supabase,embedding-local,embedding-openai,embedding-litellm,dashboard]",
 ]
+shared-only = []
 [project.scripts]
 context-store = "context_store.__main__:main"
 chronos-dashboard = "context_store.dashboard.api_server:main"

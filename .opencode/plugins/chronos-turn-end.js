@@ -3,6 +3,8 @@ const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 
+const INGESTION_MODE_ENV = 'CHRONOS_INGESTION_MODE', DEFAULT_INGESTION_MODE = 'selective';
+
 // Debug log helper
 function logDebug(msg) {
   const isDebug = !!(process.env.CHRONOS_GATE_DEBUG || process.env.NODE_DEBUG);
@@ -16,8 +18,7 @@ function logDebug(msg) {
       .replace(/(authorization:\s*)[a-zA-Z0-9_.-]+/ig, '$1[REDACTED_TOKEN]');
   } else if (typeof msg === 'object' && msg !== null) {
     try {
-      output = JSON.stringify(msg);
-      output = output
+      output = JSON.stringify(msg)
         .replace(/(sk-[a-zA-Z0-9]{20,})/g, '[REDACTED_API_KEY]')
         .replace(/(bearer\s+)[a-zA-Z0-9_.-]+/ig, '$1[REDACTED_TOKEN]')
         .replace(/(authorization:\s*)[a-zA-Z0-9_.-]+/ig, '$1[REDACTED_TOKEN]');
@@ -83,10 +84,8 @@ function getChronosSearchDirs(directory = null) {
   searchDirs.push(process.cwd());
   if (process.env.PWD) searchDirs.push(process.env.PWD);
 
-  searchDirs.push(
-    path.join(os.homedir() || process.env.HOME || '', 'program', 'chronos-graph'),
-    path.join(os.homedir() || process.env.HOME || '', 'chronos-graph')
-  );
+  searchDirs.push(path.join(os.homedir() || process.env.HOME || '', 'program', 'chronos-graph'));
+  searchDirs.push(path.join(os.homedir() || process.env.HOME || '', 'chronos-graph'));
 
   const uniqueDirs = [];
   for (const dir of searchDirs) {
@@ -118,6 +117,15 @@ function sanitizeMessagesData(data) {
   });
 }
 
+function isAllIngestionMode(loadedEnv) {
+  const mode = (
+    loadedEnv?.[INGESTION_MODE_ENV] ||
+    process.env[INGESTION_MODE_ENV] ||
+    DEFAULT_INGESTION_MODE
+  ).trim().toLowerCase();
+  return mode === 'all';
+}
+
 
 // Global reference variables to store client/directory if initialized via function
 let globalClient = null;
@@ -146,19 +154,6 @@ async function handleEvent(event) {
         logDebug("Cannot ingest: client object is not initialized.");
         return;
       }
-
-      const messages = await clientObj.session.messages({ path: { id: sessionId } });
-      logDebug(`Raw messages.data: ${JSON.stringify(sanitizeMessagesData(messages.data))}`);
-      const text = messages.data
-        .map((m) => {
-          const role = m.info?.role || "unknown";
-          const parts = (m.parts ?? [])
-            .map((p) => p.type === "text" ? p.text : "")
-            .filter(Boolean)
-            .join("\n");
-          return `${role}: ${parts}`;
-        })
-        .join("\n\n");
 
       const validSearchDirs = getChronosSearchDirs(event.directory || globalDirectory);
 
@@ -190,6 +185,24 @@ async function handleEvent(event) {
           loadedEnv = loadEnvFile(repoEnvPath);
         }
       }
+
+      if (!isAllIngestionMode(loadedEnv)) {
+        logDebug(`${INGESTION_MODE_ENV} is not 'all'; skipping turn-end ingestion.`);
+        return;
+      }
+
+      const messages = await clientObj.session.messages({ path: { id: sessionId } });
+      logDebug(`Raw messages.data: ${JSON.stringify(sanitizeMessagesData(messages.data))}`);
+      const text = messages.data
+        .map((m) => {
+          const role = m.info?.role || "unknown";
+          const parts = (m.parts ?? [])
+            .map((p) => p.type === "text" ? p.text : "")
+            .filter(Boolean)
+            .join("\n");
+          return `${role}: ${parts}`;
+        })
+        .join("\n\n");
 
       const script = path.join(projectDir, "scripts", "agent_turn_hook.py");
 
@@ -264,6 +277,7 @@ async function handleEvent(event) {
 // --------------------------------------------------------------------------
 module.exports = {
   id: "@yohi/opencode-plugin-chronos-turn-end",
+  chronosSharedSsotGuard: "CHRONOS_SHARED_SSOT_GUARD:chronos_shared.ingestion_mode",
   server: async (input, _options) => {
     logDebug("Turn-end plugin activation function (init) called.");
     if (input) {

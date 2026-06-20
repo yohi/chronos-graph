@@ -1,4 +1,4 @@
-"""ターン終了時に会話ログを MCP Gateway へ fire-and-forget で送信するフック。
+"""ターン終了時に会話ログを ChronosGate へ fire-and-forget で送信するフック。
 
 呼び出し例:
     # 生のテキストを stdin で渡す (汎用)
@@ -24,10 +24,19 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Mapping
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+
+try:
+    from chronos_shared.ingestion_mode import (
+        CHRONOS_INGESTION_MODE_ENV,  # type: ignore[misc]
+        DEFAULT_INGESTION_MODE,  # type: ignore[misc]
+    )
+except ModuleNotFoundError:
+    CHRONOS_INGESTION_MODE_ENV = "CHRONOS_INGESTION_MODE"  # type: ignore[misc]
+    DEFAULT_INGESTION_MODE = "selective"  # type: ignore[misc]
 
 LOG_FORMAT: Final[str] = "%(asctime)s [%(levelname)s] agent_turn_hook: %(message)s"
 
@@ -50,6 +59,11 @@ SUPPORTED_CLIENTS: Final[tuple[str, ...]] = (
     "cursor",
     "antigravity",
 )
+
+
+def _is_all_ingestion_mode(env: Mapping[str, str | None]) -> bool:
+    mode = env.get(CHRONOS_INGESTION_MODE_ENV) or DEFAULT_INGESTION_MODE
+    return mode.strip().lower() == "all"
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +381,13 @@ async def _send(
 
 
 async def _main_async(payload: str) -> bool:
+    if not _is_all_ingestion_mode(os.environ):
+        logging.info(
+            "%s is not 'all'; skipping turn-end ingestion",
+            CHRONOS_INGESTION_MODE_ENV,
+        )
+        return True
+
     gateway_url = os.environ.get("MCP_GATEWAY_URL", DEFAULT_GATEWAY_URL)
     api_key = os.environ.get("MCP_GATEWAY_API_KEY")
     intent = os.environ.get("MCP_INTENT", DEFAULT_INTENT)

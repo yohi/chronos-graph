@@ -6,6 +6,8 @@ import importlib.util
 import pathlib
 import sys
 
+import pytest
+
 
 def _load_hook_module():
     """scripts/agent_turn_hook.py を tests から動的に import するヘルパ。"""
@@ -116,3 +118,35 @@ def test_truncate_log_max_bytes_non_positive_returns_empty_and_truncated() -> No
     out, was_truncated = mod.truncate_log(text, max_bytes=-5)
     assert out == ""
     assert was_truncated is True
+
+
+@pytest.mark.asyncio
+async def test_main_async_skips_send_in_selective_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load_hook_module()
+    monkeypatch.delenv("CHRONOS_INGESTION_MODE", raising=False)
+    monkeypatch.delenv("MCP_GATEWAY_API_KEY", raising=False)
+
+    async def fail_send(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("_send must not be called unless CHRONOS_INGESTION_MODE=all")
+
+    monkeypatch.setattr(mod, "_send", fail_send)
+
+    assert await mod._main_async("User: hello") is True
+
+
+@pytest.mark.asyncio
+async def test_main_async_sends_in_all_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    mod = _load_hook_module()
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setenv("CHRONOS_INGESTION_MODE", "all")
+    monkeypatch.setenv("MCP_GATEWAY_API_KEY", "test-key")
+
+    async def fake_send(*args: object, **_kwargs: object) -> None:
+        calls.append(args)
+
+    monkeypatch.setattr(mod, "_send", fake_send)
+
+    assert await mod._main_async("User: hello") is True
+    assert len(calls) == 1

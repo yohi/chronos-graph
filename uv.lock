@@ -518,7 +518,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'dashboard'", specifier = ">=0.30.0" },
     { name = "websockets", marker = "extra == 'dashboard'", specifier = ">=12.0" },
 ]
-provides-extras = ["storage-postgres", "storage-supabase", "embedding-local", "dashboard", "embedding-openai", "embedding-litellm", "all"]
+provides-extras = ["storage-postgres", "storage-supabase", "embedding-local", "dashboard", "embedding-openai", "embedding-litellm", "all", "shared-only"]
 
 [package.metadata.requires-dev]
 dev = [

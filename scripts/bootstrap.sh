@@ -576,6 +576,9 @@ EOF
     fi
 
     if [[ "$AGENTS" == *"opencode"* ]]; then
+        if [ "$TYPE" != "mcp" ] || [ "$INGESTION_MODE" != "all" ]; then
+            echo -e "${BLUE}Skipping OpenCode turn-end plugin registration (requires TYPE=mcp and CHRONOS_INGESTION_MODE=all).${NC}"
+        else
         echo -e "${BLUE}Attempting to register OpenCode plugin...${NC}"
         OPCODE_CONFIG_DIR="$HOME/.config/opencode"
         if [ -f "$OPCODE_CONFIG_DIR/opencode.json" ]; then
@@ -609,6 +612,7 @@ except Exception as e:
         echo -e "   ${GREEN}@yohi:registry=https://npm.pkg.github.com${NC}"
         echo -e "2. Register the plugin in ~/.config/opencode/opencode.json (or .jsonc):"
         echo -e "   ${GREEN}\"plugin\": [ \"@yohi/opencode-plugin-chronos-turn-end\" ]${NC}"
+        fi
     fi
 fi
 

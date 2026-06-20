@@ -5,6 +5,9 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import sys
+from types import ModuleType
+
+import pytest
 
 
 def _load_hook_module():
@@ -19,6 +22,11 @@ def _load_hook_module():
     sys.modules["agent_turn_hook"] = mod
     spec.loader.exec_module(mod)
     return mod
+
+
+def _reload_hook_module() -> ModuleType:
+    sys.modules.pop("agent_turn_hook", None)
+    return _load_hook_module()
 
 
 def test_truncate_log_short_input_returns_unchanged() -> None:
@@ -116,3 +124,51 @@ def test_truncate_log_max_bytes_non_positive_returns_empty_and_truncated() -> No
     out, was_truncated = mod.truncate_log(text, max_bytes=-5)
     assert out == ""
     assert was_truncated is True
+
+
+@pytest.mark.asyncio
+async def test_main_async_skips_send_in_selective_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load_hook_module()
+    monkeypatch.delenv("CHRONOS_INGESTION_MODE", raising=False)
+    monkeypatch.setenv("MCP_GATEWAY_API_KEY", "test-key")
+
+    async def fail_send(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("_send must not be called unless CHRONOS_INGESTION_MODE=all")
+
+    monkeypatch.setattr(mod, "_send", fail_send)
+
+    assert await mod._main_async("User: hello") is True
+
+
+@pytest.mark.asyncio
+async def test_main_async_sends_in_all_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    mod = _load_hook_module()
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setenv("CHRONOS_INGESTION_MODE", "all")
+    monkeypatch.setenv("MCP_GATEWAY_API_KEY", "test-key")
+
+    async def fake_send(*args: object, **_kwargs: object) -> None:
+        calls.append(args)
+
+    monkeypatch.setattr(mod, "_send", fake_send)
+
+    assert await mod._main_async("User: hello") is True
+    assert len(calls) == 1
+
+
+def test_import_falls_back_when_ingestion_mode_symbol_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chronos_shared = ModuleType("chronos_shared")
+    chronos_shared.__path__ = []  # type: ignore[attr-defined]
+    ingestion_mode = ModuleType("chronos_shared.ingestion_mode")
+
+    monkeypatch.setitem(sys.modules, "chronos_shared", chronos_shared)
+    monkeypatch.setitem(sys.modules, "chronos_shared.ingestion_mode", ingestion_mode)
+
+    mod = _reload_hook_module()
+
+    assert mod.CHRONOS_INGESTION_MODE_ENV == "CHRONOS_INGESTION_MODE"
+    assert mod.DEFAULT_INGESTION_MODE == "selective"

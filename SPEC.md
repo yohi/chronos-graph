@@ -223,6 +223,50 @@ SQLite の `busy_timeout=5000` は強力ですが、トランザクション内�
 2. **フックの切り詰めとフェイルソフト設計**: `agent_turn_hook.py` は送信前にログを **末尾保持 (最新情報優先)** で切り詰める（UTF-8 境界での不完全なシーケンスは破棄）。SSE ハンドシェイクと POST リクエスト全体に対して2段階の厳密なタイムアウトを適用し、いかなる通信障害時もエラーを握りつぶして `exit 0` で終了することで、メインプロセス（エージェント）をクラッシュさせない。
 3. **ノイズ抑制 (Classifier 連携)**: `All` モードにおける低品質コンテンツの流入に対しては、既存の `Classifier` によるフォールバックペナルティ（`FALLBACK_PENALTY=0.5`）が適用され、検索結果のノイズ化を防ぐ。
 
+**アーキテクチャ図 (トポロジ):**
+
+```text
+┌──────────────────────────────────────────────────────────────────┐
+│  AI Agent (Claude Code / Codex / Cursor / Antigravity / OpenCode) │
+│   ┌─────────────────────────────────────────────────────┐         │
+│   │ ターン実行 → 終了時に Stop / session.idle 等が発火     │         │
+│   └────────────────────┬────────────────────────────────┘         │
+│                        │ stdin: 会話ログ or hook payload (JSON)    │
+└────────────────────────┼─────────────────────────────────────────┘
+                         ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  scripts/agent_turn_hook.py (フェイルソフトの薄い HTTP クライアント)│
+│   1. extract_payload: --client 値に応じて payload から会話ログ抽出  │
+│   2. truncate_log: 末尾保持で 8MB に切り詰め (UTF-8 境界対応)       │
+│   3. POST /messages → tools/call memory_save (timeout=2.0s)      │
+│   4. いかなるエラーも握りつぶし exit 0                              │
+└────────────────────────┬─────────────────────────────────────────┘
+                         │ HTTP (Bearer + x-mcp-intent: memory.ingest)
+                         ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  context_store (FastMCP サーバー)                                 │
+│   - memory_save ツールが BatchProcessor で非同期処理              │
+│   - Chunker → Classifier → Embedding → Deduplicator → Storage    │
+│   - Fire-and-forget: 即座に {"status":"accepted"} を返す           │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**フェイルソフト多層化設計:**
+
+| 層 | 失敗対応 |
+|---|---|
+| クライアント hook | プロセス spawn 失敗は無視 (各クライアントの責務) |
+| `agent_turn_hook.py` | 全例外 catch + `exit 0` でメインプロセスクラッシュ防止 |
+| context_store ingestion | 分類失敗は EPISODIC + `FALLBACK_PENALTY=0.5` で救済 |
+| シャットダウン | 進行中ジョブは `cancel_all` で強制終了 (ロス受容) |
+
+**制限と注意:**
+
+1. `MCP_GATEWAY_API_KEY` 未設定時はフックが no-op (stderr に ERROR ログのみ)。
+2. シャットダウン中の取り込みは保証されない — 進行中ジョブは未保存のまま消える。
+3. DB 容量が `selective` より明確に増加する。`purge_retention_days` で運用カバー。
+4. Codex は新しい hook を初回 `/hooks` レビュー後にしか実行しない。
+
 ### 4.2 Source Adapter
 
 入力ソースごとにアダプターを実装する:
@@ -973,6 +1017,65 @@ SQLファイルベースの軽量なマイグレーションシステムを備�
 
 ---
 
+### 8.7 Supabase Storage Adapter 設計
+
+`STORAGE_BACKEND=supabase` は、Supabase Data API (PostgREST) を HTTPS (port 443) 経由で利用するストレージアダプタである。Prisma Accelerate ベースの旧実装 (`storage-backend=prisma`) からの置き換えとして設計された。
+
+**コンポーネント構成:**
+
+```text
+Application (Python 3.12+)
+  └── SupabaseStorageAdapter (storage/supabase.py)
+        |   - supabase-py v2.4+ AsyncClient
+        |   - postgres_helpers 再利用
+        | HTTPS (port 443)
+        v
+Supabase Project (managed PostgreSQL)
+  +-- PostgREST (/rest/v1/memories, /rest/v1/rpc/*)
+  +-- PostgreSQL + pgvector + pg_trgm
+  +-- memories テーブル (vector(768))
+```
+
+**主要設計判断:**
+
+| 決定 | 採用案 | 根拠 |
+|---|---|---|
+| クライアント初期化 | `classmethod .create(settings)` | Prisma 実装と一貫、factory が同期コードのまま |
+| ベクトル検索 | Postgres RPC `vector_search` | PostgREST 経由で pgvector `<=>` 演算子を利用 |
+| 起動時検証 | 薄い probe (初回呼出時に検知) | Supabase CLI で事前適用が前提 |
+| アトミック increment | RPC `increment_memory_access_count` | HTTP RMW 競合の根本回避 |
+| 入力順保持 | `dict[uuid -> Memory]` + 入力順走査 | Prisma 実装踏襲 |
+
+**SQL 設計の要点:**
+
+- `supabase/migrations/` でスキーマ管理 (Supabase CLI 規約 `YYYYMMDDHHMMSS_<description>.sql`)。
+- `memories` テーブル: `vector(768)`, HNSW インデックス (`idx_memories_embedding_hnsw`), pg_trgm FTS。
+- RPC `vector_search`: `1 - (m.embedding <=> query_embedding)` でコサイン類似度。`LANGUAGE sql STABLE`, `SECURITY INVOKER`, `SET search_path = public`。
+- RPC `list_projects`: サーバサイド DISTINCT (PostgREST 単独では表現不可)。
+- RPC `increment_memory_access_count`: PL/pgSQL でアトミック increment + 時刻更新。
+- RPC `get_embedding_dimension`: 既存 embedding がない場合にスキーマ上の vector 次元を取得。
+
+**エラーマッピング:**
+
+| 条件 | StorageError コード | recoverable |
+|---|---|---|
+| PostgreSQL unique_violation (23505) | `DUPLICATE_CONTENT` | false |
+| 不正入力 (22P02, 22023) | `INVALID_INPUT` | false |
+| リソース未検出 (PGRST116) | `NOT_FOUND` | false |
+| タイムアウト・504・503・ConnectionError | `STORAGE_TIMEOUT` | true |
+| 413 Payload Too Large | `STORAGE_PAYLOAD_TOO_LARGE` | false (入力分割が必要) |
+
+**実装上の重要な注意点:**
+
+1. **UPDATE 列ホワイトリスト**: Prisma 実装と同じ許可セット。`content` 更新時は `content_hash` を再計算。
+2. **カーソルページング**: `or_` で `(created_at, id)` 複合比較。日時は `isoformat(timespec=microseconds)` の完全表現が必要。
+3. **`archived` セマンティクス**: `None=active only`, `True=archived only`, `False=両方`。
+4. **`top_k` clamp**: `SUPABASE_MAX_TOP_K=200` で頭打ち。
+5. **`keyword_search` ワイルドカード**: `%`/`_` を意図的にエスケープしない (Prisma 互換)。サニタイズは呼出側の責務。
+6. **`count_by_filter`**: `head=True` で行データを返さず count のみ取得。
+7. **機密情報保護**: `SUPABASE_KEY` を例外メッセージ・ログ・スタックトレースに含めない。
+8. **次元検証**: `create()` で DB 実次元と `settings.embedding_dimension` を照合。不一致なら `StorageError(code=INVALID_STATE, recoverable=False)` で fail-fast。
+
 ## 9. Embedding Provider
 
 ### 9.1 Protocol
@@ -1362,22 +1465,6 @@ MCP サーバーとは独立した Read-Only 可視化ダッシュボード。�
 | LogExplorer | severity フィルター UI・テキスト検索フィルターの動作確認 |
 | Accessibility | axe-core WCAG2A/2AA による主要 3 ページの critical 違反ゼロ確認 |
 
----
-
-## 15. MCP Gateway (IBAC & Guardrails)
-
-### 15.1 概要
-
-MCP Gateway は、エージェントへの過剰権限付与を防ぐための意図ベースアクセス制御（IBAC）と、出力フィルタリング、およびパラメータ制約（Semantic Guardrails）による安全なツール実行環境を提供します。
-
-### 15.2 データモデル（`policy/models.py`）
-
-#### ParamConstraint
-
-各ツール引数に対する制約を定義します。
-
-| フィールド | 型 | 説明 |
-|---|---|---|
 ## 15. ChronosGate 連携
 
 ChronosGate は、ChronosGraph から分離された独立リポジトリで、AI エージェントのツール実行前にセキュリティ評価（IBAC / Guardrails / LLM Evaluator）を行います。ChronosGraph 本体は ChronosGate からの記憶検索リクエストに応答する長期記憶サーバーとして振る舞います。

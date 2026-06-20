@@ -365,7 +365,7 @@ Hook を仕込まずに動作確認だけしたい場合は、生のテキスト
 echo "User: hello\nAssistant: hi" | uv run python scripts/agent_turn_hook.py &
 ```
 
-詳細仕様は [`docs/superpowers/specs/2026-05-27-hybrid-ingestion-mode-design.md`](docs/superpowers/specs/2026-05-27-hybrid-ingestion-mode-design.md) を参照してください。
+詳細仕様は [SPEC.md §4.1.1](SPEC.md#411-hybrid-ingestion-mode) を参照してください。
 
 
 ### 4. Phase 2: タイムアウト・遅延最適化 (Phase 2 Timeout & Latency Improvements)

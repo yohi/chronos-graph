@@ -577,7 +577,7 @@ EOF
 
     if [[ "$AGENTS" == *"opencode"* ]]; then
         if [ "$TYPE" != "mcp" ] || [ "$INGESTION_MODE" != "all" ]; then
-            echo -e "${BLUE}Skipping OpenCode turn-end plugin registration because CHRONOS_INGESTION_MODE is not all.${NC}"
+            echo -e "${BLUE}Skipping OpenCode turn-end plugin registration (requires TYPE=mcp and CHRONOS_INGESTION_MODE=all).${NC}"
         else
         echo -e "${BLUE}Attempting to register OpenCode plugin...${NC}"
         OPCODE_CONFIG_DIR="$HOME/.config/opencode"

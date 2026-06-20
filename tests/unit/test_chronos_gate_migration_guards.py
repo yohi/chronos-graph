@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from typing import ClassVar
 
+import pytest
 from pydantic import BaseModel, ConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -63,7 +64,12 @@ def test_no_runtime_references_to_legacy_security_evaluator() -> None:
 
 
 def test_turn_end_plugin_ingestion_mode_constants_match_chronos_shared() -> None:
-    from chronos_shared.ingestion_mode import CHRONOS_INGESTION_MODE_ENV, DEFAULT_INGESTION_MODE
+    chronos_shared_ingestion_mode = pytest.importorskip(
+        "chronos_shared.ingestion_mode",
+        reason="chronos_shared is not installed; skipping SSOT consistency check",
+    )
+    CHRONOS_INGESTION_MODE_ENV = chronos_shared_ingestion_mode.CHRONOS_INGESTION_MODE_ENV
+    DEFAULT_INGESTION_MODE = chronos_shared_ingestion_mode.DEFAULT_INGESTION_MODE
 
     plugin_text = (REPO_ROOT / ".opencode" / "plugins" / "chronos-turn-end.js").read_text(
         encoding="utf-8"

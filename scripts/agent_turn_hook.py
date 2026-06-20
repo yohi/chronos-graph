@@ -34,7 +34,7 @@ try:
         CHRONOS_INGESTION_MODE_ENV,  # type: ignore[misc]
         DEFAULT_INGESTION_MODE,  # type: ignore[misc]
     )
-except ModuleNotFoundError:
+except ImportError:
     CHRONOS_INGESTION_MODE_ENV = "CHRONOS_INGESTION_MODE"  # type: ignore[misc]
     DEFAULT_INGESTION_MODE = "selective"  # type: ignore[misc]
 

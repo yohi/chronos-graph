@@ -6,7 +6,7 @@
 - ``read_jsonl_transcript(path)``: JSONL ファイル読み込み + 整形
 - ``_build_parser()``: ``--client`` 引数の choices バリデーション
 
-設計書: SPEC.md §4.1.1 (Hybrid Ingestion Mode)  §11 (AC-8~AC-12)
+設計書: SPEC.md §4.1.1 (Hybrid Ingestion Mode)
 """
 
 from __future__ import annotations

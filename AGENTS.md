@@ -17,10 +17,11 @@ ChronosGraph provides persistent, multi-layered memory to AI agents (Claude, Gem
 ## Critical constraints
 
 1. **ChronosGate Separation**: Do not reintroduce `mcp_gateway/` into ChronosGraph. Security/policy gateway code belongs in the separate [ChronosGate](https://github.com/yohi/chronos-gate) repository.
-2. **No I/O Inside DB Locks**: NEVER execute `EmbeddingProvider.embed()` or other network/LLM I/O inside a database transaction lock (e.g. `save_memory`). This causes SQLite lock contention.
-3. **No Hardcoded DDL**: Raw schema modifications are forbidden. Always use migration files under `src/context_store/storage/migrations/` or `supabase/migrations/`.
-4. **Strict Setup Protocol**: Any setup task MUST follow `docs/agent-setup-protocol.md`. You MUST read it before running `scripts/bootstrap.sh` or making configuration changes.
-5. **Never create new agent config files**: Do not create new AI agent configuration directories (e.g. `.opencode/`, `.claude/`) or files (e.g. `opencode.jsonc`). Configuration must flow through the established SSOT pipeline only.
+2. **No Dependency Bleed**: Keep `context_store/` focused on memory/storage. ChronosGraph may expose shared primitives such as `chronos_shared`, but it must not depend on [ChronosGate](https://github.com/yohi/chronos-gate).
+3. **No I/O Inside DB Locks**: NEVER execute `EmbeddingProvider.embed()` or other network/LLM I/O inside a database transaction lock (e.g. `save_memory`). This causes SQLite lock contention.
+4. **No Hardcoded DDL**: Raw schema modifications are forbidden. Always use migration files under `src/context_store/storage/migrations/` or `supabase/migrations/`.
+5. **Strict Setup Protocol**: Any setup task MUST follow `docs/agent-setup-protocol.md`. You MUST read it before running `scripts/bootstrap.sh` or making configuration changes.
+6. **Never create new agent config files**: Do not create new AI agent configuration directories (e.g. `.opencode/`, `.claude/`) or files (e.g. `opencode.jsonc`). Configuration must flow through the established SSOT pipeline only.
 
 ## Progressive Disclosure
 

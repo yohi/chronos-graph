@@ -245,7 +245,7 @@ SQLite の `busy_timeout=5000` は強力ですが、トランザクション内�
                          ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │  context_store (FastMCP サーバー)                                 │
-│   - session_flush ツールが BatchProcessor で非同期処理              │
+│   - memory_save ツールが BatchProcessor で非同期処理              │
 │   - Chunker → Classifier → Embedding → Deduplicator → Storage    │
 │   - Fire-and-forget: 即座に {"status":"accepted"} を返す           │
 └──────────────────────────────────────────────────────────────────┘

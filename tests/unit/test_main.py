@@ -1,7 +1,6 @@
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
-import anyio
 import pytest
 
 
@@ -21,18 +20,6 @@ class FakeServer:
 
     async def startup(self) -> None:
         self._calls.append("startup")
-
-
-def test_initialize_server_calls_global_startup(monkeypatch: pytest.MonkeyPatch) -> None:
-    import context_store.server as server_module
-
-    calls: list[str] = []
-
-    monkeypatch.setattr(server_module, "_server", FakeServer(calls))
-
-    anyio.run(server_module.initialize_server)
-
-    assert calls == ["startup"]
 
 
 def test_main_runs_mcp_without_preinitialization(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -81,6 +68,33 @@ async def test_mcp_lifespan_propagates_startup_failure(monkeypatch: pytest.Monke
     with pytest.raises(RuntimeError, match="storage unavailable"):
         async with lifespan(server_module.mcp):
             pass
+
+
+@pytest.mark.anyio
+async def test_mcp_lifespan_disposes_orchestrator_on_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import context_store.server as server_module
+
+    calls: list[str] = []
+
+    async def fake_startup() -> None:
+        calls.append("startup")
+
+    async def fake_dispose() -> None:
+        calls.append("dispose")
+
+    monkeypatch.setattr("context_store.server._server.startup", fake_startup)
+    monkeypatch.setattr("context_store.server._server._orchestrator", MagicMock())
+    monkeypatch.setattr("context_store.server._server._orchestrator.dispose", fake_dispose)
+
+    lifespan = server_module.mcp.settings.lifespan
+    assert lifespan is not None
+
+    async with lifespan(server_module.mcp):
+        pass
+
+    assert calls == ["startup", "dispose"]
 
 
 @pytest.mark.anyio

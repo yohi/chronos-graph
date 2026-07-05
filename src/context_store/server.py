@@ -26,7 +26,11 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def _server_lifespan(_: FastMCP) -> AsyncIterator[None]:
     await _server.startup()
-    yield
+    try:
+        yield
+    finally:
+        if _server._orchestrator is not None:
+            await _server._orchestrator.dispose()
 
 
 # FastMCP インスタンス(グローバル)
@@ -382,11 +386,6 @@ class ChronosServer:
 # ---------------------------------------------------------------------------
 
 _server = ChronosServer()
-
-
-async def initialize_server() -> None:
-    """MCP エントリーポイント用の起動前初期化を実行する。"""
-    await _server.startup()
 
 
 # ---------------------------------------------------------------------------

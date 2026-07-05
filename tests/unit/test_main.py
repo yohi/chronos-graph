@@ -32,36 +32,49 @@ def test_initialize_server_calls_global_startup(monkeypatch: pytest.MonkeyPatch)
     assert calls == ["startup"]
 
 
-def test_main_initializes_before_running_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_runs_mcp_without_preinitialization(monkeypatch: pytest.MonkeyPatch) -> None:
     import context_store.__main__ as entrypoint
 
     calls: list[str] = []
-
-    async def fake_initialize_server() -> None:
-        calls.append("initialize")
-
-    monkeypatch.setattr(entrypoint, "initialize_server", fake_initialize_server)
     monkeypatch.setattr(entrypoint, "mcp", FakeMcp(calls))
 
     entrypoint.main()
 
-    assert calls == ["initialize", "run"]
+    assert calls == ["run"]
 
 
-def test_main_does_not_run_mcp_after_startup_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import context_store.__main__ as entrypoint
+@pytest.mark.anyio
+async def test_mcp_lifespan_initializes_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    import context_store.server as server_module
 
-    async def fake_initialize_server() -> None:
+    calls: list[str] = []
+
+    async def fake_startup() -> None:
+        calls.append("startup")
+
+    monkeypatch.setattr("context_store.server._server.startup", fake_startup)
+
+    lifespan = server_module.mcp.settings.lifespan
+    assert lifespan is not None
+
+    async with lifespan(server_module.mcp):
+        pass
+
+    assert calls == ["startup"]
+
+
+@pytest.mark.anyio
+async def test_mcp_lifespan_propagates_startup_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    import context_store.server as server_module
+
+    async def fake_startup() -> None:
         raise RuntimeError("storage unavailable")
 
-    run_calls: list[str] = []
+    monkeypatch.setattr("context_store.server._server.startup", fake_startup)
 
-    monkeypatch.setattr(entrypoint, "initialize_server", fake_initialize_server)
-    monkeypatch.setattr(entrypoint, "mcp", FakeMcp(run_calls))
+    lifespan = server_module.mcp.settings.lifespan
+    assert lifespan is not None
 
     with pytest.raises(RuntimeError, match="storage unavailable"):
-        entrypoint.main()
-
-    assert run_calls == []
+        async with lifespan(server_module.mcp):
+            pass

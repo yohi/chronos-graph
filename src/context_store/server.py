@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
 from mcp.server.fastmcp import FastMCP
@@ -20,8 +22,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def _server_lifespan(_: FastMCP) -> AsyncIterator[None]:
+    await _server.startup()
+    yield
+
+
 # FastMCP インスタンス(グローバル)
-mcp: FastMCP = FastMCP("chronos-graph")
+mcp: FastMCP = FastMCP("chronos-graph", lifespan=_server_lifespan)
 
 # ---------------------------------------------------------------------------
 # ChronosServer クラス(状態管理 + ビジネスロジック)
@@ -81,9 +90,7 @@ class ChronosServer:
                         self._orchestrator.url_fetch_concurrency
                     )
                     logger.warning(
-                        "%s%s",
-                        "現在のURLフェッチ制限はプロセススコープです。",
-                        "マルチプロセス実行時は制限を超過する可能性があります。",
+                        "現在のURLフェッチ制限はプロセススコープです。マルチプロセス実行時は制限を超過する可能性があります。",
                     )
 
                 # ライフサイクルマネージャーを開始

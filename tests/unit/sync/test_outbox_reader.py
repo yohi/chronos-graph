@@ -225,3 +225,42 @@ async def test_postgres_reader_fetch_pending_parses_string_payload() -> None:
     assert len(events) == 1
     assert dict(events[0].payload) == {"key": "value"}
     fake_conn.fetch.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_postgres_reader_fetch_all_actionable_parses_string_payload() -> None:
+    """asyncpg が JSONB を文字列で返しても fetch_all_actionable が dict にパースする。"""
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock, MagicMock
+
+    from context_store.sync.outbox_reader import PostgresOutboxReader
+
+    now = datetime.now(timezone.utc)
+    fake_conn = MagicMock()
+    fake_conn.fetch = AsyncMock(
+        return_value=[
+            {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "event_type": "SYNC_MEMORY",
+                "memory_id": "22222222-2222-2222-2222-222222222222",
+                "payload": '{"key": "value"}',
+                "status": "PENDING",
+                "retry_count": 0,
+                "next_retry_at": now,
+                "created_at": now,
+                "updated_at": now,
+                "error_message": None,
+            }
+        ]
+    )
+    fake_pool = MagicMock()
+    fake_pool.acquire = MagicMock(return_value=fake_conn)
+    fake_conn.__aenter__ = AsyncMock(return_value=fake_conn)
+    fake_conn.__aexit__ = AsyncMock(return_value=False)
+
+    reader = PostgresOutboxReader(pool=fake_pool)
+    events = await reader.fetch_all_actionable()
+
+    assert len(events) == 1
+    assert dict(events[0].payload) == {"key": "value"}
+    fake_conn.fetch.assert_called_once()

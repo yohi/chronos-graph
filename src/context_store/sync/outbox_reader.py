@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 import aiosqlite
 
 from context_store.sync.models import EventStatus, OutboxEvent
+
+logger = logging.getLogger(__name__)
 
 
 class OutboxReader(Protocol):
@@ -385,11 +388,16 @@ def _postgres_payload_to_dict(raw: Any) -> dict[str, Any]:
     if isinstance(raw, str):
         try:
             parsed = json.loads(raw)
-            return parsed if isinstance(parsed, dict) else {}
+            if isinstance(parsed, dict):
+                return parsed
+            logger.warning("Outbox payload is not a JSON object: %r", raw)
+            return {}
         except json.JSONDecodeError:
+            logger.warning("Outbox payload is not valid JSON: %r", raw)
             return {}
     if isinstance(raw, dict):
         return raw
+    logger.warning("Outbox payload has unexpected type %s: %r", type(raw).__name__, raw)
     return {}
 
 

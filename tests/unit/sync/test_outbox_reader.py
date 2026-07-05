@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 import aiosqlite
@@ -264,3 +265,27 @@ async def test_postgres_reader_fetch_all_actionable_parses_string_payload() -> N
     assert len(events) == 1
     assert dict(events[0].payload) == {"key": "value"}
     fake_conn.fetch.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected", "expect_warning"),
+    [
+        (None, {}, False),
+        ('{"key": "value"}', {"key": "value"}, False),
+        ("{}", {}, False),
+        ("not-json", {}, True),
+        ("[]", {}, True),
+        ("42", {}, True),
+        ({"key": "value"}, {"key": "value"}, False),
+        (123, {}, True),
+    ],
+)
+def test_postgres_payload_to_dict(raw, expected, expect_warning, caplog) -> None:
+    """_postgres_payload_to_dict が文字列・dict・None・不正値を正しく処理する。"""
+    from context_store.sync.outbox_reader import _postgres_payload_to_dict
+
+    with caplog.at_level(logging.WARNING, logger="context_store.sync.outbox_reader"):
+        result = _postgres_payload_to_dict(raw)
+
+    assert result == expected
+    assert bool(caplog.records) == expect_warning

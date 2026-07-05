@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from mcp.server.fastmcp import FastMCP
 
@@ -58,6 +58,10 @@ class ChronosServer:
         self._settings = get_settings()
         self._orchestrator = await create_orchestrator(self._settings)
 
+    async def startup(self) -> None:
+        """MCP サーバー起動前に Orchestrator とストレージを初期化する。"""
+        await self._ensure_initialized()
+
     async def _ensure_initialized(self) -> None:
         """Orchestrator を遅延初期化する(二重初期化を防ぐ)。
 
@@ -77,8 +81,9 @@ class ChronosServer:
                         self._orchestrator.url_fetch_concurrency
                     )
                     logger.warning(
-                        "現在のURLフェッチ制限はプロセススコープです。"
-                        "マルチプロセス実行時は制限を超過する可能性があります。"
+                        "%s%s",
+                        "現在のURLフェッチ制限はプロセススコープです。",
+                        "マルチプロセス実行時は制限を超過する可能性があります。",
                     )
 
                 # ライフサイクルマネージャーを開始
@@ -179,7 +184,7 @@ class ChronosServer:
             source_type = SourceType.CONVERSATION
 
         effective_tags: list[str] = tags if tags is not None else []
-        metadata: dict[str, Any] = {
+        metadata: dict[str, list[str] | str | float] = {
             "tags": effective_tags,
         }
         if project is not None:
@@ -221,7 +226,7 @@ class ChronosServer:
             raise RuntimeError("URL semaphore not initialized")
 
         effective_tags: list[str] = tags if tags is not None else []
-        metadata: dict[str, Any] = {"tags": effective_tags}
+        metadata: dict[str, list[str] | str] = {"tags": effective_tags}
         if project is not None:
             metadata["project"] = project
 
@@ -370,6 +375,11 @@ class ChronosServer:
 # ---------------------------------------------------------------------------
 
 _server = ChronosServer()
+
+
+async def initialize_server() -> None:
+    """MCP エントリーポイント用の起動前初期化を実行する。"""
+    await _server.startup()
 
 
 # ---------------------------------------------------------------------------

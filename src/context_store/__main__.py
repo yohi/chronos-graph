@@ -5,11 +5,14 @@ Usage:
     context-store  (インストール後)
 """
 
-from context_store.server import mcp
+import anyio
+
+from context_store.server import initialize_server, mcp
 
 
 def main() -> None:
     """MCP サーバーを stdio モードで起動する。"""
+    anyio.run(initialize_server)
     mcp.run()
 
 

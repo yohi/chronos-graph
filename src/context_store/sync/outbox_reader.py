@@ -179,7 +179,7 @@ class PostgresOutboxReader:
                 id=str(r["id"]),
                 event_type=r["event_type"],
                 memory_id=r["memory_id"],
-                payload=dict(r["payload"]) if r["payload"] else {},
+                payload=_postgres_payload_to_dict(r["payload"]),
                 status="PROCESSING",
                 retry_count=r["retry_count"],
                 next_retry_at=r["next_retry_at"],
@@ -236,7 +236,7 @@ class PostgresOutboxReader:
                 id=str(r["id"]),
                 event_type=r["event_type"],
                 memory_id=r["memory_id"],
-                payload=dict(r["payload"]) if r["payload"] else {},
+                payload=_postgres_payload_to_dict(r["payload"]),
                 status=r["status"],
                 retry_count=r["retry_count"],
                 next_retry_at=r["next_retry_at"],
@@ -376,6 +376,21 @@ def _supabase_row_to_event(row: dict[str, Any]) -> OutboxEvent:
         created_at=_parse_dt(row.get("created_at")),
         updated_at=_parse_dt(row.get("updated_at")),
     )
+
+
+def _postgres_payload_to_dict(raw: Any) -> dict[str, Any]:
+    """asyncpg が JSONB を文字列で返す場合も dict に変換する。"""
+    if raw is None:
+        return {}
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    if isinstance(raw, dict):
+        return raw
+    return {}
 
 
 def _parse_dt(s: str | None) -> datetime:

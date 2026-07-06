@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 import aiosqlite
 
 from context_store.sync.models import EventStatus, OutboxEvent
+
+logger = logging.getLogger(__name__)
 
 
 class OutboxReader(Protocol):
@@ -65,7 +68,7 @@ class SqliteOutboxReader:
         if not event_ids:
             return
         placeholders = ",".join("?" for _ in event_ids)
-        sql = f"DELETE FROM graph_sync_outbox WHERE id IN ({placeholders})"  # noqa: S608  # nosec
+        sql = f"DELETE FROM graph_sync_outbox WHERE id IN ({placeholders})"  # noqa: S608
         async with aiosqlite.connect(self._db_path) as conn:
             await conn.execute(sql, event_ids)
             await conn.commit()
@@ -179,7 +182,7 @@ class PostgresOutboxReader:
                 id=str(r["id"]),
                 event_type=r["event_type"],
                 memory_id=r["memory_id"],
-                payload=dict(r["payload"]) if r["payload"] else {},
+                payload=_postgres_payload_to_dict(r["payload"]),
                 status="PROCESSING",
                 retry_count=r["retry_count"],
                 next_retry_at=r["next_retry_at"],
@@ -236,7 +239,7 @@ class PostgresOutboxReader:
                 id=str(r["id"]),
                 event_type=r["event_type"],
                 memory_id=r["memory_id"],
-                payload=dict(r["payload"]) if r["payload"] else {},
+                payload=_postgres_payload_to_dict(r["payload"]),
                 status=r["status"],
                 retry_count=r["retry_count"],
                 next_retry_at=r["next_retry_at"],
@@ -376,6 +379,26 @@ def _supabase_row_to_event(row: dict[str, Any]) -> OutboxEvent:
         created_at=_parse_dt(row.get("created_at")),
         updated_at=_parse_dt(row.get("updated_at")),
     )
+
+
+def _postgres_payload_to_dict(raw: Any) -> dict[str, Any]:
+    """asyncpg が JSONB を文字列で返す場合も dict に変換する。"""
+    if raw is None:
+        return {}
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+            logger.warning("Outbox payload is not a JSON object: %r", raw)
+            return {}
+        except json.JSONDecodeError:
+            logger.warning("Outbox payload is not valid JSON: %r", raw)
+            return {}
+    if isinstance(raw, dict):
+        return raw
+    logger.warning("Outbox payload has unexpected type %s: %r", type(raw).__name__, raw)
+    return {}
 
 
 def _parse_dt(s: str | None) -> datetime:

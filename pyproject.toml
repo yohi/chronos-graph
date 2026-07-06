@@ -22,6 +22,8 @@ dependencies = [
     "redis>=7.4.0",
     "neo4j>=6.1.0",
     "asyncpg>=0.31.0",
+    "litellm>=1.89.0",
+    "importlib-resources>=6.0.0",
 ]
 
 [project.optional-dependencies]
@@ -48,17 +50,15 @@ embedding-openai = [
 embedding-litellm = [
     "litellm>=1.0.0",
 ]
-evaluator = [
-    "litellm>=1.0.0",
-]
 
 all = [
-    "context-store-mcp[storage-postgres,storage-supabase,embedding-local,embedding-openai,embedding-litellm,dashboard,evaluator]",
+    "context-store-mcp[storage-postgres,storage-supabase,embedding-local,embedding-openai,embedding-litellm,dashboard]",
 ]
+shared-only = []
+
 [project.scripts]
 context-store = "context_store.__main__:main"
 chronos-dashboard = "context_store.dashboard.api_server:main"
-chronos-mcp-gateway = "mcp_gateway.__main__:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
@@ -92,10 +92,6 @@ strict = true
 warn_unused_ignores = false
 warn_unused_configs = false
 plugins = ["pydantic.mypy"]
-
-[[tool.mypy.overrides]]
-module = "mcp_gateway.server"
-disallow_untyped_decorators = false
 
 [[tool.mypy.overrides]]
 module = "tests.*"
@@ -168,7 +164,7 @@ module = "yaml.*"
 ignore_missing_imports = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/context_store", "src/mcp_gateway", "src/chronos_shared"]
+packages = ["src/context_store", "src/chronos_shared"]
 
 [dependency-groups]
 dev = [
@@ -180,4 +176,5 @@ dev = [
     "pytest-benchmark>=4.0.0",
     "pytest-cov>=5.0.0",
     "ruff>=0.4.0",
+    "semgrep>=1.70.0",
 ]

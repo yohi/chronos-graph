@@ -1096,7 +1096,7 @@ class SQLiteStorageAdapter:
                         "SET access_count = access_count + 1, "
                         "    last_accessed_at = ?, "
                         "    updated_at = ? " + where_clause
-                    )  # noqa: S608 - IN placeholders are generated, values stay parameterized
+                    )  # noqa: S608
                     params: list[Any] = [now, now, *list(chunk)]
                     async with conn.execute(sql, params) as cursor:
                         updated_count: int = max(cursor.rowcount, 0)

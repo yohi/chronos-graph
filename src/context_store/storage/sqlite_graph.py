@@ -439,7 +439,7 @@ class SQLiteGraphAdapter:
         cursor = None
 
         try:
-            async with conn.execute(sql, params) as cursor:
+            async with conn.execute(sql, params) as cursor:  # noqa: S608
                 async for row in cursor:
                     rows.append(row)
                     # Regularly update partial result if requested

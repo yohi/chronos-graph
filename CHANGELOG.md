@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/yohi/chronos-graph/compare/v1.5.1...v1.6.0) (2026-06-18)
+
+
+### Features
+
+* **setup:** Agent Setup Protocolに基づく構築とLiteLLMタイポ修正対応 ([#343](https://github.com/yohi/chronos-graph/issues/343)) ([3cba79a](https://github.com/yohi/chronos-graph/commit/3cba79a28a10ee5a36d5883ce557a9580195d904))
+
 ## [1.5.1](https://github.com/yohi/chronos-graph/compare/v1.5.0...v1.5.1) (2026-06-17)
 
 

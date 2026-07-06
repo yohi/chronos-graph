@@ -216,12 +216,56 @@ SQLite の `busy_timeout=5000` は強力ですが、トランザクション内�
 
 記憶の保存運用として、エージェントの自主性に任せる「Selective モード」と、ターンごとに全ログを自動保存する「All モード」を切り替える機能を備える。
 - **Selective モード**（デフォルト）: 従来通り、エージェントが自律的に `memory_save` ツールを呼び出す。
-- **All モード**: `mcp_gateway` のツールリストから `memory_save` を物理的に隠蔽し、エージェントには見せない。代わりにクライアント側のフック（`scripts/agent_turn_hook.py`）等からバックグラウンドで `tools/call memory_save` を直接叩いてターン終了時にログを保存する。
+- **All モード**: クライアント側のフック（`scripts/agent_turn_hook.py` や OpenCode の `chronos-turn-end` プラグイン）からバックグラウンドで `tools/call memory_save` を直接叩き、ターン終了時にログを保存する。ツール実行前の安全評価は ChronosGate 側の責務として分離する。
 
 **アーキテクチャ上の主要な設計:**
-1. **設定のSSOT (Single Source of Truth) 化と伝播**: `CHRONOS_INGESTION_MODE` の型・デフォルト値・変数名は、クロスパッケージ参照を防ぐため独立した `src/chronos_shared/ingestion_mode.py` に集約する。Gateway 起動時、`GatewaySettings.upstream_env_passthrough` を経由してサブプロセスである context_store にこの環境変数を確実に継承させる。
+1. **設定のSSOT (Single Source of Truth) 化と伝播**: `CHRONOS_INGESTION_MODE` の型・デフォルト値・変数名は、クロスパッケージ参照を防ぐため独立した `src/chronos_shared/ingestion_mode.py` に集約する。ChronosGate を併用する場合は、Gateway 側からサブプロセスである context_store にこの環境変数を確実に継承させる。
 2. **フックの切り詰めとフェイルソフト設計**: `agent_turn_hook.py` は送信前にログを **末尾保持 (最新情報優先)** で切り詰める（UTF-8 境界での不完全なシーケンスは破棄）。SSE ハンドシェイクと POST リクエスト全体に対して2段階の厳密なタイムアウトを適用し、いかなる通信障害時もエラーを握りつぶして `exit 0` で終了することで、メインプロセス（エージェント）をクラッシュさせない。
 3. **ノイズ抑制 (Classifier 連携)**: `All` モードにおける低品質コンテンツの流入に対しては、既存の `Classifier` によるフォールバックペナルティ（`FALLBACK_PENALTY=0.5`）が適用され、検索結果のノイズ化を防ぐ。
+
+**アーキテクチャ図 (トポロジ):**
+
+```text
+┌──────────────────────────────────────────────────────────────────┐
+│  AI Agent (Claude Code / Codex / Cursor / Antigravity / OpenCode) │
+│   ┌─────────────────────────────────────────────────────┐         │
+│   │ ターン実行 → 終了時に Stop / session.idle 等が発火     │         │
+│   └────────────────────┬────────────────────────────────┘         │
+│                        │ stdin: 会話ログ or hook payload (JSON)    │
+└────────────────────────┼─────────────────────────────────────────┘
+                         ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  scripts/agent_turn_hook.py (フェイルソフトの薄い HTTP クライアント)│
+│   1. extract_payload: --client 値に応じて payload から会話ログ抽出  │
+│   2. truncate_log: 末尾保持で 8MB に切り詰め (UTF-8 境界対応)       │
+│   3. POST /messages → tools/call memory_save (timeout=2.0s)      │
+│   4. いかなるエラーも握りつぶし exit 0                              │
+└────────────────────────┬─────────────────────────────────────────┘
+                         │ HTTP (Bearer + x-mcp-intent: memory.ingest)
+                         ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  context_store (FastMCP サーバー)                                 │
+│   - memory_save ツールが BatchProcessor で非同期処理              │
+│   - Chunker → Classifier → Embedding → Deduplicator → Storage    │
+│   - Fire-and-forget: 即座に {"status":"accepted"} を返す           │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**フェイルソフト多層化設計:**
+
+| 層 | 失敗対応 |
+|---|---|
+| クライアント hook | プロセス spawn 失敗は無視 (各クライアントの責務) |
+| `agent_turn_hook.py` | 全例外 catch + `exit 0` でメインプロセスクラッシュ防止 |
+| context_store ingestion | 分類失敗は EPISODIC + `FALLBACK_PENALTY=0.5` で救済 |
+| シャットダウン | 進行中ジョブは `cancel_all` で強制終了 (ロス受容) |
+
+**制限と注意:**
+
+1. `MCP_GATEWAY_API_KEY` 未設定時はフックが no-op (stderr に ERROR ログのみ)。
+2. シャットダウン中の取り込みは保証されない — 進行中ジョブは未保存のまま消える。
+3. DB 容量が `selective` より明確に増加する。`purge_retention_days` で運用カバー。
+4. Codex は新しい hook を初回 `/hooks` レビュー後にしか実行しない。
 
 ### 4.2 Source Adapter
 
@@ -973,6 +1017,65 @@ SQLファイルベースの軽量なマイグレーションシステムを備�
 
 ---
 
+### 8.7 Supabase Storage Adapter 設計
+
+`STORAGE_BACKEND=supabase` は、Supabase Data API (PostgREST) を HTTPS (port 443) 経由で利用するストレージアダプタである。Prisma Accelerate ベースの旧実装 (`storage-backend=prisma`) からの置き換えとして設計された。
+
+**コンポーネント構成:**
+
+```text
+Application (Python 3.12+)
+  └── SupabaseStorageAdapter (storage/supabase.py)
+        |   - supabase-py v2.4+ AsyncClient
+        |   - postgres_helpers 再利用
+        | HTTPS (port 443)
+        v
+Supabase Project (managed PostgreSQL)
+  +-- PostgREST (/rest/v1/memories, /rest/v1/rpc/*)
+  +-- PostgreSQL + pgvector + pg_trgm
+  +-- memories テーブル (vector(768))
+```
+
+**主要設計判断:**
+
+| 決定 | 採用案 | 根拠 |
+|---|---|---|
+| クライアント初期化 | `classmethod .create(settings)` | Prisma 実装と一貫、factory が同期コードのまま |
+| ベクトル検索 | Postgres RPC `vector_search` | PostgREST 経由で pgvector `<=>` 演算子を利用 |
+| 起動時検証 | 薄い probe (初回呼出時に検知) | Supabase CLI で事前適用が前提 |
+| アトミック increment | RPC `increment_memory_access_count` | HTTP RMW 競合の根本回避 |
+| 入力順保持 | `dict[uuid -> Memory]` + 入力順走査 | Prisma 実装踏襲 |
+
+**SQL 設計の要点:**
+
+- `supabase/migrations/` でスキーマ管理 (Supabase CLI 規約 `YYYYMMDDHHMMSS_<description>.sql`)。
+- `memories` テーブル: `vector(768)`, HNSW インデックス (`idx_memories_embedding_hnsw`), pg_trgm FTS。
+- RPC `vector_search`: `1 - (m.embedding <=> query_embedding)` でコサイン類似度。`LANGUAGE sql STABLE`, `SECURITY INVOKER`, `SET search_path = public`。
+- RPC `list_projects`: サーバサイド DISTINCT (PostgREST 単独では表現不可)。
+- RPC `increment_memory_access_count`: PL/pgSQL でアトミック increment + 時刻更新。
+- RPC `get_embedding_dimension`: 既存 embedding がない場合にスキーマ上の vector 次元を取得。
+
+**エラーマッピング:**
+
+| 条件 | StorageError コード | recoverable |
+|---|---|---|
+| PostgreSQL unique_violation (23505) | `DUPLICATE_CONTENT` | false |
+| 不正入力 (22P02, 22023) | `INVALID_INPUT` | false |
+| リソース未検出 (PGRST116) | `NOT_FOUND` | false |
+| タイムアウト・504・503・ConnectionError | `STORAGE_TIMEOUT` | true |
+| 413 Payload Too Large | `STORAGE_PAYLOAD_TOO_LARGE` | false (入力分割が必要) |
+
+**実装上の重要な注意点:**
+
+1. **UPDATE 列ホワイトリスト**: Prisma 実装と同じ許可セット。`content` 更新時は `content_hash` を再計算。
+2. **カーソルページング**: `or_` で `(created_at, id)` 複合比較。日時は `isoformat(timespec=microseconds)` の完全表現が必要。
+3. **`archived` セマンティクス**: `None=active only`, `True=archived only`, `False=両方`。
+4. **`top_k` clamp**: `SUPABASE_MAX_TOP_K=200` で頭打ち。
+5. **`keyword_search` ワイルドカード**: `%`/`_` を意図的にエスケープしない (Prisma 互換)。サニタイズは呼出側の責務。
+6. **`count_by_filter`**: `head=True` で行データを返さず count のみ取得。
+7. **機密情報保護**: `SUPABASE_KEY` を例外メッセージ・ログ・スタックトレースに含めない。
+8. **次元検証**: `create()` で DB 実次元と `settings.embedding_dimension` を照合。不一致なら `StorageError(code=INVALID_STATE, recoverable=False)` で fail-fast。
+
 ## 9. Embedding Provider
 
 ### 9.1 Protocol
@@ -1048,7 +1151,7 @@ class PolicyHook(Protocol):
 
 ## 11. プロジェクト構成
 
-**💡 命名規則の例外について**: 本プロジェクトでは、内部コンポーネントに `context_store*` の命名規則を適用していますが、`mcp_gateway` については、トップレベルパッケージ名として例外的にこの命名規則を適用せず独立させています（`mcp_gateway/__init__.py`, `mcp_gateway/__main__.py`, `mcp_gateway/app.py` など）。これは Gateway が Context Store から独立した層として機能することを意図しているためです。
+**💡 ChronosGate 分離について**: ツール実行前の安全評価 Gateway は ChronosGraph 本体から分離され、独立リポジトリ ChronosGate として提供されます。ChronosGraph は `context_store` と共有プリミティブ `chronos_shared` を保持し、ChronosGate へ直接依存しません。
 
 ```text
 context-store-mcp/
@@ -1124,42 +1227,10 @@ context-store-mcp/
 │   │       ├── protocols.py
 │   │       └── noop.py
 │   │
-│   └── mcp_gateway/               # MCP Gateway (ZSP / IBAC / OutputFilter)
+│   └── chronos_shared/            # ChronosGraph / ChronosGate shared primitives
 │       ├── __init__.py
-│       ├── __main__.py            # `python -m mcp_gateway` エントリ
-│       ├── app.py                 # FastAPI アプリ生成 + ルート登録
-│       ├── server.py              # MCP SSE トランスポートハンドラ
-│       ├── config.py              # Pydantic Settings
-│       ├── errors.py              # GatewayError 階層
-│       │
-│       ├── auth/                  # 認証・セッション層
-│       │   ├── api_key.py
-│       │   ├── handshake.py
-│       │   ├── headers.py
-│       │   └── session.py
-│       │
-│       ├── policy/                # 認可層 (IBAC / intents.yaml 評価)
-│       │   ├── engine.py
-│       │   ├── loader.py
-│       │   └── models.py
-│       │
-│       ├── tools/                 # ツール公開・プロキシ層
-│       │   ├── proxy.py
-│       │   └── registry.py
-│       │
-│       ├── filters/               # 出力フィルタ層 (認可ギャップ防御)
-│       │   ├── factory.py
-│       │   ├── none_filter.py
-│       │   └── structural_allowlist.py
-│       │
-│       ├── upstream/              # 上流 MCP クライアント層 (subprocess)
-│       │   └── context_store_client.py
-│       │
-│       ├── audit/                 # 監査ロガ (JSON Lines / stderr)
-│       │   └── logger.py
-│       │
-│       └── policies/              # ポリシー設定ファイル
-│           └── intents.example.yaml
+│       ├── ingestion_mode.py
+│       └── py.typed
 │
 ├── frontend/                      # Dashboard Web UI (React + Vite)
 │   ├── src/
@@ -1394,185 +1465,24 @@ MCP サーバーとは独立した Read-Only 可視化ダッシュボード。�
 | LogExplorer | severity フィルター UI・テキスト検索フィルターの動作確認 |
 | Accessibility | axe-core WCAG2A/2AA による主要 3 ページの critical 違反ゼロ確認 |
 
----
+## 15. ChronosGate 連携
 
-## 15. MCP Gateway (IBAC & Guardrails)
+ChronosGate は、ChronosGraph から分離された独立リポジトリで、AI エージェントのツール実行前にセキュリティ評価（IBAC / Guardrails / LLM Evaluator）を行います。ChronosGraph 本体は ChronosGate からの記憶検索リクエストに応答する長期記憶サーバーとして振る舞います。
 
-### 15.1 概要
+詳細な仕様・構築手順は [ChronosGate リポジトリ](https://github.com/yohi/chronos-gate)（※プライベートリポジトリ）を参照してください。
 
-MCP Gateway は、エージェントへの過剰権限付与を防ぐための意図ベースアクセス制御（IBAC）と、出力フィルタリング、およびパラメータ制約（Semantic Guardrails）による安全なツール実行環境を提供します。
+### 15.1 連携インターフェース
 
-### 15.2 データモデル（`policy/models.py`）
+- **HTTP API**: `POST /evaluate` でツール実行前評価を受け付けます。
+- **CLI**: `chronos-gate evaluate --json-io` で stdin から JSON を受け取り、stdout に Decision を返します。
+- **Decision**: `"allow"`, `"deny"` (reason 必須), `"ask"` (ask_message 必須) のいずれか。
 
-#### ParamConstraint
+### 15.2 必要な環境変数（ChronosGraph 側）
 
-各ツール引数に対する制約を定義します。
-
-| フィールド | 型 | 説明 |
+| 変数 | デフォルト | 説明 |
 |---|---|---|
-| `type` | Literal | `string`, `integer`, `number`, `boolean` |
-| `max_length` | int | 文字列の最大長（ReDoS 対策を兼ねる） |
-| `pattern` | str | 正規表現（`re.fullmatch` で評価） |
-| `allowed_values` | list | 許容される値のリスト |
-| `forbidden` | bool | 引数の使用自体を禁止 |
-
-#### ToolGuardrail
-
-ツール単位のガードレール設定です。
-
-- `params`: `dict[str, ParamConstraint]` — 引数名ごとの制約
-- `requires_approval`: `bool` — HITL（Human-In-The-Loop）承認を必須とするか
-
-### 15.3 評価ロジック（`evaluate_call`）
-
-`tools/call` の実行前に以下の順序で評価を行います：
-
-1. **Capability チェック**: セッションに許可されたツールか
-2. **Intent チェック**: 現在のインテントで許可されたツールか
-3. **シークレットスキャン**: 引数に機密情報（APIキー等）が含まれていないか
-4. **パラメータ制約評価**:
-    - `forbidden` → 型チェック → `allowed_values` → `max_length` → `pattern`
-    - *※ 実際の処理は `check_call()` と `validate_call()` によって `PolicyError` を発生させ、`evaluate_call()` がキャッチして `EvaluationResult` を返す例外駆動フローで実装されています。*
-5. **承認フラグチェック**: `requires_approval` が true の場合、承認フローへ
-
-### 15.4 ReDoS 対策
-
-ユーザー定義の正規表現による脆弱性を防ぐため、以下の制約を強制します：
-
-- **パターン長制限**: `pattern` 文字列は 200 文字以内。
-- **先行長さ制限**: `pattern` を指定する場合、必ず `max_length` を併せて指定する必要があり、評価対象の文字列長が事前に制限されます。
-- **入力値制限**: 入力値自体も `RE_DOS_MAX_LENGTH` (4096文字) を超える場合は拒否されます。
-- **評価場所**: これらは `ParamConstraint` の `@model_validator` によって初期化時に Fail-fast で検証されます。
-
-### 15.5 HITL 承認フロー（`REQUIRES_APPROVAL`）
-
-承認が必要な操作が検知された場合、ゲートウェイは `approval_blocking_mode` の設定に応じて2つの挙動のいずれかをとります。
-
-#### 15.5.1 Immediate モード（デフォルト: `approval_blocking_mode: false`）
-1. **通知**: `_schedule_approval_request` を通じて `ApprovalNotifier` を非同期タスクとして安全に分離起動し、承認要求を発行（現在は `LogOnlyApprovalNotifier` により、サニタイズされた安全なログを出力）。
-2. **エラー応答**: クライアントへ JSON-RPC エラーコード `-32001` (`approval_required`) を即座に返却。クライアントは後で再試行する必要がある。
-3. **相関 ID**: エラーデータの `session_id` を用いて紐付け。
-
-#### 15.5.2 Blocking モード（`approval_blocking_mode: true`）
-ツール呼び出しを一時停止し、オペレーターからの `POST /approvals` エンドポイントへの承認応答を待機するSuspend/Resumeフローを実行します。
-
-1. `PendingApprovalRegistry` にリクエストを登録し、`approval_id` を発行して待機状態（Suspend）に入る。
-2. 同様に通知を発行。
-3. 外部のオペレーター・管理者が API 経由で承認/拒否を判断。
-   - 承認時：アップストリームのツールを実行し、結果を返す。
-   - 拒否時：`-32002` (`approval_rejected`) エラーを返す。
-   - タイムアウト時：`-32003` (`approval_timeout`) エラーを返す。
-   - 待機上限（`approval_max_pending`）超過時：`-32603` (`internal_error`) エラーを返す。
-
-**セキュリティ考慮（Defense-in-Depth）**
-- **自己承認の禁止**: 要求元エージェントと承認者エージェントが同一（`resolver_agent_id == requester_agent_id`）の場合、`403 Forbidden` として拒否され自己承認を防ぎます。ただし現在の認可モデルは要求元と承認者が異なることのみを確認しており、別のエージェント権限を用いた横断的な承認（Lateral Approval）は防いでいません（将来の高度な Role ベース認可の導入を予定）。
-- **監査ログの安全化**: ログ漏洩経由の総当たりを防ぐため、元の32文字の `approval_id` は監査ログに出力せず、先頭8文字の切り詰め（`approval_ref`）のみを記録します。
-- **DoS防御**: `PendingApprovalRegistry` に対する `max_pending` の上限制御と、セッション切断時（TTL・Idle タイムアウト）の自動回収フック（`on_session_evicted`）により、メモリ枯渇を防ぎます。
-- **ReDoS / ボディサイズ制限 / 機密情報**: `POST /approvals` のリクエストボディはストリーミングレベルで 1KB に制限され即座に413を返します。また、承認理由 (`reason`) はサニタイズ（制御文字の除去、空白の正規化、256バイトへの切り詰め）が行われます。
-
-#### 15.5.3 `POST /approvals` エンドポイント
-Blocking モードで待機中の承認を解決するための REST エンドポイント。
-- 認証: `Authorization: Bearer <API_KEY>`
-- リクエストボディ (最大 1KB):
-  ```json
-  {
-    "approval_id": "32-char-uuid-hex",
-    "decision": "approve", // または "reject"
-    "reason": "explanation (optional)"
-  }
-  ```
-- 応答:
-  - 200 OK: 解決成功
-  - 400 Bad Request: リクエスト不備
-  - 401 Unauthorized: 認証失敗
-  - 403 Forbidden: 自己承認エラーまたは権限不足
-  - 404 Not Found: `approval_id` 未登録または既に解決済み（存在判定のオラクルを防ぐため統合）
-  - 413 Payload Too Large: ボディが 1KB 超過
-
-### 15.6 エラーコード定義
-
-| コード | メッセージ | 意味 |
-|---|---|---|
-| `-32601` | tool not found | 権限不足、または承認対象にシークレットが含まれる場合 |
-| `-32602` | (reason) | パラメータ制約違反（`param_too_long` 等） |
-| `-32001` | approval_required | 承認待ち。`data.session_id` を含む |
-| `-32002` | approval_rejected | 拒否時 |
-| `-32003` | approval_timeout | タイムアウト時 |
-| `-32603` | internal_error | 待機上限（`approval_max_pending`）超過時 |
-
-### 15.7 Universal Evaluator (LLM 拡張)
-
-AI エージェントの `PreToolUse` Hook から呼び出される Universal Evaluator CLI を提供します。
-判定は二層構造で実施されます: Tier 1 で既存 deterministic `PolicyEngine` (intents.yaml + guardrails) を評価し、ALLOW の場合のみ Tier 2 で LLM が記憶を踏まえた最終判定を下します。
-
-#### 15.7.1 アーキテクチャ
-
-```text
-┌──────────────────────────────────────────────────────────────┐
-│  AI Agent (Claude Code / Gemini CLI)                          │
-│  PreToolUse Hook → JSON to stdin                              │
-└──────────────────┬───────────────────────────────────────────┘
-                   ▼
-┌──────────────────────────────────────────────────────────────┐
-│  $ uv run python -m mcp_gateway evaluate --json-io            │
-└──────────────────┬───────────────────────────────────────────┘
-                   ▼
-┌──────────────────────────────────────────────────────────────┐
-│  cli.py                                                       │
-│   1. configure_logging(stream=sys.stderr)                    │
-│   2. parse stdin JSON  → ToolCallInput                       │
-│   3. await composite.evaluate(input) → Decision              │
-│   4. json.dump(Decision, sys.stdout); sys.stdout.write("\n")  │
-│   5. sys.exit(0)   (例外時のみ exit(2))                        │
-└──────────────────┬───────────────────────────────────────────┘
-                   ▼
-┌──────────────────────────────────────────────────────────────┐
-│  composite.py (CompositeEvaluator)                            │
-│  ┌─ Tier 1: deterministic ──────────────────────────────┐    │
-│  │  PolicyEngine.evaluate_call()                        │    │
-│  │   ├─ DENY    → 即返却                                │    │
-│  │   ├─ REQUIRES_APPROVAL → ask に正規化               │    │
-│  │   └─ ALLOW   → Tier 2 へ                             │    │
-│  └──────────────────────────────────────────────────────┘    │
-│  ┌─ Tier 2: LLM (LiteLLM) + Dashboard Memory ─────────── ┐    │
-│  │  1. memory_client.retrieve(query)                    │    │
-│  │  2. llm_evaluator.judge(input, rules, memory)        │    │
-│  │  3. parse → Decision                                 │    │
-│  │  fallback: SDK未導入/キー無し/timeout → allow or ask │    │
-│  └──────────────────────────────────────────────────────┘    │
-└──────────────────────────────────────────────────────────────┘
-```
-
-#### 15.7.2 判定結果 (Decision)
-
-評価器は以下のいずれかを必ず JSON フォーマットで標準出力 (stdout) に返却します。
-例外発生時など、システムが判定不能に陥った場合は安全のため `ask` にフォールバックします。
-
-- `"allow"`: 安全と判断され、ツールを実行可能
-- `"deny"`: 危険またはポリシー違反。`reason` フィールド (理由) が必須。
-- `"ask"`: 曖昧または未構成。`ask_message` フィールド (確認事項) が必須。ユーザーへ確認を求める。
-
-#### 15.7.3 機微情報マスキング
-
-LLM へプロンプトとしてツール引数を送信する前、およびダッシュボードへセマンティック検索クエリとして送信する前に、パスワードやAPIキーなどの機微情報をマスクする処理が行われます。
-キー名ベースでの走査（`password`, `secret`, `api_key` など）および、値の正規表現パターンに基づくスキャンが適用され、該当箇所は `<REDACTED>` に置換されます。
-
-#### 15.7.4 標準出力の純度保証とフェールセーフ
-
-エージェント側でフック出力が確実にパース可能であることを保証するため、以下の厳格な制約が設けられています。
-- **Lazy Import**: `evaluate` サブコマンドでは `app.py` などの重いフレームワーク（FastAPI, Uvicorn等）は一切 import されず、起動の高速性を担保します。
-- **Stdoutの純度**: `cli`, `composite`, `llm`, `memory` モジュールでは `print()` 関数の使用が ruff (`T201`) によりグローバルに禁止されています。標準出力には最終的な Decision JSON を 1行だけ出力し、その他のすべてのログ（サードパーティ製ライブラリ含む）は `sys.stderr` へリダイレクトされます。
-- **Exit Code**:
-  - `0`: 評価プロセス自体は正常完了（`allow`, `deny`, `ask` のいずれかを stdout に出力して終了）
-  - `2`: システム評価の実行自体が致命的に失敗（stdin パースエラー、予期せぬ例外）。この場合も必ず fallback として `{"decision":"ask", "ask_message":"..."}` の JSON が標準出力に吐かれます。
-
-#### 15.7.5 LLM 評価プロンプト設計
-
-Universal LLM Evaluatorとして設計され、LiteLLM経由で任意のプロバイダ（OpenAI, Anthropic 等）のモデルを利用可能です。以下の構成で評価を行います。
-- **プロバイダ非依存化**: `CHRONOS_EVALUATOR_MODEL` を指定することで、エージェント環境に応じた柔軟なモデルの切り替えが可能です。
-- **構造化データ**: ツール入力、ルール、ダッシュボードから取得した関連記憶（`Top-K`）はすべて XML タグ（`<tool_intent>`, `<rules>`, `<memory>`）で囲まれ、厳密に分離されます。
-- **キャッシュおよび推論（Thinking）の除外**: プロバイダ非依存化を最優先とするため、Anthropic 特有のプロンプトキャッシュ（`ephemeral`）や `thinking_budget` は意図的に除外されています。レイテンシやコストの最適化は必要に応じて LiteLLM の `extra_body` 等を経由して再構成可能です。
-
+| `MCP_GATEWAY_URL` | `http://127.0.0.1:9100` | ChronosGate の HTTP エンドポイント |
+| `MCP_GATEWAY_API_KEY` | 未設定 | `agent_turn_hook.py` が ChronosGate へ送る API キー |
 ---
 
 ## 16. ロードマップ
@@ -1594,13 +1504,13 @@ Universal LLM Evaluatorとして設計され、LiteLLM経由で任意のプロ�
 | Docker Compose 統合（chronos-dashboard サービス） | `127.0.0.1:8000:8000` バインド |
 | pre-commit フック（ruff / mypy / shellcheck） | |
 | Playwright E2E テスト（6 テストグループ + axe-core） | |
-| MCP Gateway: Permission Hook (Suspend/Resume) | Blocking モードによる承認待機、`POST /approvals` エンドポイント、JSON-RPCエラー拡張 |
+| ChronosGate 分離 | Universal Evaluator / Permission Hook を独立リポジトリへ移管 |
 
 ### 16.2 近期予定（1-2 ヶ月）
 
 | 機能 | 優先度 | 概要 |
 |------|--------|------|
-| MCP Gateway: Server-defined Prompts (Hook) | High | サーバー側からエージェントのコンテキストにプロンプト（役割と利用可能ツール）を動的注入する `prompts/list`, `prompts/get` の実装。エージェント側の手動プロンプト設定の手間をゼロにし、権限設定の「最大効率」を実現する。 |
+| ChronosGate: Server-defined Prompts (Hook) | High | サーバー側からエージェントのコンテキストにプロンプト（役割と利用可能ツール）を動的注入する `prompts/list`, `prompts/get` の実装。エージェント側の手動プロンプト設定の手間をゼロにし、権限設定の「最大効率」を実現する。 |
 | Dashboard: 統計クエリキャッシング | Medium | `cachetools.TTLCache` 等による短 TTL（5-30 秒）インメモリキャッシュ。100k+ ノード規模での SLO 維持が目的 |
 | Dashboard: メモリ検索 UI | Medium | Settings または NetworkView にメモリ検索フォームを追加（`/api/memories/search` 利用） |
 | 埋め込みベクトル自動マイグレーション | Medium | プロバイダー切替時の次元数変更に対応する再埋め込みスクリプト（`scripts/migrate_dimension.py`）。現状はフェイルファスト停止のみ（v2.1 ロードマップ） |
@@ -1630,13 +1540,13 @@ Universal LLM Evaluatorとして設計され、LiteLLM経由で任意のプロ�
 
 2026-05-26 のリモート DB（Supabase Data API）前提のボトルネック監査で抽出された改善候補のうち、Phase 1 最適化（実装完了）のスコープ外として後回しになった項目をここにトラッキングする。Phase 1 で対処済みの項目（A-1/A-2/A-3 前半/B-1/C-1/C-2/C-4）は本表からは除外している。
 
-#### D. MCP Gateway 層の改善（タイムアウト・評価レイテンシ）
+#### D. ChronosGate 層の改善（タイムアウト・評価レイテンシ）
 
 | ID | 改善項目 | 影響 | 優先度 | 主要箇所 |
 |----|---------|------|--------|---------|
-| D-1 | `UpstreamClient.call_tool` への明示タイムアウト導入 | `mcp.ClientSession.call_tool` を `asyncio.wait_for` でラップし、ツール単位のタイムアウト（既定 30s 程度、設定可能化）と `UpstreamError` への正規化を行う。現状はハング型タイムアウトをそのままクライアントへ伝播してしまう。 | High (実装済) | `src/mcp_gateway/upstream/context_store_client.py:117-123` |
-| D-2 | Universal Evaluator (LiteLLM) のレイテンシ最適化 | `CHRONOS_EVALUATOR_API_KEY` 設定時、全ツール呼び出しに `acompletion()`（既定 10s）と `MemoryClient.retrieve()`（既定 3s）が直列で挟まる。read 系（`memory_search`/`memory_stats`/`list_projects`）の評価バイパス、評価結果の短 TTL キャッシュを導入する。（※LLMのプロンプト内に取得したメモリを含めるアーキテクチャ上の制約により、memory取得とLLM判定は並列化せず直列のままそれぞれのタイムアウトで管理する設計に修正） | High (実装済) | `src/mcp_gateway/policy/composite.py:109-117`, `src/mcp_gateway/policy/llm_evaluator.py:236, 275-284` |
-| D-3 | 承認モードのタイムアウト調整とバイパス分類 | Blocking 承認モードでは `approval_timeout_seconds=30.0` 固定。安全と判明している read-only ツール（`memory_search` 等）を承認バイパス対象として `intents.yaml` に基づく Tier 1 判定 (`PolicyEngine`) に統合し、二重管理を防ぐ。また、承認待機のタイムアウトを `GatewaySettings` で可変化することでクライアントから見たタイムアウト体感を改善する。 | Medium (実装済) | `src/mcp_gateway/server.py:120, 448-518` |
+| D-1 | `UpstreamClient.call_tool` への明示タイムアウト導入 | ChronosGate で `mcp.ClientSession.call_tool` を `asyncio.wait_for` でラップし、ツール単位のタイムアウトと `UpstreamError` への正規化を行う。 | High (実装済) | ChronosGate `src/chronos_gate/upstream/context_store_client.py` |
+| D-2 | Universal Evaluator (LiteLLM) のレイテンシ最適化 | `CHRONOS_EVALUATOR_API_KEY` 設定時、read 系ツールの評価バイパス、評価結果の短 TTL キャッシュ、LLM / memory retrieve のタイムアウト管理を ChronosGate 側で行う。 | High (実装済) | ChronosGate `src/chronos_gate/policy/` |
+| D-3 | 承認モードのタイムアウト調整とバイパス分類 | ChronosGate の Blocking 承認モードで read-only ツールの承認バイパスと `GatewaySettings` による承認待機タイムアウト調整を行う。 | Medium (実装済) | ChronosGate `src/chronos_gate/server.py` |
 
 #### E. ストレージ・取り込みパイプライン層の追加改善（中〜低影響）
 
@@ -1939,7 +1849,7 @@ DEFAULT_PROFILE = "lite"
 
 ### 18.5 サンドボックスランナー (`scripts/sandbox_runner.py`)
 
-`mcp_gateway` / `context_store` に非依存なスタンドアロンスクリプト。プロファイル自動選択・依存インストール・コマンド実行・破棄のライフサイクルを一元管理する。
+Gateway 実装に依存しない ChronosGraph 用スタンドアロンスクリプト。プロファイル自動選択・依存インストール・コマンド実行・破棄のライフサイクルを一元管理する。
 
 ```bash
 # プロファイル自動判定
@@ -2019,7 +1929,7 @@ apply_schema "${TEST_DB_NAME:-context_store_test}"
 1. **実行隔離**: テスト・Lint は人間の Devcontainer 内で実行しない。常に OpenSandbox を使用する。
 2. **依存管理**: バックエンドは `uv` 専用（`pip` は使わない）。フロントエンドは `pnpm`。
 3. **Statelessness**: Lite コンテナは状態を持たない。破棄は `finally` + シグナルハンドラ + サーバータイムアウトで保証する。
-4. **依存の分離**: `mcp_gateway/` と `context_store/` は分離を維持する。ランナーは `scripts/` 配下のスタンドアロンスクリプト。
+4. **依存の分離**: ChronosGraph は ChronosGate に依存しない。ランナーは `scripts/` 配下のスタンドアロンスクリプト。
 5. **Docker socket セキュリティ**: `/var/run/docker.sock` マウントは Docker API への完全アクセスを許可しホスト権限昇格リスクがあるため、`sandbox` プロファイル + `127.0.0.1` バインドに限定する。ローカル開発専用で、本番・共有環境では有効化しない。
 6. **単一 DB ホスト**: 結合テストの全 DB サービス（Postgres / Neo4j / Redis）は単一ホスト（既定 `host.docker.internal`）経由で到達可能であること。複数ホストへ分割する場合は `sandbox.yaml` の `egress.allow` 更新が必要（§18.6）。
 

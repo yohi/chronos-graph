@@ -21,7 +21,7 @@ CACHE_BACKEND=""
 ROTATE_GATEWAY_KEYS=false
 
 # New options
-TYPE="mcp" # mcp | hook
+TYPE="mcp"
 MODE="production" # production | dry-run
 SOURCE="local" # remote | local
 INGESTION_MODE="selective" # selective | all
@@ -98,10 +98,10 @@ while [[ "$#" -gt 0 ]]; do
         
         # New options
         --type)
-            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --type requires a value (mcp|hook)"; exit 1; fi
+            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --type requires a value (mcp)"; exit 1; fi
             TYPE="$2"
-            if [[ "$TYPE" != "mcp" && "$TYPE" != "hook" ]]; then
-                echo "Error: --type must be 'mcp' or 'hook'"
+            if [[ "$TYPE" != "mcp" ]]; then
+                echo "Error: --type must be 'mcp'. Security evaluator setup moved to chronos-gate."
                 exit 1
             fi
             shift ;;
@@ -133,12 +133,6 @@ while [[ "$#" -gt 0 ]]; do
         --agents)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --agents requires a value"; exit 1; fi
             AGENTS="$2"; shift ;;
-        --evaluator-model)
-            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --evaluator-model requires a value"; exit 1; fi
-            EVALUATOR_MODEL="$2"; shift ;;
-        --evaluator-api-account-id)
-            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --evaluator-api-account-id requires a value"; exit 1; fi
-            EVALUATOR_API_ACCOUNT_ID="$2"; shift ;;
         --db-host)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --db-host requires a value"; exit 1; fi
             DB_HOST="$2"; shift ;;
@@ -188,13 +182,11 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --mcp-method [python|uv|uvx]         Set MCP activation method (default: python)"
             echo "  --uv-from [source]                Set source for uvx (e.g. git URL or PyPI package)"
             echo "  --graph [true|false]             Enable/disable graph features (default: true)"
-            echo "  --type [mcp|hook]                 Set setup target type (default: mcp)"
+            echo "  --type [mcp]                      Set setup target type (default: mcp). Security evaluator setup moved to chronos-gate"
             echo "  --mode [production|dry-run]       Set execution mode (default: production)"
             echo "  --source [remote|local]           Set config source activation (default: local)"
             echo "  --ingestion-mode [all|selective]  Set memory ingestion mode (default: selective)"
             echo "  --agents [list]                   Comma-separated list of agents to configure hooks for"
-            echo "  --evaluator-model [model]         Evaluator model name for hook setup"
-            echo "  --evaluator-api-account-id [id]   API Account ID for LLM Evaluator"
             echo "  --db-host [host]                  Database host for postgres"
             echo "  --db-port [port]                  Database port for postgres"
             echo "  --db-name [name]                  Database name for postgres"
@@ -268,11 +260,7 @@ if [ "$MODE" = "dry-run" ]; then
     echo -e "${BLUE}[Dry-run Mode] Simulation of bootstrap process...${NC}"
     echo -e "Target Setup Type: ${TYPE}"
     echo -e "Backend: ${BACKEND}, Embedding: ${EMBEDDING_PROVIDER}, Graph: ${GRAPH_ENABLED}, Cache: ${CACHE_BACKEND}"
-    if [ "$TYPE" = "mcp" ]; then
-        echo -e "Source: ${SOURCE}, Ingestion Mode: ${INGESTION_MODE}, Graph Sync Mode: ${GRAPH_SYNC_MODE}"
-    else
-        echo -e "Evaluator Model: ${EVALUATOR_MODEL}"
-    fi
+    echo -e "Source: ${SOURCE}, Ingestion Mode: ${INGESTION_MODE}, Graph Sync Mode: ${GRAPH_SYNC_MODE}"
     echo -e "Selected Agents for hook configuration: ${AGENTS}"
     echo -e "\nWould execute:"
     echo -e "1. Install dependencies (uv sync --all-extras)"
@@ -281,8 +269,6 @@ if [ "$MODE" = "dry-run" ]; then
     if [[ -n "$NEO4J_URI" ]]; then echo -e "   - Set NEO4J_URI=$NEO4J_URI, NEO4J_USER=$NEO4J_USER"; fi
     if [[ -n "$REDIS_URL" ]]; then echo -e "   - Set REDIS_URL=$REDIS_URL"; fi
     if [[ -n "$EMBEDDING_MODEL" ]]; then echo -e "   - Set OpenAI/Embedding model to $EMBEDDING_MODEL"; fi
-    if [[ -n "$EVALUATOR_MODEL" ]]; then echo -e "   - Set CHRONOS_EVALUATOR_MODEL=$EVALUATOR_MODEL"; fi
-    if [[ -n "$EVALUATOR_API_ACCOUNT_ID" ]]; then echo -e "   - Set CHRONOS_EVALUATOR_API_ACCOUNT_ID=$EVALUATOR_API_ACCOUNT_ID"; fi
     echo -e "   - Set GRAPH_SYNC_MODE=$GRAPH_SYNC_MODE"
     echo -e "3. Run unit tests to verify installation (unless skip-tests is set)"
     if [ "$TYPE" = "mcp" ] && [ "$SOURCE" = "local" ]; then
@@ -291,16 +277,13 @@ if [ "$MODE" = "dry-run" ]; then
     if [[ -n "$AGENTS" ]]; then
         echo -e "5. Configure Hook files for agents: ${AGENTS}"
         if [[ "$AGENTS" == *"opencode"* ]]; then
-            echo -e "   - For OpenCode: Guide user to add '@yohi/opencode-plugin-chronos-gate' to global plugins"
+            echo -e "   - For OpenCode: Guide user to add '@yohi/opencode-plugin-chronos-turn-end' to global plugins"
         fi
         if [[ "$AGENTS" == *"claudecode"* || "$AGENTS" == *"codex"* || "$AGENTS" == *"antigravitycl"* || "$AGENTS" == *"cursorcli"* ]]; then
-            if [ "$INGESTION_MODE" = "all" ] || [ "$TYPE" = "hook" ]; then
+            if [ "$INGESTION_MODE" = "all" ]; then
                 echo -e "   - Create wrapper scripts in scripts/ for selected agents"
             fi
         fi
-    fi
-    if [ "$TYPE" = "hook" ]; then
-        echo -e "6. Run hook verification command"
     fi
     echo -e "${GREEN}[Dry-run Mode] Simulation complete. No files were modified.${NC}"
     exit 0
@@ -407,19 +390,9 @@ elif [ "$EMBEDDING_PROVIDER" = "custom-api" ]; then
     modify_var_status "LITELLM_" "comment"
 fi
 
-if [ "$TYPE" = "hook" ]; then
-    modify_var_status "CHRONOS_EVALUATOR_" "uncomment"
-else
-    modify_var_status "CHRONOS_EVALUATOR_" "comment"
-fi
-
-if [ "$TYPE" = "hook" ] || [ "$INGESTION_MODE" = "all" ]; then
+if [ "$INGESTION_MODE" = "all" ]; then
     modify_var_status "MCP_GATEWAY_" "uncomment"
-    # pydantic-settings 向けにリスト型変数を JSON 配列形式に更新
-    update_env_key "MCP_GATEWAY_UPSTREAM_COMMAND" '["python", "-m", "context_store"]'
-    update_env_key "MCP_GATEWAY_UPSTREAM_ENV_PASSTHROUGH" '["OPENAI_API_KEY", "SQLITE_DB_PATH", "GRAPH_ENABLED", "EMBEDDING_PROVIDER", "CHRONOS_INGESTION_MODE"]'
-    update_env_key "MCP_GATEWAY_POLICY_PATH" "./intents.yaml"
-    
+
     # Check if keys are already set in .env
     EXISTING_KEYS_JSON=$(grep -E "^MCP_GATEWAY_API_KEYS_JSON=" .env | cut -d'=' -f2- || true)
     EXISTING_KEY=$(grep -E "^MCP_GATEWAY_API_KEY=" .env | cut -d'=' -f2- || true)
@@ -449,12 +422,12 @@ else
 fi
 
 # Values update
-if [ "$TYPE" = "mcp" ] || [ "$TYPE" = "hook" ] || [[ "$EXPLICIT_FLAGS" == *"STORAGE_BACKEND"* ]]; then update_env_key "STORAGE_BACKEND" "$BACKEND"; fi
-if [ "$TYPE" = "mcp" ] || [ "$TYPE" = "hook" ] || [[ "$EXPLICIT_FLAGS" == *"EMBEDDING_PROVIDER"* ]]; then update_env_key "EMBEDDING_PROVIDER" "$EMBEDDING_PROVIDER"; fi
-if [ "$TYPE" = "mcp" ] || [ "$TYPE" = "hook" ] || [[ "$EXPLICIT_FLAGS" == *"GRAPH_ENABLED"* ]]; then update_env_key "GRAPH_ENABLED" "$GRAPH_ENABLED"; fi
-if [ "$TYPE" = "mcp" ] || [ "$TYPE" = "hook" ] || [[ "$EXPLICIT_FLAGS" == *"CACHE_BACKEND"* ]]; then update_env_key "CACHE_BACKEND" "$CACHE_BACKEND"; fi
-if [ "$TYPE" = "mcp" ] || [ "$TYPE" = "hook" ] || [[ "$EXPLICIT_FLAGS" == *"CHRONOS_INGESTION_MODE"* ]]; then update_env_key "CHRONOS_INGESTION_MODE" "$INGESTION_MODE"; fi
-if [ "$TYPE" = "mcp" ] || [ "$TYPE" = "hook" ] || [[ "$EXPLICIT_FLAGS" == *"GRAPH_SYNC_MODE"* ]]; then update_env_key "GRAPH_SYNC_MODE" "$GRAPH_SYNC_MODE"; fi
+if [ "$TYPE" = "mcp" ] || [[ "$EXPLICIT_FLAGS" == *"STORAGE_BACKEND"* ]]; then update_env_key "STORAGE_BACKEND" "$BACKEND"; fi
+if [ "$TYPE" = "mcp" ] || [[ "$EXPLICIT_FLAGS" == *"EMBEDDING_PROVIDER"* ]]; then update_env_key "EMBEDDING_PROVIDER" "$EMBEDDING_PROVIDER"; fi
+if [ "$TYPE" = "mcp" ] || [[ "$EXPLICIT_FLAGS" == *"GRAPH_ENABLED"* ]]; then update_env_key "GRAPH_ENABLED" "$GRAPH_ENABLED"; fi
+if [ "$TYPE" = "mcp" ] || [[ "$EXPLICIT_FLAGS" == *"CACHE_BACKEND"* ]]; then update_env_key "CACHE_BACKEND" "$CACHE_BACKEND"; fi
+if [ "$TYPE" = "mcp" ] || [[ "$EXPLICIT_FLAGS" == *"CHRONOS_INGESTION_MODE"* ]]; then update_env_key "CHRONOS_INGESTION_MODE" "$INGESTION_MODE"; fi
+if [ "$TYPE" = "mcp" ] || [[ "$EXPLICIT_FLAGS" == *"GRAPH_SYNC_MODE"* ]]; then update_env_key "GRAPH_SYNC_MODE" "$GRAPH_SYNC_MODE"; fi
 
 if [[ -n "$DB_HOST" ]]; then update_env_key "POSTGRES_HOST" "$DB_HOST"; fi
 if [[ -n "$DB_PORT" ]]; then update_env_key "POSTGRES_PORT" "$DB_PORT"; fi
@@ -474,14 +447,6 @@ if [[ -n "$EMBEDDING_MODEL" ]]; then
     elif [ "$EMBEDDING_PROVIDER" = "openai" ]; then
         update_env_key "OPENAI_EMBEDDING_MODEL" "$EMBEDDING_MODEL"
     fi
-fi
-
-if [[ -n "$EVALUATOR_MODEL" ]]; then
-    update_env_key "CHRONOS_EVALUATOR_MODEL" "$EVALUATOR_MODEL"
-fi
-
-if [[ -n "$EVALUATOR_API_ACCOUNT_ID" ]]; then
-    update_env_key "CHRONOS_EVALUATOR_API_ACCOUNT_ID" "$EVALUATOR_API_ACCOUNT_ID"
 fi
 
 if [ "$BACKEND" = "postgres" ]; then
@@ -610,63 +575,10 @@ EOF
         fi
     fi
 
-    # 6.2 Evaluator hook setup
-    if [ "$TYPE" = "hook" ]; then
-        if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" ]]; then
-            EVAL_HOOK_FILE="scripts/chronos-evaluator-hook.cmd"
-            if [ "$SOURCE" = "remote" ]; then
-                cat << 'EOF' > "$EVAL_HOOK_FILE"
-@echo off
-rem Auto-generated by bootstrap.sh
-uvx --quiet --from "context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git" chronos-mcp-gateway evaluate --json-io --policy-path "%CHRONOS_EVALUATOR_POLICY_PATH%"
-EOF
-            else
-                cat << 'EOF' > "$EVAL_HOOK_FILE"
-@echo off
-rem Auto-generated by bootstrap.sh
-where uv >nul 2>nul
-if %ERRORLEVEL% equ 0 (
-    uv --directory "%~dp0\.." run python -m mcp_gateway evaluate --json-io --policy-path "%CHRONOS_EVALUATOR_POLICY_PATH%"
-) else (
-    python -m mcp_gateway evaluate --json-io --policy-path "%CHRONOS_EVALUATOR_POLICY_PATH%"
-)
-EOF
-            fi
-            echo -e "${GREEN}Generated $EVAL_HOOK_FILE${NC}"
-        else
-            EVAL_HOOK_FILE="scripts/chronos-evaluator-hook.sh"
-            if [ "$SOURCE" = "remote" ]; then
-                cat << 'EOF' > "$EVAL_HOOK_FILE"
-#!/usr/bin/env bash
-# Auto-generated by bootstrap.sh
-uvx --quiet --from "context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git" \
-  chronos-mcp-gateway evaluate \
-  --json-io \
-  --policy-path "${CHRONOS_EVALUATOR_POLICY_PATH:-$HOME/.config/chronos/intents.yaml}"
-EOF
-            else
-                cat << 'EOF' > "$EVAL_HOOK_FILE"
-#!/usr/bin/env bash
-# Auto-generated by bootstrap.sh
-if command -v uv &> /dev/null; then
-  uv --directory "$(dirname "$0")/.." run python -m mcp_gateway evaluate \
-    --json-io \
-    --policy-path "${CHRONOS_EVALUATOR_POLICY_PATH:-$(dirname "$0")/../src/mcp_gateway/policies/intents.yaml}"
-else
-  python -m mcp_gateway evaluate \
-    --json-io \
-    --policy-path "${CHRONOS_EVALUATOR_POLICY_PATH:-$(dirname "$0")/../src/mcp_gateway/policies/intents.yaml}"
-fi
-EOF
-            fi
-            chmod +x "$EVAL_HOOK_FILE"
-            echo -e "${GREEN}Generated $EVAL_HOOK_FILE and granted execution permission.${NC}"
-            ls -la "$EVAL_HOOK_FILE"
-        fi
-    fi
-
-    # 6.3 OpenCode specific plugin configuration
     if [[ "$AGENTS" == *"opencode"* ]]; then
+        if [ "$TYPE" != "mcp" ] || [ "$INGESTION_MODE" != "all" ]; then
+            echo -e "${BLUE}Skipping OpenCode turn-end plugin registration (requires TYPE=mcp and CHRONOS_INGESTION_MODE=all).${NC}"
+        else
         echo -e "${BLUE}Attempting to register OpenCode plugin...${NC}"
         OPCODE_CONFIG_DIR="$HOME/.config/opencode"
         if [ -f "$OPCODE_CONFIG_DIR/opencode.json" ]; then
@@ -680,8 +592,8 @@ try:
     except Exception:
         data = {}
     plugin_list = data.get('plugins', [])
-    if '@yohi/opencode-plugin-chronos-gate' not in plugin_list:
-        plugin_list.append('@yohi/opencode-plugin-chronos-gate')
+    if '@yohi/opencode-plugin-chronos-turn-end' not in plugin_list:
+        plugin_list.append('@yohi/opencode-plugin-chronos-turn-end')
         data['plugins'] = plugin_list
         with open(path, 'w') as f:
             json.dump(data, f, indent=2)
@@ -695,71 +607,12 @@ except Exception as e:
             echo -e "⚠️ opencode.json not found in $OPCODE_CONFIG_DIR."
         fi
 
-        # Ensure ~/.config/opencode/intents.yaml exists
-        if [ ! -f "$OPCODE_CONFIG_DIR/intents.yaml" ]; then
-            echo -e "${GREEN}Copying intents.yaml to $OPCODE_CONFIG_DIR/intents.yaml...${NC}"
-            cp intents.yaml "$OPCODE_CONFIG_DIR/intents.yaml"
-        fi
-        # Ensure 'bash' is in allowed_tools and 'OpenCode' is in agents list
-        python -c "
-import yaml, os
-path = os.path.expanduser('~/.config/opencode/intents.yaml')
-try:
-    with open(path, 'r') as f:
-        data = yaml.safe_load(f) or {}
-    intents = data.setdefault('intents', {})
-    default_intent = intents.setdefault('default', {})
-    allowed_tools = default_intent.setdefault('allowed_tools', [])
-    if 'bash' not in allowed_tools:
-        allowed_tools.append('bash')
-        
-    agents = data.setdefault('agents', {})
-    opencode_agent = agents.setdefault('OpenCode', {})
-    allowed_intents = opencode_agent.setdefault('allowed_intents', [])
-    if 'default' not in allowed_intents:
-        allowed_intents.append('default')
-        
-    with open(path, 'w') as f:
-        yaml.safe_dump(data, f, default_flow_style=False)
-    print('✅ Successfully updated intents.yaml for OpenCode and bash tool')
-except Exception as e:
-    print('⚠️ Failed to update intents.yaml:', e)
-" 2>/dev/null || true
-
-        # Generate global config ~/.config/opencode/chronos-gate.env
-        GATE_ENV_FILE="$OPCODE_CONFIG_DIR/chronos-gate.env"
-        echo "CHRONOS_REPO_PATH=$PWD" > "$GATE_ENV_FILE"
-        echo "MCP_GATEWAY_POLICY_PATH=$OPCODE_CONFIG_DIR/intents.yaml" >> "$GATE_ENV_FILE"
-        if [[ -n "$SECURE_KEY" ]]; then
-            echo "MCP_GATEWAY_API_KEY=$SECURE_KEY" >> "$GATE_ENV_FILE"
-        elif [[ -n "$EXISTING_KEY" ]]; then
-            echo "MCP_GATEWAY_API_KEY=$EXISTING_KEY" >> "$GATE_ENV_FILE"
-        fi
-        echo -e "${GREEN}Generated global chronos-gate config in $GATE_ENV_FILE${NC}"
-        
         echo -e "\n${BLUE}--- OpenCode Setup Steps ---${NC}"
         echo -e "1. Add GitHub Packages registry to your ~/.npmrc:"
         echo -e "   ${GREEN}@yohi:registry=https://npm.pkg.github.com${NC}"
         echo -e "2. Register the plugin in ~/.config/opencode/opencode.json (or .jsonc):"
-        echo -e "   ${GREEN}\"plugin\": [ \"@yohi/opencode-plugin-chronos-gate\" ]${NC}"
-    fi
-fi
-
-# 7. Verification for Hook setup
-if [ "$TYPE" = "hook" ]; then
-    echo -e "${BLUE}Running hook verification test...${NC}"
-    POLICY_PATH="./src/mcp_gateway/policies/intents.yaml"
-    if [ ! -f "$POLICY_PATH" ]; then
-        POLICY_PATH="./intents.yaml"
-    fi
-    if [ -f "$POLICY_PATH" ]; then
-        if command -v uv &> /dev/null; then
-            echo '{"tool_name":"bash","tool_input":{"command":"ls"}}' | uv run python -m mcp_gateway evaluate --json-io --policy-path "$POLICY_PATH"
-        else
-            echo '{"tool_name":"bash","tool_input":{"command":"ls"}}' | python -m mcp_gateway evaluate --json-io --policy-path "$POLICY_PATH"
+        echo -e "   ${GREEN}\"plugin\": [ \"@yohi/opencode-plugin-chronos-turn-end\" ]${NC}"
         fi
-    else
-        echo -e "⚠️ Intents policy file not found for verification test."
     fi
 fi
 

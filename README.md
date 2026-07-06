@@ -71,12 +71,14 @@ python scripts/sandbox_runner.py -- bash -c "cd frontend && pnpm install && pnpm
 
 > [!NOTE]
 > **追記の必要性について**:
-> - **【ケース A】長期記憶サーバーの場合**: **必須**です。エージェントが自律的に記憶を保存（`memory_save`）するための指示が必要です。
+> - **【ケース A】長期記憶サーバーの場合**: **必須**です。エージェントが自律的に記憶を保存（`memory_save`）し、かつタスク開始時に関連する記憶を想起（`memory_search`）するための指示が必要です。
 > - **【ケース B】Hook (安全評価器) のみの場合**: **原則不要**です。Hook は透明な防壁として機能するため、エージェント側での意識的な対応は必要ありません。
 
-追記すべきプロンプトの原本（テンプレート）は以下に格納されています。セットアップ完了時にこの内容を対象プロジェクトの `AGENTS.md` 等に追記してください。
+追記すべきプロンプトの原本（テンプレート）は以下に格納されています。セットアップ完了時に、保存（Ingestion）と想起（Recall）の両テンプレートを対象プロジェクトの `AGENTS.md` 等に追記してください。
 
 👉 **[Memory Ingestion Prompt Template](docs/agent-prompts/memory-save-system-prompt.md)**
+
+👉 **[Memory Recall Prompt Template](docs/agent-prompts/memory-search-system-prompt.md)**
 
 
 ---

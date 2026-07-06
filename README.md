@@ -196,7 +196,7 @@ ChronosGraph 本体で利用する環境変数の一覧です。ツール実行�
 | `EMBEDDING_PROVIDER` | `local-model` | デフォルト可 | 埋め込みプロバイダー (`local-model` / `openai` / `litellm` / `custom-api`) |
 | `LOCAL_MODEL_NAME` | `cl-nagoya/ruri-v3-310m` | デフォルト可 | ローカルモデル名 (768次元) |
 | `EMBEDDING_DIMENSION` | `768` | デフォルト可 | 埋め込みベクトル次元数 (例: 768) |
-| `GRAPH_ENABLED` | `false` | デフォルト可 | グラフ関係性機能の有効化。SQLite では内部グラフ、PostgreSQL では Neo4j を使用。Supabase では `graph_sync_mode=async_outbox` のみ対応 |
+| `GRAPH_ENABLED` | `false` | デフォルト可 | グラフ関係性機能の有効化。SQLite では内部グラフ、PostgreSQL では Neo4j を使用。Supabase では `graph_sync_mode=async_outbox` のみ対応（[詳細](docs/troubleshooting/supabase-graph-sync-mode.md)） |
 | `GRAPH_SYNC_MODE` | `sync` | デフォルト可 | グラフの同期モード (`sync` = 直接同期 / `async_outbox` = Outbox を介した非同期同期) |
 | `OUTBOX_POLL_INTERVAL_SECONDS` | `5.0` | デフォルト可 | **[async_outbox用]** Outbox ワーカーのポーリング間隔秒数 |
 | `OUTBOX_BATCH_SIZE` | `100` | デフォルト可 | **[async_outbox用]** 1回のポーリングで処理する最大イベント数 |

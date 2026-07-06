@@ -32,5 +32,6 @@ The following resources are available for task-specific context. Read them only 
 | **System architecture & database schema** | `SPEC.md` |
 | **Setup flow and environment variables** | `docs/agent-setup-protocol.md` |
 | **Guidelines for the `memory_save` tool** | `docs/agent-prompts/memory-save-system-prompt.md` |
+| **Guidelines for the `memory_search` tool** | `docs/agent-prompts/memory-search-system-prompt.md` |
 | **All agent-facing prompts** | `docs/agent-prompts/` |
 | **Troubleshooting guides** | `docs/troubleshooting/` |

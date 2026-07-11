@@ -105,7 +105,7 @@ python scripts/sandbox_runner.py -- bash -c "cd frontend && pnpm install && pnpm
 
 リポジトリをクローンせずに、`uvx` を使用して ChronosGraph を MCP サーバーとして即座にセットアップするための最小設定例です。本リポジトリは [release-please](https://github.com/googleapis/release-please) によってタグ付きリリースが作成され、GitHub の tarball アーカイブから直接インストールできます。
 
-#### Claude Desktop 設定例（リリース tarball 版）
+### Claude Desktop 設定例（リリース tarball 版）
 
 `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) または `%APPDATA%\Claude\claude_desktop_config.json` (Windows) に以下の設定を追加します。`v2.0.0` の部分は [Releases](https://github.com/yohi/chronos-graph/releases) で確認できる最新バージョンに読み替えてください。
 

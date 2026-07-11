@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   release-please:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
@@ -56,12 +56,26 @@ jobs:
         run: |
           TAG="${{ needs.release-please.outputs.tag_name }}"
           set +e
-          timeout 30s uvx --from "context-store-mcp @ https://github.com/${{ github.repository }}/archive/refs/tags/${TAG}.tar.gz" context-store
+          timeout 300s uvx --from "context-store-mcp[all] @ https://github.com/${{ github.repository }}/archive/refs/tags/${TAG}.tar.gz" context-store \>
+            > >(tee /tmp/context-store-stdout.log) 2> >(tee /tmp/context-store-stderr.log >&2)
           exit_code=$?
           set -e
           if [ "$exit_code" -eq 124 ]; then
-            echo "Smoke test passed: context-store started successfully from tarball"
+            if grep -q "ChronosGraph MCP server starting on stdio" /tmp/context-store-stderr.log; then
+              echo "Smoke test passed: context-store started successfully from tarball"
+            else
+              echo "Smoke test timed out but server startup log was not found"
+              echo "--- stdout ---"
+              cat /tmp/context-store-stdout.log
+              echo "--- stderr ---"
+              cat /tmp/context-store-stderr.log
+              exit 1
+            fi
           else
             echo "Smoke test failed with unexpected exit code: $exit_code"
+            echo "--- stdout ---"
+            cat /tmp/context-store-stdout.log
+            echo "--- stderr ---"
+            cat /tmp/context-store-stderr.log
             exit "$exit_code"
           fi

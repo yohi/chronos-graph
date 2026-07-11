@@ -6,7 +6,7 @@
 
 `memory_save` などのツールを呼び出すと、以下のようなエラーが返ります。
 
-```
+```text
 Error executing tool memory_save: 1 validation error for Settings
 Value error, Supabase + graph の組み合わせには graph_sync_mode='async_outbox' が必須です
 (Neo4j Bolt は HTTPS にカプセル化できないため)。

@@ -3,6 +3,8 @@ import re
 import sys
 from typing import Any
 
+from pydantic import ValidationError
+
 from context_store.config import Settings
 
 
@@ -19,6 +21,19 @@ def sanitize_error(e: Exception) -> str:
     msg = str(e)
     # パスワードやDSNが混じりやすいため、簡易的なマスクを適用
     return re.sub(r":([^@/ ]+)@", ":****@", msg)
+
+
+def sanitize_validation_error(e: ValidationError) -> str:
+    """Pydantic ValidationError から機密情報を含まない簡潔なメッセージを組み立てる。"""
+    parts: list[str] = []
+    for err in e.errors():
+        loc = ".".join(str(x) for x in err.get("loc", []))
+        msg = err.get("msg", "")
+        if loc:
+            parts.append(f"{loc}: {msg}")
+        else:
+            parts.append(msg)
+    return "\n".join(parts)
 
 
 def is_placeholder(val: Any) -> bool:
@@ -39,7 +54,23 @@ def is_placeholder(val: Any) -> bool:
 
 
 async def check_connectivity() -> None:
-    settings = Settings()
+    try:
+        settings = Settings()
+    except ValidationError as e:
+        print(f"❌ Settings validation failed: {sanitize_validation_error(e)}")
+        # Supabase + graph_enabled=true かつ graph_sync_mode != async_outbox の
+        # 固有の組み合わせ不一致の場合だけ、トラブルシューティングガイドを提示する。
+        for err in e.errors():
+            msg = err.get("msg", "").lower()
+            if "supabase + graph" in msg and "graph_sync_mode='async_outbox'" in msg:
+                print(
+                    "\n💡 Hint: If STORAGE_BACKEND=supabase and GRAPH_ENABLED=true, "
+                    "GRAPH_SYNC_MODE must be 'async_outbox' (Neo4j Bolt cannot be tunneled "
+                    "over Supabase's HTTPS-only Data API). See "
+                    "docs/troubleshooting/supabase-graph-sync-mode.md for details."
+                )
+                break
+        sys.exit(1)
     print(f"Checking connectivity for storage_backend={settings.storage_backend}...")
 
     # 1. Check for placeholders or unset values in configuration

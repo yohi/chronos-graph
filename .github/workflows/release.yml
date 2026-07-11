@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@c3fc4de07084f75a2b61a5b933069bda6edf3d5c # v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          target-branch: master
+
+  build-and-publish:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Build package
+        run: uv build
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ needs.release-please.outputs.tag_name }}" dist/*
+
+      - name: Smoke test uvx install from release tarball
+        env:
+          UV_PYTHON: "3.12"
+        run: |
+          TAG="${{ needs.release-please.outputs.tag_name }}"
+          set +e
+          timeout 30s uvx --from "context-store-mcp @ https://github.com/${{ github.repository }}/archive/refs/tags/${TAG}.tar.gz" context-store
+          exit_code=$?
+          set -e
+          if [ "$exit_code" -eq 124 ]; then
+            echo "Smoke test passed: context-store started successfully from tarball"
+          else
+            echo "Smoke test failed with unexpected exit code: $exit_code"
+            exit "$exit_code"
+          fi

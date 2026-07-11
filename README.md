@@ -103,16 +103,40 @@ python scripts/sandbox_runner.py -- bash -c "cd frontend && pnpm install && pnpm
 
 ## Quick Start (uvx を使用する場合)
 
-リポジトリをクローンせずに、`uvx` を使用して ChronosGraph を MCP サーバーとして即座にセットアップするための最小設定例です。
+リポジトリをクローンせずに、`uvx` を使用して ChronosGraph を MCP サーバーとして即座にセットアップするための最小設定例です。本リポジトリは [release-please](https://github.com/googleapis/release-please) によってタグ付きリリースが作成され、GitHub の tarball アーカイブから直接インストールできます。
 
-#### Claude Desktop 設定例
+#### Claude Desktop 設定例（リリース tarball 版）
 
-`~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) または `%APPDATA%\Claude\claude_desktop_config.json` (Windows) に以下の設定を追加します。
+`~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) または `%APPDATA%\Claude\claude_desktop_config.json` (Windows) に以下の設定を追加します。`v2.0.0` の部分は [Releases](https://github.com/yohi/chronos-graph/releases) で確認できる最新バージョンに読み替えてください。
 
 ```json
 {
   "mcpServers": {
     "chronos-graph": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "context-store-mcp[all] @ https://github.com/yohi/chronos-graph/archive/refs/tags/v2.0.0.tar.gz",
+        "context-store"
+      ],
+      "env": {
+        "STORAGE_BACKEND": "sqlite",
+        "GRAPH_ENABLED": "true",
+        "CACHE_BACKEND": "inmemory"
+      }
+    }
+  }
+}
+```
+
+#### 開発版 / 最新 main を使用する場合
+
+リリース待たずに最新の `master` ブランチを使用する場合は、以下のように `git+https` 形式で指定してください。
+
+```json
+{
+  "mcpServers": {
+    "chronos-graph-dev": {
       "command": "uvx",
       "args": [
         "--from",
@@ -128,6 +152,7 @@ python scripts/sandbox_runner.py -- bash -c "cd frontend && pnpm install && pnpm
   }
 }
 ```
+
 *💡 **環境変数について**: この Quick Start は長期記憶 MCP サーバー (`context-store`) の最小構成例です。ツール実行前の安全評価を利用する場合は、独立リポジトリ [ChronosGate](https://github.com/yohi/chronos-gate) を追加セットアップしてください。また、Claude Desktop は JSON 設定ファイル内の `${VAR}` 構文を展開しません。機密情報を渡す場合は、環境変数をエクスポートしてから起動するラッパースクリプトを指定することを推奨します。*
 
 ---

@@ -43,12 +43,14 @@ async def check_connectivity() -> None:
         settings = Settings()
     except Exception as e:
         print(f"❌ Settings validation failed: {sanitize_error(e)}")
-        print(
-            "\n💡 Hint: If STORAGE_BACKEND=supabase and GRAPH_ENABLED=true, "
-            "GRAPH_SYNC_MODE must be 'async_outbox' (Neo4j Bolt cannot be tunneled "
-            "over Supabase's HTTPS-only Data API). See "
-            "docs/troubleshooting/supabase-graph-sync-mode.md for details."
-        )
+        error_str = str(e).lower()
+        if "graph_sync_mode" in error_str or "async_outbox" in error_str:
+            print(
+                "\n💡 Hint: If STORAGE_BACKEND=supabase and GRAPH_ENABLED=true, "
+                "GRAPH_SYNC_MODE must be 'async_outbox' (Neo4j Bolt cannot be tunneled "
+                "over Supabase's HTTPS-only Data API). See "
+                "docs/troubleshooting/supabase-graph-sync-mode.md for details."
+            )
         sys.exit(1)
     print(f"Checking connectivity for storage_backend={settings.storage_backend}...")
 

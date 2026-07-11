@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "context-store-mcp"
-version = "2.0.0"
+version = "3.0.0"
 description = "MCP-based long-term memory system for AI agents"
 requires-python = ">=3.12"
 dependencies = [

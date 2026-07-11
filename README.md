@@ -129,7 +129,7 @@ python scripts/sandbox_runner.py -- bash -c "cd frontend && pnpm install && pnpm
 }
 ```
 
-#### 開発版 / 最新 main を使用する場合
+#### 開発版 / 最新 master を使用する場合
 
 リリース待たずに最新の `master` ブランチを使用する場合は、以下のように `git+https` 形式で指定してください。
 

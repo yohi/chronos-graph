@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.0.1](https://github.com/yohi/chronos-graph/compare/v3.0.0...v3.0.1) (2026-07-30)
+
+
+### Bug Fixes
+
+* **deps:** limit mcp dependency to &lt;2.0.0 to maintain FastMCP compatibility ([#357](https://github.com/yohi/chronos-graph/issues/357)) ([1bb71e3](https://github.com/yohi/chronos-graph/commit/1bb71e327ac9ba72f5b581658d63c65c77df3967))
+
 ## [3.0.0](https://github.com/yohi/chronos-graph/compare/v2.0.0...v3.0.0) (2026-07-11)
 
 

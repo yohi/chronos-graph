@@ -8,7 +8,7 @@ version = "3.0.0"
 description = "MCP-based long-term memory system for AI agents"
 requires-python = ">=3.12"
 dependencies = [
-    "mcp[cli]>=1.0.0",
+    "mcp[cli]>=1.0.0,<2.0.0",  # MCP SDK v2 は mcp.server.fastmcp の配置を変更しているため v1 系に固定
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "httpx>=0.27.0",

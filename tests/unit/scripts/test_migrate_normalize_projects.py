@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 from types import ModuleType
+from urllib.parse import parse_qs, urlparse
 from urllib.request import Request
 
 import pytest
@@ -44,19 +45,29 @@ class FakeResponse:
 def test_migrate_updates_only_noncanonical_projects(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """GET rows, PATCH changed projects, and report changed/unchanged counts."""
     module = load_migration_script()
+    monkeypatch.setattr(module, "_PAGE_SIZE", 2)
     requests: list[Request] = []
-    rows = [
-        {"id": "memory-1", "project": " /tmp/Chronos-Graph/ "},
-        {"id": "memory-2", "project": "chronos-graph"},
-        {"id": "memory-3", "project": None},
-    ]
+    pages = {
+        0: [
+            {"id": "memory-1", "project": " /tmp/Chronos-Graph/ "},
+            {"id": "memory-2", "project": "chronos-graph"},
+        ],
+        2: [{"id": "memory-3", "project": " /tmp/Other-Project/ "}],
+    }
 
     def fake_urlopen(request: Request, timeout: float) -> FakeResponse:
         requests.append(request)
         if request.get_method() == "GET":
-            return FakeResponse(json.dumps(rows).encode())
+            query = parse_qs(urlparse(request.full_url).query)
+            offset = int(query["offset"][0])
+            assert query == {
+                "select": ["id,project"],
+                "order": ["id.asc"],
+                "limit": ["2"],
+                "offset": [str(offset)],
+            }
+            return FakeResponse(json.dumps(pages[offset]).encode())
         return FakeResponse(b"")
 
     monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
@@ -66,9 +77,23 @@ def test_migrate_updates_only_noncanonical_projects(
     result = module.main()
 
     assert result == 0
-    assert capsys.readouterr().out == "changed=1 unchanged=2\n"
-    assert [request.get_method() for request in requests] == ["GET", "PATCH"]
-    assert requests[0].full_url == "https://example.supabase.co/rest/v1/memories?select=id,project"
-    assert requests[1].full_url == "https://example.supabase.co/rest/v1/memories?id=eq.memory-1"
-    assert json.loads(requests[1].data.decode()) == {"project": "chronos-graph"}
-    assert requests[1].get_header("Content-type") == "application/json"
+    assert capsys.readouterr().out == "changed=2 unchanged=1\n"
+    assert [request.get_method() for request in requests] == [
+        "GET",
+        "GET",
+        "PATCH",
+        "PATCH",
+    ]
+    assert requests[0].full_url == (
+        "https://example.supabase.co/rest/v1/memories?"
+        "select=id%2Cproject&order=id.asc&limit=2&offset=0"
+    )
+    assert requests[1].full_url == (
+        "https://example.supabase.co/rest/v1/memories?"
+        "select=id%2Cproject&order=id.asc&limit=2&offset=2"
+    )
+    assert requests[2].full_url == "https://example.supabase.co/rest/v1/memories?id=eq.memory-1"
+    assert requests[3].full_url == "https://example.supabase.co/rest/v1/memories?id=eq.memory-3"
+    assert json.loads(requests[2].data.decode()) == {"project": "chronos-graph"}
+    assert json.loads(requests[3].data.decode()) == {"project": "other-project"}
+    assert requests[2].get_header("Content-type") == "application/json"

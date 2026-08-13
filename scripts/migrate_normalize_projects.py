@@ -1,12 +1,7 @@
 #!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.12"
-# dependencies = []
-# ///
-
 # How to run:
 # export SUPABASE_URL=... SUPABASE_KEY=...
-# uv run scripts/migrate_normalize_projects.py
+# uv run python scripts/migrate_normalize_projects.py
 
 """Backfill canonical project names in a Supabase memories table."""
 
@@ -19,7 +14,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, TypedDict
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from urllib.request import Request
 
 _SRC_PATH: Final = Path(__file__).resolve().parents[1] / "src"
@@ -29,6 +24,7 @@ if str(_SRC_PATH) not in sys.path:
 from context_store.utils.project_normalizer import normalize_project_name  # noqa: E402
 
 _REQUEST_TIMEOUT_SECONDS: Final = 60.0
+_PAGE_SIZE: Final = 1000
 
 
 class MemoryRow(TypedDict):
@@ -96,8 +92,23 @@ def _parse_rows(payload: bytes) -> list[MemoryRow]:
 
 def _fetch_rows(base_url: str, key: str) -> list[MemoryRow]:
     """Fetch all memory identifiers and project values from Supabase."""
-    endpoint = f"{base_url}/rest/v1/memories?select=id,project"
-    return _parse_rows(_request(endpoint, key))
+    rows: list[MemoryRow] = []
+    offset = 0
+    while True:
+        query = urlencode(
+            {
+                "select": "id,project",
+                "order": "id.asc",
+                "limit": _PAGE_SIZE,
+                "offset": offset,
+            }
+        )
+        endpoint = f"{base_url}/rest/v1/memories?{query}"
+        page = _parse_rows(_request(endpoint, key))
+        rows.extend(page)
+        if len(page) < _PAGE_SIZE:
+            return rows
+        offset += _PAGE_SIZE
 
 
 def _update_project(base_url: str, key: str, memory_id: str, project: str | None) -> None:

@@ -10,12 +10,12 @@ from __future__ import annotations
 import json
 import os
 import sys
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, TypedDict
 from urllib.parse import quote, urlencode
-from urllib.request import Request
+
+import httpx
 
 _SRC_PATH: Final = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC_PATH) not in sys.path:
@@ -61,16 +61,15 @@ def _request(
     if prefer is not None:
         headers["Prefer"] = prefer
 
-    request = Request(  # noqa: S310
-        endpoint, data=payload, headers=headers, method=method
+    response = httpx.request(
+        method,
+        endpoint,
+        content=payload,
+        headers=headers,
+        timeout=_REQUEST_TIMEOUT_SECONDS,
     )
-    with urllib.request.urlopen(  # noqa: S310
-        request, timeout=_REQUEST_TIMEOUT_SECONDS
-    ) as response:
-        body = response.read()
-        if not isinstance(body, bytes):
-            raise TypeError("PostgREST response body must be bytes")
-        return body
+    response.raise_for_status()
+    return response.content
 
 
 def _parse_rows(payload: bytes) -> list[MemoryRow]:

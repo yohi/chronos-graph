@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 from types import ModuleType
 from urllib.parse import parse_qs, urlparse
-from urllib.request import Request
 
 import pytest
 
@@ -27,18 +26,11 @@ class FakeResponse:
     def __init__(self, body: bytes) -> None:
         self.body = body
 
-    def read(self) -> bytes:
+    @property
+    def content(self) -> bytes:
         return self.body
 
-    def __enter__(self) -> FakeResponse:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: object | None,
-    ) -> None:
+    def raise_for_status(self) -> None:
         return None
 
 
@@ -47,7 +39,7 @@ def test_migrate_updates_only_noncanonical_projects(
 ) -> None:
     module = load_migration_script()
     monkeypatch.setattr(module, "_PAGE_SIZE", 2)
-    requests: list[Request] = []
+    requests: list[dict[str, object]] = []
     pages = {
         0: [
             {"id": "memory-1", "project": " /tmp/Chronos-Graph/ "},
@@ -56,10 +48,10 @@ def test_migrate_updates_only_noncanonical_projects(
         2: [{"id": "memory-3", "project": " /tmp/Other-Project/ "}],
     }
 
-    def fake_urlopen(request: Request, timeout: float) -> FakeResponse:
-        requests.append(request)
-        if request.get_method() == "GET":
-            query = parse_qs(urlparse(request.full_url).query)
+    def fake_request(method: str, url: str, **kwargs: object) -> FakeResponse:
+        requests.append({"method": method, "url": url, **kwargs})
+        if method == "GET":
+            query = parse_qs(urlparse(url).query)
             offset = int(query["offset"][0])
             assert query == {
                 "select": ["id,project"],
@@ -68,11 +60,11 @@ def test_migrate_updates_only_noncanonical_projects(
                 "offset": [str(offset)],
             }
             return FakeResponse(json.dumps(pages[offset]).encode())
-        if "memory-3" in request.full_url:
+        if "memory-3" in url:
             return FakeResponse(b"[]")
         return FakeResponse(b'[{"id":"memory-1","project":"chronos-graph"}]')
 
-    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(module.httpx, "request", fake_request)
     monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
     monkeypatch.setenv("SUPABASE_KEY", "test-key")
 
@@ -80,51 +72,51 @@ def test_migrate_updates_only_noncanonical_projects(
 
     assert result == 0
     assert capsys.readouterr().out == "changed=1 unchanged=1\n"
-    assert [request.get_method() for request in requests] == [
+    assert [request["method"] for request in requests] == [
         "GET",
         "GET",
         "PATCH",
         "PATCH",
     ]
-    assert requests[0].full_url == (
+    assert requests[0]["url"] == (
         "https://example.supabase.co/rest/v1/memories?"
         "select=id%2Cproject&order=id.asc&limit=2&offset=0"
     )
-    assert requests[1].full_url == (
+    assert requests[1]["url"] == (
         "https://example.supabase.co/rest/v1/memories?"
         "select=id%2Cproject&order=id.asc&limit=2&offset=2"
     )
-    assert requests[2].full_url == (
+    assert requests[2]["url"] == (
         "https://example.supabase.co/rest/v1/memories?"
         "id=eq.memory-1&project=eq.%20%2Ftmp%2FChronos-Graph%2F%20"
     )
-    assert requests[3].full_url == (
+    assert requests[3]["url"] == (
         "https://example.supabase.co/rest/v1/memories?"
         "id=eq.memory-3&project=eq.%20%2Ftmp%2FOther-Project%2F%20"
     )
-    assert json.loads(requests[2].data.decode()) == {"project": "chronos-graph"}
-    assert json.loads(requests[3].data.decode()) == {"project": "other-project"}
-    assert requests[2].get_header("Content-type") == "application/json"
-    assert requests[2].get_header("Prefer") == "return=representation"
+    assert json.loads(requests[2]["content"].decode()) == {"project": "chronos-graph"}
+    assert json.loads(requests[3]["content"].decode()) == {"project": "other-project"}
+    assert requests[2]["headers"]["Content-Type"] == "application/json"
+    assert requests[2]["headers"]["Prefer"] == "return=representation"
 
 
 def test_update_project_uses_null_project_cas_filter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = load_migration_script()
-    requests: list[Request] = []
+    requests: list[dict[str, object]] = []
 
-    def fake_urlopen(request: Request, timeout: float) -> FakeResponse:
-        requests.append(request)
+    def fake_request(method: str, url: str, **kwargs: object) -> FakeResponse:
+        requests.append({"method": method, "url": url, **kwargs})
         return FakeResponse(b"[]")
 
-    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(module.httpx, "request", fake_request)
 
     changed = module._update_project(
         "https://example.supabase.co", "test-key", "memory-null", None, "new-project"
     )
 
     assert changed == 0
-    assert requests[0].full_url == (
+    assert requests[0]["url"] == (
         "https://example.supabase.co/rest/v1/memories?id=eq.memory-null&project=is.null"
     )

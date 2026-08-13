@@ -25,6 +25,14 @@ def load_migration_script() -> ModuleType:
     return module
 
 
+def test_script_does_not_use_pep723_isolation() -> None:
+    script_path = (
+        Path(__file__).resolve().parents[3] / "scripts" / "migrate_normalize_projects_postgres.py"
+    )
+
+    assert "# /// script" not in script_path.read_text()
+
+
 class FakeTransaction:
     """Minimal async transaction context manager for the PostgreSQL test."""
 

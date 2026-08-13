@@ -1,11 +1,4 @@
 #!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.12"
-# dependencies = [
-#   "aiosqlite>=0.21.0",
-#   "anyio>=4.0.0",
-# ]
-# ///
 
 # How to run:
 # export SQLITE_DB_PATH=~/.chronos_graph/memories.db

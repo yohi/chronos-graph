@@ -1,11 +1,4 @@
 #!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.12"
-# dependencies = [
-#   "anyio>=4.0.0",
-#   "asyncpg>=0.31.0",
-# ]
-# ///
 
 # How to run:
 # export DATABASE_URL=postgresql://user:password@localhost/chronos_graph

@@ -23,6 +23,14 @@ def load_migration_script() -> ModuleType:
     return module
 
 
+def test_script_does_not_use_pep723_isolation() -> None:
+    script_path = (
+        Path(__file__).resolve().parents[3] / "scripts" / "migrate_normalize_projects_sqlite.py"
+    )
+
+    assert "# /// script" not in script_path.read_text()
+
+
 class FakeSQLiteConnection:
     """Minimal async context manager for the SQLite migration test."""
 

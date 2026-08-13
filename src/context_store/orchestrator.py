@@ -17,6 +17,7 @@ from context_store.extensions.noop import NoOpActionLogger, NoOpPolicyHook, NoOp
 from context_store.models.memory import SourceType
 from context_store.models.search import SearchStrategy
 from context_store.storage.protocols import MemoryFilters
+from context_store.utils.project_normalizer import normalize_project_name
 
 if TYPE_CHECKING:
     from context_store.embedding.protocols import EmbeddingProvider
@@ -189,7 +190,7 @@ class Orchestrator:
                 await self._batch_processor.process(
                     conversation_log,
                     session_id=effective_session_id,
-                    project=project,
+                    project=normalize_project_name(project),
                     tags=tags,
                 )
             except Exception as e:
@@ -233,6 +234,9 @@ class Orchestrator:
         Returns:
             IngestionResult のリスト。
         """
+        if metadata is not None and "project" in metadata:
+            metadata["project"] = normalize_project_name(metadata["project"])
+
         results = await self._ingestion_pipeline.ingest(
             content, source_type=source_type, metadata=metadata
         )
@@ -253,6 +257,9 @@ class Orchestrator:
         Returns:
             IngestionResult のリスト。
         """
+        if metadata is not None and "project" in metadata:
+            metadata["project"] = normalize_project_name(metadata["project"])
+
         results = await self._ingestion_pipeline.ingest(
             url, source_type=SourceType.URL, metadata=metadata
         )
@@ -294,10 +301,11 @@ class Orchestrator:
 
         base_strategy = SearchStrategy()
         adjusted_strategy = await self.policy_hook.adjust_strategy(query, base_strategy)
+        normalized_project = normalize_project_name(project)
 
         result = await self._retrieval_pipeline.search(
             query,
-            project=project,
+            project=normalized_project,
             top_k=top_k,
             max_tokens=max_tokens,
             strategy=adjusted_strategy,
@@ -337,7 +345,10 @@ class Orchestrator:
             )
         # TODO(Phase 9): edge_types と depth を RetrievalPipeline の graph_traversal に渡す。
         # 現時点ではベクトル検索でシードノードを特定し、グラフアダプターへの委譲は未実装。
-        search_result = await self._retrieval_pipeline.search(query, project=project, top_k=5)
+        normalized_project = normalize_project_name(project)
+        search_result = await self._retrieval_pipeline.search(
+            query, project=normalized_project, top_k=5
+        )
         return search_result
 
     async def delete(self, memory_id: str) -> bool:
@@ -405,17 +416,18 @@ class Orchestrator:
         Returns:
             統計情報の dict。
         """
+        normalized_project = normalize_project_name(project)
         active_count = await self._storage.count_by_filter(
-            MemoryFilters(project=project, archived=None)
+            MemoryFilters(project=normalized_project, archived=None)
         )
         archived_count = await self._storage.count_by_filter(
-            MemoryFilters(project=project, archived=True)
+            MemoryFilters(project=normalized_project, archived=True)
         )
         return {
             "active_count": active_count,
             "archived_count": archived_count,
             "total_count": active_count + archived_count,
-            "project": project,
+            "project": normalized_project,
         }
 
     async def list_projects(self) -> list[str]:

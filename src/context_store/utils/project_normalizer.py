@@ -27,9 +27,9 @@ def normalize_project_name(project: str | None) -> str | None:
     if not is_path:
         return cleaned.lower()
 
-    expanded = os.path.expanduser(cleaned)
+    expanded = os.path.realpath(os.path.expanduser(cleaned))
     try:
-        path = Path(expanded).resolve()
+        path = Path(expanded)
         if is_path or path.exists():
             if path.exists():
                 current = path if path.is_dir() else path.parent

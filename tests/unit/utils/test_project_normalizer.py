@@ -86,10 +86,13 @@ def test_normalize_project_name_expands_user_home(
     assert normalize_project_name("~/my-repo") == "my-repo"
 
 
-def test_normalize_project_name_nested_repo_directory(tmp_path: Path) -> None:
+def test_normalize_project_name_nested_repo_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo_root = tmp_path / "my-repo"
     nested_directory = repo_root / "src" / "package"
     (repo_root / ".git").mkdir(parents=True)
     nested_directory.mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
 
     assert normalize_project_name(str(nested_directory)) == "my-repo"

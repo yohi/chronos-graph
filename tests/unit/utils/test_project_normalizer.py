@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -51,8 +52,12 @@ def test_normalize_project_name_relative_path(
     repo_root = tmp_path / "my-repo"
     (repo_root / ".git").mkdir(parents=True)
     (repo_root / "src").mkdir()
-    monkeypatch.chdir(repo_root)
-
+    if relative_path in {"."}:
+        # Mock git so we don't need an actual git repository in the temp dir.
+        monkeypatch.setattr(
+            "context_store.utils.project_normalizer.subprocess.run",
+            lambda *args, **kwargs: MagicMock(returncode=0, stdout=str(repo_root)),
+        )
     assert normalize_project_name(relative_path) == expected
 
 
@@ -95,4 +100,9 @@ def test_normalize_project_name_nested_repo_directory(
     nested_directory.mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
 
+    # Mock git so we don't need an actual git repository in the temp dir.
+    monkeypatch.setattr(
+        "context_store.utils.project_normalizer.subprocess.run",
+        lambda *args, **kwargs: MagicMock(returncode=0, stdout=str(repo_root)),
+    )
     assert normalize_project_name(str(nested_directory)) == "my-repo"

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from context_store.utils.project_normalizer import normalize_project_name
@@ -21,3 +23,16 @@ from context_store.utils.project_normalizer import normalize_project_name
 )
 def test_normalize_project_name(raw: str | None, expected: str | None) -> None:
     assert normalize_project_name(raw) == expected
+
+
+def test_normalize_project_name_current_repo_root() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+
+    assert normalize_project_name(str(repo_root)) == repo_root.name.lower()
+
+
+def test_normalize_project_name_nested_repo_directory() -> None:
+    nested_directory = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[3]
+
+    assert normalize_project_name(str(nested_directory)) == repo_root.name.lower()

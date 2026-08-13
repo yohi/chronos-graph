@@ -12,6 +12,7 @@ from context_store.dashboard.schemas import (
     SemanticSearchRequest,
 )
 from context_store.storage.protocols import MemoryFilters
+from context_store.utils.project_normalizer import normalize_project_name
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ async def search_memories(
 
     service: DashboardService = request.app.state.service
     filters = MemoryFilters(
-        project=search_req.project,
+        project=normalize_project_name(search_req.project),
         memory_type=search_req.memory_type,
         archived=search_req.archived,
         min_importance=search_req.min_importance,
@@ -60,7 +61,7 @@ async def semantic_search_memories(
     try:
         memories = await service.semantic_search(
             query=req.query,
-            project=req.project,
+            project=normalize_project_name(req.project),
             top_k=req.top_k,
         )
     except RuntimeError as exc:

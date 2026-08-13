@@ -267,7 +267,7 @@ class TestSaveOperation:
         """save() が IngestionPipeline.ingest() に委譲される。"""
         ingestion = _make_mock_ingestion_pipeline()
         orch, *_, _lifecycle_manager = await _build_orchestrator(ingestion_pipeline=ingestion)
-        metadata = {"project": "/home/y_ohi/program/private/justice"}
+        metadata = {"project": "/workspace/justice"}
 
         results = await orch.save("test content", source_type=SourceType.MANUAL, metadata=metadata)
 
@@ -297,7 +297,7 @@ class TestSaveOperation:
         """save_url() が IngestionPipeline.ingest() に URL ソースタイプで委譲される。"""
         ingestion = _make_mock_ingestion_pipeline()
         orch, *_ = await _build_orchestrator(ingestion_pipeline=ingestion)
-        metadata = {"project": "/home/y_ohi/program/private/justice"}
+        metadata = {"project": "/workspace/justice"}
 
         await orch.save_url("https://example.com/page", metadata=metadata)
 
@@ -332,7 +332,7 @@ class TestSearchOperation:
 
         await orch.search(
             "test query",
-            project="/home/y_ohi/program/private/justice",
+            project="/workspace/justice",
             top_k=5,
             max_tokens=1000,
         )
@@ -424,7 +424,7 @@ class TestSearchGraphOperation:
 
         await orch.search_graph(
             "test query",
-            project="/home/y_ohi/program/private/justice",
+            project="/workspace/justice",
         )
 
         call_kwargs = retrieval.search.call_args[1]
@@ -531,7 +531,7 @@ class TestStatsOperation:
         storage.list_by_filter = AsyncMock(return_value=[])
         orch, *_ = await _build_orchestrator(storage=storage)
 
-        result = await orch.stats(project="/home/y_ohi/program/private/justice")
+        result = await orch.stats(project="/workspace/justice")
 
         assert isinstance(result, dict)
         assert result["project"] == "justice"
@@ -687,7 +687,7 @@ class TestSessionFlush:
         await orch.session_flush(
             "test log",
             session_id="sess-123",
-            project="/home/y_ohi/program/private/justice",
+            project="/workspace/justice",
         )
 
         # 登録されたタスクを取得して実行

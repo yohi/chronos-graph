@@ -72,7 +72,7 @@ class TestSessionFlushTool:
 
         await server_module.session_flush(
             conversation_log="User: test\nAssistant: test",
-            project="/home/y_ohi/program/private/justice",
+            project="/workspace/justice",
         )
 
         mock_orch = server_with_mock_orchestrator._orchestrator

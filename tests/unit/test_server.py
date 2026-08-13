@@ -318,27 +318,27 @@ def mcp_server(monkeypatch, chronos_server):
     [
         (
             "memory_save",
-            {"content": "test", "project": "/home/y_ohi/program/private/justice"},
+            {"content": "test", "project": "/workspace/justice"},
             "save",
         ),
         (
             "memory_save_url",
-            {"url": "https://example.com", "project": "/home/y_ohi/program/private/justice"},
+            {"url": "https://example.com", "project": "/workspace/justice"},
             "save_url",
         ),
         (
             "memory_search",
-            {"query": "test", "project": "/home/y_ohi/program/private/justice"},
+            {"query": "test", "project": "/workspace/justice"},
             "search",
         ),
         (
             "memory_search_graph",
-            {"query": "test", "project": "/home/y_ohi/program/private/justice"},
+            {"query": "test", "project": "/workspace/justice"},
             "search_graph",
         ),
         (
             "memory_stats",
-            {"project": "/home/y_ohi/program/private/justice"},
+            {"project": "/workspace/justice"},
             "stats",
         ),
     ],

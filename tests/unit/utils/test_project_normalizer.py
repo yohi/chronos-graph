@@ -13,10 +13,6 @@ from context_store.utils.project_normalizer import normalize_project_name
         ("chronos-graph/", "chronos-graph"),
         ("  /home/y_ohi/program/private/bitbucket-mcp  ", "bitbucket-mcp"),
         ("sibyl", "sibyl"),
-        (
-            "/home/y_ohi/program/private/chronos-graph/src/context_store/utils",
-            "chronos-graph",
-        ),
         ("none", "none"),
         (None, None),
         ("", None),

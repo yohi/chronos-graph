@@ -8,14 +8,13 @@ def normalize_project_name(project: str | None) -> str | None:
     if project is None:
         return None
 
-    cleaned = project.strip().rstrip("/\\")
+    cleaned = project.strip()
     if not cleaned:
         return None
 
-    parts = cleaned.replace("\\", "/").split("/")
-    if "src" in parts:
-        name = parts[parts.index("src") - 1]
-    else:
-        name = os.path.basename(cleaned) or cleaned
+    cleaned = cleaned.rstrip("/\\")
+    name = os.path.basename(cleaned) or cleaned
     name = name.strip()
-    return name.lower() if name else None
+    if not name:
+        return None
+    return name.lower()

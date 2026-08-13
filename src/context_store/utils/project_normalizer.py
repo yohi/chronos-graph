@@ -14,10 +14,14 @@ def normalize_project_name(project: str | None) -> str | None:
         return None
 
     cleaned = cleaned.rstrip("/\\")
+    if not cleaned:
+        return None
 
-    if os.sep in cleaned or "/" in cleaned or "\\" in cleaned:
-        try:
-            path = Path(cleaned).expanduser().resolve()
+    expanded = os.path.expanduser(cleaned)
+    is_path = any(separator in cleaned for separator in ("/", "\\", os.sep))
+    try:
+        path = Path(expanded).resolve()
+        if is_path or path.exists():
             if path.exists():
                 current = path if path.is_dir() else path.parent
                 while True:
@@ -28,10 +32,11 @@ def normalize_project_name(project: str | None) -> str | None:
                     if parent == current:
                         break
                     current = parent
-        except (OSError, ValueError):
-            pass
+    except (OSError, ValueError):
+        pass
 
-    name = os.path.basename(cleaned) or cleaned
+    segments = [segment for segment in cleaned.replace("\\", "/").split("/") if segment]
+    name = segments[-1] if segments else ""
     name = name.strip()
     if not name:
         return None

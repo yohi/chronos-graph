@@ -142,7 +142,7 @@ class SourceType(str, Enum):
 | `updated_at` | timestamp | 更新日時 |
 | `archived_at` | timestamp? | アーカイブ日時（NULL = Active） |
 | `tags` | text[] | プロジェクトタグ等 |
-| `project` | text? | プロジェクト識別子（ツール引数の `project` を直接保存） |
+| `project` | text? | プロジェクト識別子。MCP ツール受け口で自動正規化される：ローカルに存在するパスは git リポジトリルートのディレクトリ名に解決し、存在しない場合は basename を採用して前後の空白を除去、末尾の `/` を取り除き、小文字化する。例: `/home/user/repo` → `repo`、`/home/y_ohi/program/private/chronos-graph` → `chronos-graph`、`  DotFiles-AI/ ` → `dotfiles-ai`。
 
 ### 3.2 インデックス
 

@@ -4,7 +4,7 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 
 import pytest
 
@@ -52,9 +52,10 @@ class FakePostgresConnection:
                 {"id": "memory-1", "project": " /tmp/Chronos-Graph/ "},
                 {"id": "memory-2", "project": "chronos-graph"},
                 {"id": "memory-3", "project": None},
+                {"id": "memory-4", "project": " /tmp/Other-Project/ "},
             ]
         )
-        self.execute = AsyncMock()
+        self.execute = AsyncMock(side_effect=["UPDATE 1", "UPDATE 0"])
         self.transaction_context = FakeTransaction()
         self.close = AsyncMock()
 
@@ -78,10 +79,19 @@ async def test_migrate_updates_changed_rows_in_transaction(
     assert result == 0
     connect.assert_awaited_once_with("postgresql://example.invalid/chronos")
     connection.fetch.assert_awaited_once_with("SELECT id, project FROM memories")
-    connection.execute.assert_awaited_once_with(
-        "UPDATE memories SET project = $1 WHERE id = $2",
-        "chronos-graph",
-        "memory-1",
-    )
+    assert connection.execute.await_args_list == [
+        call(
+            "UPDATE memories SET project = $1 WHERE id = $2 AND project = $3",
+            "chronos-graph",
+            "memory-1",
+            " /tmp/Chronos-Graph/ ",
+        ),
+        call(
+            "UPDATE memories SET project = $1 WHERE id = $2 AND project = $3",
+            "other-project",
+            "memory-4",
+            " /tmp/Other-Project/ ",
+        ),
+    ]
     connection.close.assert_awaited_once_with()
     assert capsys.readouterr().out == "changed=1\n"

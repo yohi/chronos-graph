@@ -41,7 +41,7 @@ class FakeSQLiteConnection:
         ]
         rows.append({"id": "memory-canonical", "project": "chronos-graph"})
         self.execute_fetchall = AsyncMock(return_value=rows)
-        self.executemany = AsyncMock()
+        self.executemany = AsyncMock(side_effect=[FakeCursor(rowcount=99), FakeCursor(rowcount=1)])
         self.commit = AsyncMock()
 
     async def __aenter__(self) -> FakeSQLiteConnection:
@@ -49,6 +49,13 @@ class FakeSQLiteConnection:
 
     async def __aexit__(self, *args: object) -> None:
         return None
+
+
+class FakeCursor:
+    """Minimal SQLite cursor exposing the affected-row count."""
+
+    def __init__(self, *, rowcount: int) -> None:
+        self.rowcount = rowcount
 
 
 @pytest.mark.asyncio
@@ -72,12 +79,12 @@ async def test_migrate_updates_changed_rows_in_batches(
     assert connection.execute_fetchall.await_args.args == ("SELECT id, project FROM memories",)
     assert connection.executemany.await_count == 2
     assert connection.executemany.await_args_list[0].args == (
-        "UPDATE memories SET project = ? WHERE id = ?",
-        [("chronos-graph", f"memory-{index}") for index in range(100)],
+        "UPDATE memories SET project = ? WHERE id = ? AND project = ?",
+        [("chronos-graph", f"memory-{index}", " /tmp/Chronos-Graph/ ") for index in range(100)],
     )
     assert connection.executemany.await_args_list[1].args == (
-        "UPDATE memories SET project = ? WHERE id = ?",
-        [("chronos-graph", "memory-100")],
+        "UPDATE memories SET project = ? WHERE id = ? AND project = ?",
+        [("chronos-graph", "memory-100", " /tmp/Chronos-Graph/ ")],
     )
     connection.commit.assert_awaited_once_with()
-    assert capsys.readouterr().out == "changed=101\n"
+    assert capsys.readouterr().out == "changed=100\n"

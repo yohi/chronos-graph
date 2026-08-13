@@ -25,13 +25,13 @@ from context_store.utils.project_normalizer import normalize_project_name  # noq
 _BATCH_SIZE: Final = 100
 _DEFAULT_DB_PATH: Final = "~/.chronos_graph/memories.db"
 _SELECT_MEMORIES: Final = "SELECT id, project FROM memories"
-_UPDATE_PROJECT: Final = "UPDATE memories SET project = ? WHERE id = ?"
+_UPDATE_PROJECT: Final = "UPDATE memories SET project = ? WHERE id = ? AND project = ?"
 
 
 async def migrate(connection: aiosqlite.Connection) -> int:
     """Normalize changed projects and commit the updates."""
     rows = await connection.execute_fetchall(_SELECT_MEMORIES)
-    updates: list[tuple[str | None, str]] = []
+    updates: list[tuple[str | None, str, str | None]] = []
     changed = 0
 
     for row in rows:
@@ -41,14 +41,15 @@ async def migrate(connection: aiosqlite.Connection) -> int:
         if normalized == project:
             continue
 
-        updates.append((normalized, memory_id))
-        changed += 1
+        updates.append((normalized, memory_id, project))
         if len(updates) == _BATCH_SIZE:
-            await connection.executemany(_UPDATE_PROJECT, updates.copy())
+            cursor = await connection.executemany(_UPDATE_PROJECT, updates.copy())
+            changed += cursor.rowcount
             updates.clear()
 
     if updates:
-        await connection.executemany(_UPDATE_PROJECT, updates.copy())
+        cursor = await connection.executemany(_UPDATE_PROJECT, updates.copy())
+        changed += cursor.rowcount
     await connection.commit()
     return changed
 

@@ -23,7 +23,7 @@ if str(_SRC_PATH) not in sys.path:
 from context_store.utils.project_normalizer import normalize_project_name  # noqa: E402
 
 _SELECT_MEMORIES: Final = "SELECT id, project FROM memories"
-_UPDATE_PROJECT: Final = "UPDATE memories SET project = $1 WHERE id = $2"
+_UPDATE_PROJECT: Final = "UPDATE memories SET project = $1 WHERE id = $2 AND project = $3"
 
 
 async def migrate(connection: asyncpg.Connection) -> int:
@@ -38,8 +38,8 @@ async def migrate(connection: asyncpg.Connection) -> int:
             if normalized == project:
                 continue
 
-            await connection.execute(_UPDATE_PROJECT, normalized, row["id"])
-            changed += 1
+            result = await connection.execute(_UPDATE_PROJECT, normalized, row["id"], project)
+            changed += int(result.rsplit(" ", 1)[1])
 
     return changed
 

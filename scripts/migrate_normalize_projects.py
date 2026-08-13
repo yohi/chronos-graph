@@ -48,6 +48,7 @@ def _request(
     *,
     method: str = "GET",
     payload: bytes | None = None,
+    prefer: str | None = None,
 ) -> bytes:
     """Execute one authenticated PostgREST request and return its body."""
     headers = {
@@ -57,6 +58,8 @@ def _request(
     }
     if payload is not None:
         headers["Content-Type"] = "application/json"
+    if prefer is not None:
+        headers["Prefer"] = prefer
 
     request = Request(  # noqa: S310
         endpoint, data=payload, headers=headers, method=method
@@ -111,12 +114,25 @@ def _fetch_rows(base_url: str, key: str) -> list[MemoryRow]:
         offset += _PAGE_SIZE
 
 
-def _update_project(base_url: str, key: str, memory_id: str, project: str | None) -> None:
+def _update_project(
+    base_url: str, key: str, memory_id: str, old_project: str | None, project: str | None
+) -> int:
     """Replace one memory's project value through PostgREST."""
     encoded_id = quote(memory_id, safe="")
-    endpoint = f"{base_url}/rest/v1/memories?id=eq.{encoded_id}"
+    project_filter = "is.null" if old_project is None else f"eq.{quote(old_project, safe='')}"
+    endpoint = f"{base_url}/rest/v1/memories?id=eq.{encoded_id}&project={project_filter}"
     payload = json.dumps({"project": project}).encode()
-    _request(endpoint, key, method="PATCH", payload=payload)
+    response = _request(
+        endpoint,
+        key,
+        method="PATCH",
+        payload=payload,
+        prefer="return=representation",
+    )
+    updated_rows = json.loads(response)
+    if not isinstance(updated_rows, list):
+        raise ValueError("PostgREST update response must be a list")
+    return len(updated_rows)
 
 
 def migrate(base_url: str, key: str) -> MigrationCounts:
@@ -128,8 +144,7 @@ def migrate(base_url: str, key: str) -> MigrationCounts:
         if normalized == row["project"]:
             unchanged += 1
             continue
-        _update_project(base_url.rstrip("/"), key, row["id"], normalized)
-        changed += 1
+        changed += _update_project(base_url.rstrip("/"), key, row["id"], row["project"], normalized)
     return MigrationCounts(changed=changed, unchanged=unchanged)
 
 

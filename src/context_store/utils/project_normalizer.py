@@ -27,22 +27,26 @@ def normalize_project_name(project: str | None) -> str | None:
     if not is_path:
         return cleaned.lower()
 
-    expanded = os.path.realpath(os.path.expanduser(cleaned))
+    # --- path handling: keep all filesystem access under a resolved, real base ---
     try:
-        path = Path(expanded)
-        if is_path or path.exists():
-            if path.exists():
-                current = path if path.is_dir() else path.parent
-                while True:
-                    if (current / ".git").exists():
-                        name = current.name.strip()
-                        return name.lower() if name else None
-                    parent = current.parent
-                    if parent == current:
-                        break
-                    current = parent
+        # expanduser is necessary for tilde paths, but we never pass raw cleaned to Path.
+        expanded = os.path.expanduser(cleaned)
+        # resolve() handles ".." / symlinks; ValueError is raised for invalid
+        # paths such as null bytes.
+        path = Path(expanded).resolve()
     except (OSError, ValueError):
-        pass
+        path = None
+
+    if path is not None and path.exists():
+        current = path if path.is_dir() else path.parent
+        while True:
+            if (current / ".git").exists():
+                name = current.name.strip()
+                return name.lower() if name else None
+            parent = current.parent
+            if parent == current:
+                break
+            current = parent
 
     segments = [segment for segment in cleaned.replace("\\", "/").split("/") if segment]
     name = segments[-1] if segments else ""

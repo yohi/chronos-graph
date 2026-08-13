@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from context_store import server as server_module
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -302,6 +304,60 @@ async def test_memory_save_url_uses_semaphore(chronos_server, mock_orchestrator:
 
     # セマフォにより順序が保証される: start, end, start, end
     assert call_order == ["start", "end", "start", "end"]
+
+
+@pytest.fixture
+def mcp_server(monkeypatch, chronos_server):
+    monkeypatch.setattr(server_module, "_server", chronos_server)
+    return server_module
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_name", "kwargs", "orchestrator_method"),
+    [
+        (
+            "memory_save",
+            {"content": "test", "project": "/home/y_ohi/program/private/justice"},
+            "save",
+        ),
+        (
+            "memory_save_url",
+            {"url": "https://example.com", "project": "/home/y_ohi/program/private/justice"},
+            "save_url",
+        ),
+        (
+            "memory_search",
+            {"query": "test", "project": "/home/y_ohi/program/private/justice"},
+            "search",
+        ),
+        (
+            "memory_search_graph",
+            {"query": "test", "project": "/home/y_ohi/program/private/justice"},
+            "search_graph",
+        ),
+        (
+            "memory_stats",
+            {"project": "/home/y_ohi/program/private/justice"},
+            "stats",
+        ),
+    ],
+)
+async def test_mcp_tool_normalizes_project_before_orchestrator(
+    mcp_server,
+    mock_orchestrator: MagicMock,
+    tool_name: str,
+    kwargs: dict[str, str],
+    orchestrator_method: str,
+):
+    await getattr(mcp_server, tool_name)(**kwargs)
+
+    mock_method = getattr(mock_orchestrator, orchestrator_method)
+    call_kwargs = mock_method.call_args.kwargs
+    if tool_name in {"memory_save", "memory_save_url"}:
+        assert call_kwargs["metadata"]["project"] == "justice"
+    else:
+        assert call_kwargs["project"] == "justice"
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 
@@ -17,8 +18,16 @@ def normalize_project_name(project: str | None) -> str | None:
     if not cleaned:
         return None
 
+    is_path = (
+        cleaned in {".", ".."}
+        or "/" in cleaned
+        or "\\" in cleaned
+        or bool(re.match(r"^[A-Za-z]:[\\/]", cleaned))
+    )
+    if not is_path:
+        return cleaned.lower()
+
     expanded = os.path.expanduser(cleaned)
-    is_path = any(separator in cleaned for separator in ("/", "\\", os.sep))
     try:
         path = Path(expanded).resolve()
         if is_path or path.exists():

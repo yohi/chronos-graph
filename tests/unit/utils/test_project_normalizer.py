@@ -38,16 +38,41 @@ def test_normalize_project_name_trailing_separator(separator: str) -> None:
     assert normalize_project_name(f"my-repo{separator}") == "my-repo"
 
 
-@pytest.mark.parametrize("relative_path", [".", "src"])
+@pytest.mark.parametrize(
+    ("relative_path", "expected"),
+    [(".", "my-repo"), ("src", "src"), ("frontend", "frontend")],
+)
 def test_normalize_project_name_relative_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative_path: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    relative_path: str,
+    expected: str,
 ) -> None:
     repo_root = tmp_path / "my-repo"
     (repo_root / ".git").mkdir(parents=True)
     (repo_root / "src").mkdir()
     monkeypatch.chdir(repo_root)
 
-    assert normalize_project_name(relative_path) == "my-repo"
+    assert normalize_project_name(relative_path) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "src",
+        "frontend",
+        "./repo",
+        "../repo",
+        "~/repo",
+        "/path/to/repo",
+        r"C:\\Users\\Alice\\MyRepo",
+        "  Mixed-Case  ",
+        "repo/",
+    ],
+)
+def test_normalize_project_name_is_idempotent(value: str) -> None:
+    normalized = normalize_project_name(value)
+    assert normalize_project_name(normalized) == normalized
 
 
 def test_normalize_project_name_expands_user_home(

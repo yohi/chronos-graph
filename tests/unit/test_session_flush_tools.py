@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from context_store import server as server_module
 from context_store.orchestrator import Orchestrator
 from context_store.server import ChronosServer
 
@@ -59,6 +60,27 @@ class TestSessionFlushTool:
             session_id="test-session",
             project="my-project",
             tags=["tag1", "tag2"],
+        )
+
+    @pytest.mark.asyncio
+    async def test_session_flush_normalizes_project_before_orchestrator(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        server_with_mock_orchestrator: ChronosServer,
+    ) -> None:
+        monkeypatch.setattr(server_module, "_server", server_with_mock_orchestrator)
+
+        await server_module.session_flush(
+            conversation_log="User: test\nAssistant: test",
+            project="/workspace/justice",
+        )
+
+        mock_orch = server_with_mock_orchestrator._orchestrator
+        mock_orch.session_flush.assert_called_once_with(
+            conversation_log="User: test\nAssistant: test",
+            session_id=None,
+            project="justice",
+            tags=None,
         )
 
     @pytest.mark.asyncio

@@ -267,12 +267,16 @@ class TestSaveOperation:
         """save() が IngestionPipeline.ingest() に委譲される。"""
         ingestion = _make_mock_ingestion_pipeline()
         orch, *_, _lifecycle_manager = await _build_orchestrator(ingestion_pipeline=ingestion)
+        metadata = {"project": "/workspace/justice"}
 
-        results = await orch.save("test content", source_type=SourceType.MANUAL)
+        results = await orch.save("test content", source_type=SourceType.MANUAL, metadata=metadata)
 
         ingestion.ingest.assert_called_once()
         call_kwargs = ingestion.ingest.call_args
         assert call_kwargs[0][0] == "test content"
+        assert metadata["project"] == "justice"
+        assert call_kwargs.kwargs["metadata"] is metadata
+        assert call_kwargs.kwargs["metadata"]["project"] == "justice"
         assert len(results) > 0
 
     @pytest.mark.asyncio
@@ -293,13 +297,17 @@ class TestSaveOperation:
         """save_url() が IngestionPipeline.ingest() に URL ソースタイプで委譲される。"""
         ingestion = _make_mock_ingestion_pipeline()
         orch, *_ = await _build_orchestrator(ingestion_pipeline=ingestion)
+        metadata = {"project": "/workspace/justice"}
 
-        await orch.save_url("https://example.com/page")
+        await orch.save_url("https://example.com/page", metadata=metadata)
 
         ingestion.ingest.assert_called_once()
         call_args = ingestion.ingest.call_args
         assert call_args[0][0] == "https://example.com/page"
         assert call_args[1].get("source_type") == SourceType.URL
+        assert metadata["project"] == "justice"
+        assert call_args.kwargs["metadata"] is metadata
+        assert call_args.kwargs["metadata"]["project"] == "justice"
 
 
 class TestSearchOperation:
@@ -322,10 +330,15 @@ class TestSearchOperation:
         retrieval = _make_mock_retrieval_pipeline()
         orch, *_ = await _build_orchestrator(retrieval_pipeline=retrieval)
 
-        await orch.search("test query", project="my-project", top_k=5, max_tokens=1000)
+        await orch.search(
+            "test query",
+            project="/workspace/justice",
+            top_k=5,
+            max_tokens=1000,
+        )
 
         call_kwargs = retrieval.search.call_args[1]
-        assert call_kwargs.get("project") == "my-project"
+        assert call_kwargs.get("project") == "justice"
         assert call_kwargs.get("top_k") == 5
         assert call_kwargs.get("max_tokens") == 1000
 
@@ -409,10 +422,13 @@ class TestSearchGraphOperation:
         retrieval = _make_mock_retrieval_pipeline()
         orch, *_ = await _build_orchestrator(graph=graph, retrieval_pipeline=retrieval)
 
-        await orch.search_graph("test query", project="my-project")
+        await orch.search_graph(
+            "test query",
+            project="/workspace/justice",
+        )
 
         call_kwargs = retrieval.search.call_args[1]
-        assert call_kwargs.get("project") == "my-project"
+        assert call_kwargs.get("project") == "justice"
 
 
 class TestDeleteOperation:
@@ -515,9 +531,13 @@ class TestStatsOperation:
         storage.list_by_filter = AsyncMock(return_value=[])
         orch, *_ = await _build_orchestrator(storage=storage)
 
-        result = await orch.stats(project="my-project")
+        result = await orch.stats(project="/workspace/justice")
 
         assert isinstance(result, dict)
+        assert result["project"] == "justice"
+        assert storage.count_by_filter.call_count == 2
+        assert storage.count_by_filter.call_args_list[0].args[0].project == "justice"
+        assert storage.count_by_filter.call_args_list[1].args[0].project == "justice"
 
 
 class TestDisposeOperation:
@@ -651,7 +671,7 @@ class TestSessionFlush:
         assert "not configured" in resp["error"]
 
     @pytest.mark.asyncio
-    async def test_session_flush_calls_batch_processor(self):
+    async def test_session_flush_normalizes_project_before_batch_processing(self):
         """session_flush() が BatchProcessor.process() を呼び出す。"""
         task_registry = _make_mock_task_registry()
         batch_processor = AsyncMock()
@@ -664,7 +684,11 @@ class TestSessionFlush:
         )
 
         # session_flush を実行
-        await orch.session_flush("test log", session_id="sess-123")
+        await orch.session_flush(
+            "test log",
+            session_id="sess-123",
+            project="/workspace/justice",
+        )
 
         # 登録されたタスクを取得して実行
         task = task_registry.register.call_args[0][0]
@@ -674,7 +698,7 @@ class TestSessionFlush:
         batch_processor.process.assert_called_once_with(
             "test log",
             session_id="sess-123",
-            project=None,
+            project="justice",
             tags=None,
         )
 

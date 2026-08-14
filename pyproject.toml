@@ -75,6 +75,9 @@ select = ["E", "F", "I", "S", "B"]
 extend-select = ["T20"]
 
 [tool.ruff.lint.per-file-ignores]
+"src/context_store/utils/project_normalizer.py" = [
+    "S607", # `git` is a fixed executable; dynamic part is cwd only.
+]
 "tests/**/*.py" = [
     "S101", # assert detected
     "S105", # Possible hardcoded password

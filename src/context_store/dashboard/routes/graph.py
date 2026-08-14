@@ -13,6 +13,7 @@ from context_store.dashboard.schemas import (
     TraverseEdge,
     TraverseNode,
 )
+from context_store.utils.project_normalizer import normalize_project_name
 
 router = APIRouter()
 
@@ -29,7 +30,7 @@ async def get_graph_layout(
 
     service: DashboardService = request.app.state.service
     return await service.get_graph_layout(
-        project=project,
+        project=normalize_project_name(project),
         limit=limit,
         order_by=order_by,
     )

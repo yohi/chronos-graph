@@ -113,12 +113,12 @@ async def test_traverse_graph_raises_without_graph_backend(storage_mock):
 
 @pytest.mark.asyncio
 async def test_get_project_stats(storage_mock, graph_mock):
-    storage_mock.list_projects.return_value = ["p1"]
+    storage_mock.list_projects.return_value = ["/workspace/P1"]
     storage_mock.count_by_filter.side_effect = [10, 2, 12]
     svc = DashboardService(storage=storage_mock, graph=graph_mock)
     stats = await svc.get_project_stats()
     assert len(stats) == 1
-    assert stats[0].project == "p1"
+    assert stats[0].project == "/workspace/P1"
     assert stats[0].active_count == 10
     assert stats[0].archived_count == 2
     assert stats[0].total_count == 12
@@ -127,6 +127,7 @@ async def test_get_project_stats(storage_mock, graph_mock):
     assert calls[0].args[0].archived is None  # active
     assert calls[1].args[0].archived is True  # archived
     assert calls[2].args[0].archived is False  # total
+    assert all(call.args[0].project == "p1" for call in calls)
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING
 
 from mcp.server.fastmcp import FastMCP
 
+from context_store.utils.project_normalizer import normalize_project_name
+
 if TYPE_CHECKING:
     from context_store.config import Settings
     from context_store.orchestrator import Orchestrator
@@ -410,10 +412,11 @@ async def session_flush(
         project: プロジェクト名。
         tags: タグのリスト。
     """
+    normalized_project = normalize_project_name(project)
     return await _server.session_flush(
         conversation_log=conversation_log,
         session_id=session_id,
-        project=project,
+        project=normalized_project,
         tags=tags,
     )
 
@@ -435,10 +438,11 @@ async def memory_save(
         tags: タグのリスト。
         importance: 重要度スコア(0.0〜1.0)。
     """
+    normalized_project = normalize_project_name(project)
     return await _server.memory_save(
         content=content,
         source=source,
-        project=project,
+        project=normalized_project,
         tags=tags,
         importance=importance,
     )
@@ -457,7 +461,8 @@ async def memory_save_url(
         project: プロジェクト名。
         tags: タグのリスト。
     """
-    return await _server.memory_save_url(url=url, project=project, tags=tags)
+    normalized_project = normalize_project_name(project)
+    return await _server.memory_save_url(url=url, project=normalized_project, tags=tags)
 
 
 @mcp.tool()
@@ -477,9 +482,10 @@ async def memory_search(
         top_k: 返す最大件数。
         max_tokens: 最大トークン数。
     """
+    normalized_project = normalize_project_name(project)
     return await _server.memory_search(
         query=query,
-        project=project,
+        project=normalized_project,
         memory_type=memory_type,
         top_k=top_k,
         max_tokens=max_tokens,
@@ -501,11 +507,12 @@ async def memory_search_graph(
         depth: トラバーサル深さ。
         project: プロジェクトフィルタ。
     """
+    normalized_project = normalize_project_name(project)
     return await _server.memory_search_graph(
         query=query,
         edge_types=edge_types,
         depth=depth,
-        project=project,
+        project=normalized_project,
     )
 
 
@@ -543,7 +550,8 @@ async def memory_stats(project: str | None = None) -> str:
     Args:
         project: プロジェクトフィルタ(None の場合は全体)。
     """
-    return await _server.memory_stats(project=project)
+    normalized_project = normalize_project_name(project)
+    return await _server.memory_stats(project=normalized_project)
 
 
 # ---------------------------------------------------------------------------

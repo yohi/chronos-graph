@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from context_store.dashboard.schemas import (
@@ -17,6 +18,7 @@ from context_store.storage.protocols import (
     MemoryFilters,
     StorageAdapter,
 )
+from context_store.utils.project_normalizer import normalize_project_name
 
 if TYPE_CHECKING:
     from context_store.retrieval.pipeline import RetrievalPipeline, RetrievalResponse
@@ -61,10 +63,17 @@ class DashboardService:
 
         async def _fetch_project_stats(p: str) -> ProjectStats:
             async with semaphore:
+                normalized_project = normalize_project_name(p)
                 active, archived, total = await asyncio.gather(
-                    self._storage.count_by_filter(MemoryFilters(project=p, archived=None)),
-                    self._storage.count_by_filter(MemoryFilters(project=p, archived=True)),
-                    self._storage.count_by_filter(MemoryFilters(project=p, archived=False)),
+                    self._storage.count_by_filter(
+                        MemoryFilters(project=normalized_project, archived=None)
+                    ),
+                    self._storage.count_by_filter(
+                        MemoryFilters(project=normalized_project, archived=True)
+                    ),
+                    self._storage.count_by_filter(
+                        MemoryFilters(project=normalized_project, archived=False)
+                    ),
                 )
                 return ProjectStats(
                     project=p,
@@ -83,10 +92,13 @@ class DashboardService:
         order_by: Literal["importance", "recency"] = "importance",
     ) -> GraphLayoutResponse:
         sort_column = "importance_score" if order_by == "importance" else "created_at"
-        total = await self._storage.count_by_filter(MemoryFilters(project=project, archived=None))
+        normalized_project = normalize_project_name(project)
+        total = await self._storage.count_by_filter(
+            MemoryFilters(project=normalized_project, archived=None)
+        )
         memories = await self._storage.list_by_filter(
             MemoryFilters(
-                project=project,
+                project=normalized_project,
                 archived=None,
                 limit=limit,
                 order_by=sort_column,
@@ -150,7 +162,11 @@ class DashboardService:
 
     async def search_memories(self, filters: MemoryFilters) -> list[Memory]:
         """Search memories by filters."""
-        return await self._storage.list_by_filter(filters)
+        normalized_filters = replace(
+            filters,
+            project=normalize_project_name(filters.project),
+        )
+        return await self._storage.list_by_filter(normalized_filters)
 
     async def semantic_search(
         self,
@@ -163,7 +179,11 @@ class DashboardService:
             raise RuntimeError("retrieval_pipeline not configured for this dashboard")
 
         top_k = max(1, min(top_k, 50))
-        response = await self._retrieval.search(query=query, project=project, top_k=top_k)
+        response = await self._retrieval.search(
+            query=query,
+            project=normalize_project_name(project),
+            top_k=top_k,
+        )
         memories = getattr(response, "memories", None)
         if memories is not None:
             return list(memories)

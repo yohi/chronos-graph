@@ -95,22 +95,22 @@ def _parse_rows(payload: bytes) -> list[MemoryRow]:
 def _fetch_rows(base_url: str, key: str) -> list[MemoryRow]:
     """Fetch all memory identifiers and project values from Supabase."""
     rows: list[MemoryRow] = []
-    offset = 0
+    last_id: str | None = None
     while True:
-        query = urlencode(
-            {
-                "select": "id,project",
-                "order": "id.asc",
-                "limit": _PAGE_SIZE,
-                "offset": offset,
-            }
-        )
+        query_params: dict[str, str | int] = {
+            "select": "id,project",
+            "order": "id.asc",
+            "limit": _PAGE_SIZE,
+        }
+        if last_id is not None:
+            query_params["id"] = f"gt.{last_id}"
+        query = urlencode(query_params)
         endpoint = f"{base_url}/rest/v1/memories?{query}"
         page = _parse_rows(_request(endpoint, key))
         rows.extend(page)
         if len(page) < _PAGE_SIZE:
             return rows
-        offset += _PAGE_SIZE
+        last_id = page[-1]["id"]
 
 
 def _update_project(

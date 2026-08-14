@@ -142,7 +142,7 @@ class SourceType(str, Enum):
 | `updated_at` | timestamp | 更新日時 |
 | `archived_at` | timestamp? | アーカイブ日時（NULL = Active） |
 | `tags` | text[] | プロジェクトタグ等 |
-| `project` | text? | プロジェクト識別子。MCP ツール受け口で自動正規化される：区切り文字を含むローカルパスは git リポジトリルートのディレクトリ名に解決し、存在しない場合は basename を採用して前後の空白を除去、末尾の `/` を取り除き、小文字化する。区切り文字を含まない単純名はそのまま小文字化する。例: `/home/user/repo` → `repo`、`/path/to/chronos-graph` → `chronos-graph`、`  DotFiles-AI/ ` → `dotfiles-ai`、`sibyl` → `sibyl`。 |
+| `project` | text? | プロジェクト識別子。MCP ツール受け口で自動正規化される。入力が `.` の場合だけ、現在の Git リポジトリルートのディレクトリ名に解決する。それ以外の入力は filesystem や Git ルートへ解決せず、文字列上の basename を採用して前後の空白を除去、末尾の `/` を取り除き、小文字化する。区切り文字を含まない単純名はそのまま小文字化する。例: `.` → 現在の Git リポジトリ名、`/home/user/repo` → `repo`、`/path/to/chronos-graph` → `chronos-graph`、`  DotFiles-AI/ ` → `dotfiles-ai`、`sibyl` → `sibyl`。 |
 
 ### 3.2 インデックス
 

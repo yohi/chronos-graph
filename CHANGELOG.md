@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.1.0](https://github.com/yohi/chronos-graph/compare/v3.0.1...v3.1.0) (2026-08-14)
+
+
+### Features
+
+* プロジェクト名を自動正規化し、既存データのバックフィルを追加 ([#359](https://github.com/yohi/chronos-graph/issues/359)) ([b291815](https://github.com/yohi/chronos-graph/commit/b29181593aa666c5f481aacaf4706f9b820abc45))
+
 ## [3.0.1](https://github.com/yohi/chronos-graph/compare/v3.0.0...v3.0.1) (2026-07-30)
 
 

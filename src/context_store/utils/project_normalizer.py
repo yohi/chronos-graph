@@ -1,68 +1,69 @@
 from __future__ import annotations
 
-import os
 import re
 import subprocess
+from pathlib import Path
 
 
-def normalize_project_name(project: str | None) -> str | None:
-    """Convert a raw project identifier into the git repository root name."""
-    if project is None:
-        return None
-
+def _sanitize_project_input(project: str) -> str | None:
+    """Strip whitespace, trailing separators, and dangerous control characters."""
     cleaned = project.strip()
-    if not cleaned:
-        return None
-
     cleaned = cleaned.rstrip("/\\")
     if not cleaned:
         return None
+    # Remove embedded null bytes and other control characters that could cause
+    # path-processing APIs to behave unexpectedly or bypass validation.
+    cleaned = cleaned.replace("\x00", "")
+    cleaned = "".join(char for char in cleaned if ord(char) >= 32 or char in {"\t"})
+    cleaned = cleaned.strip()
+    cleaned = cleaned.rstrip("/\\")
+    if not cleaned:
+        return None
+    return cleaned
 
-    is_path = (
-        cleaned in {".", ".."}
-        or "/" in cleaned
-        or "\\" in cleaned
-        or bool(re.match(r"^[A-Za-z]:[\\/]", cleaned))
-    )
-    if not is_path:
-        return cleaned.lower()
 
-    # --- path handling: never pass user input directly to Path; use git subprocess ---
-    # expanduser is necessary for tilde paths, but we keep the value as a string.
-    expanded = os.path.expanduser(cleaned)
+def _safe_basename(cleaned: str) -> str | None:
+    """Extract a safe project name from a string without touching the filesystem."""
+    # Strip a Windows drive letter prefix (e.g. C: or C:) so the remainder is
+    # treated as a normal path segment list.
+    without_drive = re.sub(r"^[A-Za-z]:", "", cleaned)
+    segments = [segment for segment in without_drive.replace("\\", "/").split("/") if segment]
+    name = segments[-1] if segments else ""
+    name = name.strip()
+    if not name:
+        return None
+    return name.lower()
 
-    # Resolve the candidate directory without building a Path from user data.
-    candidate_dir = expanded
-    try:
-        if not os.path.isdir(candidate_dir):
-            parent = os.path.dirname(candidate_dir) or candidate_dir
-            if os.path.isdir(parent):
-                candidate_dir = parent
-    except (OSError, ValueError):
-        candidate_dir = ""
 
-    if candidate_dir:
+def normalize_project_name(project: str | None) -> str | None:
+    """Convert a raw project identifier into a stable project name.
+
+    User-provided paths are treated lexically and are never opened or passed to
+    a subprocess. The current working directory is trusted, so ``.`` may still
+    be resolved to its repository name for local callers.
+    """
+    if project is None:
+        return None
+
+    cleaned = _sanitize_project_input(project)
+    if cleaned is None:
+        return None
+
+    if cleaned == ".":
         try:
             result = subprocess.run(  # noqa: S607
                 ["git", "rev-parse", "--show-toplevel"],
-                cwd=candidate_dir,
+                cwd=Path.cwd(),
                 capture_output=True,
                 text=True,
                 check=False,
                 timeout=5,
             )
             if result.returncode == 0 and result.stdout:
-                repo_root = result.stdout.strip()
-                if repo_root:
-                    name = os.path.basename(repo_root).strip()
-                    if name:
-                        return name.lower()
+                repo_root = Path(result.stdout.strip())
+                if repo_root.name:
+                    return repo_root.name.lower()
         except (OSError, subprocess.SubprocessError, ValueError):
             pass
 
-    segments = [segment for segment in cleaned.replace("\\", "/").split("/") if segment]
-    name = segments[-1] if segments else ""
-    name = name.strip()
-    if not name:
-        return None
-    return name.lower()
+    return _safe_basename(cleaned)

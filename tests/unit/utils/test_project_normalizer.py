@@ -31,6 +31,7 @@ def test_normalize_project_name(raw: str | None, expected: str | None) -> None:
     ],
 )
 def test_normalize_project_name_windows_path(raw: str) -> None:
+    # On Linux these paths don't exist, so we expect a safe basename fallback.
     assert normalize_project_name(raw) == "myrepo"
 
 
@@ -92,17 +93,48 @@ def test_normalize_project_name_expands_user_home(
 
 
 def test_normalize_project_name_nested_repo_directory(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     repo_root = tmp_path / "my-repo"
     nested_directory = repo_root / "src" / "package"
     (repo_root / ".git").mkdir(parents=True)
     nested_directory.mkdir(parents=True)
-    monkeypatch.chdir(tmp_path)
 
-    # Mock git so we don't need an actual git repository in the temp dir.
+    assert normalize_project_name(str(nested_directory)) == "package"
+
+
+def test_normalize_project_name_does_not_use_user_path_as_git_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_directory = tmp_path / "project"
+    project_directory.mkdir()
+
+    def fail_if_git_is_called(*args: object, **kwargs: object) -> None:
+        raise AssertionError("user-controlled paths must not become git cwd")
+
     monkeypatch.setattr(
         "context_store.utils.project_normalizer.subprocess.run",
-        lambda *args, **kwargs: MagicMock(returncode=0, stdout=str(repo_root)),
+        fail_if_git_is_called,
     )
-    assert normalize_project_name(str(nested_directory)) == "my-repo"
+
+    assert normalize_project_name(str(project_directory)) == "project"
+
+
+def test_normalize_project_name_rejects_path_traversal() -> None:
+    # CodeQL: user input must not be passed directly to path expressions.
+    assert normalize_project_name("../../../etc/passwd") == "passwd"
+    assert normalize_project_name("/foo/../bar/../baz") == "baz"
+    assert normalize_project_name("foo/../../bar") == "bar"
+
+
+def test_normalize_project_name_strips_null_bytes_and_nontext() -> None:
+    # CodeQL: input containing embedded nulls or control chars is unsafe.
+    # Null bytes are removed (not treated as separators), so the remainder is concatenated.
+    assert normalize_project_name("repo\x00secret") == "reposecret"
+    assert normalize_project_name("repo\x1bescape") == "repoescape"
+
+
+def test_normalize_project_name_rejects_unsafe_drive_path() -> None:
+    # Drive-relative paths should fall back to a safe basename.
+    assert normalize_project_name("C:secret") == "secret"
+    assert normalize_project_name("C:\\..\\..\\windows") == "windows"

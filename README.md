@@ -99,7 +99,7 @@ python scripts/sandbox_runner.py -- bash -c "cd frontend && pnpm install && pnpm
 > [!NOTE]
 > **現行実装上の注意**: `memory_search` の `memory_type` フィルタは API 互換性のため受け取りますが、検索結果にはまだ反映されません。`memory_search_graph` の `edge_types` / `depth` 指定も専用経路は未実装で、標準のハイブリッド検索へフォールバックします。
 >
-> **Project 名の正規化**: `memory_save` / `memory_search` などで指定した `project` は自動的に正規化されます。パスがローカルに存在すれば git リポジトリルート名、そうでなければ basename を前後空白除去・小文字化します。例えば `/home/user/my-repo` は `my-repo` として保存・検索されます。
+> **Project 名の正規化**: `memory_save` / `memory_search` などで指定した `project` は自動的に正規化されます。入力は filesystem にアクセスせず basename を前後空白除去・小文字化します。`.` だけは現在の git リポジトリルート名に変換されます。例えば `/home/user/my-repo` は `my-repo` として保存・検索されます。
 
 ---
 

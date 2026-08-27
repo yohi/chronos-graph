@@ -82,18 +82,20 @@ ChronosGate 側の手順に委譲します。このプロトコルでは、Chron
 ---
 
 ### Phase 4: 対象AIエージェントの選択 (BLOCKING STEP)
-必ず `ask_question` 等のツールを使用して、複数選択可能な形式でフックを適用する対象エージェントを提示し、ユーザーに選択させてください。
+必ず `ask_question` 等のツールを使用して、複数選択可能な形式でChronosGraphを利用する対象エージェントを提示し、ユーザーに選択させてください。
+選択結果は、`--agents`へ渡す正式対応Agentのcanonical setです。空選択は不可で、一覧外のAgentは選択できません。
 
 * `[ ] claudecode`
 * `[ ] codex`
-* `[ ] antigravitycl`
 * `[ ] opencode`
-* `[ ] cursorcli`
 
 ---
 
 ### Phase 5: scripts/bootstrap.sh の実行
 収集したパラメータに基づいて、`scripts/bootstrap.sh` を引数付きで呼び出します。AIエージェント自身でファイルを直接編集したり作成したりすることはせず、必ずこのスクリプトに実行を委ねてください。
+`--agents`は1回だけ指定し、値なし、空要素、重複、`notcodex`などの未知IDを含めないでください。bootstrapはこの値を
+副作用開始前に一度だけparse・validateし、adapter tableのcanonical orderへ正規化した同じAgent setをSkills / instructions
+同期と、`all`時のturn-end hook setupへ渡します。Agent名のsubstring判定や環境変数による暗黙選択は行いません。
 
 #### コマンド生成例：
 ```bash
@@ -125,4 +127,6 @@ ChronosGate 側の手順に委譲します。このプロトコルでは、Chron
 設定完了後、疎通確認と turn-end ingestion の正常動作を確認します。
 1. **MCP 疎通テスト**: MCPサーバーが正常に起動し、設定したデータベースやキャッシュに接続できるかテストします。
 2. **Turn-end ingestion テスト**: `CHRONOS_INGESTION_MODE=all` を選んだ場合、登録したエージェントの turn-end hook / plugin が会話ログをバックグラウンド保存できるか確認します。
-3. すべてクリアになれば、自動セットアップは完了です。
+3. **Legacy prompt確認**: 既存の旧Save / Recall promptが検出された場合はwarning内容を確認します。旧Save promptが残る状態で
+   `all`を選んだ場合はwriteされず、旧promptを手動でバックアップ確認のうえ削除してから再実行します。
+4. すべてクリアになれば、自動セットアップは完了です。

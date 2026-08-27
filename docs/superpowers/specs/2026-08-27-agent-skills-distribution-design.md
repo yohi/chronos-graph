@@ -40,7 +40,7 @@ ChronosGraph の Save / Recall 運用ルールは、現在2つの長大な syste
 
 - Agent Skills非対応環境へのfallback prompt
 - Cursor CLIとAntigravityの正式対応
-- 既存ユーザー環境にコピー済みの旧promptの検出・削除・migration
+- 既存ユーザー環境にコピー済みの旧promptの自動削除・自動migration（非破壊検出と警告は対象）
 - `memory_save`、`memory_search`、`session_flush`の発火仕様変更
 - `CHRONOS_INGESTION_MODE=selective|all` の意味変更
 - turn-end ingestionのpayload処理・送信処理変更
@@ -123,11 +123,11 @@ frontmatter descriptionは、タスク開始・error・規約判断時に使うS
 
 ## 5. 対応Agentと配置先
 
-| Agent ID | Global Skills root | Global instructions |
-| --- | --- | --- |
-| `claudecode` | `~/.claude/skills/` | `~/.claude/CLAUDE.md` |
-| `codex` | `~/.agents/skills/` | `~/.codex/AGENTS.md` |
-| `opencode` | `~/.config/opencode/skills/` | `~/.config/opencode/AGENTS.md` |
+| Agent ID | Global Skills root | Global instructions | Approved instructions root |
+| --- | --- | --- | --- |
+| `claudecode` | `~/.claude/skills/` | `~/.claude/CLAUDE.md` | `~/.claude/` |
+| `codex` | `~/.agents/skills/` | `~/.codex/AGENTS.md` | `~/.codex/` |
+| `opencode` | `~/.config/opencode/skills/` | `~/.config/opencode/AGENTS.md` | `~/.config/opencode/` |
 
 配置先は同期helper内の明示的なadapter tableで管理する。将来Agentは、公式なglobal Skillsと
 global instructionsの両経路、および自動検証方法が確定してから追加する。
@@ -137,12 +137,20 @@ global instructionsの両経路、および自動検証方法が確定してか�
 `--agents` を「ChronosGraphを利用する対象Agent環境」の選択へ再定義する。
 
 - 必須かつ空文字不可
+- `--agents` optionは1回だけ指定でき、欠落・複数指定・値なしを拒否
 - 許容値は `claudecode,codex,opencode`
-- comma-separated入力の順序を正規化し、重複を除去
+- comma-separated入力を要素ごとに一度だけparseし、前後空白を除去する。空要素は拒否
+- adapter tableで定義したcanonical orderへ正規化し、重複を除去した不変のcanonical agent setを生成
 - 未知IDまたは正式対応外IDが1つでもあれば書き込み前に失敗
+- `notcodex` のように許容IDを部分文字列として含む値も未知IDとして拒否
+- raw valueの再parse、環境変数からの暗黙補完、substring-basedなAgent判定は禁止
+- canonical agent setの検証は `.env` 作成、依存関係インストール、MCP設定生成、その他のfilesystem writeより前に完了
 - `selective` でもSkills / instructions同期を実行
-- `all` では同期後、同じ選択対象へ既存turn-end hook setupを実行
+- `all` では同期後、同じcanonical agent setを既存turn-end hook setupへ渡す
 - `--non-interactive` でもAgentを暗黙選択しない
+
+bootstrapは、引数解析時に生成したcanonical agent setを同期helperと既存hook setupの唯一の入力として保持する。
+hook側はcanonical setの厳密なmembershipだけを使い、入力文字列の再分割や部分文字列検索を行わない。
 
 `--source=local|remote` はMCP serverの実行方式だけを表す。Agent資産はどちらの場合も、実行中の
 bootstrapと同じRepository checkoutまたはrelease tarballに同梱されたSSOTから同期する。
@@ -180,6 +188,15 @@ Sentinelの内容は `owner=chronosgraph` と `format=1` の2行に固定し、�
 - 同名directoryが存在しsentinelがない場合、ユーザー管理Skillとの衝突として失敗
 - 他のSkill directoryは列挙・snapshotするだけで変更しない
 
+Instructionsのsymlinkは、symlinkであること自体をChronosGraphの所有証跡とはみなさない。preflightでは
+symlinkをfollowして書き込む前に、`lstat`でlinkを識別し、解決後のcanonical pathと既存親directoryのcanonical
+pathが、対象Agent adapterの承認済みinstructions root内にあることをpath component単位で検証する。
+正常に解決できるsymlinkであってもroot外を指す場合はcollisionとして拒否する。共有symlinkを許可する実装を
+追加する場合も、`--allow-shared-instructions-symlink`と事前に承認された`--shared-instructions-root`の両方が
+指定されない限り拒否し、任意のroot外pathへ書き込める暗黙の許可は設けない。本仕様の初期実装ではshared
+symlinkを許可せず、上記opt-inが導入されるまで常にcollisionとして扱う。broken、cyclic、non-regular target、root外のparent symlinkも同じく
+preflight errorとし、非所有領域へ到達するwriteを開始しない。
+
 ## 8. 同期コンポーネント
 
 `scripts/sync_agent_assets.py` を内部CLIとして追加する。責務は次に限定する。
@@ -205,6 +222,8 @@ Sentinelの内容は `owner=chronosgraph` と `format=1` の2行に固定し、�
 5. expected outputと必要actionを生成
 6. marker外instructionsをbyte snapshot
 7. 非ChronosGraph Skillsをpath、type、content hashでsnapshot
+8. 既存instructionsのsymlinkと全既存parentを`lstat`し、解決後canonical pathのroot containmentを検証
+9. 旧Save / Recall promptの存在を本文非出力で検出し、modeに応じたwarningまたはcollisionを記録
 
 次はpreflight errorとし、全対象を無変更のまま終了する。
 
@@ -212,17 +231,35 @@ Sentinelの内容は `owner=chronosgraph` と `format=1` の2行に固定し、�
 - SSOT asset欠損、Skill name不一致、sentinel不正
 - 非所有の同名Skill
 - broken / cyclic symlink
+- resolved canonical pathが承認済みAgent instructions root外にあるsymlink、またはshared rootのopt-inがないsymlink
+- all modeでlegacy Save promptとmanaged blockを併存させることになる状態
 - 書き込み先または必要な親directoryを安全に準備できない状態
 
 ### 9.2 Production apply
 
+Production applyは、全対象のpreflight成功後、最初のfilesystem writeからpost-write verificationおよび
+`all`のhook setup完了までを1つのAgent asset transactionとして扱う。transactionはverificationとhook setupの
+全成功後にだけcommitされる。
+
+- preflight journalには、対象pathごとの存在、file type、permission、symlink link text、content hash、
+  marker外snapshot、ChronosGraph所有範囲、backup location、新規作成フラグを記録する
 - Skillは対象parent内でstagingし、既存owned directoryをbackupへ移してからswapする
 - Instructionsは同一directoryのtemporary fileへ書き、permissionを保持してreplaceする
 - Instructions fileが未存在なら、選択済み正式対応Agentに限り作成する
-- 既存instructionsがsymlinkならsymlink自体を置換せず、解決先を更新する
-- 全対象のpreflight成功後にだけapplyを開始する
-- 途中I/O errorでは、今回変更したChronosGraph所有部分だけをbackupから復元する
-- 新規作成物はrollback時に除去し、既存の非所有領域には触れない
+- 既存instructionsが安全なsymlinkならsymlink自体を置換せず、preflightで承認済みと判定した解決先だけを更新する
+- `all`のhook setupには、platform wrapper（`scripts/chronos-turn-hook.sh` / `.cmd`）とOpenCodeのmanaged plugin
+  registrationを含め、同期済みcanonical agent set以外のhookを変更しない
+- wrapper、hook artifact、managed plugin registrationにもbackupとrestore journalを作る。既存設定ファイルの
+  非所有contentはsnapshotと一致する範囲だけを更新・復元し、非所有変更を丸ごと上書きしない
+- 全対象のpreflight成功後にだけapplyを開始し、post-write verificationと`all` hook setupが終わるまでcommitしない
+- apply中のI/O error、post-write verification failure、hook setup failureのいずれもtransaction failureとし、
+  reverse orderで今回変更したSkill、managed instructions block、wrapper、hook artifactをrollbackする
+- rollbackでは既存owned pathをbackupから復元し、今回作成したpathは、preflight時に不存在でかつtransactionが
+  作成したことを確認できる場合だけ除去する。pre-existing pathや非所有領域は削除・修復しない
+- rollback対象の現在値がpreflight snapshotから外部変更されている場合は非所有変更を保護し、自動的に全体を
+  復元せず、未復旧のChronosGraph所有pathとして報告する
+- rollback failureは元のfailureと別に記録し、非ゼロ終了、復旧できなかったowned pathの列挙、
+  `Bootstrap complete!` 非表示を必須とする
 
 ### 9.3 Dry-run
 
@@ -248,7 +285,8 @@ Dry-runではstaging、temporary file、directory作成を含むfilesystem write
 - target contentと現在のSSOTから再計算したbundle digestが一致
 - `all` では既存hook setupも成功
 
-全確認成功後だけbootstrapを完了扱いにする。
+検証または`all` hook setupのいずれかが失敗した場合、verification成功とはみなさず、9.2のtransaction
+rollbackを完了してからerrorを報告する。全確認成功後だけtransactionをcommitし、bootstrapを完了扱いにする。
 
 ## 10. Error reportingとrollback
 
@@ -257,6 +295,11 @@ Error outputには、対象Agent、対象path、phase、action、不一致項目
 
 Apply中のerrorでは、元errorとrollback成否を両方報告する。Rollback自体が失敗した場合も完了扱いに
 せず、復旧できなかったChronosGraph所有pathを列挙する。非所有領域の自動修復は行わない。
+
+preflightでsymlink collisionまたはlegacy Save promptのall-mode collisionを検出した場合は、対象Agent、
+対象path、phase、collision種別、必要な手動対応だけを警告・errorに含め、symlinkの解決先本文やlegacy prompt
+本文を出力しない。rollbackのbackup artifactはtransaction終了時に、commitまたはrollback成功時だけ安全に
+破棄し、rollback failure時は復旧用として保持して未復旧pathとartifact識別子を報告する。
 
 ## 11. Agent Setup Protocolへの統合
 
@@ -269,6 +312,8 @@ Apply中のerrorでは、元errorとrollback成否を両方報告する。Rollba
 
 Agentは収集した対象を `--agents` へ渡し、bootstrapにMCP setup、Agent資産同期、必要時hook setupを
 一括委譲する。Agentが各global設定を個別にスクラッチ作成しない原則を維持する。
+bootstrapは`--agents`を一度だけcanonical agent setへparse・validateし、そのsetをAgent資産同期と`all` hook
+setupへそのまま渡す。validationはPhase 5のfilesystem side effectより前に行う。
 
 ### Phase 7
 
@@ -278,6 +323,8 @@ Agentは収集した対象を `--agents` へ渡し、bootstrapにMCP setup、Age
 - selected Agentの2 Skillsが存在
 - bundle digestとSSOTが一致
 - marker外instructionsと他Skillsが変更されていない
+- legacy prompt検出結果がmode guardと整合し、許可されたwarning以外のcollisionがない
+- transaction commit後にselected Agentのhook artifactが存在し、`all`ではhook setupが成功している
 
 ## 12. 旧方式の廃止と文書更新
 
@@ -287,9 +334,28 @@ Agentは収集した対象を `--agents` へ渡し、bootstrapにMCP setup、Age
 - `AGENTS.md` の旧prompt参照をRepository Skill SSOT参照へ更新
 - Agent Setup ProtocolのPhase 4、5、7を新方式へ更新
 - bootstrapの `Final Step: Enabling Autonomous Memory` と手動コピー案内を削除
-- README等に旧方式のmigration noteやfallback手順を残さない
+- README等に旧方式の自動migration手順やfallback手順を残さない
 
-既存ユーザー環境へコピー済みの旧promptは対象外であり、検出・削除しない。
+選択されたAgentのglobal instructions pathにコピー済みの旧Save / Recall promptは、preflightで非破壊に検出する。
+検出器はversioned fingerprintと安定したtemplate headingを使い、
+legacy種別（Save / Recall）と対象pathだけを記録し、prompt本文・credential・ユーザー本文を読み出して
+出力したり、削除・置換・自動migrationしたりしない。検出時は「新しいSkillとmanaged blockの導入後、旧promptを
+手動でバックアップ確認のうえ削除し、重複ルールがないことを確認する」という安全な手動移行を促すwarningを
+表示する。このruntime warningは既存promptを変更せず、README等の正規手順として旧方式を復活させない。
+
+旧promptとmanaged blockが併存する場合のmode guardは次のように固定する。
+
+- `selective`: legacy Save / Recall promptを残したままmanaged blockと2つのSkillを導入できるが、warningを
+  必ず表示する。managed blockのselective guardとSave Skillが正規経路であり、旧promptの削除はユーザーの
+  手動作業に限定する
+- `all`: legacy Recall promptだけならwarningのうえ導入を続行できる。legacy Save promptを検出した場合は、
+  Agentが直接`memory_save`を呼ぶ経路を保証付きで無効化できないため、warningを伴うpreflight collisionとして
+  全writeを拒否する。ユーザーが旧Save promptを手動削除して再実行するまでhook setupも開始しない
+- mode切替のupgradeでは、旧Save promptが残る`selective`から`all`への切替を必ず拒否し、filesystem snapshotを
+  完全保持する。旧Save promptを手動削除した後の再実行だけが`all`のmanaged block更新とhook setupへ進める
+
+したがって、旧promptの検出は対象外ではなく安全性のためのread-only preflight契約であり、削除・migrationの自動化
+だけを対象外とする。
 
 ## 13. Test strategy
 
@@ -297,11 +363,17 @@ Agentは収集した対象を `--agents` へ渡し、bootstrapにMCP setup、Age
 
 - 3 Agentのpath mapping
 - Agent ID validation、順序正規化、重複除去
+- `--agents`の欠落、複数指定、空文字、空要素、`notcodex`、正式対応外IDの拒否
+- canonical agent setが同期とhook setupの双方へ同一順序で渡ること、およびsubstring判定を使わないこと
 - selective / all minimal block render
 - marker append、replace、unchanged、malformed detection
 - owned Skill create / updateと非所有同名Skill collision
+- instructions symlinkのcanonical path containment、broken / cyclic / parent symlink、shared root opt-inなしの拒否
 - SSOT validationとbundle digest
 - dry-runでwrite APIが呼ばれないこと
+- post-write verification failure、all hook setup failure、wrapper backup/restore、新規artifact削除のrollback
+- rollback failure時のnon-zero終了、未復旧owned path報告、非所有snapshot保護
+- legacy Save / Recall promptの本文非出力検出、warning、selective許可、all Save collision
 - credentialや既存本文をerror outputへ含めないこと
 
 ### 13.2 Temporary HOME integration tests
@@ -314,16 +386,23 @@ Agentは収集した対象を `--agents` へ渡し、bootstrapにMCP setup、Age
 - `selective` から `all` への変更でmanaged blockだけ更新
 - multi-Agent preflight失敗時に部分更新なし
 - 注入したI/O failureからのrollback
-- instructions symlinkを保持した更新
+- post-write verification failureからのSkill / instructions / wrapper rollback
+- `all` hook setup failureからのhook artifact backup/restoreと新規作成物削除
+- rollback failure時の非所有領域保護と復旧不能path報告
+- instructions symlinkを保持した更新、およびroot外・shared symlink拒否
+- 旧Save / Recall prompt併存時のread-only warningと手動移行案内
+- legacy Save promptが残る`selective`→`all` upgradeの拒否、および手動削除後upgradeの成功
 - dry-run前後のfilesystem snapshot完全一致
 
 ### 13.3 Bootstrap regression tests
 
 - `--help` の新しい `--agents` 契約
 - `--agents` 必須、正式対応外ID拒否
+- duplicates、empty entries、`notcodex`、multiple agentsを含む`--agents`回帰
 - dry-run outputにAgent資産planとdigestを含む
 - dry-runのexit statusとfilesystem不変
 - 同期または検証失敗時にcompletion messageなし
+- post-write / hook failureおよびrollback failure時にcompletion messageなし
 - 全検証成功時だけcompletion messageあり
 - 既存hook payload / ingestion mode testsが継続して通る
 
@@ -337,6 +416,8 @@ Agentは収集した対象を `--agents` へ渡し、bootstrapにMCP setup、Age
 4. dry-run
 5. mode切替
 6. `all` のturn-end hook経路
+7. approved root内symlink、root外symlink、broken/cyclic symlink
+8. 旧Save / Recall prompt併存時のwarningと、旧Save promptが残る`all` upgradeの拒否
 
 生成されたglobal instructionsとSkillを、各Agentの公式配置先から直接確認する。
 
@@ -351,9 +432,9 @@ Agentは収集した対象を `--agents` へ渡し、bootstrapにMCP setup、Age
 | R3 | §4.3: 常時blockをSkill routingとmode guardに限定 |
 | R5、R6 | §4.1、§4.2、§6: Recall / Save behaviorとingestion modeを維持 |
 | R7、R8 | §8、§11: bootstrap経由で導入済み状態まで完了 |
-| R9 | §7、§9: marker / owned directory境界と非所有snapshot検証 |
+| R9 | §7、§9: marker / owned directory / canonical symlink境界と非所有snapshot検証 |
 | R10、R13 | §4、§9: Repository SSOTからdigest比較で再同期 |
-| R11 | §9.4、§11: existence、digest、非破壊性を完了条件化 |
+| R11 | §9.2〜§9.4、§10、§11: existence、digest、transaction rollback、非破壊性を完了条件化 |
 | R12 | §5、§6: 正式対応3 Agentのみ許可 |
 | R15 | §12: README、AGENTS、Protocol、bootstrapの旧参照を削除 |
 | R16 | §9.3、§13: temporary fileも作らないdry-runとfilesystem snapshot test |
@@ -367,9 +448,13 @@ Agentは収集した対象を `--agents` へ渡し、bootstrapにMCP setup、Age
 | AC6、AC7 | §7、§9: marker外instructionsと他Skillsをsnapshot検証 |
 | AC8、AC9 | §9、§11: digest再同期とsetup完了前検証 |
 | AC10 | §9.3、§13: dry-runのwrite禁止とfilesystem snapshot test |
-| AC11、AC12 | §12: 旧案内と旧system prompt sourceを削除 |
+| AC11、AC12 | §12: 旧案内と旧system prompt sourceを削除し、既存コピーはread-only検出 |
 | AC13 | §2.2、§6: 正式対応外Agentへfallbackしない |
 | AC14 | §2.2、§4、§13: memory API、発火仕様、ingestion modeの回帰防止 |
+| AC15 | §6、§9.1、§13.1、§13.3: `--agents`の一度だけの厳格なparse、canonical set共有、side effect前検証 |
+| AC16 | §7、§9.1〜§9.4、§13: canonical path root containmentとshared symlink opt-inなしのcollision拒否 |
+| AC17 | §9.2、§9.4、§10、§13: post-write / hook failureおよびrollback failureを含むtransaction rollback |
+| AC18 | §12、§13.2、§13.4: legacy prompt warning、selective/all coexistence guard、upgrade integration |
 
 ## 15. Risksとmitigation
 
@@ -378,7 +463,10 @@ Agentは収集した対象を `--agents` へ渡し、bootstrapにMCP setup、Age
 | ユーザー管理の同名Skillを上書き | sentinelがない同名directoryはpreflight collision |
 | 壊れたmarkerでユーザー本文を誤置換 | marker重複・片側欠損・入れ子をwrite前に拒否 |
 | 複数Agent同期の途中失敗 | 全対象preflight、staged apply、ChronosGraph所有部分のrollback |
+| 外部rootを指す正常なinstructions symlinkを更新して非所有領域を変更 | canonical path containment、shared root opt-in、preflight collision |
+| post-write検証または`all` hook setupの失敗でSkillだけが部分更新される | hook artifactを含むtransaction journal、reverse rollback、rollback failure報告 |
 | mode切替で古いSave rulesが誤発火 | blockとSkill descriptionのmode guardを更新 |
+| 旧Save promptと`all` managed blockの併存でAgentが直接保存する | legacy promptのread-only検出、warning、`all` preflight collision、手動移行後再実行 |
 | SSOT更新漏れ | targetとcurrent sourceのSHA-256 digestを完了時に再照合 |
 | dry-runの隠れた副作用 | stagingを含むwrite APIを呼ばず、filesystem snapshot testで保証 |
 | 将来Agentの不確実な配置仕様 | 公式global pathsと検証方法が確定するまでadapterを追加しない |

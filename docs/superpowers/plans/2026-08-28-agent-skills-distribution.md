@@ -1149,6 +1149,15 @@ def updated_plugin_config(original: bytes | None) -> bytes:
 
 Include wrappers and OpenCode configuration files in the same journal, backup, post-write verification, and reverse rollback path as Skills and instructions. If rollback sees a target value differing from the transaction's recorded value, leave that external change untouched, report only the owned path that could not be restored, retain its backup artifact, and return non-zero.
 
+Add dedicated unit tests for the package-metadata probe so each case asserts both preflight failure before any transaction begins and that the diagnostic contains no token value, response body, or resolved credential:
+
+- A test that returns a valid GitHub Packages metadata response with readable credentials and proves `preflight` succeeds without creating the OpenCode config file (probe is read-only).
+- A parameterized test for HTTP 401 and HTTP 403 from `https://npm.pkg.github.com/@yohi%2fopencode-plugin-chronos-turn-end` that expects `PluginRegistryPrerequisiteError` and asserts the rendered diagnostic omits the test token, the response body, and the resolved credential path.
+- A test that injects a network or connection error during the probe and asserts a redacted typed diagnostic whose category is `registry-probe-network` (or equivalent) and whose message contains no exception string or traceback.
+- A test that injects an invalid or malformed authentication response (e.g., token expansion yields an empty string) and asserts a redacted typed diagnostic whose category is `registry-probe-credential` (or equivalent).
+
+Use a test-only `monkeypatch` seam in `hooks.py` for the probe HTTP call so the implementation can resolve real Bun/npm registry precedence while the tests avoid network I/O. Do not add a public flag to disable the probe in production; the seam is for unit tests only.
+
 - [ ] **Step 7: Run all transaction unit tests**
 
 Run: `uv run pytest tests/unit/test_sync_agent_assets.py -k "apply_sync or opencode_plugin or hook_failure" -v`

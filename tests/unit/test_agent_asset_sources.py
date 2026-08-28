@@ -44,3 +44,18 @@ def test_legacy_test_fixtures_match_pinned_detector_versions() -> None:
     assert hashlib.sha256((fixtures / "legacy-recall-v1.md").read_bytes()).hexdigest() == (
         "171c000346a5880f4c8a846f1ab34147708ff9a3f25baf7f3ee051504b0bfca5"
     )
+
+
+def test_legacy_prompt_source_files_are_absent() -> None:
+    prompts = REPO_ROOT / "docs" / "agent-prompts"
+
+    assert not (prompts / "memory-save-system-prompt.md").exists()
+    assert not (prompts / "memory-search-system-prompt.md").exists()
+
+
+def test_agent_guidance_points_to_repository_asset_ssot() -> None:
+    agents_document = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "agent-assets/" in agents_document
+    assert "memory-save-system-prompt.md" not in agents_document
+    assert "memory-search-system-prompt.md" not in agents_document

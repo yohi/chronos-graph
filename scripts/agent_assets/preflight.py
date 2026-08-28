@@ -148,6 +148,7 @@ def preflight(request: SyncRequest, bundle: AssetBundle) -> SyncPlan:
     snapshots: list[TargetSnapshot] = []
     diagnostics: list[SafeDiagnostic] = []
     rendered_block = render_managed_block(bundle, request.ingestion_mode).removesuffix(b"\n")
+    from .hooks import plan_hook_targets
     from .preflight_files import plan_skills, safe_instruction_target, snapshot
 
     for agent_id in request.agent_ids:
@@ -184,6 +185,8 @@ def preflight(request: SyncRequest, bundle: AssetBundle) -> SyncPlan:
         skill_targets, skill_snapshots = plan_skills(bundle, adapter.skills_root)
         targets.extend(skill_targets)
         snapshots.extend(skill_snapshots)
+
+    targets.extend(plan_hook_targets(request))
 
     return SyncPlan(
         request=request,

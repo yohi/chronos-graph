@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -44,6 +46,14 @@ from agent_assets.preflight import (  # noqa: E402
     parse_instruction_sections,
     preflight,
     safe_diagnostic,
+)
+from agent_assets.transaction import (  # noqa: E402
+    ApplyError,
+    FileOperations,
+    HookSetupError,
+    PostWriteVerificationError,
+    SystemFileOperations,
+    apply_sync,
 )
 
 
@@ -300,3 +310,231 @@ def test_preflight_rejects_legacy_save_prompt_in_all_mode(tmp_path: Path) -> Non
 
     with pytest.raises(LegacySaveAllModeCollision):
         preflight(request, build_bundle(REPO_ROOT / "agent-assets"))
+
+
+class ReplaceFailingFileOperations:
+    """Test-only structural FileOperations fake."""
+
+    def __init__(self, fail_on_replace: int) -> None:
+        self._delegate = SystemFileOperations()
+        self._fail_on_replace = fail_on_replace
+        self._replace_count = 0
+
+    def replace(self, source: Path, destination: Path) -> None:
+        self._replace_count += 1
+        if self._replace_count == self._fail_on_replace:
+            raise OSError("injected replace failure")
+        self._delegate.replace(source, destination)
+
+    def move(self, source: Path, destination: Path) -> None:
+        self._delegate.move(source, destination)
+
+    def remove(self, path: Path) -> None:
+        self._delegate.remove(path)
+
+
+def prepared_plan_for(
+    agent: AgentId,
+    home: Path,
+    ingestion_mode: IngestionMode,
+    repo_root: Path = REPO_ROOT,
+) -> SyncPlan:
+    request = SyncRequest(
+        repo_root=repo_root,
+        home=home,
+        mode=ExecutionMode.PRODUCTION,
+        ingestion_mode=ingestion_mode,
+        agent_ids=(agent,),
+    )
+    return preflight(request, build_bundle(repo_root / "agent-assets"))
+
+
+def test_apply_sync_restores_owned_instruction_after_verification_failure(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    instruction = home / ".claude" / "CLAUDE.md"
+    instruction.parent.mkdir(parents=True)
+    instruction.write_bytes(b"user-before\n")
+    plan = prepared_plan_for(AgentId.CLAUDECODE, home, IngestionMode.SELECTIVE)
+
+    with pytest.raises(ApplyError):
+        apply_sync(plan, SystemFileOperations(), verify=lambda _: False)
+
+    assert instruction.read_bytes() == b"user-before\n"
+
+
+def test_apply_sync_restores_owned_artifacts_after_verifier_exception(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    instruction = home / ".claude" / "CLAUDE.md"
+    instruction.parent.mkdir(parents=True)
+    instruction.write_bytes(b"user-before\n")
+    plan = prepared_plan_for(AgentId.CLAUDECODE, home, IngestionMode.SELECTIVE)
+
+    def raise_from_verifier(_: SyncPlan) -> bool:
+        raise RuntimeError("injected verifier failure")
+
+    with pytest.raises(ApplyError) as error:
+        apply_sync(plan, SystemFileOperations(), verify=raise_from_verifier)
+
+    assert isinstance(error.value.__cause__, PostWriteVerificationError)
+    assert instruction.read_bytes() == b"user-before\n"
+
+
+def test_apply_sync_removes_only_new_transaction_artifacts_on_failure(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    plan = prepared_plan_for(AgentId.CODEX, home, IngestionMode.SELECTIVE)
+    operations: FileOperations = ReplaceFailingFileOperations(fail_on_replace=2)
+
+    with pytest.raises(ApplyError):
+        apply_sync(plan, operations)
+
+    assert not (home / ".agents" / "skills" / "chronos-memory-save").exists()
+    assert not (home / ".agents" / "skills" / "chronos-memory-recall").exists()
+
+
+def configure_opencode_plugin_registry(home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    registry = home / ".npmrc"
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(
+        "@yohi:registry=https://npm.pkg.github.com\n"
+        "//npm.pkg.github.com/:_authToken=${CHRONOS_OPENCODE_PACKAGES_TOKEN}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CHRONOS_OPENCODE_PACKAGES_TOKEN", "test-only-token")
+    return registry
+
+
+def test_all_mode_registers_opencode_plugin_without_replacing_other_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import agent_assets.hooks as hooks
+
+    monkeypatch.setattr(hooks, "probe_package_metadata", lambda _: None)
+    home = tmp_path / "home"
+    registry = configure_opencode_plugin_registry(home, monkeypatch)
+    registry_before = registry.read_bytes()
+    config = home / ".config" / "opencode" / "opencode.json"
+    config.parent.mkdir(parents=True)
+    config.write_text('{"theme":"dark","plugin":["other-plugin"]}', encoding="utf-8")
+    plan = prepared_plan_for(AgentId.OPENCODE, home, IngestionMode.ALL)
+
+    apply_sync(plan, SystemFileOperations())
+    apply_sync(
+        prepared_plan_for(AgentId.OPENCODE, home, IngestionMode.ALL),
+        SystemFileOperations(),
+    )
+
+    registered = json.loads(config.read_text(encoding="utf-8"))
+    assert registered["theme"] == "dark"
+    assert registered["plugin"] == ["other-plugin", "@yohi/opencode-plugin-chronos-turn-end"]
+    assert registry.read_bytes() == registry_before
+
+
+def test_all_mode_creates_wrapper_and_selective_mode_does_not(tmp_path: Path) -> None:
+    all_repo = tmp_path / "all-repo"
+    shutil.copytree(REPO_ROOT / "agent-assets", all_repo / "agent-assets")
+    (all_repo / "scripts").mkdir()
+    shutil.copy2(REPO_ROOT / "scripts" / "agent_turn_hook.py", all_repo / "scripts")
+    all_home = tmp_path / "all-home"
+    apply_sync(
+        prepared_plan_for(AgentId.CLAUDECODE, all_home, IngestionMode.ALL, all_repo),
+        SystemFileOperations(),
+    )
+    wrapper_name = "chronos-turn-hook.cmd" if os.name == "nt" else "chronos-turn-hook.sh"
+    assert (all_repo / "scripts" / wrapper_name).is_file()
+
+    selective_repo = tmp_path / "selective-repo"
+    shutil.copytree(all_repo / "agent-assets", selective_repo / "agent-assets")
+    (selective_repo / "scripts").mkdir()
+    shutil.copy2(REPO_ROOT / "scripts" / "agent_turn_hook.py", selective_repo / "scripts")
+    apply_sync(
+        prepared_plan_for(
+            AgentId.CLAUDECODE,
+            tmp_path / "selective-home",
+            IngestionMode.SELECTIVE,
+            selective_repo,
+        ),
+        SystemFileOperations(),
+    )
+    assert not (selective_repo / "scripts" / wrapper_name).exists()
+
+
+def test_all_mode_rejects_missing_opencode_plugin_registry_before_any_apply(
+    tmp_path: Path,
+) -> None:
+    from agent_assets.hooks import PluginRegistryPrerequisiteError
+
+    with pytest.raises(PluginRegistryPrerequisiteError):
+        prepared_plan_for(AgentId.OPENCODE, tmp_path / "home", IngestionMode.ALL)
+
+    assert not (tmp_path / "home" / ".config" / "opencode" / "opencode.json").exists()
+
+
+@pytest.mark.parametrize("filename", ["opencode.jsonc", "oh-my-opencode.jsonc"])
+def test_all_mode_rejects_locally_managed_opencode_config_before_any_apply(
+    tmp_path: Path, filename: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import agent_assets.hooks as hooks
+    from agent_assets.hooks import HookConfigCollision
+
+    monkeypatch.setattr(hooks, "probe_package_metadata", lambda _: None)
+    home = tmp_path / "home"
+    configure_opencode_plugin_registry(home, monkeypatch)
+    jsonc = home / ".config" / "opencode" / filename
+    jsonc.parent.mkdir(parents=True)
+    jsonc.write_text("// managed elsewhere\n{}", encoding="utf-8")
+
+    with pytest.raises(HookConfigCollision):
+        prepared_plan_for(AgentId.OPENCODE, home, IngestionMode.ALL)
+
+
+def test_opencode_package_probe_is_read_only_and_redacts_access_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import agent_assets.hooks as hooks
+    from agent_assets.hooks import PluginRegistryPrerequisiteError
+
+    home = tmp_path / "home"
+    configure_opencode_plugin_registry(home, monkeypatch)
+    monkeypatch.setattr(hooks, "probe_package_metadata", lambda _: None)
+    prepared_plan_for(AgentId.OPENCODE, home, IngestionMode.ALL)
+    assert not (home / ".config" / "opencode" / "opencode.json").exists()
+
+    token = "sensitive-test-token"
+    monkeypatch.setenv("CHRONOS_OPENCODE_PACKAGES_TOKEN", token)
+
+    def fail_probe(_: str) -> None:
+        raise PluginRegistryPrerequisiteError("registry-probe-access")
+
+    monkeypatch.setattr(hooks, "probe_package_metadata", fail_probe)
+    with pytest.raises(PluginRegistryPrerequisiteError) as error:
+        prepared_plan_for(AgentId.OPENCODE, home, IngestionMode.ALL)
+
+    assert token not in str(error.value)
+    assert "response-body" not in str(error.value)
+
+
+def test_all_mode_hook_failure_restores_skills_instructions_and_wrapper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import agent_assets.transaction as transaction
+
+    home = tmp_path / "home"
+    repo_root = tmp_path / "repo"
+    shutil.copytree(REPO_ROOT / "agent-assets", repo_root / "agent-assets")
+    (repo_root / "scripts").mkdir()
+    shutil.copy2(REPO_ROOT / "scripts" / "agent_turn_hook.py", repo_root / "scripts")
+    plan = prepared_plan_for(AgentId.CLAUDECODE, home, IngestionMode.ALL, repo_root)
+
+    def fail_hooks(*_: object) -> None:
+        raise HookSetupError("injected-hook-failure")
+
+    monkeypatch.setattr(transaction, "install_selected_hooks", fail_hooks)
+
+    with pytest.raises(ApplyError):
+        apply_sync(plan, SystemFileOperations())
+
+    assert not (home / ".claude" / "skills" / "chronos-memory-save").exists()
+    wrapper_name = "chronos-turn-hook.cmd" if os.name == "nt" else "chronos-turn-hook.sh"
+    assert not (plan.request.repo_root / "scripts" / wrapper_name).exists()

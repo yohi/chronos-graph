@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the durable source material in `agent-assets/`, then expose a thin `scripts/sync_agent_assets.py` internal CLI backed by small, typed modules under `scripts/agent_assets/`. Bootstrap parses the raw `--agents` CSV once into a canonical set before any side effect, then delegates all selected-agent mutations, post-write verification, and `all`-mode hook setup to the helper's single transaction.
 
-**Tech Stack:** Python 3.12 standard library, Bash, pytest, ruff, mypy, `gh stack`.
+**Tech Stack:** Python 3.12 standard library, Bash, pytest, Node.js built-in test runner, ruff, mypy, `gh stack`.
 
 ## Global Constraints
 
@@ -14,14 +14,14 @@
 - Install both `chronos-memory-save` and `chronos-memory-recall` for every selected Agent in both `selective` and `all` modes.
 - Use these global paths: Claude Code `~/.claude/skills/` and `~/.claude/CLAUDE.md`; Codex `~/.agents/skills/` and `~/.codex/AGENTS.md`; OpenCode `~/.config/opencode/skills/` and `~/.config/opencode/AGENTS.md`.
 - Treat `agent-assets/` in the checkout or release tarball running bootstrap as the only Agent asset SSOT. `--source=local|remote` must not alter the asset source.
-- Preserve existing non-ChronosGraph instructions byte-for-byte and preserve non-ChronosGraph Skill paths, types, and content hashes.
+- Preserve existing non-ChronosGraph instructions byte-for-byte and preserve every preflight-supported non-ChronosGraph Skill entry's relative path, `lstat` type, and type-appropriate fingerprint. Use a content SHA-256 for regular files, link-target bytes for symlinks, and structural presence for directories; reject unsupported special files as preflight collisions rather than attempting to copy them.
 - Own only the HTML marker block `<!-- BEGIN CHRONOSGRAPH MANAGED: agent-memory -->` through `<!-- END CHRONOSGRAPH MANAGED: agent-memory -->` and Skill directories with an exact `.chronosgraph-managed` sentinel.
 - Compute the bundle SHA-256 by sorting all regular files below `agent-assets/` by relative POSIX path and hashing `relative-path`, NUL, file bytes, NUL for each file. Reject symlinks and undefined file types in the SSOT.
 - Treat duplicated, partial, or nested instruction markers; non-owned same-name Skills; unsafe symlinks; malformed SSOT; and legacy Save plus `all` mode as preflight failures with no writes.
 - Resolve existing instruction symlinks before writing, permit only regular-file targets canonically contained within the Agent's approved instructions root, and reject broken, cyclic, parent, root-external, and shared symlinks. Do not add shared-symlink opt-in flags in this implementation.
 - `selective` permits read-only warnings for legacy Save or Recall prompts. `all` permits a legacy Recall warning but rejects a legacy Save prompt before any write or hook setup.
 - `dry-run` performs the same parse, validation, render, comparison, and conflict detection as production, but must not create directories, temporary files, backups, staging directories, or hook artifacts.
-- Include Skills, managed instruction blocks, wrappers, and OpenCode plugin registration in one transaction. Commit only after post-write verification and selected `all`-mode hooks succeed; otherwise roll back only paths proven to be ChronosGraph-owned changes from the current transaction.
+- Include Skills, managed instruction blocks, wrappers, and OpenCode plugin registration in one transaction. Commit only after post-write verification and selected `all`-mode hooks succeed; otherwise roll back only paths proven to be ChronosGraph-owned changes from the current transaction. `build_bundle` and preflight failures occur before journal creation and do not invoke rollback; every ordinary exception after journal creation must use the rollback path.
 - Error and warning output may include Agent ID, path, phase, action, mismatch category, digest, and recovery artifact identifier. It must not print existing instructions, other Skill contents, prompt bodies, or credentials.
 - Do not change `memory_save`, `memory_search`, `session_flush`, ingestion semantics, storage/retrieval code, or the Cursor/Antigravity payload parsing in `scripts/agent_turn_hook.py`.
 - Keep each new Python module at or below 250 pure lines. Use frozen, slotted dataclasses and typed exceptions; add no runtime dependency.
@@ -66,6 +66,7 @@ After each layer's scoped tests pass, stage only that layer's listed files and c
 | `tests/unit/test_agent_asset_sources.py` | Source asset layout and machine-consumed frontmatter/sentinel tests |
 | `tests/unit/test_sync_agent_assets.py` | Pure parser, digest, marker, ownership, symlink, legacy, transaction, and diagnostic tests |
 | `tests/integration/test_sync_agent_assets.py` | Temporary-HOME end-to-end synchronization and rollback scenarios |
+| `tests/integration/test_opencode_turn_end_plugin.cjs` | Node contract test for the `session.idle` event and `agent_turn_hook.py` invocation |
 | `tests/unit/test_bootstrap_agent_assets.py` | Bootstrap CLI contract, delegation, dry-run, and completion-message regression tests |
 | `tests/unit/test_bootstrap_messages.py` | Narrow regression checks for removed legacy bootstrap guidance |
 | `tests/fixtures/agent_assets/legacy-save-v1.md` | Test-only historical Save prompt bytes used to prove read-only fingerprint detection |
@@ -601,7 +602,7 @@ def parse_instruction_sections(original: bytes) -> InstructionSections:
     )
 ```
 
-For each selected Skill root, snapshot every non-ChronosGraph entry as relative path, `lstat` type, and content hash. A same-name target is owned only when `.chronosgraph-managed` is a regular file containing exactly `owner=chronosgraph\nformat=1\n`; otherwise raise `SkillCollisionError` before apply.
+For each selected Skill root, snapshot every non-ChronosGraph entry as a relative path, `lstat` type, and type-appropriate fingerprint. Store those immutable snapshots in `SyncPlan`; regular files use content SHA-256, symlinks use their link-target bytes without dereferencing, and directories use structural presence. Reject unsupported special files before apply. A same-name target is owned only when `.chronosgraph-managed` is a regular file containing exactly `owner=chronosgraph\nformat=1\n`; otherwise raise `SkillCollisionError` before apply.
 
 - [ ] **Step 4: Write failing symlink, legacy-prompt, and redaction tests**
 
@@ -773,16 +774,69 @@ gh stack add agent-skills/sync-transaction
 **Interfaces:**
 
 - Consumes: a fully successful `SyncPlan` from Task 3.
-- Produces: `apply_sync(plan: SyncPlan, operations: FileOperations, verify: Callable[[SyncPlan], bool] | None = None) -> SyncResult`, which either verifies all managed artifacts and hooks or restores the transaction's owned changes in reverse order.
+- Produces: `apply_sync(plan: SyncPlan, operations: FileOperations, verify: Callable[[SyncPlan], bool] | None = None) -> SyncResult`, which either verifies all managed artifacts and hooks or restores the transaction's owned changes in reverse order. It receives only a successful preflight plan and rolls back every ordinary post-journal exception.
 
 - [ ] **Step 1: Write failing apply and rollback tests**
 
-Add a file-operation seam so tests can inject an `OSError` after a controlled replacement. Cover owned Skill update, new Skill creation, instruction replacement, verification failure, and rollback result.
+Keep the production `FileOperations` Protocol as the seam, but implement every fault-injecting fake in this test module. Pass the fake directly to `apply_sync`; do not add a failure-injection class or helper to `transaction.py`. Cover owned Skill update, new Skill creation, instruction replacement, post-write verification exceptions, and rollback result. Parameterize replacement failures across every durable replacement in both selective and `all` mode, then assert no owned artifact remains partially applied.
 
 ```python
+import hashlib
+import os
 import shutil
+import stat
 
-from agent_assets.transaction import ApplyError, HookSetupError, SystemFileOperations, apply_sync
+from agent_assets.transaction import (
+    ApplyError,
+    FileOperations,
+    HookSetupError,
+    PostWriteVerificationError,
+    SystemFileOperations,
+    apply_sync,
+)
+
+
+class ReplaceFailingFileOperations:
+    """Test-only structural `FileOperations` fake."""
+
+    def __init__(self, fail_on_replace: int) -> None:
+        self._delegate = SystemFileOperations()
+        self._fail_on_replace = fail_on_replace
+        self._replace_count = 0
+
+    def replace(self, source: Path, destination: Path) -> None:
+        self._replace_count += 1
+        if self._replace_count == self._fail_on_replace:
+            raise OSError("injected replace failure")
+        self._delegate.replace(source, destination)
+
+    def move(self, source: Path, destination: Path) -> None:
+        self._delegate.move(source, destination)
+
+    def remove(self, path: Path) -> None:
+        self._delegate.remove(path)
+
+
+def snapshot_unmanaged_entries(skill_root: Path) -> dict[str, tuple[int, str]]:
+    """Return test-only path/type/fingerprint snapshots without following links."""
+    managed = {"SKILL.md", ".chronosgraph-managed"}
+    snapshots: dict[str, tuple[int, str]] = {}
+    for candidate in sorted(skill_root.rglob("*")):
+        relative = candidate.relative_to(skill_root).as_posix()
+        if relative in managed:
+            continue
+        mode = candidate.lstat().st_mode
+        file_type = stat.S_IFMT(mode)
+        if stat.S_ISREG(mode):
+            fingerprint = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        elif stat.S_ISLNK(mode):
+            fingerprint = hashlib.sha256(os.fsencode(os.readlink(candidate))).hexdigest()
+        elif stat.S_ISDIR(mode):
+            fingerprint = "directory"
+        else:
+            raise AssertionError(f"unsupported fixture entry: {relative}")
+        snapshots[relative] = (file_type, fingerprint)
+    return snapshots
 
 
 def isolated_repo_root(tmp_path: Path) -> Path:
@@ -825,16 +879,53 @@ def test_apply_sync_restores_owned_instruction_after_verification_failure(tmp_pa
     assert instruction.read_bytes() == b"user-before\n"
 
 
+def test_apply_sync_restores_owned_artifacts_after_verifier_exception(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    instruction = home / ".claude" / "CLAUDE.md"
+    instruction.parent.mkdir(parents=True)
+    instruction.write_bytes(b"user-before\n")
+    plan = prepared_plan_for(AgentId.CLAUDECODE, home, IngestionMode.SELECTIVE)
+
+    def raise_from_verifier(_: SyncPlan) -> bool:
+        raise RuntimeError("injected verifier failure")
+
+    with pytest.raises(ApplyError) as error:
+        apply_sync(plan, SystemFileOperations(), verify=raise_from_verifier)
+
+    assert isinstance(error.value.__cause__, PostWriteVerificationError)
+    assert instruction.read_bytes() == b"user-before\n"
+
+
+def test_apply_sync_preserves_unmanaged_entries_inside_owned_skill(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    skill_root = home / ".claude" / "skills" / "chronos-memory-save"
+    source_skill = REPO_ROOT / "agent-assets" / "skills" / "chronos-memory-save"
+    shutil.copytree(source_skill, skill_root)
+    (skill_root / "SKILL.md").write_bytes(b"outdated owned skill\n")
+    (skill_root / "custom.md").write_bytes(b"user-maintained content\n")
+    (skill_root / "notes").mkdir()
+    before = snapshot_unmanaged_entries(skill_root)
+
+    plan = prepared_plan_for(AgentId.CLAUDECODE, home, IngestionMode.SELECTIVE)
+    apply_sync(plan, SystemFileOperations())
+
+    assert snapshot_unmanaged_entries(skill_root) == before
+    assert (skill_root / "SKILL.md").read_bytes() == (source_skill / "SKILL.md").read_bytes()
+
+
 def test_apply_sync_removes_only_new_transaction_artifacts_on_failure(tmp_path: Path) -> None:
     home = tmp_path / "home"
     plan = prepared_plan_for(AgentId.CODEX, home, IngestionMode.SELECTIVE)
+    operations: FileOperations = ReplaceFailingFileOperations(fail_on_replace=2)
 
     with pytest.raises(ApplyError):
-        apply_sync(plan, replace_failure_after_first_skill(home))
+        apply_sync(plan, operations)
 
     assert not (home / ".agents" / "skills" / "chronos-memory-save").exists()
     assert not (home / ".agents" / "skills" / "chronos-memory-recall").exists()
 ```
+
+Parameterize `ReplaceFailingFileOperations` over every replacement planned for the selective and `all`-mode target sets, including an owned Skill, a new Skill, the managed instruction file, the wrapper, and the OpenCode configuration. Independently inject `move` and `remove` failures during rollback. Each case must assert that pre-existing owned targets are restored, newly created owned targets are absent, and non-ChronosGraph snapshots are unchanged.
 
 - [ ] **Step 2: Run transaction tests to confirm apply is unavailable**
 
@@ -844,7 +935,7 @@ Expected: FAIL with an import error for `agent_assets.transaction`.
 
 - [ ] **Step 3: Implement staged Skills, atomic instruction replacement, and journaled rollback**
 
-Use a frozen `TransactionJournalEntry` for the preflight state and a mutable transaction-local journal only while apply is active. Stage each expected Skill directory under its destination parent, byte-compare against an owned target, move an owned target to its private backup, then atomically replace it with the staged directory. Write an instruction update to a temporary file in the resolved target's directory, preserve the existing permission bits, and replace only the resolved file target.
+Use a frozen `TransactionJournalEntry` for the preflight state and a mutable transaction-local journal only while apply is active. For an existing owned Skill target, build staging under its destination parent from the target's complete preflight-supported tree without dereferencing non-ChronosGraph symlinks, then replace only `SKILL.md` and `.chronosgraph-managed` with the rendered owned files. Byte-compare the owned entries, move the owned target to its private backup, and atomically replace it with staging. The post-replacement non-ChronosGraph snapshot must equal the preflight snapshot. For a new Skill target, stage only the owned source tree. Write an instruction update to a temporary file in the resolved target's directory, preserve the existing permission bits, and replace only the resolved file target.
 
 ```python
 from collections.abc import Callable
@@ -866,22 +957,6 @@ class SystemFileOperations:
     """Filesystem implementation used by production synchronization."""
 
 
-class ReplaceFailureAfterFirstSkill(SystemFileOperations):
-    def __init__(self, failure_target: Path) -> None:
-        self._failure_target = failure_target
-
-    def replace(self, source: Path, destination: Path) -> None:
-        if destination == self._failure_target:
-            raise OSError("injected replace failure")
-        super().replace(source, destination)
-
-
-def replace_failure_after_first_skill(home: Path) -> FileOperations:
-    return ReplaceFailureAfterFirstSkill(
-        home / ".agents" / "skills" / "chronos-memory-recall"
-    )
-
-
 def apply_sync(
     plan: SyncPlan,
     operations: FileOperations,
@@ -895,35 +970,62 @@ def apply_sync(
         replace_owned_skill_directories(plan, journal, operations)
         replace_managed_instruction_blocks(plan, journal, operations)
         install_selected_hooks(plan, journal, operations)
-        if not verifier(plan):
+        try:
+            verified = verifier(plan)
+        except Exception as error:
+            raise PostWriteVerificationError("verification-exception") from error
+        if not verified:
             raise PostWriteVerificationError("verification-failed")
-    except (OSError, HookSetupError, PostWriteVerificationError) as error:
-        rollback_result = rollback_transaction(journal, operations)
+    except Exception as error:
+        try:
+            rollback_result = rollback_transaction(journal, operations)
+        except Exception as rollback_error:
+            rollback_result = RollbackResult.failure(rollback_error)
         raise ApplyError.from_failure(error, rollback_result) from error
     return journal.commit()
 ```
 
-Define `ApplyError`, `HookSetupError`, and `PostWriteVerificationError` as typed `RuntimeError` subclasses. Define `TransactionJournalEntry` as a frozen, slotted preflight snapshot and keep mutable backup paths only in the transaction-local `TransactionJournal`.
+Define `ApplyError`, `HookSetupError`, and `PostWriteVerificationError` as typed `RuntimeError` subclasses. `RollbackResult.failure()` must retain only a redacted rollback failure category. Normalize a verifier callback exception to `PostWriteVerificationError("verification-exception")` without including callback content in diagnostics. Define `TransactionJournalEntry` as a frozen, slotted preflight snapshot and keep mutable backup paths only in the transaction-local `TransactionJournal`. `AssetValidationError` and `HookConfigCollision` raised by `build_bundle` or preflight remain preflight failures; if either arises during post-write digest recomputation or hook revalidation, it is an ordinary post-journal failure and must be rolled back. For every ordinary post-journal exception, call `rollback_transaction` exactly once, convert even a rollback failure into `RollbackResult`, then raise `ApplyError`.
 
-`verify_post_write_state` must compare both installed Skill trees byte-for-byte to the current SSOT, compare the entire rendered managed block byte-for-byte, compare marker-external instruction bytes to the preflight snapshot, compare all non-ChronosGraph Skill snapshots, and recompute the source bundle digest. Do not trust the prior preflight digest alone.
+`verify_post_write_state` must compare both installed Skill trees byte-for-byte to the current SSOT, compare the entire rendered managed block byte-for-byte, compare marker-external instruction bytes to the preflight snapshot, compare all non-ChronosGraph Skill snapshots including path, `lstat` type, and fingerprint, and recompute the source bundle digest. Do not trust the prior preflight digest alone.
 
 - [ ] **Step 4: Write failing `all`-mode hook and hook-rollback tests**
 
-Add tests for wrapper creation, OpenCode registration, selective-mode hook absence, plugin idempotence, hook setup failure, and external-change preservation during rollback.
+Add tests for wrapper creation, OpenCode registration, selective-mode hook absence, plugin idempotence, user-owned registry prerequisite handling, hook setup failure, and external-change preservation during rollback. Independently inject `OSError`, `HookSetupError`, `PostWriteVerificationError`, `HookConfigCollision`, and `AssetValidationError` after at least one durable transaction mutation, and assert each produces `ApplyError` only after rollback. Keep `AssetValidationError` and `HookConfigCollision` injections separate from their preflight tests so the tests distinguish no-write preflight failures from rollback-required post-journal failures.
 
 ```python
 import json
 import os
 
 import agent_assets.transaction as transaction
-from agent_assets.hooks import HookConfigCollision
+from agent_assets.hooks import HookConfigCollision, PluginRegistryPrerequisiteError
 
 
-def test_all_mode_registers_opencode_plugin_without_replacing_other_config(tmp_path: Path) -> None:
+def configure_opencode_plugin_registry(
+    home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
+    registry = home / ".npmrc"
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(
+        "@yohi:registry=https://npm.pkg.github.com\n"
+        "//npm.pkg.github.com/:_authToken=${CHRONOS_OPENCODE_PACKAGES_TOKEN}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CHRONOS_OPENCODE_PACKAGES_TOKEN", "test-only-token")
+    return registry
+
+
+def test_all_mode_registers_opencode_plugin_without_replacing_other_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     home = tmp_path / "home"
+    registry = configure_opencode_plugin_registry(home, monkeypatch)
+    registry_before = registry.read_bytes()
     config = home / ".config" / "opencode" / "opencode.json"
     config.parent.mkdir(parents=True)
-    config.write_text('{"theme":"dark","plugins":["other-plugin"]}', encoding="utf-8")
+    config.write_text('{"theme":"dark","plugin":["other-plugin"]}', encoding="utf-8")
     plan = prepared_plan_for(AgentId.OPENCODE, home, IngestionMode.ALL)
 
     apply_sync(plan, SystemFileOperations())
@@ -934,15 +1036,29 @@ def test_all_mode_registers_opencode_plugin_without_replacing_other_config(tmp_p
 
     registered = json.loads(config.read_text(encoding="utf-8"))
     assert registered["theme"] == "dark"
-    assert registered["plugins"] == ["other-plugin", "@yohi/opencode-plugin-chronos-turn-end"]
+    assert registered["plugin"] == ["other-plugin", "@yohi/opencode-plugin-chronos-turn-end"]
+    assert registry.read_bytes() == registry_before
+
+
+def test_all_mode_rejects_missing_opencode_plugin_registry_before_any_apply(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+
+    with pytest.raises(PluginRegistryPrerequisiteError):
+        prepared_plan_for(AgentId.OPENCODE, home, IngestionMode.ALL)
+
+    assert not (home / ".config" / "opencode" / "opencode.json").exists()
 
 
 @pytest.mark.parametrize("filename", ["opencode.jsonc", "oh-my-opencode.jsonc"])
-def test_all_mode_rejects_opencode_jsonc_before_any_apply(
+def test_all_mode_rejects_non_strict_or_locally_managed_opencode_config_before_any_apply(
     tmp_path: Path,
     filename: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     home = tmp_path / "home"
+    configure_opencode_plugin_registry(home, monkeypatch)
     jsonc = home / ".config" / "opencode" / filename
     jsonc.parent.mkdir(parents=True)
     jsonc.write_text("// managed elsewhere\n{}", encoding="utf-8")
@@ -1005,7 +1121,9 @@ Expected: FAIL because hook planning and installation have not been implemented.
 
 In `hooks.py`, generate `scripts/chronos-turn-hook.sh` on POSIX and `scripts/chronos-turn-hook.cmd` on Windows only when the selected canonical set contains Claude Code or Codex. Put an exact ChronosGraph management marker immediately after the interpreter header (`# chronosgraph-managed: turn-hook-wrapper format=1` for POSIX, `rem chronosgraph-managed: turn-hook-wrapper format=1` for Windows). During preflight, an existing same-name wrapper without that exact marker is a hook collision; do not overwrite it. Preserve the existing wrapper behavior: prefer a local virtualenv interpreter, otherwise `uv`, then `python`; invoke `scripts/agent_turn_hook.py` with all received arguments. Do not modify `scripts/agent_turn_hook.py`.
 
-For selected OpenCode in `all` mode, have `preflight.py` validate the hook configuration before returning `SyncPlan`, then let `hooks.py` apply only that approved plan. Update an existing strict-JSON `~/.config/opencode/opencode.json` by appending `@yohi/opencode-plugin-chronos-turn-end` exactly once to `plugins`, preserving every other parsed value. If no OpenCode JSON configuration exists, create a minimal one containing that plugin. If an existing `opencode.jsonc` or `oh-my-opencode.jsonc` would take precedence, or if an existing JSON file cannot be parsed as JSON, raise a preflight hook-config collision instead of creating a competing file or rewriting comments.
+For selected OpenCode in `all` mode, have `preflight.py` validate the hook configuration before returning `SyncPlan`, then let `hooks.py` apply only that approved plan. Update an existing strict-JSON `~/.config/opencode/opencode.json` by appending `@yohi/opencode-plugin-chronos-turn-end` exactly once to OpenCode's singular `plugin` array, preserving every other parsed value. If no OpenCode JSON configuration exists, create a minimal one containing that plugin. An existing `opencode.jsonc` is a supported OpenCode format that this strict-JSON writer must not rewrite; an existing `oh-my-opencode.jsonc` is a locally managed overlay that must not be shadowed. Treat either as a preflight hook-config collision rather than claiming an undocumented native precedence or creating a competing file.
+
+Treat installation of `@yohi/opencode-plugin-chronos-turn-end` as an explicit user-owned prerequisite for OpenCode `all` mode. Before returning `SyncPlan`, verify that the user-level Bun configuration source selected by documented precedence maps `@yohi` to `https://npm.pkg.github.com` and has a non-empty credential source for that registry with the GitHub Packages read permission required by the package. An environment-referenced token is acceptable only when its environment variable is set. A missing route or credential source raises `PluginRegistryPrerequisiteError` before any transaction begins. Do not create, rewrite, copy, log, or persist `~/.npmrc`, `bunfig.toml`, token files, or token values; inspect only enough to emit a redacted typed diagnostic. `package.json` `publishConfig` controls publishing and must not be treated as a consumer-side registry configuration.
 
 ```python
 OPENCODE_PLUGIN = "@yohi/opencode-plugin-chronos-turn-end"
@@ -1019,13 +1137,13 @@ def updated_plugin_config(original: bytes | None) -> bytes:
         raise HookConfigCollision("opencode-json") from error
     if not isinstance(config, dict):
         raise HookConfigCollision("opencode-config-root")
-    plugins = config.get("plugins", [])
-    if not isinstance(plugins, list) or not all(isinstance(plugin, str) for plugin in plugins):
+    plugin = config.get("plugin", [])
+    if not isinstance(plugin, list) or not all(isinstance(entry, str) for entry in plugin):
         raise HookConfigCollision("opencode-plugin-list")
-    plugins = list(plugins)
-    if OPENCODE_PLUGIN not in plugins:
-        plugins.append(OPENCODE_PLUGIN)
-    config["plugins"] = plugins
+    plugin = list(plugin)
+    if OPENCODE_PLUGIN not in plugin:
+        plugin.append(OPENCODE_PLUGIN)
+    config["plugin"] = plugin
     return (json.dumps(config, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
 ```
 
@@ -1055,6 +1173,7 @@ git commit -m "feat(agent-sync): 資産同期をトランザクション化"
 **Files:**
 
 - Create: `tests/integration/test_sync_agent_assets.py`
+- Create: `tests/integration/test_opencode_turn_end_plugin.cjs`
 
 **Interfaces:**
 
@@ -1178,20 +1297,39 @@ dry-run filesystem snapshot is identical before and after execution
 
 Run normal-flow cases through `invoke_sync`. For deterministic I/O, verification, hook, and rollback failure cases, use the same copied repository and temporary HOME but import `agent_assets.cli`, monkeypatch its `SystemFileOperations` factory or the transaction hook/verification seam, then call `run_sync(request)` directly. This exercises the real CLI lifecycle and filesystem paths without adding environment-variable test switches or fault-injection behavior to production code.
 
-- [ ] **Step 5: Run the temporary-HOME integration suite**
+- [ ] **Step 5: Write the OpenCode turn-end plugin event contract test**
+
+Create `tests/integration/test_opencode_turn_end_plugin.cjs` using Node's built-in test runner. Load a fresh copy of `.opencode/plugins/chronos-turn-end.js` with `node:child_process`'s `spawn` replaced by a test-local fake; do not start a real Python process, contact a gateway, or read a real user configuration. Build a temporary project containing `.env` with `CHRONOS_INGESTION_MODE=all`, a placeholder `scripts/agent_turn_hook.py`, and a temporary `HOME/.config/opencode/` directory for the plugin's error log.
+
+The test must initialize the exported plugin object through `server({ client, directory })`, dispatch its returned `event` hook with `session.idle`, and assert all of the following:
+
+```text
+client.session.messages receives the event session ID
+the spawned command targets scripts/agent_turn_hook.py in the temporary project
+the child cwd is the temporary project
+stdin receives the rendered User/Assistant conversation and is closed
+the child is detached and unreferenced
+```
+
+Use a second test for a non-`all` ingestion mode to prove that `session.idle` does not spawn the hook. Restore `require` hooks, environment variables, module cache entries, and the working directory in test cleanup so this contract test has no cross-test effects.
+
+- [ ] **Step 6: Run the temporary-HOME and OpenCode plugin integration suites**
 
 Run: `uv run pytest tests/integration/test_sync_agent_assets.py -v`
 
-Expected: PASS. Each scenario must assert target existence or preserved snapshots, exit status, and redacted diagnostics rather than implementation internals.
+Run: `node --test tests/integration/test_opencode_turn_end_plugin.cjs`
 
-- [ ] **Step 6: Commit integration coverage and create the bootstrap layer**
+Expected: PASS. Each synchronizer scenario must assert target existence or preserved snapshots, exit status, and redacted diagnostics rather than implementation internals. The Node test must prove the public plugin event contract without a live OpenCode process or external ingestion.
+
+- [ ] **Step 7: Commit integration coverage and create the bootstrap layer**
 
 ```bash
-git add tests/integration/test_sync_agent_assets.py scripts/agent_assets/cli.py
+git add tests/integration/test_sync_agent_assets.py tests/integration/test_opencode_turn_end_plugin.cjs scripts/agent_assets/cli.py
 uv run ruff check scripts/agent_assets/cli.py tests/integration/test_sync_agent_assets.py
 uv run ruff format scripts/agent_assets/cli.py tests/integration/test_sync_agent_assets.py
 uv run mypy scripts/agent_assets/cli.py
 uv run pytest tests/unit/test_sync_agent_assets.py tests/integration/test_sync_agent_assets.py -v
+node --test tests/integration/test_opencode_turn_end_plugin.cjs
 git commit -m "test(agent-sync): 一時HOMEの同期シナリオを追加"
 gh stack add agent-skills/bootstrap
 ```
@@ -1562,10 +1700,11 @@ shellcheck scripts/bootstrap.sh
 uv run ruff check scripts/sync_agent_assets.py scripts/agent_assets tests/unit/test_agent_asset_sources.py tests/unit/test_sync_agent_assets.py tests/integration/test_sync_agent_assets.py tests/unit/test_bootstrap_agent_assets.py tests/unit/test_bootstrap_messages.py
 uv run mypy scripts/sync_agent_assets.py scripts/agent_assets
 uv run pytest tests/unit/test_agent_asset_sources.py tests/unit/test_sync_agent_assets.py tests/integration/test_sync_agent_assets.py tests/unit/test_bootstrap_agent_assets.py tests/unit/test_bootstrap_messages.py -v
+node --test tests/integration/test_opencode_turn_end_plugin.cjs
 uv run pytest tests/unit/ -v
 ```
 
-- [ ] Perform manual QA with a fresh temporary HOME for each supported Agent in both modes. Verify clean install, no-op re-sync, unrelated instructions and Skills, dry-run, mode switch, `all`-mode hook artifacts, each symlink class, legacy warning, and legacy Save `selective` to `all` rejection.
+- [ ] Perform manual QA with a fresh temporary HOME for each supported Agent in both modes. Verify clean install, no-op re-sync, unrelated instructions and Skills, dry-run, mode switch, `all`-mode hook artifacts, each symlink class, legacy warning, and legacy Save `selective` to `all` rejection. For OpenCode `all` mode, verify the missing registry/auth prerequisite fails before writes, a configured user-owned prerequisite is left byte-identical, and the Node contract test covers `session.idle` hook dispatch without live external ingestion.
 
 - [ ] Measure every newly created or modified Python module. Split any module that exceeds 250 pure lines before PR submission.
 
@@ -1590,11 +1729,11 @@ gh stack view --json
 
 ## Self-Review
 
-1. **Spec coverage:** Task 1 covers the two Skills, minimal instructions, names, and SSOT layout. Tasks 2 and 3 cover agent selection, adapter paths, digest, marker ownership, Skill collision, symlink containment, legacy detection, and safe output. Tasks 4 and 5 cover staged apply, verification, dry-run, hooks, rollback, and the required temporary-HOME matrix. Task 6 covers one-time bootstrap parsing and shared canonical targets. Task 7 removes old sources and aligns all documentation. The final section covers full validation and the required stacked PR delivery.
+1. **Spec coverage:** Task 1 covers the two Skills, minimal instructions, names, and SSOT layout. Tasks 2 and 3 cover agent selection, adapter paths, digest, marker ownership, Skill collision, symlink containment, legacy detection, registry/auth preflight, and safe output. Tasks 4 and 5 cover staged apply, unmanaged-entry preservation, verification, post-journal typed rollback, hooks, OpenCode `session.idle` dispatch, dry-run, and the required temporary-HOME matrix. Task 6 covers one-time bootstrap parsing and shared canonical targets. Task 7 removes old sources and aligns all documentation. The final section covers full validation and the required stacked PR delivery.
 
 2. **Placeholder scan:** Every task names exact files, public interfaces, test commands, expected outcomes, commit boundaries, and implementation behavior. No unresolved implementation item remains.
 
-3. **Type consistency:** `AgentId`, `IngestionMode`, `SyncRequest`, `AssetBundle`, and `SyncPlan` flow in that order from CLI parsing through preflight and transaction. Bootstrap passes repeated canonical `--agent` values only; the helper's CSV parser is used only by `canonicalize`.
+3. **Type consistency:** `AgentId`, `IngestionMode`, `SyncRequest`, `AssetBundle`, and `SyncPlan` flow in that order from CLI parsing through preflight and transaction. `AssetValidationError`, `HookConfigCollision`, and registry prerequisite errors are preflight failures unless first raised after journal creation, where they are captured in `ApplyError` after rollback. Bootstrap passes repeated canonical `--agent` values only; the helper's CSV parser is used only by `canonicalize`.
 
 ## Execution Handoff
 

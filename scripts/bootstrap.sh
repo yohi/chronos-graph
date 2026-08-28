@@ -26,7 +26,8 @@ MODE="production" # production | dry-run
 SOURCE="local" # remote | local
 INGESTION_MODE="selective" # selective | all
 AGENTS="" # comma-separated list of agents
-EVALUATOR_MODEL=""
+AGENTS_SEEN=0
+CANONICAL_AGENTS=()
 DB_HOST=""
 DB_PORT=""
 DB_NAME=""
@@ -36,7 +37,6 @@ NEO4J_USER=""
 REDIS_URL=""
 EMBEDDING_MODEL=""
 GRAPH_SYNC_MODE="sync" # sync | async_outbox
-EVALUATOR_API_ACCOUNT_ID=""
 
 # Track which flags were explicitly set to allow overwriting .env
 EXPLICIT_FLAGS=""
@@ -131,8 +131,13 @@ while [[ "$#" -gt 0 ]]; do
             EXPLICIT_FLAGS="$EXPLICIT_FLAGS CHRONOS_INGESTION_MODE"
             shift ;;
         --agents)
-            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --agents requires a value"; exit 1; fi
-            AGENTS="$2"; shift ;;
+            AGENTS_SEEN=$((AGENTS_SEEN + 1))
+            if [[ "$AGENTS_SEEN" -ne 1 || -z "${2:-}" || "$2" == -* ]]; then
+                echo "Error: --agents requires one non-empty value" >&2
+                exit 1
+            fi
+            AGENTS="$2"
+            shift ;;
         --db-host)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --db-host requires a value"; exit 1; fi
             DB_HOST="$2"; shift ;;
@@ -186,7 +191,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --mode [production|dry-run]       Set execution mode (default: production)"
             echo "  --source [remote|local]           Set config source activation (default: local)"
             echo "  --ingestion-mode [all|selective]  Set memory ingestion mode (default: selective)"
-            echo "  --agents [list]                   Comma-separated list of agents to configure hooks for"
+            echo "  --agents [claudecode,codex,opencode] Required target environments for Skills, instructions, and all-mode hooks"
             echo "  --db-host [host]                  Database host for postgres"
             echo "  --db-port [port]                  Database port for postgres"
             echo "  --db-name [name]                  Database name for postgres"
@@ -206,6 +211,33 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
+if [[ "$AGENTS_SEEN" -ne 1 ]]; then
+    echo "Error: --agents is required exactly once" >&2
+    exit 1
+fi
+
+if ! CANONICAL_AGENT_LINES="$(
+    python scripts/sync_agent_assets.py canonicalize --agents "$AGENTS"
+)"; then
+    exit 1
+fi
+mapfile -t CANONICAL_AGENTS <<< "$CANONICAL_AGENT_LINES"
+CANONICAL_AGENT_CSV="$(IFS=,; printf '%s' "${CANONICAL_AGENTS[*]}")"
+
+run_agent_asset_sync() {
+    local sync_args=(
+        sync
+        --repo-root "$PWD"
+        --mode "$MODE"
+        --ingestion-mode "$INGESTION_MODE"
+    )
+    local agent
+    for agent in "${CANONICAL_AGENTS[@]}"; do
+        sync_args+=(--agent "$agent")
+    done
+    python scripts/sync_agent_assets.py "${sync_args[@]}"
+}
+
 # Check if required parameters are explicitly set or forced by defaults
 if [[ -z "$BACKEND" || -z "$EMBEDDING_PROVIDER" ]]; then
     if [ "$FORCE_DEFAULTS" = "true" ]; then
@@ -218,7 +250,7 @@ if [[ -z "$BACKEND" || -z "$EMBEDDING_PROVIDER" ]]; then
         echo "  Embedding: local-model"
         echo ""
         # Ask for confirmation with a 10-second timeout to prevent hangs in pseudo-TTY agent execution
-        read -t 10 -p "Do you want to proceed with default settings? [y/N]: " CONFIRM || CONFIRM="n"
+        read -r -t 10 -p "Do you want to proceed with default settings? [y/N]: " CONFIRM || CONFIRM="n"
         if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
             BACKEND=${BACKEND:-"sqlite"}
             EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-"local-model"}
@@ -261,7 +293,7 @@ if [ "$MODE" = "dry-run" ]; then
     echo -e "Target Setup Type: ${TYPE}"
     echo -e "Backend: ${BACKEND}, Embedding: ${EMBEDDING_PROVIDER}, Graph: ${GRAPH_ENABLED}, Cache: ${CACHE_BACKEND}"
     echo -e "Source: ${SOURCE}, Ingestion Mode: ${INGESTION_MODE}, Graph Sync Mode: ${GRAPH_SYNC_MODE}"
-    echo -e "Selected Agents for hook configuration: ${AGENTS}"
+    echo -e "Selected Agent targets: ${CANONICAL_AGENT_CSV}"
     echo -e "\nWould execute:"
     echo -e "1. Install dependencies (uv sync --all-extras)"
     echo -e "2. Configure .env with settings (uncomment/comment out blocks as needed)"
@@ -274,17 +306,8 @@ if [ "$MODE" = "dry-run" ]; then
     if [ "$TYPE" = "mcp" ] && [ "$SOURCE" = "local" ]; then
         echo -e "4. Run connectivity check: uv run python scripts/check_connectivity.py"
     fi
-    if [[ -n "$AGENTS" ]]; then
-        echo -e "5. Configure Hook files for agents: ${AGENTS}"
-        if [[ "$AGENTS" == *"opencode"* ]]; then
-            echo -e "   - For OpenCode: Guide user to add '@yohi/opencode-plugin-chronos-turn-end' to global plugins"
-        fi
-        if [[ "$AGENTS" == *"claudecode"* || "$AGENTS" == *"codex"* || "$AGENTS" == *"antigravitycl"* || "$AGENTS" == *"cursorcli"* ]]; then
-            if [ "$INGESTION_MODE" = "all" ]; then
-                echo -e "   - Create wrapper scripts in scripts/ for selected agents"
-            fi
-        fi
-    fi
+    echo -e "5. Synchronize Agent assets for: ${CANONICAL_AGENT_CSV}"
+    run_agent_asset_sync
     echo -e "${GREEN}[Dry-run Mode] Simulation complete. No files were modified.${NC}"
     exit 0
 fi
@@ -319,9 +342,9 @@ modify_var_status() {
     local prefix=$1
     local action=$2 # "comment" or "uncomment"
     if [ "$action" = "comment" ]; then
-        "${SED_INPLACE[@]}" "s/^\([[:space:]]*$prefix[A-Z0-9_]*=\)/# \1/" .env
+        "${SED_INPLACE[@]}" "s/^\([[:space:]]*${prefix}[A-Z0-9_]*=\)/# \1/" .env
     else
-        "${SED_INPLACE[@]}" "s/^#[[:space:]]*\($prefix[A-Z0-9_]*=\)/\1/" .env
+        "${SED_INPLACE[@]}" "s/^#[[:space:]]*\(${prefix}[A-Z0-9_]*=\)/\1/" .env
     fi
 }
 
@@ -529,114 +552,8 @@ if [ "$TYPE" = "mcp" ] && [ "$SOURCE" = "local" ]; then
     fi
 fi
 
-# 6. Hook configuration
-if [[ -n "$AGENTS" ]]; then
-    echo -e "${BLUE}Configuring hooks for agents: ${AGENTS}...${NC}"
-    
-    # 6.1 Turn hook setup
-    if [ "$TYPE" = "mcp" ] && [ "$INGESTION_MODE" = "all" ]; then
-        if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" ]]; then
-            HOOK_FILE="scripts/chronos-turn-hook.cmd"
-            cat << 'EOF' > "$HOOK_FILE"
-@echo off
-rem Auto-generated by bootstrap.sh
-set "SCRIPT_DIR=%~dp0"
-set "PROJECT_DIR=%SCRIPT_DIR%.."
-if exist "%PROJECT_DIR%\.venv\Scripts\python.exe" (
-    "%PROJECT_DIR%\.venv\Scripts\python.exe" "%SCRIPT_DIR%agent_turn_hook.py" %*
-) else (
-    where uv >nul 2>nul
-    if %ERRORLEVEL% equ 0 (
-        uv --directory "%PROJECT_DIR%" run python "%SCRIPT_DIR%agent_turn_hook.py" %*
-    ) else (
-        python "%SCRIPT_DIR%agent_turn_hook.py" %*
-    )
-)
-EOF
-            echo -e "${GREEN}Generated $HOOK_FILE${NC}"
-        else
-            HOOK_FILE="scripts/chronos-turn-hook.sh"
-            cat << 'EOF' > "$HOOK_FILE"
-#!/usr/bin/env bash
-# Auto-generated by bootstrap.sh
-SCRIPT_DIR="$(dirname "$0")"
-PROJECT_DIR="$SCRIPT_DIR/.."
-if [ -f "$PROJECT_DIR/.venv/bin/python" ]; then
-  "$PROJECT_DIR/.venv/bin/python" "$SCRIPT_DIR/agent_turn_hook.py" "$@"
-elif command -v uv &> /dev/null; then
-  uv --directory "$PROJECT_DIR" run python "$SCRIPT_DIR/agent_turn_hook.py" "$@"
-else
-  python "$SCRIPT_DIR/agent_turn_hook.py" "$@"
-fi
-EOF
-            chmod +x "$HOOK_FILE"
-            echo -e "${GREEN}Generated $HOOK_FILE and granted execution permission.${NC}"
-            ls -la "$HOOK_FILE"
-        fi
-    fi
-
-    if [[ "$AGENTS" == *"opencode"* ]]; then
-        if [ "$TYPE" != "mcp" ] || [ "$INGESTION_MODE" != "all" ]; then
-            echo -e "${BLUE}Skipping OpenCode turn-end plugin registration (requires TYPE=mcp and CHRONOS_INGESTION_MODE=all).${NC}"
-        else
-        echo -e "${BLUE}Attempting to register OpenCode plugin...${NC}"
-        OPCODE_CONFIG_DIR="$HOME/.config/opencode"
-        if [ -f "$OPCODE_CONFIG_DIR/opencode.json" ]; then
-            python -c "
-import json, os
-path = os.path.expanduser('~/.config/opencode/opencode.json')
-try:
-    try:
-        with open(path, 'r') as f:
-            data = json.load(f)
-    except Exception:
-        data = {}
-    plugin_list = data.get('plugins', [])
-    if '@yohi/opencode-plugin-chronos-turn-end' not in plugin_list:
-        plugin_list.append('@yohi/opencode-plugin-chronos-turn-end')
-        data['plugins'] = plugin_list
-        with open(path, 'w') as f:
-            json.dump(data, f, indent=2)
-        print('✅ Successfully added plugin to opencode.json')
-except Exception as e:
-    print('⚠️ Failed to update opencode.json automatically:', e)
-"
-        elif [ -f "$OPCODE_CONFIG_DIR/opencode.jsonc" ]; then
-            echo -e "⚠️ opencode.jsonc detected. Automatic JSON editing is skipped for jsonc format to preserve comments."
-        else
-            echo -e "⚠️ opencode.json not found in $OPCODE_CONFIG_DIR."
-        fi
-
-        echo -e "\n${BLUE}--- OpenCode Setup Steps ---${NC}"
-        echo -e "1. Add GitHub Packages registry to your ~/.npmrc:"
-        echo -e "   ${GREEN}@yohi:registry=https://npm.pkg.github.com${NC}"
-        echo -e "2. Register the plugin in ~/.config/opencode/opencode.json (or .jsonc):"
-        echo -e "   ${GREEN}\"plugin\": [ \"@yohi/opencode-plugin-chronos-turn-end\" ]${NC}"
-        fi
-    fi
-fi
-
-# 8. Agent Instruction Guidance (Optional)
-NEXT_STEPS_MSG="
-To allow your AI agent to save memories autonomously, you need to add instructions.
-Since this project is often shared with a team, ${BLUE}DO NOT${NC} append these rules
-to project-root files (like .cursorrules) if you don't want to affect others.
-
-Recommended: Add the content of ${BLUE}docs/agent-prompts/memory-save-system-prompt.md${NC}
-to your ${GREEN}GLOBAL${NC} configuration:
-- ${BLUE}Gemini CLI:${NC}  Append to ${GREEN}~/.gemini/GEMINI.md${NC}
-- ${BLUE}Cursor:${NC}      Copy to ${GREEN}Settings > General > Rules for AI${NC}
-- ${BLUE}Claude Code:${NC} Append to ${GREEN}~/.clauderules${NC}
-
-Next steps:
-1. Edit .env if you haven't already.
-2. Use mcp_config.json to configure your MCP client (Claude Desktop/Cursor).
-3. ${BLUE}IMPORTANT:${NC} To enable autonomous memory saving, add the content of
-   ${BLUE}docs/agent-prompts/memory-save-system-prompt.md${NC} to your ${GREEN}GLOBAL${NC} settings
-   (e.g., ~/.gemini/GEMINI.md for Gemini CLI or Cursor Settings)."
-
-echo -e "\n${BLUE}Final Step: Enabling Autonomous Memory${NC}"
-echo -e "$NEXT_STEPS_MSG"
+echo -e "${BLUE}Synchronizing Agent assets for: ${CANONICAL_AGENT_CSV}...${NC}"
+run_agent_asset_sync
 
 echo -e "\n${GREEN}Bootstrap complete!${NC}"
 

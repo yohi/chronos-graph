@@ -20,7 +20,9 @@ from agent_assets.cli import main  # noqa: E402
 from agent_assets.models import (  # noqa: E402
     AgentId,
     AgentSelectionError,
+    ExecutionMode,
     IngestionMode,
+    SyncRequest,
     adapter_for,
     parse_agent_csv,
 )
@@ -105,3 +107,58 @@ def test_main_canonicalize_works_with_global_help_flag(
     with pytest.raises(SystemExit) as exc_info:
         main(["-h"])
     assert exc_info.value.code == 0
+
+
+def test_main_sync_runs_when_repo_root_is_cwd_in_dry_run_selective(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["unexpected", "sync"])
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "agent_assets.cli.run_sync",
+        lambda request: calls.append(request) or 0,
+    )
+    code = main(
+        [
+            "sync",
+            "--repo-root",
+            str(Path.cwd()),
+            "--mode",
+            "dry-run",
+            "--ingestion-mode",
+            "selective",
+            "--agent",
+            "claudecode",
+        ]
+    )
+
+    assert code == 0
+    assert len(calls) == 1
+    request = calls[0]
+    assert isinstance(request, SyncRequest)
+    assert request.command == "sync"
+    assert request.repo_root == Path.cwd()
+    assert request.mode is ExecutionMode.DRY_RUN
+    assert request.ingestion_mode is IngestionMode.SELECTIVE
+    assert request.agent_ids == (AgentId.CLAUDECODE,)
+
+
+def test_main_canonicalize_still_runs_when_args_match_sync_default_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["unexpected", "sync"])
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "agent_assets.cli.run_sync",
+        lambda request: calls.append(request) or 0,
+    )
+    printed: list[str] = []
+    monkeypatch.setattr(
+        "agent_assets.cli._print_canonical_agents",
+        lambda request: printed.extend(agent_id.value for agent_id in request.agent_ids) or 0,
+    )
+    code = main(["canonicalize", "--agents", "codex"])
+
+    assert code == 0
+    assert not calls
+    assert printed == ["codex"]

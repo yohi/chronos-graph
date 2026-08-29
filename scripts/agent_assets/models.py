@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 
 class AgentId(StrEnum):
@@ -39,6 +40,7 @@ class AgentAdapter:
 
 @dataclass(frozen=True, slots=True)
 class SyncRequest:
+    command: Literal["canonicalize", "sync"]
     repo_root: Path
     home: Path
     mode: ExecutionMode
@@ -56,6 +58,26 @@ class AssetBundle:
 
 class AgentSelectionError(RuntimeError):
     """Raised when raw `--agents` input cannot become a supported canonical set."""
+
+
+def validate_command(value: str) -> Literal["canonicalize", "sync"]:
+    """Return the canonical command name or exit with a parser error."""
+    if value in ("canonicalize", "sync"):
+        return value  # type: ignore[return-value]
+    print(f"unknown-command:{value}", file=sys.stderr)
+    sys.exit(2)
+
+    """Return the canonical command name or exit with a parser error."""
+    if value in ("canonicalize", "sync"):
+        return value  # type: ignore[return-value]
+    print(f"unknown-command:{value}", file=sys.stderr)
+    sys.exit(2)
+
+    """Return the canonical command name or exit with a parser error."""
+    if value == "canonicalize" or value == "sync":
+        return value
+    print(f"unknown-command:{value}", file=sys.stderr)
+    sys.exit(2)
 
 
 def parse_agent_csv(raw: str) -> tuple[AgentId, ...]:

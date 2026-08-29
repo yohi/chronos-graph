@@ -164,9 +164,15 @@ async def test_memory_search_delegates_to_orchestrator(
     chronos_server, mock_orchestrator: MagicMock
 ):
     """memory_search が orchestrator.search() に委譲されること。"""
-    result = await chronos_server.memory_search(query="find this")
+    result = await chronos_server.memory_search(query="find this", project="default-project")
 
-    mock_orchestrator.search.assert_called_once()
+    mock_orchestrator.search.assert_called_once_with(
+        "find this",
+        project="default-project",
+        memory_type=None,
+        top_k=10,
+        max_tokens=None,
+    )
     assert result is not None
 
 
@@ -200,9 +206,16 @@ async def test_memory_search_graph_delegates_to_orchestrator(
     chronos_server, mock_orchestrator: MagicMock
 ):
     """memory_search_graph が orchestrator.search_graph() に委譲されること。"""
-    result = await chronos_server.memory_search_graph(query="graph query")
+    result = await chronos_server.memory_search_graph(
+        query="graph query", project="default-project"
+    )
 
-    mock_orchestrator.search_graph.assert_called_once()
+    mock_orchestrator.search_graph.assert_called_once_with(
+        "graph query",
+        edge_types=None,
+        depth=2,
+        project="default-project",
+    )
     assert result is not None
 
 

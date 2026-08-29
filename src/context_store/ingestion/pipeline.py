@@ -30,6 +30,7 @@ from context_store.ingestion.chunker import Chunker
 from context_store.ingestion.classifier import Classifier
 from context_store.ingestion.deduplicator import DeduplicationAction, Deduplicator
 from context_store.ingestion.graph_linker import GraphLinker
+from context_store.ingestion.guard import inspect_and_reject_if_unsafe
 from context_store.models.memory import Memory, MemoryType, SourceType
 from context_store.storage.protocols import GraphAdapter, MemoryFilters, StorageAdapter
 from context_store.utils import mask_url
@@ -232,13 +233,16 @@ class IngestionPipeline:
 
         raw_contents = await self._prepare_raw_contents(source, source_type, meta)
 
+        # 信頼境界: チャンク化・埋め込み前に各 RawContent を検査して棄却
+        for raw in raw_contents:
+            inspect_and_reject_if_unsafe(raw.content)
+
         flattened: list[RawContent] = []
         for raw in raw_contents:
             flattened.extend(self._chunker.chunk(raw))
 
         if not flattened:
             return []
-
         # memo_key で重複排除したユニークなチャンクを特定して埋め込みを生成
         unique_chunks: dict[tuple[str, str, str], RawContent] = {}
         for chunk in flattened:

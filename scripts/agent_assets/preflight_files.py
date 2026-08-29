@@ -75,7 +75,7 @@ def plan_skills(
             action = PlannedAction.UPDATE
         else:
             action = PlannedAction.CREATE
-        targets.append(PlannedTarget(target_root, action, ()))
+        targets.append(PlannedTarget(target_root, action, tuple(snapshots)))
     return tuple(targets), tuple(snapshots)
 
 

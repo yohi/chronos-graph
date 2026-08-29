@@ -189,3 +189,58 @@ def test_main_sync_dry_run_loads_sync_modules(
     assert code == 0
     assert captured.out.startswith("bundle-digest:")
     assert f"{tmp_path / '.claude' / 'CLAUDE.md'}:create" in captured.out
+
+
+def test_main_sync_production_installs_selected_agent_assets(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda _: home))
+
+    code = main(
+        [
+            "sync",
+            "--repo-root",
+            str(REPO_ROOT),
+            "--mode",
+            "production",
+            "--ingestion-mode",
+            "selective",
+            "--agent",
+            "claudecode",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert captured.out == "Synchronization complete\n"
+    assert (home / ".claude" / "CLAUDE.md").is_file()
+    assert (home / ".claude" / "skills" / "chronos-memory-recall" / "SKILL.md").is_file()
+    assert (home / ".claude" / "skills" / "chronos-memory-save" / "SKILL.md").is_file()
+
+
+def test_apply_sync_rejects_unmanaged_skill_change_after_preflight(tmp_path: Path) -> None:
+    from agent_assets.preflight import preflight
+    from agent_assets.transaction import ApplyError, SystemFileOperations, apply_sync
+
+    home = tmp_path / "home"
+    unmanaged = home / ".claude" / "skills" / "user-skill" / "README.md"
+    unmanaged.parent.mkdir(parents=True)
+    unmanaged.write_bytes(b"before\n")
+    request = SyncRequest(
+        command="sync",
+        repo_root=REPO_ROOT,
+        home=home,
+        mode=ExecutionMode.PRODUCTION,
+        ingestion_mode=IngestionMode.SELECTIVE,
+        agent_ids=(AgentId.CLAUDECODE,),
+    )
+    plan = preflight(request, build_bundle(REPO_ROOT / "agent-assets"))
+    unmanaged.write_bytes(b"after\n")
+
+    with pytest.raises(ApplyError):
+        apply_sync(plan, SystemFileOperations())
+
+    assert not (home / ".claude" / "CLAUDE.md").exists()

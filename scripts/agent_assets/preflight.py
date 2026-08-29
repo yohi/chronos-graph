@@ -157,12 +157,15 @@ def preflight(request: SyncRequest, bundle: AssetBundle) -> SyncPlan:
         instruction_path = safe_instruction_target(
             adapter.instructions_path, adapter.instructions_root
         )
+        instruction_snapshots: tuple[TargetSnapshot, ...] = ()
         if instruction_path.exists():
             original = instruction_path.read_bytes()
             sections = parse_instruction_sections(original)
             replacement = sections.prefix + rendered_block + sections.suffix
             action = PlannedAction.UNCHANGED if replacement == original else PlannedAction.UPDATE
-            snapshots.append(snapshot(instruction_path, instruction_path.parent))
+            instruction_snapshot = snapshot(instruction_path, instruction_path.parent)
+            instruction_snapshots = (instruction_snapshot,)
+            snapshots.append(instruction_snapshot)
             detected = detect_legacy_prompts(original, LEGACY_SIGNATURES)
             for signature in detected:
                 if (
@@ -178,7 +181,7 @@ def preflight(request: SyncRequest, bundle: AssetBundle) -> SyncPlan:
             PlannedTarget(
                 path=instruction_path,
                 action=action,
-                snapshots=(),
+                snapshots=instruction_snapshots,
                 content=replacement,
             )
         )

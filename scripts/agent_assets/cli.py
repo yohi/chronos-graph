@@ -14,7 +14,7 @@ from agent_assets.models import (
 )
 
 
-def _parse_sync_args(raw: list[str] | None = None) -> SyncRequest:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sync_agent_assets.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -40,8 +40,11 @@ def _parse_sync_args(raw: list[str] | None = None) -> SyncRequest:
         choices=[AgentId.CLAUDECODE, AgentId.CODEX, AgentId.OPENCODE],
         help="Canonical Agent ID (repeat for each agent)",
     )
+    return parser
 
-    args = parser.parse_args(raw)
+
+def _parse_sync_args(raw: list[str] | None = None) -> SyncRequest:
+    args = _build_parser().parse_args(raw)
     if args.command == "canonicalize":
         return SyncRequest(
             repo_root=Path.cwd(),
@@ -67,14 +70,6 @@ def _print_canonical_agents(request: SyncRequest) -> int:
     return 0
 
 
-def _print_dry_run_plan(request: SyncRequest) -> int:
-    bundle = build_bundle(request.repo_root / "agent-assets")
-    print(f"bundle-digest:{bundle.digest}")
-    for agent_id in request.agent_ids:
-        print(f"agent:{agent_id.value}:planned:sync")
-    return 0
-
-
 def run_sync(request: SyncRequest) -> int:
     """Run the entire selected-Agent synchronization lifecycle."""
     from agent_assets.preflight import preflight
@@ -93,9 +88,23 @@ def run_sync(request: SyncRequest) -> int:
 
 
 def main(raw: list[str] | None = None) -> int:
-    request = _parse_sync_args(raw)
-    if len(sys.argv) > 1 and sys.argv[1] == "canonicalize":
+    args = _build_parser().parse_args(raw)
+    if args.command == "canonicalize":
+        request = SyncRequest(
+            repo_root=Path.cwd(),
+            home=Path.home(),
+            mode=ExecutionMode.DRY_RUN,
+            ingestion_mode=IngestionMode.SELECTIVE,
+            agent_ids=parse_agent_csv(args.agents),
+        )
         return _print_canonical_agents(request)
+    request = SyncRequest(
+        repo_root=args.repo_root.resolve(),
+        home=Path.home(),
+        mode=ExecutionMode(args.mode),
+        ingestion_mode=IngestionMode(args.ingestion_mode),
+        agent_ids=tuple(AgentId(value) for value in args.agent),
+    )
     return run_sync(request)
 
 

@@ -16,6 +16,7 @@ from agent_assets.bundle import (  # noqa: E402
     build_bundle,
     render_managed_block,
 )
+from agent_assets.cli import main  # noqa: E402
 from agent_assets.models import (  # noqa: E402
     AgentId,
     AgentSelectionError,
@@ -76,3 +77,31 @@ def test_rendered_all_block_has_no_unresolved_token() -> None:
     assert b"{{" not in rendered
     assert bundle.digest.encode("ascii") in rendered
     assert b"ingestion-mode=all" in rendered
+
+
+def test_main_canonicalize_uses_raw_args(capsys: pytest.CaptureFixture[str]) -> None:
+    code = main(["canonicalize", "--agents", "codex,opencode"])
+    captured = capsys.readouterr()
+
+    assert code == 0
+    assert captured.out == "codex\nopencode\n"
+
+
+def test_main_canonicalize_ignores_sys_argv(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["unexpected", "sync"])
+    code = main(["canonicalize", "--agents", "claudecode"])
+    captured = capsys.readouterr()
+
+    assert code == 0
+    assert captured.out == "claudecode\n"
+
+
+def test_main_canonicalize_works_with_global_help_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["unexpected", "sync"])
+    with pytest.raises(SystemExit) as exc_info:
+        main(["-h"])
+    assert exc_info.value.code == 0

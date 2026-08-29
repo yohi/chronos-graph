@@ -11,6 +11,7 @@ import pytest
 
 from context_store.ingestion.adapters import RawContent
 from context_store.ingestion.deduplicator import DeduplicationAction
+from context_store.ingestion.guard import ContentRejected
 from context_store.ingestion.pipeline import IngestionPipeline, IngestionResult
 from context_store.models.memory import Memory, MemorySource, MemoryType, ScoredMemory, SourceType
 from context_store.storage.protocols import GraphAdapter, StorageAdapter
@@ -48,8 +49,8 @@ def _make_mock_embedding_provider(
             await asyncio.sleep(delay)
         return [embedding or [0.1, 0.2, 0.3, 0.4] for _ in texts]
 
-    provider.embed = embed
-    provider.embed_batch = embed_batch
+    provider.embed = AsyncMock(side_effect=embed)
+    provider.embed_batch = AsyncMock(side_effect=embed_batch)
     return provider
 
 
@@ -311,6 +312,36 @@ async def test_pipeline_dispose_closes_embedding_provider_and_url_adapter() -> N
 
     url_adapter.aclose.assert_awaited_once()
     embedding_provider.close.assert_awaited_once()
+
+
+# ===========================================================================
+# Trust boundary tests
+# ===========================================================================
+
+
+class TestIngestionTrustBoundary:
+    """Unsafe content must be rejected before embedding provider sees it."""
+
+    @pytest.mark.asyncio
+    async def test_rejects_unsafe_content_before_embed_batch(self) -> None:
+        """Raw content containing credentials must be rejected before embed_batch()."""
+        storage = _make_mock_storage()
+        graph = _make_mock_graph()
+        embedding_provider = _make_mock_embedding_provider()
+
+        pipeline = IngestionPipeline(
+            storage=storage,
+            graph=graph,
+            embedding_provider=embedding_provider,
+            settings=make_settings(),
+        )
+
+        unsafe_content = "Here is my API key: sk-abcdefghijklmnopqrstuvwxyz1234"
+        with pytest.raises(ContentRejected):
+            await pipeline.ingest(unsafe_content, source_type=SourceType.MANUAL)
+
+        embedding_provider.embed_batch.assert_not_called()
+        storage.save_memory.assert_not_called()
 
 
 # ===========================================================================

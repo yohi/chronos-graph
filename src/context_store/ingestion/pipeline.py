@@ -233,13 +233,16 @@ class IngestionPipeline:
 
         raw_contents = await self._prepare_raw_contents(source, source_type, meta)
 
+        # 信頼境界: チャンク化・埋め込み前に各 RawContent を検査して棄却
+        for raw in raw_contents:
+            inspect_and_reject_if_unsafe(raw.content)
+
         flattened: list[RawContent] = []
         for raw in raw_contents:
             flattened.extend(self._chunker.chunk(raw))
 
         if not flattened:
             return []
-
         # memo_key で重複排除したユニークなチャンクを特定して埋め込みを生成
         unique_chunks: dict[tuple[str, str, str], RawContent] = {}
         for chunk in flattened:
@@ -461,9 +464,6 @@ class IngestionPipeline:
         precomputed_embedding: list[float] | None = None,
     ) -> IngestionResult | None:
         """チャンクのコア処理（ロック範囲を最適化）。"""
-        # 信頼境界: 保存前に資格情報・PII・オプトアウトマーカーを検出して棄却
-        inspect_and_reject_if_unsafe(chunk.content)
-
         # ステップ3: 分類（LLM不使用のルールベース）
         classification = self._classifier.classify(chunk)
 

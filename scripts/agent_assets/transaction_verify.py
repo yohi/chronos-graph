@@ -24,9 +24,9 @@ def source_for_target(plan: SyncPlan, target: PlannedTarget) -> Path:
 
 def snapshots_match(plan: SyncPlan, target: PlannedTarget) -> bool:
     """Compare the current target state with the preflight snapshot."""
-    if not target.snapshots:
-        return True
     if target.content is not None:
+        if not target.snapshots:
+            return True
         if target.path.is_symlink() or not target.path.is_file():
             return False
         actual: tuple[TargetSnapshot, ...] = (snapshot(target.path, target.path.parent),)

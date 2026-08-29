@@ -244,3 +244,67 @@ def test_apply_sync_rejects_unmanaged_skill_change_after_preflight(tmp_path: Pat
         apply_sync(plan, SystemFileOperations())
 
     assert not (home / ".claude" / "CLAUDE.md").exists()
+
+
+def test_apply_sync_preserves_unchanged_unmanaged_skill_entries(tmp_path: Path) -> None:
+    from agent_assets.preflight import preflight
+    from agent_assets.transaction import SystemFileOperations, apply_sync
+
+    home = tmp_path / "home"
+    unmanaged = home / ".claude" / "skills" / "user-skill" / "README.md"
+    unmanaged.parent.mkdir(parents=True)
+    unmanaged.write_bytes(b"before\n")
+    request = SyncRequest(
+        command="sync",
+        repo_root=REPO_ROOT,
+        home=home,
+        mode=ExecutionMode.PRODUCTION,
+        ingestion_mode=IngestionMode.SELECTIVE,
+        agent_ids=(AgentId.CLAUDECODE,),
+    )
+    plan = preflight(request, build_bundle(REPO_ROOT / "agent-assets"))
+
+    apply_sync(plan, SystemFileOperations())
+
+    assert unmanaged.read_bytes() == b"before\n"
+    assert (home / ".claude" / "skills" / "chronos-memory-recall" / "SKILL.md").is_file()
+
+
+def test_apply_sync_rejects_unmanaged_skill_added_after_preflight(tmp_path: Path) -> None:
+    from agent_assets.preflight import preflight
+    from agent_assets.transaction import ApplyError, SystemFileOperations, apply_sync
+
+    home = tmp_path / "home"
+    request = SyncRequest(
+        command="sync",
+        repo_root=REPO_ROOT,
+        home=home,
+        mode=ExecutionMode.PRODUCTION,
+        ingestion_mode=IngestionMode.SELECTIVE,
+        agent_ids=(AgentId.CLAUDECODE,),
+    )
+    plan = preflight(request, build_bundle(REPO_ROOT / "agent-assets"))
+    added = home / ".claude" / "skills" / "external-skill" / "README.md"
+    added.parent.mkdir(parents=True)
+    added.write_bytes(b"added-after-preflight\n")
+
+    with pytest.raises(ApplyError):
+        apply_sync(plan, SystemFileOperations())
+
+    assert added.read_bytes() == b"added-after-preflight\n"
+    assert not (home / ".claude" / "skills" / "chronos-memory-recall").exists()
+
+
+def test_safe_instruction_target_rejects_root_that_is_not_an_ancestor(
+    tmp_path: Path,
+) -> None:
+    from agent_assets.preflight_errors import InstructionCollisionError
+    from agent_assets.preflight_files import safe_instruction_target
+
+    path = tmp_path / "outside" / "AGENTS.md"
+    root = tmp_path / "approved"
+
+    with pytest.raises(InstructionCollisionError) as error_info:
+        safe_instruction_target(path, root)
+
+    assert error_info.value.code == "instruction-root-mismatch"

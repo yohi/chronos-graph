@@ -180,6 +180,7 @@ def apply_sync(
         _validate_preflight_state(plan)
         _apply_non_hook_targets(plan, journal, operations)
         install_selected_hooks(plan, journal, operations)
+        journal.cleanup_staging_roots()
         verifier = verify or verify_post_write_state
         try:
             verified = verifier(plan)

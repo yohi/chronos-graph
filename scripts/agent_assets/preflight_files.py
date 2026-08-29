@@ -107,6 +107,8 @@ def _existing_parent_paths(path: Path, root: Path) -> tuple[Path, ...]:
             parents.append(current)
         if current == root:
             return tuple(parents)
+        if current == current.parent:
+            raise InstructionCollisionError(path, "instruction-root-mismatch")
         current = current.parent
 
 

@@ -323,6 +323,7 @@ class TestSearchOperation:
 
         retrieval.search.assert_called_once()
         assert result is not None
+
     @pytest.mark.asyncio
     async def test_search_passes_parameters_to_pipeline(self):
         """search() がパラメータを RetrievalPipeline.search() に渡す。"""
@@ -397,6 +398,7 @@ class TestSearchGraphOperation:
             await orch.search_graph("test query", project="default-project")
 
         assert "グラフ機能が無効" in str(exc_info.value)
+
     @pytest.mark.asyncio
     async def test_search_graph_delegates_to_retrieval_pipeline(self):
         """グラフが有効な場合 RetrievalPipeline.search() に委譲される。
@@ -412,6 +414,7 @@ class TestSearchGraphOperation:
 
         retrieval.search.assert_called_once()
         assert result is not None
+
     @pytest.mark.asyncio
     async def test_search_graph_passes_project_to_retrieval_pipeline(self):
         """search_graph() が project パラメータを RetrievalPipeline.search() に渡す。"""

@@ -76,25 +76,38 @@ def _print_canonical_agents(request: SyncRequest) -> int:
 def run_sync(request: SyncRequest) -> int:
     """Run the entire selected-Agent synchronization lifecycle."""
     from agent_assets.preflight import preflight
-    from agent_assets.transaction import SystemFileOperations, apply_sync
 
     bundle = build_bundle(request.repo_root / "agent-assets")
     plan = preflight(request, bundle)
     if request.mode is ExecutionMode.DRY_RUN:
         print(f"bundle-digest:{bundle.digest}")
-        for target in plan.targets:
+        for target in sorted(plan.targets, key=lambda item: item.path.as_posix()):
             print(f"{target.path}:{target.action.value}")
+        for diagnostic in sorted(plan.diagnostics, key=lambda item: item.render()):
+            print(diagnostic.render())
         return 0
+
+    from agent_assets.transaction import SystemFileOperations, apply_sync
+
     apply_sync(plan, SystemFileOperations())
     print("Synchronization complete")
     return 0
 
 
 def main(raw: list[str] | None = None) -> int:
+    from agent_assets.preflight import MarkerError, PreflightCollisionError
+
     request = _parse_sync_args(raw)
     if request.command == "canonicalize":
         return _print_canonical_agents(request)
-    return run_sync(request)
+    try:
+        return run_sync(request)
+    except PreflightCollisionError as error:
+        print(error.diagnostic().render(), file=sys.stderr)
+        return 2
+    except MarkerError as error:
+        print(f"preflight:reject:.:{error.code}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

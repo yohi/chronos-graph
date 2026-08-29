@@ -162,3 +162,30 @@ def test_main_canonicalize_still_runs_when_args_match_sync_default_values(
     assert code == 0
     assert not calls
     assert printed == ["codex"]
+
+
+def test_main_sync_dry_run_loads_sync_modules(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda _: tmp_path))
+
+    code = main(
+        [
+            "sync",
+            "--repo-root",
+            str(REPO_ROOT),
+            "--mode",
+            "dry-run",
+            "--ingestion-mode",
+            "selective",
+            "--agent",
+            "claudecode",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert captured.out.startswith("bundle-digest:")
+    assert f"{tmp_path / '.claude' / 'CLAUDE.md'}:create" in captured.out

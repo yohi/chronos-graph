@@ -23,6 +23,19 @@ class ExecutionMode(StrEnum):
     DRY_RUN = "dry-run"
 
 
+class PlannedAction(StrEnum):
+    CREATE = "create"
+    UPDATE = "update"
+    UNCHANGED = "unchanged"
+    CONFLICT = "conflict"
+
+
+class SnapshotKind(StrEnum):
+    DIRECTORY = "directory"
+    FILE = "file"
+    SYMLINK = "symlink"
+
+
 CANONICAL_AGENT_ORDER: Final = (
     AgentId.CLAUDECODE,
     AgentId.CODEX,
@@ -54,6 +67,42 @@ class AssetBundle:
     digest: str
     minimal_template: bytes
     skill_roots: tuple[Path, Path]
+
+
+@dataclass(frozen=True, slots=True)
+class TargetSnapshot:
+    path: Path
+    kind: SnapshotKind
+    fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class PlannedTarget:
+    path: Path
+    action: PlannedAction
+    snapshots: tuple[TargetSnapshot, ...]
+    content: bytes | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SafeDiagnostic:
+    phase: str
+    action: str
+    path: Path
+    mismatch: str
+
+    def render(self) -> str:
+        """Render a deterministic diagnostic without target content."""
+        return f"{self.phase}:{self.action}:{self.path}:{self.mismatch}"
+
+
+@dataclass(frozen=True, slots=True)
+class SyncPlan:
+    request: SyncRequest
+    bundle: AssetBundle
+    targets: tuple[PlannedTarget, ...]
+    diagnostics: tuple[SafeDiagnostic, ...]
+    snapshots: tuple[TargetSnapshot, ...] = ()
 
 
 class AgentSelectionError(RuntimeError):

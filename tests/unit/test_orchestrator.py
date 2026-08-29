@@ -385,6 +385,17 @@ class TestSearchOperation:
         assert "strategy" in search_kwargs
         assert search_kwargs["strategy"] is custom_strategy
 
+    @pytest.mark.asyncio
+    async def test_search_raises_value_error_for_whitespace_only_project(self):
+        """空白だけの project は正規化後に ValueError を送出する。"""
+        retrieval = _make_mock_retrieval_pipeline()
+        orch, *_ = await _build_orchestrator(retrieval_pipeline=retrieval)
+
+        with pytest.raises(ValueError, match="project is required for memory_search"):
+            await orch.search("test query", project="   ")
+
+        retrieval.search.assert_not_called()
+
 
 class TestSearchGraphOperation:
     """search_graph() 操作のテスト。"""

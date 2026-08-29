@@ -291,7 +291,8 @@ class Orchestrator:
         Returns:
             検索結果の dict。
         """
-        if project is None or project == "":
+        normalized_project = normalize_project_name(project)
+        if normalized_project is None:
             raise ValueError("project is required for memory_search")
 
         if memory_type is not None:
@@ -304,7 +305,6 @@ class Orchestrator:
 
         base_strategy = SearchStrategy()
         adjusted_strategy = await self.policy_hook.adjust_strategy(query, base_strategy)
-        normalized_project = normalize_project_name(project)
 
         result = await self._retrieval_pipeline.search(
             query,

@@ -88,23 +88,14 @@ def run_sync(request: SyncRequest) -> int:
 
 
 def main(raw: list[str] | None = None) -> int:
-    args = _build_parser().parse_args(raw)
-    if args.command == "canonicalize":
-        request = SyncRequest(
-            repo_root=Path.cwd(),
-            home=Path.home(),
-            mode=ExecutionMode.DRY_RUN,
-            ingestion_mode=IngestionMode.SELECTIVE,
-            agent_ids=parse_agent_csv(args.agents),
-        )
-        return _print_canonical_agents(request)
-    request = SyncRequest(
-        repo_root=args.repo_root.resolve(),
-        home=Path.home(),
-        mode=ExecutionMode(args.mode),
-        ingestion_mode=IngestionMode(args.ingestion_mode),
-        agent_ids=tuple(AgentId(value) for value in args.agent),
+    request = _parse_sync_args(raw)
+    canonical = (
+        request.repo_root == Path.cwd()
+        and request.mode is ExecutionMode.DRY_RUN
+        and request.ingestion_mode is IngestionMode.SELECTIVE
     )
+    if canonical:
+        return _print_canonical_agents(request)
     return run_sync(request)
 
 

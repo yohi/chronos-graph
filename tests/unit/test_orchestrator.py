@@ -319,11 +319,10 @@ class TestSearchOperation:
         retrieval = _make_mock_retrieval_pipeline()
         orch, *_ = await _build_orchestrator(retrieval_pipeline=retrieval)
 
-        result = await orch.search("test query")
+        result = await orch.search("test query", project="default-project")
 
         retrieval.search.assert_called_once()
         assert result is not None
-
     @pytest.mark.asyncio
     async def test_search_passes_parameters_to_pipeline(self):
         """search() がパラメータを RetrievalPipeline.search() に渡す。"""
@@ -352,7 +351,7 @@ class TestSearchOperation:
         retrieval = _make_mock_retrieval_pipeline()
         orch, *_ = await _build_orchestrator(retrieval_pipeline=retrieval, policy_hook=policy_hook)
 
-        await orch.search("test query")
+        await orch.search("test query", project="default-project")
 
         policy_hook.adjust_strategy.assert_called_once()
         call_args = policy_hook.adjust_strategy.call_args
@@ -371,7 +370,7 @@ class TestSearchOperation:
         retrieval = _make_mock_retrieval_pipeline()
         orch, *_ = await _build_orchestrator(retrieval_pipeline=retrieval, policy_hook=policy_hook)
 
-        await orch.search("test query")
+        await orch.search("test query", project="default-project")
 
         # PolicyHook が正しい引数で呼ばれ、adjusted_strategy が返されたことを確認
         policy_hook.adjust_strategy.assert_called_once()
@@ -395,10 +394,9 @@ class TestSearchGraphOperation:
         orch, *_ = await _build_orchestrator(graph=None)
 
         with pytest.raises(RuntimeError) as exc_info:
-            await orch.search_graph("test query")
+            await orch.search_graph("test query", project="default-project")
 
         assert "グラフ機能が無効" in str(exc_info.value)
-
     @pytest.mark.asyncio
     async def test_search_graph_delegates_to_retrieval_pipeline(self):
         """グラフが有効な場合 RetrievalPipeline.search() に委譲される。
@@ -410,11 +408,10 @@ class TestSearchGraphOperation:
         retrieval = _make_mock_retrieval_pipeline()
         orch, *_ = await _build_orchestrator(graph=graph, retrieval_pipeline=retrieval)
 
-        result = await orch.search_graph("test query", depth=2)
+        result = await orch.search_graph("test query", depth=2, project="default-project")
 
         retrieval.search.assert_called_once()
         assert result is not None
-
     @pytest.mark.asyncio
     async def test_search_graph_passes_project_to_retrieval_pipeline(self):
         """search_graph() が project パラメータを RetrievalPipeline.search() に渡す。"""

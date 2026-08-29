@@ -291,6 +291,9 @@ class Orchestrator:
         Returns:
             検索結果の dict。
         """
+        if project is None or project == "":
+            raise ValueError("project is required for memory_search")
+
         if memory_type is not None:
             logger.warning(
                 "memory_type=%r が指定されましたが、現時点では RetrievalPipeline が "
@@ -333,6 +336,9 @@ class Orchestrator:
         Raises:
             RuntimeError: グラフが無効な場合。
         """
+        if project is None or project == "":
+            raise ValueError("project is required for memory_search_graph")
+
         if self._graph is None:
             raise RuntimeError("グラフ機能が無効です。graph_enabled=true を設定してください。")
 

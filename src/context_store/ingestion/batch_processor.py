@@ -17,6 +17,8 @@ if TYPE_CHECKING:
     from context_store.ingestion.pipeline import IngestionPipeline
     from context_store.lifecycle.manager import LifecycleManager
 
+from context_store.ingestion.guard import inspect_and_reject_if_unsafe
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,6 +51,9 @@ class BatchProcessor:
         IngestionPipeline.estimate_chunks() に委譲することで、
         Adapter による分割ロジックとの乖離を防ぐ。
         """
+        # 信頼境界: 推定時に資格情報/PII/オプトアウトを事前検出
+        inspect_and_reject_if_unsafe(conversation_log)
+
         return await self._pipeline.estimate_chunks(
             conversation_log,
             source_type=SourceType.CONVERSATION,

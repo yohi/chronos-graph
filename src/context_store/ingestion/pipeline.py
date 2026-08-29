@@ -30,6 +30,7 @@ from context_store.ingestion.chunker import Chunker
 from context_store.ingestion.classifier import Classifier
 from context_store.ingestion.deduplicator import DeduplicationAction, Deduplicator
 from context_store.ingestion.graph_linker import GraphLinker
+from context_store.ingestion.guard import inspect_and_reject_if_unsafe
 from context_store.models.memory import Memory, MemoryType, SourceType
 from context_store.storage.protocols import GraphAdapter, MemoryFilters, StorageAdapter
 from context_store.utils import mask_url
@@ -460,6 +461,9 @@ class IngestionPipeline:
         precomputed_embedding: list[float] | None = None,
     ) -> IngestionResult | None:
         """チャンクのコア処理（ロック範囲を最適化）。"""
+        # 信頼境界: 保存前に資格情報・PII・オプトアウトマーカーを検出して棄却
+        inspect_and_reject_if_unsafe(chunk.content)
+
         # ステップ3: 分類（LLM不使用のルールベース）
         classification = self._classifier.classify(chunk)
 

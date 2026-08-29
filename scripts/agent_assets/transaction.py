@@ -129,20 +129,42 @@ class TransactionJournal:
     plan: SyncPlan
     root: Path
     entries: list[_AppliedEntry]
+    staging_roots: dict[Path, Path]
 
     def __init__(self, plan: SyncPlan, root: Path) -> None:
         self.plan = plan
         self.root = root
         self.entries = []
+        self.staging_roots = {}
 
     @classmethod
     def create(cls, plan: SyncPlan) -> TransactionJournal:
         """Create a private temporary area for one synchronization."""
         return cls(plan, Path(tempfile.mkdtemp(prefix="chronosgraph-sync-")))
 
+    def stage_root_for(self, parent: Path) -> Path:
+        """Create or return a staging root on the target's filesystem."""
+        root = self.staging_roots.get(parent)
+        if root is None:
+            root = Path(
+                tempfile.mkdtemp(
+                    prefix="chronosgraph-stage-",
+                    dir=parent,
+                )
+            )
+            self.staging_roots[parent] = root
+        return root
+
+    def cleanup_staging_roots(self) -> None:
+        """Remove all target-local staging roots owned by this transaction."""
+        for root in self.staging_roots.values():
+            shutil.rmtree(root, ignore_errors=True)
+        self.staging_roots.clear()
+
     def commit(self) -> SyncResult:
         """Discard private transaction artifacts after successful verification."""
         paths = tuple(entry.target.path for entry in self.entries)
+        self.cleanup_staging_roots()
         shutil.rmtree(self.root, ignore_errors=True)
         return SyncResult(paths)
 
@@ -222,7 +244,8 @@ def _apply_target(
 
     target.path.parent.mkdir(parents=True, exist_ok=True)
     existed = _target_exists(target.path)
-    stage = journal.root / f"stage-{len(journal.entries)}"
+    stage_root = journal.stage_root_for(target.path.parent)
+    stage = stage_root / f"stage-{len(journal.entries)}"
     if target.content is None:
         source = source_for_target(plan, target)
         _stage_skill(source, target.path if existed else None, stage)
@@ -267,6 +290,7 @@ def rollback_transaction(journal: TransactionJournal, operations: FileOperations
                 operations.move(entry.backup, entry.target.path)
         except Exception:  # noqa: BLE001 - continue restoring independent entries
             rollback_failed = True
+    journal.cleanup_staging_roots()
     if rollback_failed:
         return RollbackResult(False, "rollback-failed")
     if externally_changed:

@@ -17,6 +17,7 @@ from .models import (
     SyncRequest,
     TargetSnapshot,
     adapter_for,
+    resolve_codex_home,
 )
 from .preflight_errors import (
     InstructionCollisionError,
@@ -153,7 +154,11 @@ def preflight(request: SyncRequest, bundle: AssetBundle) -> SyncPlan:
     rendered_block = render_managed_block(bundle, request.ingestion_mode).removesuffix(b"\n")
 
     for agent_id in request.agent_ids:
-        adapter = adapter_for(agent_id, request.home)
+        adapter = adapter_for(
+            agent_id,
+            request.home,
+            request.codex_home or resolve_codex_home(request.home),
+        )
         instruction_path = safe_instruction_target(
             adapter.instructions_path, adapter.instructions_root
         )

@@ -11,6 +11,7 @@ from agent_assets.models import (
     IngestionMode,
     SyncRequest,
     parse_agent_csv,
+    resolve_codex_home,
     validate_command,
 )
 
@@ -46,24 +47,27 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _parse_sync_args(raw: list[str] | None = None) -> SyncRequest:
     args = _build_parser().parse_args(raw)
+    home = Path.home()
     if args.command == "canonicalize":
         return SyncRequest(
             command=validate_command(args.command),
             repo_root=Path.cwd(),
-            home=Path.home(),
+            home=home,
             mode=ExecutionMode.DRY_RUN,
             ingestion_mode=IngestionMode.SELECTIVE,
             agent_ids=parse_agent_csv(args.agents),
+            codex_home=resolve_codex_home(home),
         )
 
     agent_ids = tuple(AgentId(value) for value in args.agent)
     return SyncRequest(
         command=validate_command(args.command),
         repo_root=args.repo_root.resolve(),
-        home=Path.home(),
+        home=home,
         mode=ExecutionMode(args.mode),
         ingestion_mode=IngestionMode(args.ingestion_mode),
         agent_ids=agent_ids,
+        codex_home=resolve_codex_home(home),
     )
 
 

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Final, Literal
+from typing import Final, Literal, assert_never
 
 
 class AgentId(StrEnum):
@@ -59,6 +60,7 @@ class SyncRequest:
     mode: ExecutionMode
     ingestion_mode: IngestionMode
     agent_ids: tuple[AgentId, ...]
+    codex_home: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,20 +140,34 @@ def parse_agent_csv(raw: str) -> tuple[AgentId, ...]:
     return tuple(agent for agent in CANONICAL_AGENT_ORDER if agent in requested)
 
 
-def adapter_for(agent_id: AgentId, home: Path) -> AgentAdapter:
+def resolve_codex_home(home: Path) -> Path:
+    """Resolve CODEX_HOME or derive the default from the user's home."""
+    configured = os.environ.get("CODEX_HOME")
+    return Path(configured).expanduser() if configured else home / ".codex"
+
+
+def adapter_for(
+    agent_id: AgentId,
+    home: Path,
+    codex_home: Path | None = None,
+) -> AgentAdapter:
     """Return the canonical global paths for one supported Agent."""
     match agent_id:
         case AgentId.CLAUDECODE:
             instructions_root = home / ".claude"
             instructions_path = instructions_root / "CLAUDE.md"
+            skills_root = instructions_root / "skills"
         case AgentId.CODEX:
-            instructions_root = home / ".agents"
+            instructions_root = codex_home or home / ".codex"
             instructions_path = instructions_root / "AGENTS.md"
+            skills_root = home / ".agents" / "skills"
         case AgentId.OPENCODE:
             instructions_root = home / ".config" / "opencode"
             instructions_path = instructions_root / "AGENTS.md"
+            skills_root = instructions_root / "skills"
+        case unreachable:
+            assert_never(unreachable)
 
-    skills_root = instructions_root / "skills"
     return AgentAdapter(
         agent_id=agent_id,
         skills_root=skills_root,

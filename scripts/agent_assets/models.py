@@ -67,18 +67,6 @@ def validate_command(value: str) -> Literal["canonicalize", "sync"]:
     print(f"unknown-command:{value}", file=sys.stderr)
     sys.exit(2)
 
-    """Return the canonical command name or exit with a parser error."""
-    if value in ("canonicalize", "sync"):
-        return value  # type: ignore[return-value]
-    print(f"unknown-command:{value}", file=sys.stderr)
-    sys.exit(2)
-
-    """Return the canonical command name or exit with a parser error."""
-    if value == "canonicalize" or value == "sync":
-        return value
-    print(f"unknown-command:{value}", file=sys.stderr)
-    sys.exit(2)
-
 
 def parse_agent_csv(raw: str) -> tuple[AgentId, ...]:
     """Parse one comma-separated CLI value into canonical supported Agent IDs."""

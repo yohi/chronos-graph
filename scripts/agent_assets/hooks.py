@@ -141,6 +141,8 @@ def probe_package_metadata(token: str) -> None:
         _METADATA_URL, headers={"Authorization": f"Bearer {token}"}
     )
     try:
+        # The endpoint is the fixed HTTPS GitHub Packages registry URL above.
+        # nosemgrep
         with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310 - fixed request URL
             if response.status < 200 or response.status >= 300:
                 raise PluginRegistryPrerequisiteError("registry-probe-access")

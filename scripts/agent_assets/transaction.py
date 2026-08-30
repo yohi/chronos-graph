@@ -5,28 +5,39 @@ import shutil
 import stat
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from .bundle import build_bundle
 from .models import PlannedAction, PlannedTarget, SyncPlan
+from .transaction_verify import (
+    matches_applied,
+    snapshots_match,
+    source_for_target,
+    verify_post_write_state,
+)
 
 
 class FileOperations(Protocol):
-    def replace(self, source: Path, destination: Path) -> None: ...
+    """Filesystem operations used by the synchronizer and its tests."""
 
-    def move(self, source: Path, destination: Path) -> None: ...
+    def replace(self, source: Path, destination: Path) -> None:
+        """Atomically replace one destination path."""
 
-    def remove(self, path: Path) -> None: ...
+    def move(self, source: Path, destination: Path) -> None:
+        """Move an owned path into or out of the transaction journal."""
+
+    def remove(self, path: Path) -> None:
+        """Remove a path created by the current transaction."""
 
 
 class SystemFileOperations:
+    """Filesystem implementation used by production synchronization."""
+
     def replace(self, source: Path, destination: Path) -> None:
         os.replace(source, destination)
 
     def move(self, source: Path, destination: Path) -> None:
-        shutil.move(str(source), str(destination))
+        _ = shutil.move(str(source), str(destination))
 
     def remove(self, path: Path) -> None:
         if path.is_dir() and not path.is_symlink():
@@ -35,25 +46,46 @@ class SystemFileOperations:
             path.unlink(missing_ok=True)
 
 
+class PreflightStateChangedError(RuntimeError):
+    """Report a target that changed after the no-write preflight."""
+
+    def __init__(self, path: Path) -> None:
+        self.path: Path = path
+        super().__init__("preflight-state-changed")
+
+
 class HookSetupError(RuntimeError):
-    pass
+    """Report a hook installation failure after transaction mutation."""
 
 
 class PostWriteVerificationError(RuntimeError):
-    pass
+    """Report a failed or raised post-write verifier."""
 
 
-@dataclass(frozen=True, slots=True)
 class RollbackResult:
+    """Redacted result of restoring the transaction's owned changes."""
+
+    __slots__: tuple[str, ...] = ("succeeded", "category")
     succeeded: bool
-    category: str | None = None
+    category: str | None
+
+    def __init__(self, succeeded: bool, category: str | None = None) -> None:
+        self.succeeded = succeeded
+        self.category = category
 
     @classmethod
-    def failure(cls, _: Exception) -> RollbackResult:
+    def failure(cls, _error: Exception) -> RollbackResult:
+        """Return a result that does not expose filesystem error details."""
         return cls(False, "rollback-failed")
 
 
 class ApplyError(RuntimeError):
+    """Report an apply failure together with its rollback result."""
+
+    __slots__: tuple[str, ...] = ("category", "rollback")
+    category: str
+    rollback: RollbackResult
+
     def __init__(self, category: str, rollback: RollbackResult) -> None:
         self.category = category
         self.rollback = rollback
@@ -61,39 +93,80 @@ class ApplyError(RuntimeError):
 
     @classmethod
     def from_failure(cls, error: Exception, rollback: RollbackResult) -> ApplyError:
+        """Convert an internal exception into a redacted apply error."""
         return cls(type(error).__name__.lower(), rollback)
 
 
-@dataclass(frozen=True, slots=True)
-class TransactionJournalEntry:
+class SyncResult:
+    """Paths changed by a successfully committed synchronization."""
+
+    __slots__: tuple[str, ...] = ("paths",)
+    paths: tuple[Path, ...]
+
+    def __init__(self, paths: tuple[Path, ...]) -> None:
+        self.paths = paths
+
+
+class _AppliedEntry:
+    """Mutable journal state needed while a replacement is in progress."""
+
+    __slots__: tuple[str, ...] = ("target", "existed", "backup", "installed")
     target: PlannedTarget
     existed: bool
-
-
-@dataclass(slots=True)
-class _AppliedEntry:
-    entry: TransactionJournalEntry
     backup: Path | None
-    expected: bytes | None
+    installed: bool
+
+    def __init__(self, target: PlannedTarget, existed: bool, backup: Path | None) -> None:
+        self.target = target
+        self.existed = existed
+        self.backup = backup
+        self.installed = False
 
 
-@dataclass(slots=True)
 class TransactionJournal:
+    """Own temporary staging and backup paths until commit or rollback."""
+
+    plan: SyncPlan
     root: Path
-    entries: list[_AppliedEntry] = field(default_factory=list)
+    entries: list[_AppliedEntry]
+    staging_roots: dict[Path, Path]
+
+    def __init__(self, plan: SyncPlan, root: Path) -> None:
+        self.plan = plan
+        self.root = root
+        self.entries = []
+        self.staging_roots = {}
 
     @classmethod
     def create(cls, plan: SyncPlan) -> TransactionJournal:
-        return cls(Path(tempfile.mkdtemp(prefix="chronosgraph-sync-")))
+        """Create a private temporary area for one synchronization."""
+        return cls(plan, Path(tempfile.mkdtemp(prefix="chronosgraph-sync-")))
+
+    def stage_root_for(self, parent: Path) -> Path:
+        """Create or return a staging root on the target's filesystem."""
+        root = self.staging_roots.get(parent)
+        if root is None:
+            root = Path(
+                tempfile.mkdtemp(
+                    prefix="chronosgraph-stage-",
+                    dir=parent,
+                )
+            )
+            self.staging_roots[parent] = root
+        return root
+
+    def cleanup_staging_roots(self) -> None:
+        """Remove all target-local staging roots owned by this transaction."""
+        for root in self.staging_roots.values():
+            shutil.rmtree(root, ignore_errors=True)
+        self.staging_roots.clear()
 
     def commit(self) -> SyncResult:
+        """Discard private transaction artifacts after successful verification."""
+        paths = tuple(entry.target.path for entry in self.entries)
+        self.cleanup_staging_roots()
         shutil.rmtree(self.root, ignore_errors=True)
-        return SyncResult(tuple(applied.entry.target.path for applied in self.entries))
-
-
-@dataclass(frozen=True, slots=True)
-class SyncResult:
-    paths: tuple[Path, ...]
+        return SyncResult(paths)
 
 
 def apply_sync(
@@ -101,21 +174,24 @@ def apply_sync(
     operations: FileOperations,
     verify: Callable[[SyncPlan], bool] | None = None,
 ) -> SyncResult:
+    """Apply one preflighted plan or restore every owned change made by this call."""
     journal = TransactionJournal.create(plan)
-    verifier = verify or verify_post_write_state
     try:
+        _validate_preflight_state(plan)
         _apply_non_hook_targets(plan, journal, operations)
         install_selected_hooks(plan, journal, operations)
+        journal.cleanup_staging_roots()
+        verifier = verify or verify_post_write_state
         try:
             verified = verifier(plan)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - normalize verifier failures
             raise PostWriteVerificationError("verification-exception") from error
         if not verified:
             raise PostWriteVerificationError("verification-failed")
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - transaction boundary rollback
         try:
             rollback = rollback_transaction(journal, operations)
-        except Exception as rollback_error:
+        except Exception as rollback_error:  # noqa: BLE001 - redact rollback details
             rollback = RollbackResult.failure(rollback_error)
         raise ApplyError.from_failure(error, rollback) from error
     return journal.commit()
@@ -132,91 +208,100 @@ def _apply_non_hook_targets(
 def install_selected_hooks(
     plan: SyncPlan, journal: TransactionJournal, operations: FileOperations
 ) -> None:
+    """Apply hook targets after Skills and instructions have been staged."""
     for target in plan.targets:
         if _is_hook_target(plan, target):
             _apply_target(plan, target, journal, operations)
 
 
 def _is_hook_target(plan: SyncPlan, target: PlannedTarget) -> bool:
-    return (
-        target.path.parent == plan.request.repo_root / "scripts"
-        or target.path.name == "opencode.json"
+    return target.path.parent == plan.request.repo_root / "scripts" or (
+        target.path.name == "opencode.json"
     )
+
+
+def _validate_preflight_state(plan: SyncPlan) -> None:
+    for target in plan.targets:
+        match target.action:
+            case PlannedAction.CREATE:
+                if _target_exists(target.path) or not snapshots_match(plan, target):
+                    raise PreflightStateChangedError(target.path)
+            case PlannedAction.UPDATE:
+                if not _target_exists(target.path) or not snapshots_match(plan, target):
+                    raise PreflightStateChangedError(target.path)
+            case PlannedAction.UNCHANGED:
+                continue
+            case PlannedAction.CONFLICT:
+                raise PreflightStateChangedError(target.path)
 
 
 def _apply_target(
     plan: SyncPlan, target: PlannedTarget, journal: TransactionJournal, operations: FileOperations
 ) -> None:
-    if target.action is PlannedAction.UNCHANGED:
-        return
+    match target.action:
+        case PlannedAction.UNCHANGED:
+            return
+        case PlannedAction.CREATE | PlannedAction.UPDATE:
+            pass
+        case PlannedAction.CONFLICT:
+            raise PreflightStateChangedError(target.path)
+
     target.path.parent.mkdir(parents=True, exist_ok=True)
-    existed = target.path.exists() or target.path.is_symlink()
-    entry = TransactionJournalEntry(target, existed)
-    stage = journal.root / f"stage-{len(journal.entries)}"
-    expected = target.content
+    existed = _target_exists(target.path)
+    stage_root = journal.stage_root_for(target.path.parent)
+    stage = stage_root / f"stage-{len(journal.entries)}"
     if target.content is None:
-        source = next(root for root in plan.bundle.skill_roots if root.name == target.path.name)
+        source = source_for_target(plan, target)
         _stage_skill(source, target.path if existed else None, stage)
-        expected = None
     else:
-        stage.write_bytes(target.content)
+        _ = stage.write_bytes(target.content)
         if existed:
             stage.chmod(stat.S_IMODE(target.path.stat().st_mode))
+
     backup = journal.root / f"backup-{len(journal.entries)}" if existed else None
     if backup is not None:
         operations.move(target.path, backup)
-    try:
-        operations.replace(stage, target.path)
-    except Exception:
-        if backup is not None and backup.exists():
-            operations.move(backup, target.path)
-        raise
-    journal.entries.append(_AppliedEntry(entry, backup, expected))
+    entry = _AppliedEntry(target, existed, backup)
+    journal.entries.append(entry)
+    operations.replace(stage, target.path)
+    entry.installed = True
 
 
 def _stage_skill(source: Path, existing: Path | None, stage: Path) -> None:
     if existing is None:
-        shutil.copytree(source, stage, symlinks=True)
+        _ = shutil.copytree(source, stage, symlinks=True)
         return
-    shutil.copytree(existing, stage, symlinks=True)
+    _ = shutil.copytree(existing, stage, symlinks=True)
     for name in ("SKILL.md", ".chronosgraph-managed"):
-        shutil.copy2(source / name, stage / name)
+        _ = shutil.copy2(source / name, stage / name)
 
 
 def rollback_transaction(journal: TransactionJournal, operations: FileOperations) -> RollbackResult:
+    """Restore entries in reverse order while preserving external changes."""
+    journal.cleanup_staging_roots()
+    rollback_failed = False
     externally_changed = False
-    try:
-        for applied in reversed(journal.entries):
-            path = applied.entry.target.path
-            if not _matches_applied(path, applied.expected):
+    for entry in reversed(journal.entries):
+        try:
+            if not entry.installed:
+                if entry.backup is not None and not _target_exists(entry.target.path):
+                    operations.move(entry.backup, entry.target.path)
+                continue
+            if not matches_applied(journal.plan, entry.target):
                 externally_changed = True
                 continue
-            operations.remove(path)
-            if applied.backup is not None:
-                operations.move(applied.backup, path)
-    except Exception as error:
-        return RollbackResult.failure(error)
+            operations.remove(entry.target.path)
+            if entry.backup is not None:
+                operations.move(entry.backup, entry.target.path)
+        except Exception:  # noqa: BLE001 - continue restoring independent entries
+            rollback_failed = True
+    if rollback_failed:
+        return RollbackResult(False, "rollback-failed")
     if externally_changed:
         return RollbackResult(False, "rollback-external-change")
     shutil.rmtree(journal.root, ignore_errors=True)
     return RollbackResult(True)
 
 
-def _matches_applied(path: Path, expected: bytes | None) -> bool:
-    if expected is not None:
-        return path.exists() and path.read_bytes() == expected
-    return path.is_dir() and (path / ".chronosgraph-managed").exists()
-
-
-def verify_post_write_state(plan: SyncPlan) -> bool:
-    if build_bundle(plan.bundle.root).digest != plan.bundle.digest:
-        return False
-    for target in plan.targets:
-        if target.content is not None and target.path.read_bytes() != target.content:
-            return False
-        if target.content is None:
-            source = next(root for root in plan.bundle.skill_roots if root.name == target.path.name)
-            for name in ("SKILL.md", ".chronosgraph-managed"):
-                if (target.path / name).read_bytes() != (source / name).read_bytes():
-                    return False
-    return True
+def _target_exists(path: Path) -> bool:
+    return path.exists() or path.is_symlink()

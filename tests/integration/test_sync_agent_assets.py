@@ -20,6 +20,10 @@ if str(SCRIPTS_ROOT) not in sys.path:
 
 from agent_assets.models import AgentId, ExecutionMode, IngestionMode, SyncRequest  # noqa: E402
 from agent_assets.preflight import BEGIN_MARKER, END_MARKER, parse_instruction_sections  # noqa: E402
+from agent_assets.transaction import (  # noqa: E402
+    SystemFileOperations as RealSystemFileOperations,
+    apply_sync as real_apply_sync,
+)
 
 
 def copied_repo_root(tmp_path: Path) -> Path:
@@ -40,7 +44,11 @@ def invoke_sync(
     agents: list[str],
     ingestion_mode: str = "selective",
 ) -> subprocess.CompletedProcess[str]:
-    environment = {**os.environ, "HOME": str(home)}
+    environment = {
+        **os.environ,
+        "HOME": str(home),
+        "CODEX_HOME": str(home / ".codex"),
+    }
     command = [
         sys.executable,
         str(HELPER),
@@ -65,11 +73,13 @@ def invoke_sync(
 
 def request(repo_root: Path, home: Path, *agents: AgentId, mode: IngestionMode) -> SyncRequest:
     return SyncRequest(
+        command="sync",
         repo_root=repo_root,
         home=home,
         mode=ExecutionMode.PRODUCTION,
         ingestion_mode=mode,
         agent_ids=agents,
+        codex_home=home / ".codex",
     )
 
 
@@ -80,8 +90,17 @@ def digest(path: Path) -> str:
 def instructions_for(home: Path, agent: str) -> Path:
     roots = {
         "claudecode": home / ".claude" / "CLAUDE.md",
-        "codex": home / ".agents" / "AGENTS.md",
+        "codex": home / ".codex" / "AGENTS.md",
         "opencode": home / ".config" / "opencode" / "AGENTS.md",
+    }
+    return roots[agent]
+
+
+def skills_for(home: Path, agent: str) -> Path:
+    roots = {
+        "claudecode": home / ".claude" / "skills",
+        "codex": home / ".agents" / "skills",
+        "opencode": home / ".config" / "opencode" / "skills",
     }
     return roots[agent]
 
@@ -93,7 +112,7 @@ def test_sync_clean_install_creates_skills_and_managed_block(tmp_path: Path, age
     result = invoke_sync(source_root, tmp_path / "home", "production", [agent])
 
     assert result.returncode == 0, result.stderr
-    skill_root = instructions_for(tmp_path / "home", agent).parent / "skills"
+    skill_root = skills_for(tmp_path / "home", agent)
     assert (skill_root / "chronos-memory-save" / "SKILL.md").is_file()
     assert (skill_root / "chronos-memory-recall" / "SKILL.md").is_file()
     assert instructions_for(tmp_path / "home", agent).read_bytes().count(BEGIN_MARKER) == 1
@@ -309,9 +328,7 @@ def test_sync_legacy_save_rejects_all_before_hook_setup_then_allows_manual_remov
 
 class FailingReplaceOperations:
     def __init__(self, fail_on_replace: int) -> None:
-        import agent_assets.transaction as transaction
-
-        self._delegate = transaction.SystemFileOperations()
+        self._delegate = RealSystemFileOperations()
         self._fail_on_replace = fail_on_replace
         self._replacements = 0
 
@@ -339,7 +356,7 @@ def test_run_sync_io_failure_restores_owned_skills_and_instructions(
     instruction = instructions_for(home, "claudecode")
     instruction.parent.mkdir(parents=True)
     instruction.write_bytes(b"user-before\n")
-    monkeypatch.setattr(cli, "SystemFileOperations", lambda: FailingReplaceOperations(2))
+    monkeypatch.setattr(transaction, "SystemFileOperations", lambda: FailingReplaceOperations(2))
 
     with pytest.raises(transaction.ApplyError):
         cli.run_sync(request(source_root, home, AgentId.CLAUDECODE, mode=IngestionMode.SELECTIVE))
@@ -372,7 +389,7 @@ def test_run_sync_rollback_failure_preserves_external_change_and_reports_unrecov
     instruction.parent.mkdir(parents=True)
     instruction.write_bytes(b"user-before\n")
     monkeypatch.setattr(
-        cli,
+        transaction,
         "SystemFileOperations",
         lambda: ExternalChangeOnFailureOperations(instruction),
     )
@@ -397,9 +414,9 @@ def test_run_sync_rolls_back_owned_artifacts_when_post_write_verification_fails(
     instruction.parent.mkdir(parents=True)
     instruction.write_bytes(b"user-before\n")
     monkeypatch.setattr(
-        cli,
+        transaction,
         "apply_sync",
-        lambda plan, operations: transaction.apply_sync(plan, operations, verify=lambda _: False),
+        lambda plan, operations: real_apply_sync(plan, operations, verify=lambda _: False),
     )
 
     with pytest.raises(transaction.ApplyError):

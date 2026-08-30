@@ -19,6 +19,7 @@ from agent_assets.bundle import (  # noqa: E402
     build_bundle,
     render_managed_block,
 )
+from agent_assets.cli import main  # noqa: E402
 from agent_assets.models import (  # noqa: E402
     AgentId,
     AgentSelectionError,
@@ -114,8 +115,175 @@ def test_rendered_all_block_has_no_unresolved_token() -> None:
     assert b"ingestion-mode=all" in rendered
 
 
+def test_main_canonicalize_uses_raw_args(capsys: pytest.CaptureFixture[str]) -> None:
+    code = main(["canonicalize", "--agents", "codex,opencode"])
+    captured = capsys.readouterr()
+
+    assert code == 0
+    assert captured.out == "codex\nopencode\n"
+
+
+def test_main_canonicalize_ignores_sys_argv(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["unexpected", "sync"])
+    code = main(["canonicalize", "--agents", "claudecode"])
+    captured = capsys.readouterr()
+
+    assert code == 0
+    assert captured.out == "claudecode\n"
+
+
+def test_main_canonicalize_works_with_global_help_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["unexpected", "sync"])
+    with pytest.raises(SystemExit) as exc_info:
+        main(["-h"])
+    assert exc_info.value.code == 0
+
+
+def test_main_sync_runs_when_repo_root_is_cwd_in_dry_run_selective(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["unexpected", "sync"])
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "agent_assets.cli.run_sync",
+        lambda request: calls.append(request) or 0,
+    )
+    code = main(
+        [
+            "sync",
+            "--repo-root",
+            str(Path.cwd()),
+            "--mode",
+            "dry-run",
+            "--ingestion-mode",
+            "selective",
+            "--agent",
+            "claudecode",
+        ]
+    )
+
+    assert code == 0
+    assert len(calls) == 1
+    request = calls[0]
+    assert isinstance(request, SyncRequest)
+    assert request.command == "sync"
+    assert request.repo_root == Path.cwd()
+    assert request.mode is ExecutionMode.DRY_RUN
+    assert request.ingestion_mode is IngestionMode.SELECTIVE
+    assert request.agent_ids == (AgentId.CLAUDECODE,)
+
+
+def test_main_canonicalize_still_runs_when_args_match_sync_default_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["unexpected", "sync"])
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "agent_assets.cli.run_sync",
+        lambda request: calls.append(request) or 0,
+    )
+    printed: list[str] = []
+    monkeypatch.setattr(
+        "agent_assets.cli._print_canonical_agents",
+        lambda request: printed.extend(agent_id.value for agent_id in request.agent_ids) or 0,
+    )
+    code = main(["canonicalize", "--agents", "codex"])
+
+    assert code == 0
+    assert not calls
+    assert printed == ["codex"]
+
+
+def test_main_sync_dry_run_loads_sync_modules(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda _: tmp_path))
+
+    code = main(
+        [
+            "sync",
+            "--repo-root",
+            str(REPO_ROOT),
+            "--mode",
+            "dry-run",
+            "--ingestion-mode",
+            "selective",
+            "--agent",
+            "claudecode",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert captured.out.startswith("bundle-digest:")
+    assert f"{tmp_path / '.claude' / 'CLAUDE.md'}:create" in captured.out
+
+
+def test_main_sync_production_installs_selected_agent_assets(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda _: home))
+
+    code = main(
+        [
+            "sync",
+            "--repo-root",
+            str(REPO_ROOT),
+            "--mode",
+            "production",
+            "--ingestion-mode",
+            "selective",
+            "--agent",
+            "claudecode",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert captured.out.startswith("bundle-digest:")
+    assert ":create:sha256=" in captured.out
+    assert (home / ".claude" / "CLAUDE.md").is_file()
+    assert (home / ".claude" / "skills" / "chronos-memory-recall" / "SKILL.md").is_file()
+    assert (home / ".claude" / "skills" / "chronos-memory-save" / "SKILL.md").is_file()
+
+
+def test_apply_sync_rejects_unmanaged_skill_change_after_preflight(tmp_path: Path) -> None:
+    from agent_assets.preflight import preflight
+    from agent_assets.transaction import ApplyError, SystemFileOperations, apply_sync
+
+    home = tmp_path / "home"
+    unmanaged = home / ".claude" / "skills" / "user-skill" / "README.md"
+    unmanaged.parent.mkdir(parents=True)
+    unmanaged.write_bytes(b"before\n")
+    request = SyncRequest(
+        command="sync",
+        repo_root=REPO_ROOT,
+        home=home,
+        mode=ExecutionMode.PRODUCTION,
+        ingestion_mode=IngestionMode.SELECTIVE,
+        agent_ids=(AgentId.CLAUDECODE,),
+    )
+    plan = preflight(request, build_bundle(REPO_ROOT / "agent-assets"))
+    unmanaged.write_bytes(b"after\n")
+
+    with pytest.raises(ApplyError):
+        apply_sync(plan, SystemFileOperations())
+
+    assert not (home / ".claude" / "CLAUDE.md").exists()
+
+
 def preflight_request_for(agent: AgentId, home: Path) -> SyncRequest:
     return SyncRequest(
+        command="sync",
         repo_root=REPO_ROOT,
         home=home,
         mode=ExecutionMode.PRODUCTION,
@@ -301,6 +469,7 @@ def test_preflight_rejects_legacy_save_prompt_in_all_mode(tmp_path: Path) -> Non
         (REPO_ROOT / "tests" / "fixtures" / "agent_assets" / "legacy-save-v1.md").read_bytes()
     )
     request = SyncRequest(
+        command="sync",
         repo_root=REPO_ROOT,
         home=tmp_path,
         mode=ExecutionMode.PRODUCTION,
@@ -340,6 +509,7 @@ def prepared_plan_for(
     repo_root: Path = REPO_ROOT,
 ) -> SyncPlan:
     request = SyncRequest(
+        command="sync",
         repo_root=repo_root,
         home=home,
         mode=ExecutionMode.PRODUCTION,
@@ -538,3 +708,67 @@ def test_all_mode_hook_failure_restores_skills_instructions_and_wrapper(
     assert not (home / ".claude" / "skills" / "chronos-memory-save").exists()
     wrapper_name = "chronos-turn-hook.cmd" if os.name == "nt" else "chronos-turn-hook.sh"
     assert not (plan.request.repo_root / "scripts" / wrapper_name).exists()
+
+
+def test_apply_sync_preserves_unchanged_unmanaged_skill_entries(tmp_path: Path) -> None:
+    from agent_assets.preflight import preflight
+    from agent_assets.transaction import SystemFileOperations, apply_sync
+
+    home = tmp_path / "home"
+    unmanaged = home / ".claude" / "skills" / "user-skill" / "README.md"
+    unmanaged.parent.mkdir(parents=True)
+    unmanaged.write_bytes(b"before\n")
+    request = SyncRequest(
+        command="sync",
+        repo_root=REPO_ROOT,
+        home=home,
+        mode=ExecutionMode.PRODUCTION,
+        ingestion_mode=IngestionMode.SELECTIVE,
+        agent_ids=(AgentId.CLAUDECODE,),
+    )
+    plan = preflight(request, build_bundle(REPO_ROOT / "agent-assets"))
+
+    apply_sync(plan, SystemFileOperations())
+
+    assert unmanaged.read_bytes() == b"before\n"
+    assert (home / ".claude" / "skills" / "chronos-memory-recall" / "SKILL.md").is_file()
+
+
+def test_apply_sync_rejects_unmanaged_skill_added_after_preflight(tmp_path: Path) -> None:
+    from agent_assets.preflight import preflight
+    from agent_assets.transaction import ApplyError, SystemFileOperations, apply_sync
+
+    home = tmp_path / "home"
+    request = SyncRequest(
+        command="sync",
+        repo_root=REPO_ROOT,
+        home=home,
+        mode=ExecutionMode.PRODUCTION,
+        ingestion_mode=IngestionMode.SELECTIVE,
+        agent_ids=(AgentId.CLAUDECODE,),
+    )
+    plan = preflight(request, build_bundle(REPO_ROOT / "agent-assets"))
+    added = home / ".claude" / "skills" / "external-skill" / "README.md"
+    added.parent.mkdir(parents=True)
+    added.write_bytes(b"added-after-preflight\n")
+
+    with pytest.raises(ApplyError):
+        apply_sync(plan, SystemFileOperations())
+
+    assert added.read_bytes() == b"added-after-preflight\n"
+    assert not (home / ".claude" / "skills" / "chronos-memory-recall").exists()
+
+
+def test_safe_instruction_target_rejects_root_that_is_not_an_ancestor(
+    tmp_path: Path,
+) -> None:
+    from agent_assets.preflight_errors import InstructionCollisionError
+    from agent_assets.preflight_files import safe_instruction_target
+
+    path = tmp_path / "outside" / "AGENTS.md"
+    root = tmp_path / "approved"
+
+    with pytest.raises(InstructionCollisionError) as error_info:
+        safe_instruction_target(path, root)
+
+    assert error_info.value.code == "instruction-root-mismatch"

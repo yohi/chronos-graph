@@ -4,6 +4,7 @@ import hashlib
 import os
 import stat
 from pathlib import Path
+from typing import Final
 
 from .models import (
     AssetBundle,
@@ -14,11 +15,11 @@ from .models import (
 )
 from .preflight_errors import InstructionCollisionError, SkillCollisionError
 
-OWNER_SENTINEL = b"owner=chronosgraph\nformat=1\n"
+OWNER_SENTINEL: Final = b"owner=chronosgraph\nformat=1\n"
 
 
 def safe_instruction_target(path: Path, root: Path) -> Path:
-    """Validate instruction containment and return the leaf file that may be updated."""
+    """Validate an instruction destination and return its safe write target."""
     for parent in _existing_parent_paths(path, root):
         if stat.S_ISLNK(parent.lstat().st_mode):
             raise InstructionCollisionError(parent, "parent-symlink")
@@ -52,7 +53,7 @@ def safe_instruction_target(path: Path, root: Path) -> Path:
 def plan_skills(
     bundle: AssetBundle, skills_root: Path
 ) -> tuple[tuple[PlannedTarget, ...], tuple[TargetSnapshot, ...]]:
-    """Validate Skill ownership and snapshot every user-managed Skill entry."""
+    """Validate requested Skill ownership and snapshot unmanaged entries."""
     names = {root.name for root in bundle.skill_roots}
     targets: list[PlannedTarget] = []
     snapshots: list[TargetSnapshot] = []
@@ -74,12 +75,12 @@ def plan_skills(
             action = PlannedAction.UPDATE
         else:
             action = PlannedAction.CREATE
-        targets.append(PlannedTarget(target_root, action, ()))
+        targets.append(PlannedTarget(target_root, action, tuple(snapshots)))
     return tuple(targets), tuple(snapshots)
 
 
 def snapshot(path: Path, relative_to: Path) -> TargetSnapshot:
-    """Capture one non-content target fingerprint without dereferencing symlinks."""
+    """Capture a non-content fingerprint without dereferencing symlinks."""
     metadata = path.lstat()
     relative = path.relative_to(relative_to)
     if stat.S_ISREG(metadata.st_mode):
@@ -98,7 +99,7 @@ def snapshot(path: Path, relative_to: Path) -> TargetSnapshot:
 
 
 def _existing_parent_paths(path: Path, root: Path) -> tuple[Path, ...]:
-    """Return existing parents from the destination to its approved root."""
+    """Return existing destination parents up to the approved root."""
     parents: list[Path] = []
     current = path.parent
     while True:
@@ -106,11 +107,13 @@ def _existing_parent_paths(path: Path, root: Path) -> tuple[Path, ...]:
             parents.append(current)
         if current == root:
             return tuple(parents)
+        if current == current.parent:
+            raise InstructionCollisionError(path, "instruction-root-mismatch")
         current = current.parent
 
 
 def _is_owned_skill(path: Path) -> bool:
-    """Return whether a Skill root has the exact ChronosGraph ownership sentinel."""
+    """Return whether a Skill root has the exact ownership sentinel."""
     sentinel = path / ".chronosgraph-managed"
     try:
         mode = sentinel.lstat().st_mode

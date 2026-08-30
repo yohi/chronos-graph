@@ -14,12 +14,12 @@ from agent_assets.models import (
     SyncPlan,
     SyncRequest,
     parse_agent_csv,
+    resolve_codex_home,
+    validate_command,
 )
-from agent_assets.preflight import MarkerError, PreflightCollisionError, preflight
-from agent_assets.transaction import SystemFileOperations, apply_sync
 
 
-def _parse_sync_args(raw: list[str] | None = None) -> SyncRequest:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sync_agent_assets.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -45,24 +45,32 @@ def _parse_sync_args(raw: list[str] | None = None) -> SyncRequest:
         choices=[AgentId.CLAUDECODE, AgentId.CODEX, AgentId.OPENCODE],
         help="Canonical Agent ID (repeat for each agent)",
     )
+    return parser
 
-    args = parser.parse_args(raw)
+
+def _parse_sync_args(raw: list[str] | None = None) -> SyncRequest:
+    args = _build_parser().parse_args(raw)
+    home = Path.home()
     if args.command == "canonicalize":
         return SyncRequest(
+            command=validate_command(args.command),
             repo_root=Path.cwd(),
-            home=Path.home(),
+            home=home,
             mode=ExecutionMode.DRY_RUN,
             ingestion_mode=IngestionMode.SELECTIVE,
             agent_ids=parse_agent_csv(args.agents),
+            codex_home=resolve_codex_home(home),
         )
 
     agent_ids = tuple(AgentId(value) for value in args.agent)
     return SyncRequest(
+        command=validate_command(args.command),
         repo_root=args.repo_root.resolve(),
-        home=Path.home(),
+        home=home,
         mode=ExecutionMode(args.mode),
         ingestion_mode=IngestionMode(args.ingestion_mode),
         agent_ids=agent_ids,
+        codex_home=resolve_codex_home(home),
     )
 
 
@@ -82,19 +90,26 @@ def _print_plan(plan: SyncPlan) -> None:
 
 def run_sync(request: SyncRequest) -> int:
     """Run the entire selected-Agent synchronization lifecycle."""
+    from agent_assets.preflight import preflight
+
     bundle = build_bundle(request.repo_root / "agent-assets")
     plan = preflight(request, bundle)
     if request.mode is ExecutionMode.DRY_RUN:
         _print_plan(plan)
         return 0
+
+    from agent_assets.transaction import SystemFileOperations, apply_sync
+
     apply_sync(plan, SystemFileOperations())
     _print_plan(plan)
     return 0
 
 
 def main(raw: list[str] | None = None) -> int:
+    from agent_assets.preflight import MarkerError, PreflightCollisionError
+
     request = _parse_sync_args(raw)
-    if len(sys.argv) > 1 and sys.argv[1] == "canonicalize":
+    if request.command == "canonicalize":
         return _print_canonical_agents(request)
     try:
         return run_sync(request)

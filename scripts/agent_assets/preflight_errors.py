@@ -6,7 +6,7 @@ from .models import SafeDiagnostic
 
 
 class PreflightCollisionError(RuntimeError):
-    """Base typed collision that carries only a safe path and reason code."""
+    """Carry only a safe path and reason code for a preflight collision."""
 
     path: Path
     code: str
@@ -17,17 +17,17 @@ class PreflightCollisionError(RuntimeError):
         super().__init__(code)
 
     def diagnostic(self) -> SafeDiagnostic:
-        """Return a deterministic diagnostic without target content."""
+        """Return a diagnostic that excludes target content."""
         return SafeDiagnostic("preflight", "reject", self.path, self.code)
 
 
 class SkillCollisionError(PreflightCollisionError):
-    """Raised when a requested Skill root is not ChronosGraph-owned."""
+    """Report a requested Skill root that is not ChronosGraph-owned."""
 
 
 class InstructionCollisionError(PreflightCollisionError):
-    """Raised when an instruction destination is unsafe to update."""
+    """Report an instruction destination that is unsafe to update."""
 
 
 class LegacySaveAllModeCollision(PreflightCollisionError):
-    """Raised when legacy save instructions conflict with all-mode ingestion."""
+    """Report legacy Save instructions that conflict with all-mode ingestion."""

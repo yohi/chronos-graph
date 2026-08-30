@@ -17,6 +17,7 @@ from .models import (
     SyncRequest,
     TargetSnapshot,
     adapter_for,
+    resolve_codex_home,
 )
 from .preflight_errors import (
     InstructionCollisionError,
@@ -24,6 +25,7 @@ from .preflight_errors import (
     PreflightCollisionError,
     SkillCollisionError,
 )
+from .preflight_files import plan_skills, safe_instruction_target, snapshot
 
 BEGIN_MARKER: Final = b"<!-- BEGIN CHRONOSGRAPH MANAGED: agent-memory -->"
 END_MARKER: Final = b"<!-- END CHRONOSGRAPH MANAGED: agent-memory -->"
@@ -60,7 +62,9 @@ class InstructionSections:
 
 
 class MarkerError(RuntimeError):
-    """Raised when managed instruction markers are malformed."""
+    """Report malformed managed instruction markers by reason code."""
+
+    code: str
 
     def __init__(self, code: str) -> None:
         self.code = code
@@ -120,7 +124,7 @@ def parse_instruction_sections(original: bytes) -> InstructionSections:
 def detect_legacy_prompts(
     instruction: bytes, signatures: tuple[LegacySignature, ...]
 ) -> tuple[LegacySignature, ...]:
-    """Return matching signature records without retaining target instruction text."""
+    """Return matching legacy signatures without retaining instruction text."""
     matches: list[LegacySignature] = []
     for signature in signatures:
         start = instruction.find(signature.heading)
@@ -133,7 +137,7 @@ def detect_legacy_prompts(
 
 
 def safe_diagnostic(signature: LegacySignature, path: Path) -> SafeDiagnostic:
-    """Build a redacted warning using only kind and target path."""
+    """Build a redacted legacy warning from its kind and target path."""
     return SafeDiagnostic(
         phase="preflight",
         action="warn",
@@ -149,20 +153,25 @@ def preflight(request: SyncRequest, bundle: AssetBundle) -> SyncPlan:
     diagnostics: list[SafeDiagnostic] = []
     rendered_block = render_managed_block(bundle, request.ingestion_mode).removesuffix(b"\n")
     from .hooks import plan_hook_targets
-    from .preflight_files import plan_skills, safe_instruction_target, snapshot
 
     for agent_id in request.agent_ids:
-        adapter = adapter_for(agent_id, request.home)
+        adapter = adapter_for(
+            agent_id,
+            request.home,
+            request.codex_home or resolve_codex_home(request.home),
+        )
         instruction_path = safe_instruction_target(
             adapter.instructions_path, adapter.instructions_root
         )
+        instruction_snapshots: tuple[TargetSnapshot, ...] = ()
         if instruction_path.exists():
             original = instruction_path.read_bytes()
             sections = parse_instruction_sections(original)
             replacement = sections.prefix + rendered_block + sections.suffix
-            desired_content = replacement
             action = PlannedAction.UNCHANGED if replacement == original else PlannedAction.UPDATE
-            snapshots.append(snapshot(instruction_path, instruction_path.parent))
+            instruction_snapshot = snapshot(instruction_path, instruction_path.parent)
+            instruction_snapshots = (instruction_snapshot,)
+            snapshots.append(instruction_snapshot)
             detected = detect_legacy_prompts(original, LEGACY_SIGNATURES)
             for signature in detected:
                 if (
@@ -173,13 +182,13 @@ def preflight(request: SyncRequest, bundle: AssetBundle) -> SyncPlan:
                 diagnostics.append(safe_diagnostic(signature, instruction_path))
         else:
             action = PlannedAction.CREATE
-            desired_content = rendered_block
+            replacement = rendered_block
         targets.append(
             PlannedTarget(
-                instruction_path,
-                action,
-                (),
-                desired_content,
+                path=instruction_path,
+                action=action,
+                snapshots=instruction_snapshots,
+                content=replacement,
             )
         )
         skill_targets, skill_snapshots = plan_skills(bundle, adapter.skills_root)

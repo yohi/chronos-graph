@@ -222,7 +222,13 @@ if ! CANONICAL_AGENT_LINES="$(
     exit 1
 fi
 mapfile -t CANONICAL_AGENTS <<< "$CANONICAL_AGENT_LINES"
-CANONICAL_AGENT_CSV="$(IFS=,; printf '%s' "${CANONICAL_AGENTS[*]}")"
+CANONICAL_AGENT_CSV=""
+for agent in "${CANONICAL_AGENTS[@]}"; do
+    if [[ -n "$CANONICAL_AGENT_CSV" ]]; then
+        CANONICAL_AGENT_CSV+=","
+    fi
+    CANONICAL_AGENT_CSV+="$agent"
+done
 
 run_agent_asset_sync() {
     local sync_args=(

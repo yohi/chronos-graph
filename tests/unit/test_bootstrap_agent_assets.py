@@ -98,8 +98,8 @@ def copied_bootstrap_repository(tmp_path: Path) -> Path:
     uv_stub = bin_dir / "uv"
     uv_stub_condition = "".join(
         (
-            "if [ \"$1\" = run ] && [ \"$2\" = python ] && ",
-            "[ \"$3\" = scripts/generate_config.py ]; then",
+            'if [ "$1" = run ] && [ "$2" = python ] && ',
+            '[ "$3" = scripts/generate_config.py ]; then',
         )
     )
     uv_stub_script = "\n".join(

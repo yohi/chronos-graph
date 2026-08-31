@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import stat
@@ -40,6 +41,10 @@ def safe_instruction_target(path: Path, root: Path) -> Path:
         raise InstructionCollisionError(path, "instruction-symlink-broken") from error
     except RuntimeError as error:
         raise InstructionCollisionError(path, "instruction-symlink-cycle") from error
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise InstructionCollisionError(path, "instruction-symlink-cycle") from error
+        raise
 
     try:
         resolved_target.relative_to(root.resolve(strict=False))

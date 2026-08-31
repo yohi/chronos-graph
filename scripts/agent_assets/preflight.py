@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Final
 
 from .bundle import render_managed_block
+from .hooks import plan_hook_targets
 from .models import (
     AssetBundle,
     IngestionMode,
@@ -152,7 +153,6 @@ def preflight(request: SyncRequest, bundle: AssetBundle) -> SyncPlan:
     snapshots: list[TargetSnapshot] = []
     diagnostics: list[SafeDiagnostic] = []
     rendered_block = render_managed_block(bundle, request.ingestion_mode).removesuffix(b"\n")
-    from .hooks import plan_hook_targets
 
     for agent_id in request.agent_ids:
         adapter = adapter_for(
@@ -195,7 +195,10 @@ def preflight(request: SyncRequest, bundle: AssetBundle) -> SyncPlan:
         targets.extend(skill_targets)
         snapshots.extend(skill_snapshots)
 
-    targets.extend(plan_hook_targets(request))
+    hook_targets = plan_hook_targets(request)
+    targets.extend(hook_targets)
+    for target in hook_targets:
+        snapshots.extend(target.snapshots)
 
     return SyncPlan(
         request=request,

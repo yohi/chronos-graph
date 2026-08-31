@@ -255,8 +255,15 @@ def _apply_target(
         _stage_skill(source, target.path if existed else None, stage)
     else:
         _ = stage.write_bytes(target.content)
-        if existed:
-            stage.chmod(stat.S_IMODE(target.path.stat().st_mode))
+        is_posix_wrapper = (
+            os.name != "nt"
+            and target.path == plan.request.repo_root / "scripts" / "chronos-turn-hook.sh"
+        )
+        stage_mode = stat.S_IMODE((target.path if existed else stage).stat().st_mode)
+        if is_posix_wrapper:
+            stage_mode |= stat.S_IXUSR
+        if existed or is_posix_wrapper:
+            stage.chmod(stage_mode)
 
     backup = journal.root / f"backup-{len(journal.entries)}" if existed else None
     if backup is not None:

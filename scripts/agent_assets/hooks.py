@@ -7,8 +7,16 @@ import urllib.request
 from pathlib import Path
 from typing import Final
 
-from .models import AgentId, PlannedAction, PlannedTarget, SyncRequest
+from .models import (
+    AgentId,
+    IngestionMode,
+    PlannedAction,
+    PlannedTarget,
+    SyncRequest,
+    TargetSnapshot,
+)
 from .preflight_errors import PreflightCollisionError
+from .preflight_files import snapshot
 
 OPENCODE_PLUGIN: Final = "@yohi/opencode-plugin-chronos-turn-end"
 _POSIX_MARKER: Final = b"# chronosgraph-managed: turn-hook-wrapper format=1"
@@ -26,16 +34,16 @@ class PluginRegistryPrerequisiteError(RuntimeError):
         super().__init__(category)
 
 
-def updated_plugin_config(original: bytes | None) -> bytes:
+def updated_plugin_config(original: bytes | None, path: Path) -> bytes:
     try:
         config = {} if original is None else json.loads(original.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise HookConfigCollision(Path("opencode.json"), "opencode-json") from error
+        raise HookConfigCollision(path, "opencode-json") from error
     if not isinstance(config, dict):
-        raise HookConfigCollision(Path("opencode.json"), "opencode-config-root")
+        raise HookConfigCollision(path, "opencode-config-root")
     plugin = config.get("plugin", [])
     if not isinstance(plugin, list) or not all(isinstance(entry, str) for entry in plugin):
-        raise HookConfigCollision(Path("opencode.json"), "opencode-plugin-list")
+        raise HookConfigCollision(path, "opencode-plugin-list")
     if OPENCODE_PLUGIN not in plugin:
         plugin = [*plugin, OPENCODE_PLUGIN]
     config["plugin"] = plugin
@@ -43,7 +51,7 @@ def updated_plugin_config(original: bytes | None) -> bytes:
 
 
 def plan_hook_targets(request: SyncRequest) -> tuple[PlannedTarget, ...]:
-    if request.ingestion_mode.value != "all":
+    if request.ingestion_mode is not IngestionMode.ALL:
         return ()
     targets: list[PlannedTarget] = []
     if {AgentId.CLAUDECODE, AgentId.CODEX}.intersection(request.agent_ids):
@@ -58,15 +66,17 @@ def _plan_wrapper(repo_root: Path) -> PlannedTarget:
     filename = "chronos-turn-hook.cmd" if os.name == "nt" else "chronos-turn-hook.sh"
     path = repo_root / "scripts" / filename
     content = _wrapper_content()
+    target_snapshots: tuple[TargetSnapshot, ...] = ()
     if path.exists():
         lines = path.read_bytes().splitlines()
         marker = _WINDOWS_MARKER if os.name == "nt" else _POSIX_MARKER
         if len(lines) < 2 or lines[1] != marker:
             raise HookConfigCollision(path, "wrapper-not-owned")
         action = PlannedAction.UNCHANGED if path.read_bytes() == content else PlannedAction.UPDATE
+        target_snapshots = (snapshot(path, path.parent),)
     else:
         action = PlannedAction.CREATE
-    return PlannedTarget(path, action, (), content)
+    return PlannedTarget(path, action, target_snapshots, content)
 
 
 def _plan_opencode_config(home: Path) -> PlannedTarget:
@@ -77,11 +87,12 @@ def _plan_opencode_config(home: Path) -> PlannedTarget:
             raise HookConfigCollision(collision, "opencode-jsonc-collision")
     path = root / "opencode.json"
     original = path.read_bytes() if path.exists() else None
-    content = updated_plugin_config(original)
+    content = updated_plugin_config(original, path)
     action = PlannedAction.CREATE if original is None else PlannedAction.UPDATE
     if original == content:
         action = PlannedAction.UNCHANGED
-    return PlannedTarget(path, action, (), content)
+    target_snapshots = () if original is None else (snapshot(path, path.parent),)
+    return PlannedTarget(path, action, target_snapshots, content)
 
 
 def _wrapper_content() -> bytes:
@@ -117,7 +128,13 @@ def _validate_plugin_registry(home: Path) -> None:
 def _registry_token(path: Path) -> str:
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-        values = dict(line.split("=", 1) for line in lines if "=" in line)
+        values: dict[str, str] = {}
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith(("#", ";")) or "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            values[key.strip()] = value.strip()
         registry = values.get("@yohi:registry", "").rstrip("/")
         raw_token = values.get("//npm.pkg.github.com/:_authToken", "")
     except OSError as error:

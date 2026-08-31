@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import errno
 import hashlib
+import io
 import json
 import os
 import shutil
+import stat
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -426,6 +432,25 @@ def test_preflight_rejects_unsafe_instruction_symlink_targets(
         )
 
 
+def test_preflight_rejects_instruction_symlink_cycle_from_eloop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agent_assets.preflight_files import safe_instruction_target
+
+    home = tmp_path / "home"
+    instruction = home / ".claude" / "CLAUDE.md"
+    instruction.parent.mkdir(parents=True)
+    instruction.symlink_to(instruction)
+
+    def raise_eloop(_path: Path, strict: bool = False) -> Path:
+        raise OSError(errno.ELOOP, "too many levels of symbolic links")
+
+    monkeypatch.setattr(Path, "resolve", raise_eloop)
+
+    with pytest.raises(InstructionCollisionError):
+        safe_instruction_target(instruction, instruction.parent)
+
+
 def test_preflight_rejects_instruction_parent_symlink(tmp_path: Path) -> None:
     home = tmp_path / "home"
     actual_root = home / "actual-claude"
@@ -613,6 +638,8 @@ def test_all_mode_creates_wrapper_and_selective_mode_does_not(tmp_path: Path) ->
     )
     wrapper_name = "chronos-turn-hook.cmd" if os.name == "nt" else "chronos-turn-hook.sh"
     assert (all_repo / "scripts" / wrapper_name).is_file()
+    if os.name != "nt":
+        assert all_repo.joinpath("scripts", wrapper_name).stat().st_mode & stat.S_IXUSR
 
     selective_repo = tmp_path / "selective-repo"
     shutil.copytree(all_repo / "agent-assets", selective_repo / "agent-assets")
@@ -628,6 +655,124 @@ def test_all_mode_creates_wrapper_and_selective_mode_does_not(tmp_path: Path) ->
         SystemFileOperations(),
     )
     assert not (selective_repo / "scripts" / wrapper_name).exists()
+
+
+def test_all_mode_rejects_existing_hook_changed_after_preflight(tmp_path: Path) -> None:
+    import agent_assets.hooks as hooks
+
+    repo_root = tmp_path / "repo"
+    shutil.copytree(REPO_ROOT / "agent-assets", repo_root / "agent-assets")
+    (repo_root / "scripts").mkdir()
+    shutil.copy2(
+        REPO_ROOT / "scripts" / "agent_turn_hook.py",
+        repo_root / "scripts" / "agent_turn_hook.py",
+    )
+    wrapper_name = "chronos-turn-hook.cmd" if os.name == "nt" else "chronos-turn-hook.sh"
+    wrapper = repo_root / "scripts" / wrapper_name
+    wrapper.write_bytes(hooks._wrapper_content() + b"\n")
+    request = SyncRequest(
+        command="sync",
+        repo_root=repo_root,
+        home=tmp_path / "home",
+        mode=ExecutionMode.PRODUCTION,
+        ingestion_mode=IngestionMode.ALL,
+        agent_ids=(AgentId.CLAUDECODE,),
+    )
+
+    plan = preflight(request, build_bundle(repo_root / "agent-assets"))
+    hook_target = next(target for target in plan.targets if target.path == wrapper)
+    assert hook_target.snapshots
+    assert hook_target.snapshots[0] in plan.snapshots
+    wrapper.write_bytes(b"external-change\n")
+
+    with pytest.raises(ApplyError):
+        apply_sync(plan, SystemFileOperations())
+
+    assert wrapper.read_bytes() == b"external-change\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX wrapper permissions are not available")
+def test_all_mode_makes_existing_posix_wrapper_executable(tmp_path: Path) -> None:
+    import agent_assets.hooks as hooks
+
+    repo_root = tmp_path / "repo"
+    shutil.copytree(REPO_ROOT / "agent-assets", repo_root / "agent-assets")
+    (repo_root / "scripts").mkdir()
+    shutil.copy2(
+        REPO_ROOT / "scripts" / "agent_turn_hook.py",
+        repo_root / "scripts" / "agent_turn_hook.py",
+    )
+    wrapper = repo_root / "scripts" / "chronos-turn-hook.sh"
+    wrapper.write_bytes(hooks._wrapper_content() + b"\n")
+    wrapper.chmod(0o640)
+    request = SyncRequest(
+        command="sync",
+        repo_root=repo_root,
+        home=tmp_path / "home",
+        mode=ExecutionMode.PRODUCTION,
+        ingestion_mode=IngestionMode.ALL,
+        agent_ids=(AgentId.CLAUDECODE,),
+    )
+
+    apply_sync(preflight(request, build_bundle(repo_root / "agent-assets")), SystemFileOperations())
+
+    mode = stat.S_IMODE(wrapper.stat().st_mode)
+    assert mode & stat.S_IXUSR
+    assert mode & stat.S_IRUSR
+    assert mode & stat.S_IWUSR
+    assert not mode & stat.S_IXGRP
+    assert not mode & stat.S_IXOTH
+
+
+def test_all_mode_rejects_existing_opencode_config_changed_after_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import agent_assets.hooks as hooks
+
+    monkeypatch.setattr(hooks, "probe_package_metadata", lambda _: None)
+    home = tmp_path / "home"
+    configure_opencode_plugin_registry(home, monkeypatch)
+    config = home / ".config" / "opencode" / "opencode.json"
+    config.parent.mkdir(parents=True)
+    config.write_text('{"theme":"dark"}', encoding="utf-8")
+
+    plan = prepared_plan_for(AgentId.OPENCODE, home, IngestionMode.ALL)
+    config.write_text('{"theme":"external"}', encoding="utf-8")
+
+    with pytest.raises(ApplyError):
+        apply_sync(plan, SystemFileOperations())
+
+    assert json.loads(config.read_text(encoding="utf-8"))["theme"] == "external"
+
+
+def test_registry_token_accepts_spaced_entries_and_comments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import agent_assets.hooks as hooks
+
+    registry = tmp_path / ".npmrc"
+    registry.write_text(
+        "  # comment = ignored\n"
+        "; other = ignored\n"
+        " @yohi:registry = https://npm.pkg.github.com/ \n"
+        " //npm.pkg.github.com/:_authToken = ${TEST_TOKEN} \n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TEST_TOKEN", "test-token")
+
+    assert hooks._registry_token(registry) == "test-token"
+
+
+def test_updated_plugin_config_reports_actual_path(tmp_path: Path) -> None:
+    import agent_assets.hooks as hooks
+    from agent_assets.hooks import HookConfigCollision
+
+    config_path = tmp_path / ".config" / "opencode" / "opencode.json"
+
+    with pytest.raises(HookConfigCollision) as error:
+        hooks.updated_plugin_config(b"[]", config_path)
+
+    assert error.value.path == config_path
 
 
 def test_all_mode_rejects_missing_opencode_plugin_registry_before_any_apply(
@@ -659,11 +804,10 @@ def test_all_mode_rejects_locally_managed_opencode_config_before_any_apply(
         prepared_plan_for(AgentId.OPENCODE, home, IngestionMode.ALL)
 
 
-def test_opencode_package_probe_is_read_only_and_redacts_access_failures(
+def test_opencode_package_probe_is_read_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import agent_assets.hooks as hooks
-    from agent_assets.hooks import PluginRegistryPrerequisiteError
 
     home = tmp_path / "home"
     configure_opencode_plugin_registry(home, monkeypatch)
@@ -671,18 +815,29 @@ def test_opencode_package_probe_is_read_only_and_redacts_access_failures(
     prepared_plan_for(AgentId.OPENCODE, home, IngestionMode.ALL)
     assert not (home / ".config" / "opencode" / "opencode.json").exists()
 
+
+def test_opencode_package_probe_redacts_http_failures() -> None:
+    import agent_assets.hooks as hooks
+    from agent_assets.hooks import PluginRegistryPrerequisiteError
+
     token = "sensitive-test-token"
-    monkeypatch.setenv("CHRONOS_OPENCODE_PACKAGES_TOKEN", token)
+    response_body = b"response-body-secret"
 
-    def fail_probe(_: str) -> None:
-        raise PluginRegistryPrerequisiteError("registry-probe-access")
+    def fail_urlopen(_request: urllib.request.Request, _timeout: float) -> None:
+        raise urllib.error.HTTPError(
+            hooks._METADATA_URL,
+            401,
+            f"token={token};body={response_body.decode()}",
+            None,
+            io.BytesIO(response_body),
+        )
 
-    monkeypatch.setattr(hooks, "probe_package_metadata", fail_probe)
-    with pytest.raises(PluginRegistryPrerequisiteError) as error:
-        prepared_plan_for(AgentId.OPENCODE, home, IngestionMode.ALL)
+    with patch.object(hooks.urllib.request, "urlopen", fail_urlopen):
+        with pytest.raises(PluginRegistryPrerequisiteError) as error:
+            hooks.probe_package_metadata(token)
 
     assert token not in str(error.value)
-    assert "response-body" not in str(error.value)
+    assert response_body.decode() not in str(error.value)
 
 
 def test_all_mode_hook_failure_restores_skills_instructions_and_wrapper(

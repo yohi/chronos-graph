@@ -763,6 +763,23 @@ def test_registry_token_accepts_spaced_entries_and_comments(
     assert hooks._registry_token(registry) == "test-token"
 
 
+def test_registry_token_maps_invalid_utf8_to_credential_prerequisite(
+    tmp_path: Path,
+) -> None:
+    import agent_assets.hooks as hooks
+    from agent_assets.hooks import PluginRegistryPrerequisiteError
+
+    registry = tmp_path / ".npmrc"
+    registry.write_bytes(
+        b"@yohi:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=\xff\n"
+    )
+
+    with pytest.raises(PluginRegistryPrerequisiteError) as error:
+        hooks._registry_token(registry)
+
+    assert error.value.category == "registry-probe-credential"
+
+
 def test_updated_plugin_config_reports_actual_path(tmp_path: Path) -> None:
     import agent_assets.hooks as hooks
     from agent_assets.hooks import HookConfigCollision

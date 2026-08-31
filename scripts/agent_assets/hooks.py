@@ -144,7 +144,7 @@ def _registry_token(path: Path) -> str:
             values[key.strip()] = value.strip()
         registry = values.get("@yohi:registry", "").rstrip("/")
         raw_token = values.get("//npm.pkg.github.com/:_authToken", "")
-    except OSError as error:
+    except (OSError, UnicodeDecodeError) as error:
         raise PluginRegistryPrerequisiteError("registry-probe-credential") from error
     if registry != "https://npm.pkg.github.com":
         raise PluginRegistryPrerequisiteError("registry-probe-credential")

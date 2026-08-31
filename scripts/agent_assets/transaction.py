@@ -189,7 +189,10 @@ def apply_sync(
         if not verified:
             raise PostWriteVerificationError("verification-failed")
     except Exception as error:  # noqa: BLE001 - transaction boundary rollback
-        rollback = rollback_transaction(journal, operations)
+        try:
+            rollback = rollback_transaction(journal, operations)
+        except Exception as rollback_error:  # noqa: BLE001 - redact rollback details
+            rollback = RollbackResult.failure(rollback_error)
         raise ApplyError.from_failure(error, rollback) from error
     return journal.commit()
 
@@ -252,8 +255,15 @@ def _apply_target(
         _stage_skill(source, target.path if existed else None, stage)
     else:
         _ = stage.write_bytes(target.content)
-        if existed:
-            stage.chmod(stat.S_IMODE(target.path.stat().st_mode))
+        is_posix_wrapper = (
+            os.name != "nt"
+            and target.path == plan.request.repo_root / "scripts" / "chronos-turn-hook.sh"
+        )
+        stage_mode = stat.S_IMODE((target.path if existed else stage).stat().st_mode)
+        if is_posix_wrapper:
+            stage_mode |= stat.S_IXUSR
+        if existed or is_posix_wrapper:
+            stage.chmod(stage_mode)
 
     backup = journal.root / f"backup-{len(journal.entries)}" if existed else None
     if backup is not None:
@@ -266,7 +276,7 @@ def _apply_target(
 
 def _stage_skill(source: Path, existing: Path | None, stage: Path) -> None:
     if existing is None:
-        _ = shutil.copytree(source, stage)
+        _ = shutil.copytree(source, stage, symlinks=True)
         return
     _ = shutil.copytree(existing, stage, symlinks=True)
     for name in ("SKILL.md", ".chronosgraph-managed"):
@@ -275,6 +285,7 @@ def _stage_skill(source: Path, existing: Path | None, stage: Path) -> None:
 
 def rollback_transaction(journal: TransactionJournal, operations: FileOperations) -> RollbackResult:
     """Restore entries in reverse order while preserving external changes."""
+    journal.cleanup_staging_roots()
     rollback_failed = False
     externally_changed = False
     for entry in reversed(journal.entries):
@@ -291,7 +302,6 @@ def rollback_transaction(journal: TransactionJournal, operations: FileOperations
                 operations.move(entry.backup, entry.target.path)
         except Exception:  # noqa: BLE001 - continue restoring independent entries
             rollback_failed = True
-    journal.cleanup_staging_roots()
     if rollback_failed:
         return RollbackResult(False, "rollback-failed")
     if externally_changed:

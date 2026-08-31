@@ -1,3 +1,5 @@
+# mypy: disable-error-code=import-not-found
+
 from __future__ import annotations
 
 import argparse
@@ -9,6 +11,7 @@ from agent_assets.models import (
     AgentId,
     ExecutionMode,
     IngestionMode,
+    SyncPlan,
     SyncRequest,
     parse_agent_csv,
     resolve_codex_home,
@@ -77,6 +80,14 @@ def _print_canonical_agents(request: SyncRequest) -> int:
     return 0
 
 
+def _print_plan(plan: SyncPlan) -> None:
+    print(f"bundle-digest:{plan.bundle.digest}")
+    for target in sorted(plan.targets, key=lambda item: item.path.as_posix()):
+        print(f"{target.path}:{target.action.value}:sha256={plan.bundle.digest}")
+    for diagnostic in sorted(plan.diagnostics, key=lambda item: item.render()):
+        print(diagnostic.render())
+
+
 def run_sync(request: SyncRequest) -> int:
     """Run the entire selected-Agent synchronization lifecycle."""
     from agent_assets.preflight import preflight
@@ -84,17 +95,13 @@ def run_sync(request: SyncRequest) -> int:
     bundle = build_bundle(request.repo_root / "agent-assets")
     plan = preflight(request, bundle)
     if request.mode is ExecutionMode.DRY_RUN:
-        print(f"bundle-digest:{bundle.digest}")
-        for target in sorted(plan.targets, key=lambda item: item.path.as_posix()):
-            print(f"{target.path}:{target.action.value}")
-        for diagnostic in sorted(plan.diagnostics, key=lambda item: item.render()):
-            print(diagnostic.render())
+        _print_plan(plan)
         return 0
 
     from agent_assets.transaction import SystemFileOperations, apply_sync
 
     apply_sync(plan, SystemFileOperations())
-    print("Synchronization complete")
+    _print_plan(plan)
     return 0
 
 

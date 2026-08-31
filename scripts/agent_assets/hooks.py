@@ -5,10 +5,11 @@ import os
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Final
+from typing import Final, assert_never
 
 from .models import (
     AgentId,
+    ExecutionMode,
     IngestionMode,
     PlannedAction,
     PlannedTarget,
@@ -57,7 +58,13 @@ def plan_hook_targets(request: SyncRequest) -> tuple[PlannedTarget, ...]:
     if {AgentId.CLAUDECODE, AgentId.CODEX}.intersection(request.agent_ids):
         targets.append(_plan_wrapper(request.repo_root))
     if AgentId.OPENCODE in request.agent_ids:
-        _validate_plugin_registry(request.home)
+        match request.mode:
+            case ExecutionMode.PRODUCTION:
+                _validate_plugin_registry(request.home)
+            case ExecutionMode.DRY_RUN:
+                pass
+            case unreachable:
+                assert_never(unreachable)
         targets.append(_plan_opencode_config(request.home))
     return tuple(targets)
 

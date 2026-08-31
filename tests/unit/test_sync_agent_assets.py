@@ -786,6 +786,27 @@ def test_all_mode_rejects_missing_opencode_plugin_registry_before_any_apply(
     assert not (tmp_path / "home" / ".config" / "opencode" / "opencode.json").exists()
 
 
+def test_dry_run_all_mode_plans_opencode_without_registry_prerequisite(
+    tmp_path: Path,
+) -> None:
+    from agent_assets.hooks import plan_hook_targets
+
+    request = SyncRequest(
+        command="sync",
+        repo_root=REPO_ROOT,
+        home=tmp_path / "home",
+        mode=ExecutionMode.DRY_RUN,
+        ingestion_mode=IngestionMode.ALL,
+        agent_ids=(AgentId.OPENCODE,),
+    )
+
+    targets = plan_hook_targets(request)
+
+    assert [target.path for target in targets] == [
+        request.home / ".config" / "opencode" / "opencode.json"
+    ]
+
+
 @pytest.mark.parametrize("filename", ["opencode.jsonc", "oh-my-opencode.jsonc"])
 def test_all_mode_rejects_locally_managed_opencode_config_before_any_apply(
     tmp_path: Path, filename: str, monkeypatch: pytest.MonkeyPatch

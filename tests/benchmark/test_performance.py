@@ -42,6 +42,7 @@ def settings(tmp_db: str) -> Settings:
         embedding_provider="openai",
         openai_api_key=SecretStr("bench-key"),
         graph_enabled=True,
+        graph_sync_mode="sync",
     )
 
 

@@ -22,6 +22,7 @@ async def seeded_sqlite(tmp_path):
         sqlite_db_path=str(db_path),
         cache_backend="inmemory",
         graph_enabled=True,
+        graph_sync_mode="sync",
     )
 
     # Write mode initialization + seed
@@ -114,6 +115,7 @@ async def test_create_storage_default_is_write_mode(tmp_path):
         sqlite_db_path=str(db_path),
         cache_backend="inmemory",
         graph_enabled=False,
+        graph_sync_mode="sync",
     )
     storage, graph, cache = await create_storage(settings)
     try:

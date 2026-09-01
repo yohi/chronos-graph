@@ -11,7 +11,7 @@ if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
 from agent_assets.bundle import build_bundle, compute_bundle_digest  # noqa: E402
-from agent_assets.cli import _parse_sync_args  # noqa: E402
+from agent_assets.cli import _parse_sync_args, main  # noqa: E402
 from agent_assets.models import (  # noqa: E402
     AgentId,
     ExecutionMode,
@@ -89,19 +89,87 @@ def test_parse_sync_args_preserves_custom_codex_home(
     assert plan.targets[0].path == codex_home / "AGENTS.md"
 
 
-def test_bundle_digest_distinguishes_ambiguous_nul_separated_records(
+def test_bundle_digest_distinguishes_nul_record_collisions(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    (first / "a").write_bytes(b"b\x00c\x00d")
+    (second / "a").write_bytes(b"b")
+    (second / "c").write_bytes(b"d")
+
+    assert compute_bundle_digest(first) != compute_bundle_digest(second)
+
+
+def test_main_redacts_plugin_registry_prerequisite_failures(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    first_root = tmp_path / "first"
-    first_root.mkdir()
-    (first_root / "a").write_bytes(b"b")
-    (first_root / "c").write_bytes(b"d")
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda _: home))
 
-    second_root = tmp_path / "second"
-    second_root.mkdir()
-    (second_root / "a").write_bytes(b"b\x00c\x00d")
+    result = main(
+        [
+            "sync",
+            "--repo-root",
+            str(REPO_ROOT),
+            "--mode",
+            "production",
+            "--ingestion-mode",
+            "all",
+            "--agent",
+            "opencode",
+        ]
+    )
 
-    assert compute_bundle_digest(first_root) != compute_bundle_digest(second_root)
+    captured = capsys.readouterr()
+    assert result == 2
+    assert captured.out == ""
+    assert captured.err == "preflight:reject:.:registry-probe-credential\n"
+    assert str(home) not in captured.err
+
+
+def test_main_redacts_agent_selection_errors(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = main(["canonicalize", "--agents", "notcodex"])
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert captured.out == ""
+    assert captured.err == "canonicalize:reject:.:unsupported-agent\n"
+
+
+def test_main_redacts_apply_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from agent_assets.transaction import ApplyError, RollbackResult
+
+    def raise_apply_error(_request: object) -> int:
+        raise ApplyError("verification-failed", RollbackResult(True))
+
+    monkeypatch.setattr("agent_assets.cli.run_sync", raise_apply_error)
+
+    result = main(
+        [
+            "sync",
+            "--repo-root",
+            str(REPO_ROOT),
+            "--mode",
+            "production",
+            "--ingestion-mode",
+            "selective",
+            "--agent",
+            "claudecode",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert captured.out == ""
+    assert captured.err == "apply:reject:.:verification-failed:rollback=None\n"
 
 
 def test_apply_sync_stages_each_target_locally_and_cleans_staging_roots(

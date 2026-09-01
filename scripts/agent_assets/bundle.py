@@ -28,9 +28,9 @@ def compute_bundle_digest(asset_root: Path) -> str:
             raise AssetValidationError(candidate, "unsupported-file-type")
         relative_path = candidate.relative_to(asset_root).as_posix().encode("utf-8")
         content = candidate.read_bytes()
-        digest.update(len(relative_path).to_bytes(8, byteorder="big"))
+        digest.update(len(relative_path).to_bytes(8, "big"))
         digest.update(relative_path)
-        digest.update(len(content).to_bytes(8, byteorder="big"))
+        digest.update(len(content).to_bytes(8, "big"))
         digest.update(content)
     return digest.hexdigest()
 

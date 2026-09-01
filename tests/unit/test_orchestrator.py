@@ -325,6 +325,16 @@ class TestSearchOperation:
         assert result is not None
 
     @pytest.mark.asyncio
+    async def test_search_allows_missing_project(self):
+        retrieval = _make_mock_retrieval_pipeline()
+        orch, *_ = await _build_orchestrator(retrieval_pipeline=retrieval)
+
+        await orch.search("test query")
+
+        retrieval.search.assert_called_once()
+        assert retrieval.search.call_args.kwargs["project"] is None
+
+    @pytest.mark.asyncio
     async def test_search_passes_parameters_to_pipeline(self):
         """search() がパラメータを RetrievalPipeline.search() に渡す。"""
         retrieval = _make_mock_retrieval_pipeline()

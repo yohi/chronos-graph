@@ -292,7 +292,7 @@ class Orchestrator:
             検索結果の dict。
         """
         normalized_project = normalize_project_name(project)
-        if normalized_project is None:
+        if project is not None and normalized_project is None:
             raise ValueError("project is required for memory_search")
 
         if memory_type is not None:

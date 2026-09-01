@@ -406,6 +406,28 @@ def test_preflight_accepts_owned_same_name_skill_as_an_update(tmp_path: Path) ->
     )
 
 
+def test_apply_sync_does_not_follow_existing_skill_symlink(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    skill_root = home / ".claude" / "skills" / "chronos-memory-save"
+    skill_root.mkdir(parents=True)
+    external = tmp_path / "external.md"
+    external.write_bytes(b"outside-before")
+    (skill_root / "SKILL.md").symlink_to(external)
+    (skill_root / ".chronosgraph-managed").write_bytes(b"owner=chronosgraph\nformat=1\n")
+    plan = preflight(
+        preflight_request_for(AgentId.CLAUDECODE, home),
+        build_bundle(REPO_ROOT / "agent-assets"),
+    )
+
+    apply_sync(plan, SystemFileOperations())
+
+    assert external.read_bytes() == b"outside-before"
+    assert not (skill_root / "SKILL.md").is_symlink()
+    assert (skill_root / "SKILL.md").read_bytes() == (
+        REPO_ROOT / "agent-assets" / "skills" / "chronos-memory-save" / "SKILL.md"
+    ).read_bytes()
+
+
 @pytest.mark.parametrize("target_kind", ["broken", "cycle", "directory"])
 def test_preflight_rejects_unsafe_instruction_symlink_targets(
     tmp_path: Path, target_kind: str
@@ -527,6 +549,45 @@ class ReplaceFailingFileOperations:
         self._delegate.remove(path)
 
 
+class RecoveryStageFailingFileOperations:
+    def __init__(self) -> None:
+        self._delegate = SystemFileOperations()
+        self.backup_path: Path | None = None
+
+    def replace(self, source: Path, destination: Path) -> None:
+        self._delegate.replace(source, destination)
+
+    def move(self, source: Path, destination: Path) -> None:
+        if source.name.startswith("backup-"):
+            self.backup_path = source
+            raise OSError("injected-recovery-stage-move-failure")
+        self._delegate.move(source, destination)
+
+    def remove(self, path: Path) -> None:
+        self._delegate.remove(path)
+
+
+class ExternalChangeOnReplaceFailureOperations:
+    def __init__(self, target: Path) -> None:
+        self._delegate = SystemFileOperations()
+        self._target = target
+        self.backup_path: Path | None = None
+
+    def replace(self, source: Path, destination: Path) -> None:
+        if destination == self._target:
+            self._target.write_bytes(b"external-change\n")
+            raise OSError("injected-replace-failure")
+        self._delegate.replace(source, destination)
+
+    def move(self, source: Path, destination: Path) -> None:
+        if source == self._target:
+            self.backup_path = destination
+        self._delegate.move(source, destination)
+
+    def remove(self, path: Path) -> None:
+        self._delegate.remove(path)
+
+
 def prepared_plan_for(
     agent: AgentId,
     home: Path,
@@ -542,6 +603,46 @@ def prepared_plan_for(
         agent_ids=(agent,),
     )
     return preflight(request, build_bundle(repo_root / "agent-assets"))
+
+
+def test_apply_sync_keeps_target_when_recovery_stage_move_fails(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    instruction = home / ".claude" / "CLAUDE.md"
+    instruction.parent.mkdir(parents=True)
+    instruction.write_bytes(b"user-before\n")
+    plan = prepared_plan_for(AgentId.CLAUDECODE, home, IngestionMode.SELECTIVE)
+    operations = RecoveryStageFailingFileOperations()
+
+    with pytest.raises(ApplyError) as error:
+        apply_sync(plan, operations, verify=lambda _: False)
+
+    target = _instruction_target(plan)
+    assert target.content is not None
+    assert instruction.read_bytes() == target.content
+    assert operations.backup_path is not None
+    assert operations.backup_path.exists()
+    assert error.value.rollback.recovery_paths == (operations.backup_path,)
+
+
+def test_apply_sync_reports_external_change_when_uninstalled_target_reappears(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    instruction = home / ".claude" / "CLAUDE.md"
+    instruction.parent.mkdir(parents=True)
+    instruction.write_bytes(b"user-before\n")
+    plan = prepared_plan_for(AgentId.CLAUDECODE, home, IngestionMode.SELECTIVE)
+    operations = ExternalChangeOnReplaceFailureOperations(instruction)
+
+    with pytest.raises(ApplyError) as error:
+        apply_sync(plan, operations)
+
+    assert instruction.read_bytes() == b"external-change\n"
+    assert operations.backup_path is not None
+    assert operations.backup_path.exists()
+    assert not error.value.rollback.succeeded
+    assert error.value.rollback.category == "rollback-external-change"
+    assert error.value.rollback.recovery_paths == (operations.backup_path,)
 
 
 def test_apply_sync_restores_owned_instruction_after_verification_failure(

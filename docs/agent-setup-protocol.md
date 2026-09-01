@@ -121,6 +121,8 @@ ChronosGate 側の手順に委譲します。このプロトコルでは、Chron
 ---
 
 ### Phase 7: 同期結果の検証
-transaction commit後、選択したinstructions、両方のSkills、digestの一致、marker外instructionsの保持、他Skillsの保持、legacy warning/collisionの結果、`all`モードのhook artifact成功を検証してください。
+同期が成功した場合はtransaction commit後、選択したinstructions、両方のSkills、digestの一致、marker外instructionsの保持、他Skillsの保持、許可されたlegacy warningの結果、`all`モードのhook artifact成功を検証してください。
 
-既存の旧Save / Recall promptが検出された場合はwarningを確認し、必要に応じてユーザーが手動で削除してから再実行します。ユーザーが複製した旧promptは削除しません。
+`all`モードで旧Save promptが検出されてpreflight collisionとして同期が拒否された場合は、検出された旧Save promptをユーザーが手動で削除してからbootstrapを再実行してください。この拒否はwriteとhook setupの前に発生し、bootstrapは旧promptやユーザーが複製したpromptを自動削除しません。
+
+`selective`モード、または`all`モードで旧Recall promptが検出された場合は、warningを確認し、必要に応じて手動削除後に再実行してください。

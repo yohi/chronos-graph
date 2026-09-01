@@ -72,7 +72,7 @@ ChronosGraph は、リポジトリ所有の `agent-assets/` を Agent instructio
 > [!NOTE]
 > 自動セットアップの対応先は Claude Code、Codex、OpenCode です。設定ファイルやSkillsを手動でコピー・編集せず、必ず [Agent Setup Protocol](docs/agent-setup-protocol.md) を通じてbootstrapを実行してください。
 
-`all` モードではbootstrapが選択した環境のturn-end hookも同期します。既存のユーザー管理指示や他のSkillsは保持され、旧形式の指示を検出した場合は手動削除が必要であることを警告します。
+`all` モードではbootstrapが選択した環境のturn-end hookも同期します。既存のユーザー管理指示や他のSkillsは保持されます。旧Save promptを検出すると、警告を伴うpreflight拒否となり、Agent資産のwriteやhook setupを開始せず同期を中断します。検出された旧Save promptを手動で削除してからbootstrapを再実行してください。旧Recall promptは警告のみで同期を継続し、旧promptはbootstrapが自動削除しません。
 
 ---
 

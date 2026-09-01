@@ -93,7 +93,10 @@ def _stage_skill(source: Path, existing: Path | None, stage: Path) -> None:
         return
     _ = shutil.copytree(existing, stage, symlinks=True)
     for name in ("SKILL.md", ".chronosgraph-managed"):
-        _ = shutil.copy2(source / name, stage / name)
+        destination = stage / name
+        if destination.is_symlink():
+            destination.unlink()
+        _ = shutil.copy2(source / name, destination)
 
 
 def _target_exists(path: Path) -> bool:

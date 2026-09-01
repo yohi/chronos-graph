@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import sys
 from pathlib import Path
 
@@ -90,15 +89,16 @@ def test_parse_sync_args_preserves_custom_codex_home(
     assert plan.targets[0].path == codex_home / "AGENTS.md"
 
 
-def test_bundle_digest_uses_nul_delimited_records(tmp_path: Path) -> None:
-    asset_root = tmp_path / "assets"
-    asset_root.mkdir()
-    (asset_root / "a").write_bytes(b"b")
-    (asset_root / "c").write_bytes(b"d")
+def test_bundle_digest_distinguishes_nul_record_collisions(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    (first / "a").write_bytes(b"b\x00c\x00d")
+    (second / "a").write_bytes(b"b")
+    (second / "c").write_bytes(b"d")
 
-    expected = hashlib.sha256(b"a\x00b\x00c\x00d\x00").hexdigest()
-
-    assert compute_bundle_digest(asset_root) == expected
+    assert compute_bundle_digest(first) != compute_bundle_digest(second)
 
 
 def test_main_redacts_plugin_registry_prerequisite_failures(

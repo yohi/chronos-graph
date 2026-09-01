@@ -52,15 +52,22 @@ class PostWriteVerificationError(RuntimeError):
 
 
 class RollbackResult:
-    """Redacted result of restoring the transaction's owned changes."""
+    """Result of restoring the transaction's owned changes."""
 
-    __slots__: tuple[str, ...] = ("succeeded", "category")
+    __slots__: tuple[str, ...] = ("succeeded", "category", "recovery_paths")
     succeeded: bool
     category: str | None
+    recovery_paths: tuple[Path, ...]
 
-    def __init__(self, succeeded: bool, category: str | None = None) -> None:
+    def __init__(
+        self,
+        succeeded: bool,
+        category: str | None = None,
+        recovery_paths: tuple[Path, ...] = (),
+    ) -> None:
         self.succeeded = succeeded
         self.category = category
+        self.recovery_paths = recovery_paths
 
     @classmethod
     def failure(cls, _error: Exception) -> RollbackResult:

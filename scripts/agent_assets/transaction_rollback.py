@@ -18,8 +18,12 @@ def rollback_transaction(journal: TransactionJournal, operations: FileOperations
         backup_location = entry.backup
         try:
             if not entry.installed:
-                if entry.backup is not None and not _target_exists(entry.target.path):
-                    operations.move(entry.backup, entry.target.path)
+                if entry.backup is not None:
+                    if _target_exists(entry.target.path):
+                        externally_changed = True
+                        recovery_paths.append(entry.backup)
+                    else:
+                        operations.move(entry.backup, entry.target.path)
                 continue
             if not matches_applied(journal.plan, entry.target):
                 externally_changed = True

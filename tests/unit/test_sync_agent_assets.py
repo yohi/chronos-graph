@@ -567,6 +567,27 @@ class RecoveryStageFailingFileOperations:
         self._delegate.remove(path)
 
 
+class ExternalChangeOnReplaceFailureOperations:
+    def __init__(self, target: Path) -> None:
+        self._delegate = SystemFileOperations()
+        self._target = target
+        self.backup_path: Path | None = None
+
+    def replace(self, source: Path, destination: Path) -> None:
+        if destination == self._target:
+            self._target.write_bytes(b"external-change\n")
+            raise OSError("injected-replace-failure")
+        self._delegate.replace(source, destination)
+
+    def move(self, source: Path, destination: Path) -> None:
+        if source == self._target:
+            self.backup_path = destination
+        self._delegate.move(source, destination)
+
+    def remove(self, path: Path) -> None:
+        self._delegate.remove(path)
+
+
 def prepared_plan_for(
     agent: AgentId,
     home: Path,
@@ -600,6 +621,27 @@ def test_apply_sync_keeps_target_when_recovery_stage_move_fails(tmp_path: Path) 
     assert instruction.read_bytes() == target.content
     assert operations.backup_path is not None
     assert operations.backup_path.exists()
+    assert error.value.rollback.recovery_paths == (operations.backup_path,)
+
+
+def test_apply_sync_reports_external_change_when_uninstalled_target_reappears(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    instruction = home / ".claude" / "CLAUDE.md"
+    instruction.parent.mkdir(parents=True)
+    instruction.write_bytes(b"user-before\n")
+    plan = prepared_plan_for(AgentId.CLAUDECODE, home, IngestionMode.SELECTIVE)
+    operations = ExternalChangeOnReplaceFailureOperations(instruction)
+
+    with pytest.raises(ApplyError) as error:
+        apply_sync(plan, operations)
+
+    assert instruction.read_bytes() == b"external-change\n"
+    assert operations.backup_path is not None
+    assert operations.backup_path.exists()
+    assert not error.value.rollback.succeeded
+    assert error.value.rollback.category == "rollback-external-change"
     assert error.value.rollback.recovery_paths == (operations.backup_path,)
 
 

@@ -130,7 +130,6 @@ def test_main_redacts_plugin_registry_prerequisite_failures(
     assert str(home) not in captured.err
 
 
-
 def test_main_redacts_agent_selection_errors(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -171,6 +170,8 @@ def test_main_redacts_apply_errors(
     assert result == 1
     assert captured.out == ""
     assert captured.err == "apply:reject:.:verification-failed:rollback=None\n"
+
+
 def test_apply_sync_stages_each_target_locally_and_cleans_staging_roots(
     tmp_path: Path,
 ) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -11,7 +12,7 @@ if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
 from agent_assets.bundle import build_bundle, compute_bundle_digest  # noqa: E402
-from agent_assets.cli import _parse_sync_args  # noqa: E402
+from agent_assets.cli import _parse_sync_args, main  # noqa: E402
 from agent_assets.models import (  # noqa: E402
     AgentId,
     ExecutionMode,
@@ -89,19 +90,44 @@ def test_parse_sync_args_preserves_custom_codex_home(
     assert plan.targets[0].path == codex_home / "AGENTS.md"
 
 
-def test_bundle_digest_distinguishes_ambiguous_nul_separated_records(
+def test_bundle_digest_uses_nul_delimited_records(tmp_path: Path) -> None:
+    asset_root = tmp_path / "assets"
+    asset_root.mkdir()
+    (asset_root / "a").write_bytes(b"b")
+    (asset_root / "c").write_bytes(b"d")
+
+    expected = hashlib.sha256(b"a\x00b\x00c\x00d\x00").hexdigest()
+
+    assert compute_bundle_digest(asset_root) == expected
+
+
+def test_main_redacts_plugin_registry_prerequisite_failures(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    first_root = tmp_path / "first"
-    first_root.mkdir()
-    (first_root / "a").write_bytes(b"b")
-    (first_root / "c").write_bytes(b"d")
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda _: home))
 
-    second_root = tmp_path / "second"
-    second_root.mkdir()
-    (second_root / "a").write_bytes(b"b\x00c\x00d")
+    result = main(
+        [
+            "sync",
+            "--repo-root",
+            str(REPO_ROOT),
+            "--mode",
+            "production",
+            "--ingestion-mode",
+            "all",
+            "--agent",
+            "opencode",
+        ]
+    )
 
-    assert compute_bundle_digest(first_root) != compute_bundle_digest(second_root)
+    captured = capsys.readouterr()
+    assert result == 2
+    assert captured.out == ""
+    assert captured.err == "preflight:reject:.:registry-probe-credential\n"
+    assert str(home) not in captured.err
 
 
 def test_apply_sync_stages_each_target_locally_and_cleans_staging_roots(

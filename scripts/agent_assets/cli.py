@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from agent_assets.bundle import build_bundle
+from agent_assets.hooks import PluginRegistryPrerequisiteError
 from agent_assets.models import (
     AgentId,
     ExecutionMode,
@@ -115,6 +116,9 @@ def main(raw: list[str] | None = None) -> int:
         return run_sync(request)
     except PreflightCollisionError as error:
         print(error.diagnostic().render(), file=sys.stderr)
+        return 2
+    except PluginRegistryPrerequisiteError as error:
+        print(f"preflight:reject:.:{error.category}", file=sys.stderr)
         return 2
     except MarkerError as error:
         print(f"preflight:reject:.:{error.code}", file=sys.stderr)

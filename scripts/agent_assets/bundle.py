@@ -5,6 +5,9 @@ import stat
 from pathlib import Path
 from typing import Final
 
+import yaml
+from yaml.nodes import MappingNode, ScalarNode
+
 from agent_assets.models import (
     MANAGED_SKILL_SENTINEL,
     AssetBundle,
@@ -83,14 +86,25 @@ def _validate_skill_frontmatter(document: bytes, path: Path, skill_name: str) ->
     except ValueError:
         raise AssetValidationError(path, "asset-skill-frontmatter") from None
 
-    frontmatter = lines[1:end]
-    expected_name = b"name: " + skill_name.encode("utf-8")
-    descriptions = tuple(
-        line.removeprefix(b"description: ").strip()
-        for line in frontmatter
-        if line.startswith(b"description: ")
+    frontmatter = b"\n".join(lines[1:end])
+    try:
+        document_node = yaml.compose(frontmatter)
+        metadata = yaml.safe_load(frontmatter)
+    except yaml.YAMLError:
+        raise AssetValidationError(path, "asset-skill-frontmatter") from None
+    if not isinstance(document_node, MappingNode) or not isinstance(metadata, dict):
+        raise AssetValidationError(path, "asset-skill-frontmatter")
+
+    keys = tuple(
+        key_node.value for key_node, _ in document_node.value if isinstance(key_node, ScalarNode)
     )
-    if frontmatter.count(expected_name) != 1 or len(descriptions) != 1 or not descriptions[0]:
+    description = metadata.get("description")
+    if (
+        len(keys) != len(set(keys))
+        or metadata.get("name") != skill_name
+        or not isinstance(description, str)
+        or not description.strip()
+    ):
         raise AssetValidationError(path, "asset-skill-frontmatter")
 
 

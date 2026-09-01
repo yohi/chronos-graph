@@ -150,6 +150,47 @@ def test_bundle_rejects_skill_with_invalid_frontmatter(tmp_path: Path) -> None:
     assert error_info.value.code == "asset-skill-frontmatter"
 
 
+def test_bundle_rejects_skill_with_malformed_yaml_frontmatter(tmp_path: Path) -> None:
+    asset_root = tmp_path / "agent-assets"
+    shutil.copytree(REPO_ROOT / "agent-assets", asset_root)
+    document = asset_root / "skills" / "chronos-memory-save" / "SKILL.md"
+    document.write_bytes(b"---\nname: chronos-memory-save\ndescription: [\n---\n<role>\n</role>\n")
+
+    with pytest.raises(AssetValidationError) as error_info:
+        build_bundle(asset_root)
+
+    assert error_info.value.code == "asset-skill-frontmatter"
+
+
+def test_bundle_rejects_skill_with_nonstring_description(tmp_path: Path) -> None:
+    asset_root = tmp_path / "agent-assets"
+    shutil.copytree(REPO_ROOT / "agent-assets", asset_root)
+    document = asset_root / "skills" / "chronos-memory-save" / "SKILL.md"
+    document.write_bytes(
+        b"---\nname: chronos-memory-save\ndescription: [save]\n---\n<role>\n</role>\n"
+    )
+
+    with pytest.raises(AssetValidationError) as error_info:
+        build_bundle(asset_root)
+
+    assert error_info.value.code == "asset-skill-frontmatter"
+
+
+def test_bundle_rejects_skill_with_duplicate_frontmatter_keys(tmp_path: Path) -> None:
+    asset_root = tmp_path / "agent-assets"
+    shutil.copytree(REPO_ROOT / "agent-assets", asset_root)
+    document = asset_root / "skills" / "chronos-memory-save" / "SKILL.md"
+    document.write_bytes(
+        b"---\nname: chronos-memory-save\nname: replacement\ndescription: Save memory.\n"
+        b"---\n<role>\n</role>\n"
+    )
+
+    with pytest.raises(AssetValidationError) as error_info:
+        build_bundle(asset_root)
+
+    assert error_info.value.code == "asset-skill-frontmatter"
+
+
 def test_rendered_all_block_has_no_unresolved_token() -> None:
     bundle = build_bundle(REPO_ROOT / "agent-assets")
     rendered = render_managed_block(bundle, IngestionMode.ALL)

@@ -152,6 +152,7 @@ def preflight(request: SyncRequest, bundle: AssetBundle) -> SyncPlan:
     targets: list[PlannedTarget] = []
     snapshots: list[TargetSnapshot] = []
     diagnostics: list[SafeDiagnostic] = []
+    resolved_instruction_targets: set[Path] = set()
     rendered_block = render_managed_block(bundle, request.ingestion_mode).removesuffix(b"\n")
 
     for agent_id in request.agent_ids:
@@ -163,6 +164,10 @@ def preflight(request: SyncRequest, bundle: AssetBundle) -> SyncPlan:
         instruction_path = safe_instruction_target(
             adapter.instructions_path, adapter.instructions_root
         )
+        resolved_instruction_path = instruction_path.resolve(strict=False)
+        if resolved_instruction_path in resolved_instruction_targets:
+            raise InstructionCollisionError(adapter.instructions_path, "instruction-symlink-shared")
+        resolved_instruction_targets.add(resolved_instruction_path)
         instruction_snapshots: tuple[TargetSnapshot, ...] = ()
         if instruction_path.exists():
             original = instruction_path.read_bytes()

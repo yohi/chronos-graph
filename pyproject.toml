@@ -89,7 +89,7 @@ extend-select = ["T20"]
 
 [tool.mypy]
 python_version = "3.12"
-mypy_path = "src"
+mypy_path = ["src", "scripts"]
 explicit_package_bases = true
 strict = true
 warn_unused_ignores = false

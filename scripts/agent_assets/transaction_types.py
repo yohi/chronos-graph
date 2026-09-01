@@ -54,7 +54,7 @@ class PostWriteVerificationError(RuntimeError):
 class RollbackResult:
     """Result of restoring the transaction's owned changes."""
 
-    __slots__: tuple[str, ...] = ("succeeded", "category", "recovery_paths")
+    __slots__: tuple[str, ...] = ("category", "recovery_paths", "succeeded")
     succeeded: bool
     category: str | None
     recovery_paths: tuple[Path, ...]

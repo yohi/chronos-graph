@@ -2004,7 +2004,7 @@ all: In all mode, do not call `memory_save` or `session_flush`; turn-end ingesti
 
 - instructions は marker pair（`<!-- BEGIN CHRONOSGRAPH MANAGED: agent-memory -->` 〜 `<!-- END CHRONOSGRAPH MANAGED: agent-memory -->`）で囲まれた範囲のみ所有する。0 組（新規作成）または 1 組のみ許可し、重複・片側欠損・順序逆転は write 前 error。新 target bytes は常に `prefix + rendered block + suffix` として構築する。
 - Skill は同名 directory が正確な sentinel を含む regular file を持つ場合のみ所有。未存在なら create、sentinel 無し・非 regular・内容不一致は collision として拒否。
-- 所有 Skill 配下の非 ChronosGraph entry は relative path / `lstat` type / fingerprint（regular file は content SHA-256、symlink は link target bytes）で snapshot し、apply 前後で一致を要求する。unsupported special file は preflight collision。
+- Skills root 配下の非所有 entry（他のユーザー管理 Skills を含む）は relative path / `lstat` type / fingerprint（regular file は content SHA-256、symlink は link target bytes、directory は構造的存在）で snapshot し、apply 前後で一致を要求する。unsupported special file は preflight collision。所有 Skill 配下の非 SSOT entry は staging 複製によって保持され、snapshot 検証対象外である（§19.8）。
 
 ### 19.6 Preflight（write 前に全対象を検証し、部分更新を許さない）
 
@@ -2078,7 +2078,7 @@ python scripts/sync_agent_assets.py sync \
 | `scripts/agent_assets/cli.py` | CLI 境界・決定論的 plan 出力・redacted diagnostics |
 | `scripts/bootstrap.sh` | `--agents` の 1 回 parse と helper 委譲 |
 
-各新規 Python module は pure 250 行以下を維持し、runtime 依存は標準ライブラリのみ。
+各新規 Python module は pure 250 行以下を維持し、runtime 依存は標準ライブラリと既存の pyyaml（SKILL.md frontmatter 検証のみに使用）に限る。
 
 ### 19.13 テスト
 

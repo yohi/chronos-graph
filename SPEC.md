@@ -1955,7 +1955,7 @@ apply_schema "${TEST_DB_NAME:-context_store_test}"
 Save / Recall の記憶運用ルールを、常時 context を消費する system prompt の手動コピーから、必要時にロードする global Agent Skills へ一本化する。リポジトリ内の `agent-assets/` を SSOT とし、`scripts/bootstrap.sh` が内部 CLI `scripts/sync_agent_assets.py` に委譲して導入・同期・検証・ロールバックまでを完結させる。
 
 - 対応 Agent: `claudecode` / `codex` / `opencode`（公式の global 設置経路が確立した Agent のみ）
-- 対象外: Cursor CLI / Antigravity への配布、ユーザー管理資産の自動削除・自動 migration（非破壊検出と warning は対象）
+- 対象外: Cursor CLI / Antigravity への配布、ユーザー管理資産の自動削除・自動 migration（非破壊検出と warning は対象）、wheel への Agent 資産同梱と専用 installer CLI の追加
 - 非破壊契約: 既存 instructions の marker 外は byte-for-byte 保持、他 Skills は変更しない
 - 詳細な運用規則は各 `SKILL.md` が唯一の SSOT とする。Recall は task start / prior-work 参照 / 既知解決があり得る error / convention decision での project-scoped 検索、結果の可視化、current state への grounding を維持する。Save は `selective` での完了・failure-to-success trigger、Semantic / Procedural 形式、自律的な `memory_save`、8,000 文字時の `session_flush` を維持する。
 - この配布レイヤーは `memory_save`、`memory_search`、`session_flush` の API・発火 semantics、`CHRONOS_INGESTION_MODE` の意味、turn-end ingestion の payload / 送信処理、storage / retrieval engine、既存の Cursor / Antigravity payload parser を変更しない。
@@ -2086,6 +2086,58 @@ python scripts/sync_agent_assets.py sync \
 - Integration: `tests/integration/test_sync_agent_assets.py`（temporary HOME での e2e・rollback・symlink 分類）、`tests/integration/test_opencode_turn_end_plugin.cjs`（`session.idle` → `scripts/agent_turn_hook.py` の plugin 契約）
 - 必須 regression matrix: SSOT の missing / malformed template・Skill layout・sentinel・render token、3 Agent の clean install、同一 SSOT の no-op re-sync、marker 外 instructions と他 Skills の保持、SSOT 更新時の所有範囲だけの更新、mode switch、multi-Agent preflight failure 時の部分更新なし、I/O / post-write verification / hook setup / rollback failure、in-root / shared / root-external / broken / cyclic / parent symlink、legacy Save / Recall の mode guard、dry-run 前後の filesystem snapshot、OpenCode plugin の `session.idle` dispatch を検証する。3 Agent × 2 ingestion mode の clean install・再同期・mode switch・hook artifact は一時 HOME で manual QA も行う。
 - fixtures: `tests/fixtures/agent_assets/legacy-save-v1.md` / `legacy-recall-v1.md`（legacy fingerprint 検出の pinned 入力）
+
+### 19.14 要求トレーサビリティとリスク対応
+
+旧設計仕様書（削除済み `2026-08-27-agent-skills-distribution-design`）の要求・受入基準の対応表と主要リスクの緩和策を本節に集約する。要求定義の原文（`REQUIREMENTS_2026-08-14.md`）はリポジトリに存在しないため、内容列がその趣旨を要約する。
+
+#### 要求（Functional Requirements）
+
+| 要件 | SPEC 上の充足箇所 | 内容 |
+|---|---|---|
+| R1 / R4 / R14 | §19.1、§19.2 | 2 つのメモリ Skill を詳細運用規則の唯一 SSOT とし、旧 system prompt を削除 |
+| R2 | §19.3 | 3 Agent（Claude Code / Codex / OpenCode）の global Skills root へ導入 |
+| R3 | §19.2、§19.4 | 常時 block を Skill routing と mode guard に限定 |
+| R5 / R6 | §19.1、§19.4 | Recall / Save behavior と ingestion mode の意味を維持 |
+| R7 / R8 | §19.11、§19.12 | bootstrap 経由で導入済み状態まで完了 |
+| R9 | §19.5、§19.6、§19.8 | marker / owned directory / symlink 境界と非所有 entry の snapshot 検証 |
+| R10 / R13 | §19.2、§19.4、§19.9 | Repository SSOT から digest 比較で再同期 |
+| R11 | §19.8、§19.9、§19.10 | 存在確認、digest、transaction rollback、非破壊性を完了条件化 |
+| R12 | §19.3、§19.11 | 正式対応 3 Agent のみ許可 |
+| R15 | §19.2（README / `docs/agent-setup-protocol.md` の更新は完了済み） | README・AGENTS・Protocol・bootstrap の旧参照を削除 |
+| R16 | §19.10、§19.13 | temporary file も作らない dry-run と filesystem snapshot test |
+
+#### 受入基準（Acceptance Criteria）
+
+| 受入基準 | SPEC 上の充足箇所 | 内容 |
+|---|---|---|
+| AC1 / AC2 | §19.2、§19.11、§19.12 | 手動 copy 無しの自動導入と minimal instructions |
+| AC3 / AC4 / AC5 | §19.1、§19.4、§19.11 | 両 mode の Recall、selective Save、`all` hook を維持 |
+| AC6 / AC7 | §19.5、§19.6、§19.8 | marker 外 instructions と他 Skills を snapshot 検証 |
+| AC8 / AC9 | §19.6〜§19.9、§19.11 | digest 再同期と setup 完了前検証 |
+| AC10 | §19.10、§19.13 | dry-run の write 禁止と filesystem snapshot test |
+| AC11 / AC12 | §19.2、README | 旧案内と旧 system prompt source を削除し、既存 copy は read-only 検出 |
+| AC13 | §19.1、§19.11 | 正式対応外 Agent へ fallback しない |
+| AC14 | §19.1、§19.2、§19.13 | memory API・発火仕様・ingestion mode の回帰防止 |
+| AC15 | §19.11、§19.13 | `--agents` の 1 回だけの厳格な parse、canonical set 共有、side effect 前検証 |
+| AC16 | §19.5、§19.6、§19.13 | canonical path root containment と shared symlink の collision 拒否 |
+| AC17 | §19.8、§19.9、§19.13 | post-write / hook failure および rollback failure を含む transaction rollback |
+| AC18 | §19.2、§19.6、§19.13 | legacy prompt warning、selective / `all` 共存 guard、upgrade integration |
+
+#### 主要リスクと緩和策
+
+| リスク | 緩和策 |
+|---|---|
+| ユーザー管理の同名 Skill を上書き | sentinel 無しの同名 directory は preflight collision（§19.5） |
+| 壊れた marker でユーザー本文を誤置換 | marker 重複・片側欠損・入れ子を write 前に拒否（§19.5） |
+| 複数 Agent 同期の途中失敗 | 全対象 preflight、staged apply、ChronosGraph 所有部分の rollback（§19.6、§19.8） |
+| 外部 root を指す instructions symlink で非所有領域を変更 | canonical path containment、shared root opt-in、preflight collision（§19.6） |
+| post-write 検証 / `all` hook setup 失敗による部分更新 | hook artifact を含む transaction journal、逆順 rollback、rollback failure 報告（§19.8） |
+| mode 切替で古い Save rules が誤発火 | block と Skill description の mode guard を更新（§19.4） |
+| 旧 Save prompt と `all` managed block の併存で Agent が直接保存 | legacy prompt の read-only 検出、warning、`all` preflight collision、手動移行後再実行（§19.6） |
+| SSOT 更新漏れ | target と current source の SHA-256 digest を完了時に再照合（§19.9） |
+| dry-run の隠れた副作用 | staging を含む write API を呼ばず filesystem snapshot test で保証（§19.10、§19.13） |
+| 将来 Agent の不確実な配置仕様 | 公式 global paths と検証方法が確定するまで adapter を追加しない（§19.3） |
 
 ---
 

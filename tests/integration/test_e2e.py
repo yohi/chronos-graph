@@ -47,6 +47,7 @@ def sqlite_settings(tmp_db_path: str) -> Settings:
         embedding_provider="openai",
         openai_api_key=SecretStr("test-key"),
         graph_enabled=True,  # SQLiteGraphAdapter を使う (sqlite モードでは常に有効)
+        graph_sync_mode="sync",
     )
 
 
@@ -312,6 +313,7 @@ class TestMCPServerE2E:
             embedding_provider="openai",
             openai_api_key=SecretStr("test-key"),
             graph_enabled=True,  # SQLiteGraphAdapter を使う
+            graph_sync_mode="sync",
         )
 
         # create_orchestrator を実際の SQLite + MockProvider で実行

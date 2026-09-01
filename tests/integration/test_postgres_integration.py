@@ -11,6 +11,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import pytest_asyncio
 
 from context_store.models.memory import Memory, MemoryType, SourceType
 from context_store.storage.postgres import PostgresStorageAdapter
@@ -31,8 +32,8 @@ def _make_memory(**kwargs: Any) -> Memory:
     return Memory(**defaults)
 
 
-@pytest.fixture
-def adapter(db_session):
+@pytest_asyncio.fixture
+async def adapter(db_session):
     """PostgresStorageAdapter wrapping the transactional test connection."""
     # Wrap the single connection in a mock pool that yields it directly
     mock_pool = MagicMock()
@@ -47,8 +48,8 @@ def adapter(db_session):
 
     mock_pool.acquire = MagicMock(return_value=_FakeAcquire())
 
-    adp = PostgresStorageAdapter.__new__(PostgresStorageAdapter)
-    adp._pool = mock_pool
+    await db_session.execute("TRUNCATE TABLE memories")
+    adp = PostgresStorageAdapter(mock_pool)
     return adp
 
 

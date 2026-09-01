@@ -18,6 +18,7 @@ from agent_assets.models import (
     resolve_codex_home,
     validate_command,
 )
+from agent_assets.transaction import ApplyError
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -107,9 +108,15 @@ def run_sync(request: SyncRequest) -> int:
 
 
 def main(raw: list[str] | None = None) -> int:
+    from agent_assets.models import AgentSelectionError
     from agent_assets.preflight import MarkerError, PreflightCollisionError
 
-    request = _parse_sync_args(raw)
+    try:
+        request = _parse_sync_args(raw)
+    except AgentSelectionError as error:
+        print(f"canonicalize:reject:.:{error}", file=sys.stderr)
+        return 2
+
     if request.command == "canonicalize":
         return _print_canonical_agents(request)
     try:
@@ -123,6 +130,12 @@ def main(raw: list[str] | None = None) -> int:
     except MarkerError as error:
         print(f"preflight:reject:.:{error.code}", file=sys.stderr)
         return 2
+    except ApplyError as error:
+        print(
+            f"apply:reject:.:{error.category}:rollback={error.rollback.category}",
+            file=sys.stderr,
+        )
+        return 1
 
 
 if __name__ == "__main__":

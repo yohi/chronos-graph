@@ -130,6 +130,47 @@ def test_main_redacts_plugin_registry_prerequisite_failures(
     assert str(home) not in captured.err
 
 
+
+def test_main_redacts_agent_selection_errors(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = main(["canonicalize", "--agents", "notcodex"])
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert captured.out == ""
+    assert captured.err == "canonicalize:reject:.:unsupported-agent\n"
+
+
+def test_main_redacts_apply_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from agent_assets.transaction import ApplyError, RollbackResult
+
+    def raise_apply_error(_request: object) -> int:
+        raise ApplyError("verification-failed", RollbackResult(True))
+
+    monkeypatch.setattr("agent_assets.cli.run_sync", raise_apply_error)
+
+    result = main(
+        [
+            "sync",
+            "--repo-root",
+            str(REPO_ROOT),
+            "--mode",
+            "production",
+            "--ingestion-mode",
+            "selective",
+            "--agent",
+            "claudecode",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert captured.out == ""
+    assert captured.err == "apply:reject:.:verification-failed:rollback=None\n"
 def test_apply_sync_stages_each_target_locally_and_cleans_staging_roots(
     tmp_path: Path,
 ) -> None:

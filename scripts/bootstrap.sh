@@ -7,6 +7,20 @@ if [ ! -f "pyproject.toml" ]; then
     exit 2
 fi
 
+# Resolve a portable Python runner for helper scripts that only need the
+# standard library. Prefer python3 over 'uv run python' because stub uv
+# wrappers in tests would otherwise swallow the helper invocation.
+if command -v python3 &> /dev/null; then
+    PYTHON_CMD=(python3)
+elif command -v python &> /dev/null; then
+    PYTHON_CMD=(python)
+elif command -v uv &> /dev/null; then
+    PYTHON_CMD=(uv run python)
+else
+    echo -e "\033[0;31mError: python3, python, or uv is required to run bootstrap.\033[0m" >&2
+    exit 1
+fi
+
 # Default options
 BACKEND=""
 EMBEDDING_PROVIDER=""
@@ -217,7 +231,7 @@ if [[ "$AGENTS_SEEN" -ne 1 ]]; then
 fi
 
 if ! CANONICAL_AGENT_LINES="$(
-    python scripts/sync_agent_assets.py canonicalize --agents "$AGENTS"
+    "${PYTHON_CMD[@]}" scripts/sync_agent_assets.py canonicalize --agents "$AGENTS"
 )"; then
     exit 1
 fi
@@ -241,7 +255,7 @@ run_agent_asset_sync() {
     for agent in "${CANONICAL_AGENTS[@]}"; do
         sync_args+=(--agent "$agent")
     done
-    python scripts/sync_agent_assets.py "${sync_args[@]}"
+    "${PYTHON_CMD[@]}" scripts/sync_agent_assets.py "${sync_args[@]}"
 }
 
 # Check if required parameters are explicitly set or forced by defaults

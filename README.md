@@ -67,18 +67,12 @@ python scripts/sandbox_runner.py -- bash -c "cd frontend && pnpm install && pnpm
 
 ## 🧠 Agent Identity & Memory Protocol
 
-本プロジェクトでは、セットアップ完了後、各AIエージェントが使用する `AGENTS.md` や `.cursorrules` などの指示ファイルに対して、エージェントが長期記憶システムを自律運用するためのプロンプトを追記する運用を想定しています。
+ChronosGraph は、リポジトリ所有の `agent-assets/` を Agent instruction の単一情報源（SSOT）とします。セットアップでは、Agent Setup Protocol が対応するグローバルAgent環境を選択し、`scripts/bootstrap.sh` がメモリ保存・想起の両Skillsと最小限の管理対象グローバル指示ブロックを同期します。
 
 > [!NOTE]
-> **追記の必要性について**:
-> - **【ケース A】長期記憶サーバーの場合**: **必須**です。エージェントが自律的に記憶を保存（`memory_save`）し、かつタスク開始時に関連する記憶を想起（`memory_search`）するための指示が必要です。
-> - **【ケース B】Hook (安全評価器) のみの場合**: **原則不要**です。Hook は透明な防壁として機能するため、エージェント側での意識的な対応は必要ありません。
+> 自動セットアップの対応先は Claude Code、Codex、OpenCode です。設定ファイルやSkillsを手動でコピー・編集せず、必ず [Agent Setup Protocol](docs/agent-setup-protocol.md) を通じてbootstrapを実行してください。
 
-追記すべきプロンプトの原本（テンプレート）は以下に格納されています。セットアップ完了時に、保存（Ingestion）と想起（Recall）の両テンプレートを対象プロジェクトの `AGENTS.md` 等に追記してください。
-
-👉 **[Memory Ingestion Prompt Template](docs/agent-prompts/memory-save-system-prompt.md)**
-
-👉 **[Memory Recall Prompt Template](docs/agent-prompts/memory-search-system-prompt.md)**
+`all` モードではbootstrapが選択した環境のturn-end hookも同期します。既存のユーザー管理指示や他のSkillsは保持されます。旧Save promptを検出すると、警告を伴うpreflight拒否となり、Agent資産のwriteやhook setupを開始せず同期を中断します。検出された旧Save promptを手動で削除してからbootstrapを再実行してください。旧Recall promptは警告のみで同期を継続し、旧promptはbootstrapが自動削除しません。
 
 ---
 
@@ -259,7 +253,7 @@ ChronosGraph 本体で利用する環境変数の一覧です。ツール実行�
 echo "$CONVERSATION_LOG" | uv run python scripts/agent_turn_hook.py &
 ```
 
-#### `CHRONOS_INGESTION_MODE=all` を選ぶ場合のクライアント別セットアップ
+#### `CHRONOS_INGESTION_MODE=all` を選ぶ場合の自動セットアップ
 
 > [!WARNING]
 > `CHRONOS_INGESTION_MODE=all` を **環境変数として設定するだけでは全量保存は機能しません。** 自動保存の経路はクライアント側 hook の責務です。ChronosGate を併用する場合は、Gateway 側の `memory.ingest` intent も許可してください。
@@ -269,121 +263,9 @@ echo "$CONVERSATION_LOG" | uv run python scripts/agent_turn_hook.py &
 1. `MCP_GATEWAY_API_KEY` 環境変数を hook プロセスに渡す (未設定時は no-op)。
 2. `MCP_GATEWAY_URL` を hook プロセスから到達可能にする (デフォルト `http://127.0.0.1:9100`)。
 3. ChronosGate を併用する場合は、Gateway 側の API キー設定と `memory.ingest` intent を許可しておく。
-4. 以下の例はローカルリポジトリから実行する前提のため、`uv` が利用可能であること。
+4. ローカルリポジトリから実行する場合は `uv` が利用可能であること。
 
-##### 🟦 Claude Code (`~/.claude/settings.json` または `.claude/settings.json`)
-
-Claude Code の `Stop` event は `transcript_path` を含む JSON を stdin に渡します。`--client claude-code` がこれを自動解釈し、JSONL transcript を `User: ...` / `Assistant: ...` 形式に整形してからGateway に送信します。
-
-```json
-{
-  "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "uv --directory ${CLAUDE_PROJECT_DIR} run python scripts/agent_turn_hook.py --client claude-code &"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-##### 🟪 Codex CLI (`hooks.json` または `config.toml` の `[hooks]`)
-
-Codex CLI は Claude Code 互換の hook 仕様を採用しています。設定例は Claude Code とほぼ同一で、`--client codex` を指定します。`/hooks` コマンドで初回信頼レビューを完了させる必要があります。
-
-```json
-{
-  "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "uv run python scripts/agent_turn_hook.py --client codex &"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-##### 🟧 Cursor (`.cursor/hooks.json`)
-
-Cursor 独自の小文字イベント名 (`stop`) を使います。Cursor は Claude Code 形式の `.claude/settings.json` も自動的に読むので、Claude Code と同一の `.claude/settings.json` を共有することも可能です。
-
-```json
-{
-  "version": 1,
-  "hooks": {
-    "stop": [
-      {
-        "command": "uv run python scripts/agent_turn_hook.py --client cursor &"
-      }
-    ]
-  }
-}
-```
-
-##### 🟩 Antigravity CLI (`.agents/hooks.json` または `~/.gemini/config/hooks.json`)
-
-Antigravity は payload に `transcriptPath` (キャメルケース) を含めます。`--client antigravity` がこれも解釈します。
-
-```json
-{
-  "chronos-ingestion": {
-    "Stop": [
-      {
-        "type": "command",
-        "command": "uv run python scripts/agent_turn_hook.py --client antigravity &",
-        "timeout": 5
-      }
-    ]
-  }
-}
-```
-
-##### 🟨 OpenCode (`.opencode/plugins/chronos-turn-end.ts`)
-
-OpenCode は hook 機構を持たず、代わりに TypeScript プラグインで `session.idle` イベントを購読します。以下は概念例です。プラグイン側で会話履歴を取得し、子プロセスとして `agent_turn_hook.py --content "..."` を spawn します。
-
-```typescript
-import { spawn } from "node:child_process";
-import path from "node:path";
-
-export const ChronosTurnEnd = async ({ client, directory }) => {
-  return {
-    event: async ({ event }) => {
-      if (event.type !== "session.idle") return;
-      const sessionId = event.properties?.sessionID;
-      if (!sessionId) return;
-
-      const messages = await client.session.messages.list({ path: { id: sessionId } });
-      const text = messages.data
-        .map((m: any) => {
-          const parts = (m.parts ?? [])
-            .map((p: any) => p.type === "text" ? p.text : "")
-            .filter(Boolean)
-            .join("\n");
-          return `${m.role}: ${parts}`;
-        })
-        .join("\n\n");
-
-      const child = spawn("uv", ["--directory", directory, "run", "python", "scripts/agent_turn_hook.py", "--content", text], {
-        detached: true,
-        stdio: "ignore",
-        env: { ...process.env },
-      });
-      child.unref();
-    },
-  };
-};
-```
+対応する自動セットアップ先は Claude Code、Codex、OpenCode のみです。Phase 4で対象を選択し、Phase 5のbootstrap実行に1つの`--agents` CSV値として渡してください。bootstrapはSkills、管理対象のグローバル指示、`all`モードのhook成果物を同期します。設定やhookを手動で作成・編集する経路はサポートしません。
 
 ##### 🔧 動作確認用の手動実行 (任意)
 

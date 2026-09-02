@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import stat
+from collections.abc import Hashable
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import yaml
-from yaml.nodes import MappingNode, ScalarNode
+from yaml.nodes import MappingNode
 
 from agent_assets.models import (
     MANAGED_SKILL_SENTINEL,
@@ -24,6 +25,35 @@ _REQUIRED_SKILL_NAMES: Final = (
     "chronos-memory-recall",
     "chronos-memory-save",
 )
+
+
+class _UniqueKeySafeLoader(yaml.SafeLoader):
+    def construct_mapping(
+        self,
+        node: MappingNode,
+        deep: bool = False,
+    ) -> dict[Hashable, Any]:
+        mapping: dict[Hashable, Any] = {}
+        for key_node, value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            try:
+                duplicate = key in mapping
+            except TypeError:
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    "found unhashable key",
+                    key_node.start_mark,
+                ) from None
+            if duplicate:
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    "found duplicate key",
+                    key_node.start_mark,
+                )
+            mapping[key] = self.construct_object(value_node, deep=deep)
+        return mapping
 
 
 class AssetValidationError(RuntimeError):
@@ -88,20 +118,20 @@ def _validate_skill_frontmatter(document: bytes, path: Path, skill_name: str) ->
 
     frontmatter = b"\n".join(lines[1:end])
     try:
-        document_node = yaml.compose(frontmatter)
-        metadata = yaml.safe_load(frontmatter)
+        loader = _UniqueKeySafeLoader(frontmatter)
+        try:
+            document_node = yaml.compose(frontmatter)
+            metadata = loader.get_single_data()
+        finally:
+            loader.dispose()
     except yaml.YAMLError:
         raise AssetValidationError(path, "asset-skill-frontmatter") from None
     if not isinstance(document_node, MappingNode) or not isinstance(metadata, dict):
         raise AssetValidationError(path, "asset-skill-frontmatter")
 
-    keys = tuple(
-        key_node.value for key_node, _ in document_node.value if isinstance(key_node, ScalarNode)
-    )
     description = metadata.get("description")
     if (
-        len(keys) != len(set(keys))
-        or metadata.get("name") != skill_name
+        metadata.get("name") != skill_name
         or not isinstance(description, str)
         or not description.strip()
     ):

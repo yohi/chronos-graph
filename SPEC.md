@@ -2025,7 +2025,7 @@ all: In all mode, do not call `memory_save` or `session_flush`; turn-end ingesti
 
 ### 19.8 Transaction（production apply）
 
-適用順序: journal 生成（private temp directory）→ preflight 状態の再検証（TOCTIU 対策）→ Skills / instructions の適用 → hook artifacts（wrapper / `opencode.json`）→ post-write verification → commit。
+適用順序: journal 生成（private temp directory）→ preflight 状態の再検証（TOCTOU 対策）→ Skills / instructions の適用 → hook artifacts（wrapper / `opencode.json`）→ post-write verification → commit。
 
 - **wrapper**: canonical set が `claudecode` または `codex` を含む `all` モードでのみ `scripts/chronos-turn-hook.sh`（Windows は `.cmd`）を作成。2 行目に管理 marker（`# chronosgraph-managed: turn-hook-wrapper format=1` / Windows は `rem ...`）を要求し、marker 無き同名 wrapper は hook collision。interpreter は local `.venv` → `uv` → `python` の順で `scripts/agent_turn_hook.py` を呼ぶ。`scripts/agent_turn_hook.py` 自体は変更しない。
 - **Skill**: 対象 parent 内の staging に既存 target を snapshot どおり複製し、`SKILL.md` と `.chronosgraph-managed` のみ SSOT から置換してから atomic swap。

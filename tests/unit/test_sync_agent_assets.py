@@ -112,6 +112,102 @@ def test_bundle_rejects_a_symlink(tmp_path: Path) -> None:
         build_bundle(asset_root)
 
 
+def test_bundle_rejects_missing_skill_sentinel(tmp_path: Path) -> None:
+    asset_root = tmp_path / "agent-assets"
+    shutil.copytree(REPO_ROOT / "agent-assets", asset_root)
+    sentinel = asset_root / "skills" / "chronos-memory-save" / ".chronosgraph-managed"
+    sentinel.unlink()
+
+    with pytest.raises(AssetValidationError) as error_info:
+        build_bundle(asset_root)
+
+    assert error_info.value.code == "asset-skill-sentinel-missing"
+
+
+def test_bundle_rejects_template_with_invalid_render_tokens(tmp_path: Path) -> None:
+    asset_root = tmp_path / "agent-assets"
+    shutil.copytree(REPO_ROOT / "agent-assets", asset_root)
+    template = asset_root / "minimal-instructions.md"
+    template.write_bytes(template.read_bytes().replace(b"{{INGESTION_MODE}}", b"all"))
+
+    with pytest.raises(AssetValidationError) as error_info:
+        build_bundle(asset_root)
+
+    assert error_info.value.code == "asset-template-render-token"
+
+
+def test_bundle_rejects_skill_with_invalid_frontmatter(tmp_path: Path) -> None:
+    asset_root = tmp_path / "agent-assets"
+    shutil.copytree(REPO_ROOT / "agent-assets", asset_root)
+    document = asset_root / "skills" / "chronos-memory-save" / "SKILL.md"
+    document.write_bytes(
+        document.read_bytes().replace(b"name: chronos-memory-save", b"name: unexpected")
+    )
+
+    with pytest.raises(AssetValidationError) as error_info:
+        build_bundle(asset_root)
+
+    assert error_info.value.code == "asset-skill-frontmatter"
+
+
+def test_bundle_rejects_skill_with_malformed_yaml_frontmatter(tmp_path: Path) -> None:
+    asset_root = tmp_path / "agent-assets"
+    shutil.copytree(REPO_ROOT / "agent-assets", asset_root)
+    document = asset_root / "skills" / "chronos-memory-save" / "SKILL.md"
+    document.write_bytes(b"---\nname: chronos-memory-save\ndescription: [\n---\n<role>\n</role>\n")
+
+    with pytest.raises(AssetValidationError) as error_info:
+        build_bundle(asset_root)
+
+    assert error_info.value.code == "asset-skill-frontmatter"
+
+
+def test_bundle_rejects_skill_with_nonstring_description(tmp_path: Path) -> None:
+    asset_root = tmp_path / "agent-assets"
+    shutil.copytree(REPO_ROOT / "agent-assets", asset_root)
+    document = asset_root / "skills" / "chronos-memory-save" / "SKILL.md"
+    document.write_bytes(
+        b"---\nname: chronos-memory-save\ndescription: [save]\n---\n<role>\n</role>\n"
+    )
+
+    with pytest.raises(AssetValidationError) as error_info:
+        build_bundle(asset_root)
+
+    assert error_info.value.code == "asset-skill-frontmatter"
+
+
+def test_bundle_rejects_skill_with_duplicate_frontmatter_keys(tmp_path: Path) -> None:
+    asset_root = tmp_path / "agent-assets"
+    shutil.copytree(REPO_ROOT / "agent-assets", asset_root)
+    document = asset_root / "skills" / "chronos-memory-save" / "SKILL.md"
+    document.write_bytes(
+        b"---\nname: chronos-memory-save\nname: replacement\ndescription: Save memory.\n"
+        b"---\n<role>\n</role>\n"
+    )
+
+    with pytest.raises(AssetValidationError) as error_info:
+        build_bundle(asset_root)
+
+    assert error_info.value.code == "asset-skill-frontmatter"
+
+
+def test_bundle_rejects_semantically_duplicate_frontmatter_keys(
+    tmp_path: Path,
+) -> None:
+    asset_root = tmp_path / "agent-assets"
+    shutil.copytree(REPO_ROOT / "agent-assets", asset_root)
+    document = asset_root / "skills" / "chronos-memory-save" / "SKILL.md"
+    document.write_bytes(
+        b"---\nname: chronos-memory-save\n1: first\n01: second\n"
+        b"description: Save memory.\n---\n<role>\n</role>\n"
+    )
+
+    with pytest.raises(AssetValidationError) as error_info:
+        build_bundle(asset_root)
+
+    assert error_info.value.code == "asset-skill-frontmatter"
+
+
 def test_rendered_all_block_has_no_unresolved_token() -> None:
     bundle = build_bundle(REPO_ROOT / "agent-assets")
     rendered = render_managed_block(bundle, IngestionMode.ALL)
@@ -229,6 +325,37 @@ def test_main_sync_dry_run_loads_sync_modules(
     assert code == 0
     assert captured.out.startswith("bundle-digest:")
     assert f"{tmp_path / '.claude' / 'CLAUDE.md'}:create" in captured.out
+
+
+def test_main_maps_invalid_asset_bundle_to_preflight_rejection(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    asset_root = repo_root / "agent-assets"
+    shutil.copytree(REPO_ROOT / "agent-assets", asset_root)
+    template = asset_root / "minimal-instructions.md"
+    template.write_bytes(template.read_bytes().replace(b"{{INGESTION_MODE}}", b"all"))
+    monkeypatch.setattr(Path, "home", classmethod(lambda _: tmp_path / "home"))
+
+    code = main(
+        [
+            "sync",
+            "--repo-root",
+            str(repo_root),
+            "--mode",
+            "dry-run",
+            "--ingestion-mode",
+            "selective",
+            "--agent",
+            "claudecode",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert code == 2
+    assert captured.err == f"preflight:reject:{template}:asset-template-render-token\n"
 
 
 def test_main_sync_production_installs_selected_agent_assets(
@@ -354,6 +481,29 @@ def test_preflight_rejects_instruction_symlink_outside_approved_root(tmp_path: P
             preflight_request_for(AgentId.CLAUDECODE, home),
             build_bundle(REPO_ROOT / "agent-assets"),
         )
+
+
+def test_preflight_rejects_shared_resolved_instruction_target(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    shared_root = home / ".claude"
+    shared_instruction = shared_root / "CLAUDE.md"
+    shared_root.mkdir(parents=True)
+    shared_instruction.write_bytes(b"shared instructions\n")
+    (shared_root / "AGENTS.md").symlink_to(shared_instruction)
+    request = SyncRequest(
+        command="sync",
+        repo_root=REPO_ROOT,
+        home=home,
+        mode=ExecutionMode.PRODUCTION,
+        ingestion_mode=IngestionMode.SELECTIVE,
+        agent_ids=(AgentId.CLAUDECODE, AgentId.CODEX),
+        codex_home=shared_root,
+    )
+
+    with pytest.raises(InstructionCollisionError) as error_info:
+        preflight(request, build_bundle(REPO_ROOT / "agent-assets"))
+
+    assert error_info.value.code == "instruction-symlink-shared"
 
 
 def test_preflight_replaces_only_the_managed_instruction_section(tmp_path: Path) -> None:

@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from agent_assets.bundle import build_bundle
+from agent_assets.bundle import AssetValidationError, build_bundle
 from agent_assets.hooks import PluginRegistryPrerequisiteError
 from agent_assets.models import (
     AgentId,
@@ -121,6 +121,9 @@ def main(raw: list[str] | None = None) -> int:
         return _print_canonical_agents(request)
     try:
         return run_sync(request)
+    except AssetValidationError as error:
+        print(error.diagnostic().render(), file=sys.stderr)
+        return 2
     except PreflightCollisionError as error:
         print(error.diagnostic().render(), file=sys.stderr)
         return 2

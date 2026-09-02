@@ -83,6 +83,7 @@ ChronosGate 側の手順に委譲します。このプロトコルでは、Chron
 
 ### Phase 4: 対象AIエージェントの選択 (BLOCKING STEP)
 必ず `ask_question` 等のツールを使用して、ChronosGraphの対象環境として `claudecode`、`codex`、`opencode` の1つ以上を複数選択可能な形式で提示し、ユーザーに選択させてください。空選択は無効です。
+`--non-interactive` でも対象Agentを暗黙選択してはなりません。必ず収集済みの明示選択を `--agents` に渡してください。
 
 * `[ ] claudecode`
 * `[ ] codex`
@@ -93,6 +94,8 @@ ChronosGate 側の手順に委譲します。このプロトコルでは、Chron
 ### Phase 5: scripts/bootstrap.sh の実行
 収集したパラメータに基づいて、`scripts/bootstrap.sh` を引数付きで呼び出します。AIエージェント自身でファイルを直接編集したり作成したりすることはせず、必ずこのスクリプトに実行を委ねてください。
 `--agents`には1つのCSV値だけを渡します。bootstrapは副作用開始前に値をcanonicalizeし、両方のingestion modeでSkillsとinstructionsをインストールまたは同期します。
+`--source=local|remote` はMCP serverの実行方式だけを表し、Agent assetのSSOTは常に実行中のcheckoutまたはrelease tarball内の `agent-assets/` です。
+OpenCodeを`all`モードで選択する場合は、実行前にGitHub Packagesの `@yohi` registry mappingと読み取り権限を持つcredential sourceがユーザー管理の `~/.npmrc` にあることを確認してください。Agentは`.npmrc`やtokenを作成・更新・保存してはなりません。
 
 #### コマンド生成例：
 ```bash

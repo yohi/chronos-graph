@@ -4,15 +4,21 @@
 
 ## What is this project?
 
-ChronosGraph provides persistent, multi-layered memory to AI agents (Claude, Gemini, Cursor, etc.) via the Model Context Protocol (MCP). The core is a Python 3.12+ FastMCP server. Storage backends include SQLite (`sqlite-vec`), PostgreSQL (`pgvector`), Supabase, Neo4j (for graph relationships), and Redis (for caching).
+ChronosGraph provides persistent, multi-layered memory to AI agents (Claude, Gemini, Cursor, etc.) via the Model Context Protocol (MCP). The core is a Python 3.12+ FastMCP server (`src/context_store/`). Storage backends include SQLite (`sqlite-vec`), PostgreSQL (`pgvector`), Supabase, Neo4j (for graph relationships), and Redis (for caching). A React + FastAPI dashboard lives in `frontend/`.
+
+The memory save/recall rules that AI agents themselves follow are distributed as global Agent Skills from `agent-assets/`, with the repository as the single source of truth (SSOT).
 
 ## How to work on this project
 
+Run all Python commands through `uv` (never plain `python`/`pip`).
+
 - **Install deps**: `uv sync --all-extras`
-- **Run tests**: `uv run pytest tests/unit/ -v`
+- **Run tests**: `uv run pytest tests/unit/ -v` (integration: `uv run pytest tests/integration/ -v`)
 - **Lint / Format**: `uv run ruff check src/ tests/` and `uv run ruff format src/ tests/`
 - **Type check**: `uv run mypy src/`
 - **Frontend** (in `frontend/`): `pnpm install && pnpm run lint && pnpm run test:unit`
+
+Before declaring work complete, run the lint, type check, and tests relevant to your change and confirm they pass.
 
 ## Critical constraints
 
@@ -30,6 +36,8 @@ The following resources are available for task-specific context. Read them only 
 | Topic | Location |
 |---|---|
 | **System architecture & database schema** | `SPEC.md` |
+| **Agent Skills distribution & sync contract** | `SPEC.md` §19 |
 | **Setup flow and environment variables** | `docs/agent-setup-protocol.md` |
 | **Repository-owned Agent instruction source** | `agent-assets/` |
+| **Dashboard frontend** | `frontend/` |
 | **Troubleshooting guides** | `docs/troubleshooting/` |

@@ -37,6 +37,9 @@ class SnapshotKind(StrEnum):
     SYMLINK = "symlink"
 
 
+MANAGED_SKILL_SENTINEL: Final = b"owner=chronosgraph\nformat=1\n"
+
+
 CANONICAL_AGENT_ORDER: Final = (
     AgentId.CLAUDECODE,
     AgentId.CODEX,

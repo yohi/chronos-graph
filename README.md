@@ -67,7 +67,7 @@ python scripts/sandbox_runner.py -- bash -c "cd frontend && pnpm install && pnpm
 
 ## 🧠 Agent Identity & Memory Protocol
 
-ChronosGraph は、リポジトリ所有の `agent-assets/` を Agent instruction の単一情報源（SSOT）とします。セットアップでは、Agent Setup Protocol が対応するグローバルAgent環境を選択し、`scripts/bootstrap.sh` がメモリ保存・想起の両Skillsと最小限の管理対象グローバル指示ブロックを同期します。
+ChronosGraph は、リポジトリ所有の `agent-assets/` を Agent instruction の単一情報源（SSOT）とします。セットアップでは、Agent Setup Protocol が対応するグローバルAgent環境を選択し、`scripts/bootstrap.sh` が2つのメモリSkills（`chronos-memory-save` / `chronos-memory-recall`）と最小限の管理対象グローバル指示ブロックを同期します。同期の設計詳細（bundle digest・所有境界・transaction rollback）は [SPEC.md §19](SPEC.md) を参照してください。
 
 > [!NOTE]
 > 自動セットアップの対応先は Claude Code、Codex、OpenCode です。設定ファイルやSkillsを手動でコピー・編集せず、必ず [Agent Setup Protocol](docs/agent-setup-protocol.md) を通じてbootstrapを実行してください。
@@ -264,6 +264,10 @@ echo "$CONVERSATION_LOG" | uv run python scripts/agent_turn_hook.py &
 2. `MCP_GATEWAY_URL` を hook プロセスから到達可能にする (デフォルト `http://127.0.0.1:9100`)。
 3. ChronosGate を併用する場合は、Gateway 側の API キー設定と `memory.ingest` intent を許可しておく。
 4. ローカルリポジトリから実行する場合は `uv` が利用可能であること。
+
+**OpenCode 固有の追加前提条件**
+
+OpenCode を `all` モードで選択する場合は、GitHub Packages の `@yohi` registry mapping と読み取り権限を持つ credential source をユーザー管理の `~/.npmrc` に事前設定すること。bootstrap は registry 設定や token を作成・更新しない。詳細は [SPEC.md §19.7](SPEC.md) を参照する。
 
 対応する自動セットアップ先は Claude Code、Codex、OpenCode のみです。Phase 4で対象を選択し、Phase 5のbootstrap実行に1つの`--agents` CSV値として渡してください。bootstrapはSkills、管理対象のグローバル指示、`all`モードのhook成果物を同期します。設定やhookを手動で作成・編集する経路はサポートしません。
 

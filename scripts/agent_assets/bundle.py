@@ -2,13 +2,150 @@ from __future__ import annotations
 
 import hashlib
 import stat
+from collections.abc import Hashable
 from pathlib import Path
+from typing import Any, Final
 
-from agent_assets.models import AssetBundle, IngestionMode
+import yaml
+from yaml.nodes import MappingNode
+
+from agent_assets.models import (
+    MANAGED_SKILL_SENTINEL,
+    AssetBundle,
+    IngestionMode,
+    SafeDiagnostic,
+)
+
+_REQUIRED_TEMPLATE_TOKENS: Final = (
+    b"{{BUNDLE_SHA256}}",
+    b"{{INGESTION_MODE}}",
+    b"{{SAVE_MODE_RULE}}",
+)
+_REQUIRED_SKILL_NAMES: Final = (
+    "chronos-memory-recall",
+    "chronos-memory-save",
+)
+
+
+class _UniqueKeySafeLoader(yaml.SafeLoader):
+    def construct_mapping(
+        self,
+        node: MappingNode,
+        deep: bool = False,
+    ) -> dict[Hashable, Any]:
+        mapping: dict[Hashable, Any] = {}
+        for key_node, value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            try:
+                duplicate = key in mapping
+            except TypeError:
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    "found unhashable key",
+                    key_node.start_mark,
+                ) from None
+            if duplicate:
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    "found duplicate key",
+                    key_node.start_mark,
+                )
+            mapping[key] = self.construct_object(value_node, deep=deep)
+        return mapping
 
 
 class AssetValidationError(RuntimeError):
     """Raised when the repository-owned Agent asset tree is malformed."""
+
+    path: Path
+    code: str
+
+    def __init__(self, path: Path, code: str) -> None:
+        self.path = path
+        self.code = code
+        super().__init__(code)
+
+    def diagnostic(self) -> SafeDiagnostic:
+        return SafeDiagnostic("preflight", "reject", self.path, self.code)
+
+
+def _require_directory(path: Path, code: str) -> None:
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        raise AssetValidationError(path, f"{code}-missing") from None
+    if stat.S_ISLNK(mode):
+        raise AssetValidationError(path, f"{code}-symlink")
+    if not stat.S_ISDIR(mode):
+        raise AssetValidationError(path, f"{code}-not-directory")
+
+
+def _read_required_regular_file(path: Path, code: str) -> bytes:
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        raise AssetValidationError(path, f"{code}-missing") from None
+    if stat.S_ISLNK(mode):
+        raise AssetValidationError(path, f"{code}-symlink")
+    if not stat.S_ISREG(mode):
+        raise AssetValidationError(path, f"{code}-not-regular")
+    return path.read_bytes()
+
+
+def _validate_template(path: Path) -> bytes:
+    template = _read_required_regular_file(path, "asset-template")
+    for token in _REQUIRED_TEMPLATE_TOKENS:
+        if template.count(token) != 1:
+            raise AssetValidationError(path, "asset-template-render-token")
+    without_tokens = template
+    for token in _REQUIRED_TEMPLATE_TOKENS:
+        without_tokens = without_tokens.replace(token, b"")
+    if b"{{" in without_tokens or b"}}" in without_tokens:
+        raise AssetValidationError(path, "asset-template-render-token")
+    return template
+
+
+def _validate_skill_frontmatter(document: bytes, path: Path, skill_name: str) -> None:
+    lines = document.splitlines()
+    if not lines or lines[0] != b"---":
+        raise AssetValidationError(path, "asset-skill-frontmatter")
+    try:
+        end = lines.index(b"---", 1)
+    except ValueError:
+        raise AssetValidationError(path, "asset-skill-frontmatter") from None
+
+    frontmatter = b"\n".join(lines[1:end])
+    try:
+        loader = _UniqueKeySafeLoader(frontmatter)
+        try:
+            document_node = yaml.compose(frontmatter)
+            metadata = loader.get_single_data()
+        finally:
+            loader.dispose()
+    except yaml.YAMLError:
+        raise AssetValidationError(path, "asset-skill-frontmatter") from None
+    if not isinstance(document_node, MappingNode) or not isinstance(metadata, dict):
+        raise AssetValidationError(path, "asset-skill-frontmatter")
+
+    description = metadata.get("description")
+    if (
+        metadata.get("name") != skill_name
+        or not isinstance(description, str)
+        or not description.strip()
+    ):
+        raise AssetValidationError(path, "asset-skill-frontmatter")
+
+
+def _validate_skill_source(root: Path, skill_name: str) -> None:
+    _require_directory(root, "asset-skill")
+    document_path = root / "SKILL.md"
+    document = _read_required_regular_file(document_path, "asset-skill-document")
+    _validate_skill_frontmatter(document, document_path, skill_name)
+    sentinel = _read_required_regular_file(root / ".chronosgraph-managed", "asset-skill-sentinel")
+    if sentinel != MANAGED_SKILL_SENTINEL:
+        raise AssetValidationError(root / ".chronosgraph-managed", "asset-skill-sentinel-content")
 
 
 def compute_bundle_digest(asset_root: Path) -> str:
@@ -37,10 +174,15 @@ def compute_bundle_digest(asset_root: Path) -> str:
 
 def build_bundle(asset_root: Path) -> AssetBundle:
     """Validate the repository-owned asset tree and return its bundle."""
+    _require_directory(asset_root, "asset-root")
+    skills_root = asset_root / "skills"
+    _require_directory(skills_root, "asset-skills-root")
+    template = _validate_template(asset_root / "minimal-instructions.md")
+    recall_root = skills_root / _REQUIRED_SKILL_NAMES[0]
+    save_root = skills_root / _REQUIRED_SKILL_NAMES[1]
+    _validate_skill_source(recall_root, _REQUIRED_SKILL_NAMES[0])
+    _validate_skill_source(save_root, _REQUIRED_SKILL_NAMES[1])
     digest = compute_bundle_digest(asset_root)
-    template = (asset_root / "minimal-instructions.md").read_bytes()
-    recall_root = asset_root / "skills" / "chronos-memory-recall"
-    save_root = asset_root / "skills" / "chronos-memory-save"
     return AssetBundle(
         root=asset_root,
         digest=digest,

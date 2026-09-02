@@ -5,9 +5,9 @@ import hashlib
 import os
 import stat
 from pathlib import Path
-from typing import Final
 
 from .models import (
+    MANAGED_SKILL_SENTINEL,
     AssetBundle,
     PlannedAction,
     PlannedTarget,
@@ -15,8 +15,6 @@ from .models import (
     TargetSnapshot,
 )
 from .preflight_errors import InstructionCollisionError, SkillCollisionError
-
-OWNER_SENTINEL: Final = b"owner=chronosgraph\nformat=1\n"
 
 
 def safe_instruction_target(path: Path, root: Path) -> Path:
@@ -124,4 +122,4 @@ def _is_owned_skill(path: Path) -> bool:
         mode = sentinel.lstat().st_mode
     except FileNotFoundError:
         return False
-    return stat.S_ISREG(mode) and sentinel.read_bytes() == OWNER_SENTINEL
+    return stat.S_ISREG(mode) and sentinel.read_bytes() == MANAGED_SKILL_SENTINEL

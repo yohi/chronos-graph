@@ -1948,6 +1948,199 @@ apply_schema "${TEST_DB_NAME:-context_store_test}"
 
 ---
 
+## 19. Agent Skills Distribution (Agent 資産同期)
+
+### 19.1 目的
+
+Save / Recall の記憶運用ルールを、常時 context を消費する system prompt の手動コピーから、必要時にロードする global Agent Skills へ一本化する。リポジトリ内の `agent-assets/` を SSOT とし、`scripts/bootstrap.sh` が内部 CLI `scripts/sync_agent_assets.py` に委譲して導入・同期・検証・ロールバックまでを完結させる。
+
+- 対応 Agent: `claudecode` / `codex` / `opencode`（公式の global 設置経路が確立した Agent のみ）
+- 対象外: Cursor CLI / Antigravity への配布、ユーザー管理資産の自動削除・自動 migration（非破壊検出と warning は対象）、wheel への Agent 資産同梱と専用 installer CLI の追加
+- 非破壊契約: 既存 instructions の marker 外は byte-for-byte 保持、他 Skills は変更しない
+- 詳細な運用規則は各 `SKILL.md` が唯一の SSOT とする。Recall は task start / prior-work 参照 / 既知解決があり得る error / convention decision での project-scoped 検索、結果の可視化、current state への grounding を維持する。Save は `selective` での完了・failure-to-success trigger、Semantic / Procedural 形式、自律的な `memory_save`、8,000 文字時の `session_flush` を維持する。
+- この配布レイヤーは `memory_save`、`memory_search`、`session_flush` の API・発火 semantics、`CHRONOS_INGESTION_MODE` の意味、turn-end ingestion の payload / 送信処理、storage / retrieval engine、既存の Cursor / Antigravity payload parser を変更しない。
+
+### 19.2 Repository SSOT (`agent-assets/`)
+
+```text
+agent-assets/
+├── minimal-instructions.md          # render token テンプレート
+└── skills/
+    ├── chronos-memory-recall/
+    │   ├── SKILL.md
+    │   └── .chronosgraph-managed    # 所有 sentinel
+    └── chronos-memory-save/
+        ├── SKILL.md
+        └── .chronosgraph-managed
+```
+
+- sentinel は正確に `owner=chronosgraph\nformat=1\n`（28 bytes）。形式不一致は所有と推定せず collision として扱う。
+- `minimal-instructions.md` は render token `{{BUNDLE_SHA256}}` / `{{INGESTION_MODE}}` / `{{SAVE_MODE_RULE}}` を保持し、同期時にすべて置換する。token のまま対象へ配置しない。
+- 旧 `docs/agent-prompts/` 配下の system prompt template は削除済み。legacy 検出器の regression 用 fixture のみ `tests/fixtures/agent_assets/` に保持し、runtime は読まない。
+
+### 19.3 対応 Agent と配置先
+
+| Agent ID | Global Skills root | Global instructions | Approved instructions root |
+|---|---|---|---|
+| `claudecode` | `~/.claude/skills/` | `~/.claude/CLAUDE.md` | `~/.claude/` |
+| `codex` | `~/.agents/skills/` | `${CODEX_HOME:-~/.codex}/AGENTS.md` | `${CODEX_HOME:-~/.codex}/` |
+| `opencode` | `~/.config/opencode/skills/` | `~/.config/opencode/AGENTS.md` | `~/.config/opencode/` |
+
+配置先は `scripts/agent_assets/models.py` の adapter table が唯一の定義源。Codex のみ `CODEX_HOME` 環境変数で instructions root を上書きできる（Skills root は常に `~/.agents/skills/`）。正式対応外 Agent への fallback prompt / asset 配布は行わない。将来 Agent は公式 global paths と自動検証方法が確定してから adapter に追加する。
+
+### 19.4 Bundle digest と managed block render
+
+- SSOT 配下の全 regular file を relative POSIX path 昇順でソートし、各 file について `8-byte big-endian path 長 + path bytes + 8-byte big-endian content 長 + content bytes` を順に SHA-256 へ入力する（長さプレフィックス方式）。SSOT 内の symlink と未定義 file type は validation error。
+- digest と期待 block は毎回 SSOT から再計算し、利用者側コピーを入力にしない。digest は SSOT 整合判定専用で、外部互換性を持たない。
+- render 済み block は `chronosgraph-bundle` metadata comment に bundle SHA-256 と ingestion mode を記録する。render token は対象へ残してはならない。
+- `SAVE_MODE_RULE` は mode 固定文言:
+
+```text
+selective: In selective mode, load and follow `chronos-memory-save` when its save trigger applies.
+all: In all mode, do not call `memory_save` or `session_flush`; turn-end ingestion owns saving.
+```
+
+### 19.5 所有境界
+
+- instructions は marker pair（`<!-- BEGIN CHRONOSGRAPH MANAGED: agent-memory -->` 〜 `<!-- END CHRONOSGRAPH MANAGED: agent-memory -->`）で囲まれた範囲のみ所有する。0 組（新規作成）または 1 組のみ許可し、重複・片側欠損・順序逆転は write 前 error。新 target bytes は常に `prefix + rendered block + suffix` として構築する。
+- Skill は同名 directory が正確な sentinel を含む regular file を持つ場合のみ所有。未存在なら create、sentinel 無し・非 regular・内容不一致は collision として拒否。
+- Skills root 配下の非所有 entry（他のユーザー管理 Skills を含む）は relative path / `lstat` type / fingerprint（regular file は content SHA-256、symlink は link target bytes、directory は構造的存在）で snapshot し、apply 前後で一致を要求する。unsupported special file は preflight collision。所有 Skill 配下の非 SSOT entry は staging 複製によって保持され、snapshot 検証対象外である（§19.8）。
+
+### 19.6 Preflight（write 前に全対象を検証し、部分更新を許さない）
+
+1. **instructions symlink**: 既存親 directory の symlink、broken、cyclic（ELOOP）、解決先が承認 root 外、non-regular target はすべて preflight error。root 内 leaf symlink は symlink 自体を保持したまま、解決先の regular file を更新対象とする。shared instructions symlink は初期実装では未サポートであり、検出時は collision とする。shared root を許可する将来変更には明示的な opt-in と承認済み root の指定を要する。
+2. **legacy prompt 検出**: 安定 heading + versioned byte 長 + SHA-256 の fingerprint をメモリ内で照合し、prompt 本文は出力しない。
+   - `selective`: Save / Recall とも手動削除を促す warning のみで継続。
+   - `all`: legacy Save は preflight collision として全 write・hook setup 前に拒否（Recall は warning のみ）。legacy Save が残る `selective` → `all` 切替は必ず拒否され、手動削除後の再実行でのみ進行する。
+3. **OpenCode `all` hook config**: `opencode.jsonc` / `oh-my-opencode.jsonc` が存在する場合は collision（strict JSON writer は書き換えない）。`opencode.json` 未存在なら plugin のみの minimal JSON を作成、存在すれば `plugin` 配列へ `@yohi/opencode-plugin-chronos-turn-end` を一度だけ追加し、他 key を保持する。
+
+1 対象でも失敗した場合（marker 重複・SSOT 破損・collision 等）は全対象を無変更のまま終了する。
+
+### 19.7 OpenCode `all` モードの registry 前提条件（production のみ）
+
+- 前提: ユーザー所有の `~/.npmrc` が `@yohi:registry=https://npm.pkg.github.com` マッピングと非空の `//npm.pkg.github.com/:_authToken`（`${ENV_VAR}` 参照可）を持つこと。`.npmrc` / `bunfig.toml` / token を create・rewrite・log・persist しない。
+- GitHub Packages の package metadata を read-only probe し、401/403 は `registry-probe-access`、その他のネットワーク系 failure は `registry-probe-network`、credential 不備は `registry-probe-credential` として `PluginRegistryPrerequisiteError` で preflight 拒否する。diagnostic に token 値・response body・credential path は含めない。
+- dry-run では probe を実行しない（オフライン dry-run を可能にする意図的な例外。network I/O は同期対象の状態検証に含めない）。
+- 現行実装の credential 解決源は `~/.npmrc` のみ。Bun 固有の `bunfig.toml` precedence 解決は将来拡張とする。
+
+### 19.8 Transaction（production apply）
+
+適用順序: journal 生成（private temp directory）→ preflight 状態の再検証（TOCTOU 対策）→ Skills / instructions の適用 → hook artifacts（wrapper / `opencode.json`）→ post-write verification → commit。
+
+- **wrapper**: canonical set が `claudecode` または `codex` を含む `all` モードでのみ `scripts/chronos-turn-hook.sh`（Windows は `.cmd`）を作成。2 行目に管理 marker（`# chronosgraph-managed: turn-hook-wrapper format=1` / Windows は `rem ...`）を要求し、marker 無き同名 wrapper は hook collision。interpreter は local `.venv` → `uv` → `python` の順で `scripts/agent_turn_hook.py` を呼ぶ。`scripts/agent_turn_hook.py` 自体は変更しない。
+- **Skill**: 対象 parent 内の staging に既存 target を snapshot どおり複製し、`SKILL.md` と `.chronosgraph-managed` のみ SSOT から置換してから atomic swap。
+- **instructions**: 同一 directory の temporary file へ permission 保持で書き atomic replace。未存在なら作成する。
+- journal 生成後の全例外は rollback を 1 回実行してから `ApplyError` として報告。`build_bundle` / preflight 失敗は journal 生成前に発生するため rollback しない。
+- rollback は逆順で実行し、preflight snapshot と現在値が一致する owned path のみ復元。外部変更があった path は触れず backup artifact を保持して報告する。今回作成した path は transaction が作成したことを確認できる場合のみ除去。rollback 自体の失敗も別 category で報告し非ゼロ終了。
+- bootstrap は `set -e` により helper 失敗時に `Bootstrap complete!` を表示しない。
+
+### 19.9 Post-write verification
+
+- SSOT bundle digest を**再計算**して preflight 値と照合する（preflight 値を信用しない）。
+- 全 target: Skill は SSOT と byte 一致かつ非所有 snapshot 一致、instructions は期待 content と byte 一致（marker 外保持を包含）。
+
+### 19.10 Dry-run
+
+- production と同一の parse / validation / render / 比較を行い、bundle digest と target ごとの `create` / `update` / `unchanged` / diagnostics を出力する。
+- staging・temporary file・directory 作成を含む filesystem write を一切行わない。production で失敗する preflight 状態は dry-run も非ゼロ終了する（§19.7 の registry probe のみ例外）。
+
+### 19.11 内部 CLI 契約
+
+```bash
+# CSV を受け付ける唯一の口。canonical Agent ID を 1 行 1 件で出力
+python scripts/sync_agent_assets.py canonicalize --agents "opencode,claudecode,codex,opencode"
+
+# sync は繰り返し --agent のみ受け付ける（CSV 再分割なし）
+python scripts/sync_agent_assets.py sync \
+  --repo-root . --mode production --ingestion-mode all \
+  --agent claudecode --agent opencode
+```
+
+- `--agents` は必須かつ 1 回のみ。空値・空要素・未知 ID（`notcodex` のような substring も含む）を拒否し、canonical order へ正規化して重複除去する。環境変数からの暗黙補完・substring 判定は禁止。
+- bootstrap は canonicalize を依存 install・`.env` 作成・MCP 設定生成など全 filesystem side effect より前に 1 回実行し、得た canonical set を dry-run 表示と helper 呼び出しの唯一の入力とする。hook 側は canonical set の厳密な membership のみを使用する。
+- 各 selected Agent には `selective` / `all` のいずれでも両 Skills と managed instruction block を同期する。`all` では同じ canonical set に含まれる Agent の hook artifact だけを同一 transaction で同期する。
+- `--source=local|remote` は MCP server の実行方式だけを選ぶ。Agent asset は常に実行中 bootstrap と同じ checkout または release tarball の `agent-assets/` から同期し、`--source` で切り替わらない。`--non-interactive` でも Agent は暗黙選択せず、`--agents` を必須とする。
+- error / warning 出力は Agent ID・path・phase・action・不一致 category・digest・復旧 artifact 識別子のみ。instructions 本文・他 Skill 本文・prompt 本文・credential は出力しない。preflight 拒否は exit 2、apply / rollback 失敗は exit 1。
+
+### 19.12 コンポーネント構成
+
+| ファイル | 役割 |
+|---|---|
+| `agent-assets/` | Agent 資産 SSOT（§19.2） |
+| `scripts/sync_agent_assets.py` | 内部 CLI エントリポイント（`canonicalize` / `sync`） |
+| `scripts/agent_assets/models.py` | Agent ID・mode・adapter・plan 等の型と `parse_agent_csv` |
+| `scripts/agent_assets/bundle.py` | SSOT 検証・digest 計算・block render |
+| `scripts/agent_assets/preflight.py` | marker 解析・legacy 検出・plan 生成 |
+| `scripts/agent_assets/preflight_files.py` | instructions symlink containment・Skill 所有判定・snapshot |
+| `scripts/agent_assets/hooks.py` | wrapper / OpenCode plugin 設定の plan と registry probe |
+| `scripts/agent_assets/transaction.py` | apply / verify / rollback のファサード |
+| `scripts/agent_assets/transaction_*.py` | staging・journal・rollback・post-write verification |
+| `scripts/agent_assets/cli.py` | CLI 境界・決定論的 plan 出力・redacted diagnostics |
+| `scripts/bootstrap.sh` | `--agents` の 1 回 parse と helper 委譲 |
+
+各新規 Python module は pure 250 行以下を維持し、runtime 依存は標準ライブラリと既存の pyyaml（SKILL.md frontmatter 検証のみに使用）に限る。
+
+### 19.13 テスト
+
+- Unit: `tests/unit/test_agent_asset_sources.py`（SSOT 構造・frontmatter・sentinel）、`tests/unit/test_sync_agent_assets.py`（parser・digest・marker・所有・symlink・legacy・transaction・diagnostics）、`tests/unit/test_bootstrap_agent_assets.py`（CLI 契約・委譲・dry-run・完了メッセージ抑止）、`tests/unit/test_bootstrap_messages.py`（旧案内削除の regression）
+- Integration: `tests/integration/test_sync_agent_assets.py`（temporary HOME での e2e・rollback・symlink 分類）、`tests/integration/test_opencode_turn_end_plugin.cjs`（`session.idle` → `scripts/agent_turn_hook.py` の plugin 契約）
+- 必須 regression matrix: SSOT の missing / malformed template・Skill layout・sentinel・render token、3 Agent の clean install、同一 SSOT の no-op re-sync、marker 外 instructions と他 Skills の保持、SSOT 更新時の所有範囲だけの更新、mode switch、multi-Agent preflight failure 時の部分更新なし、I/O / post-write verification / hook setup / rollback failure、in-root / shared / root-external / broken / cyclic / parent symlink、legacy Save / Recall の mode guard、dry-run 前後の filesystem snapshot、OpenCode plugin の `session.idle` dispatch を検証する。3 Agent × 2 ingestion mode の clean install・再同期・mode switch・hook artifact は一時 HOME で manual QA も行う。
+- fixtures: `tests/fixtures/agent_assets/legacy-save-v1.md` / `legacy-recall-v1.md`（legacy fingerprint 検出の pinned 入力）
+
+### 19.14 要求トレーサビリティとリスク対応
+
+旧設計仕様書（削除済み `2026-08-27-agent-skills-distribution-design`）の要求・受入基準の対応表と主要リスクの緩和策を本節に集約する。要求定義の原文（`REQUIREMENTS_2026-08-14.md`）はリポジトリに存在しないため、内容列がその趣旨を要約する。
+
+#### 要求（Functional Requirements）
+
+| 要件 | SPEC 上の充足箇所 | 内容 |
+|---|---|---|
+| R1 / R4 / R14 | §19.1、§19.2 | 2 つのメモリ Skill を詳細運用規則の唯一 SSOT とし、旧 system prompt を削除 |
+| R2 | §19.3 | 3 Agent（Claude Code / Codex / OpenCode）の global Skills root へ導入 |
+| R3 | §19.2、§19.4 | 常時 block を Skill routing と mode guard に限定 |
+| R5 / R6 | §19.1、§19.4 | Recall / Save behavior と ingestion mode の意味を維持 |
+| R7 / R8 | §19.11、§19.12 | bootstrap 経由で導入済み状態まで完了 |
+| R9 | §19.5、§19.6、§19.8 | marker / owned directory / symlink 境界と非所有 entry の snapshot 検証 |
+| R10 / R13 | §19.2、§19.4、§19.9 | Repository SSOT から digest 比較で再同期 |
+| R11 | §19.8、§19.9、§19.10 | 存在確認、digest、transaction rollback、非破壊性を完了条件化 |
+| R12 | §19.3、§19.11 | 正式対応 3 Agent のみ許可 |
+| R15 | §19.2（README / `docs/agent-setup-protocol.md` の更新は完了済み） | README・AGENTS・Protocol・bootstrap の旧参照を削除 |
+| R16 | §19.10、§19.13 | temporary file も作らない dry-run と filesystem snapshot test |
+
+#### 受入基準（Acceptance Criteria）
+
+| 受入基準 | SPEC 上の充足箇所 | 内容 |
+|---|---|---|
+| AC1 / AC2 | §19.2、§19.11、§19.12 | 手動 copy 無しの自動導入と minimal instructions |
+| AC3 / AC4 / AC5 | §19.1、§19.4、§19.11 | 両 mode の Recall、selective Save、`all` hook を維持 |
+| AC6 / AC7 | §19.5、§19.6、§19.8 | marker 外 instructions と他 Skills を snapshot 検証 |
+| AC8 / AC9 | §19.6〜§19.9、§19.11 | digest 再同期と setup 完了前検証 |
+| AC10 | §19.10、§19.13 | dry-run の write 禁止と filesystem snapshot test |
+| AC11 / AC12 | §19.2、README | 旧案内と旧 system prompt source を削除し、既存 copy は read-only 検出 |
+| AC13 | §19.1、§19.11 | 正式対応外 Agent へ fallback しない |
+| AC14 | §19.1、§19.2、§19.13 | memory API・発火仕様・ingestion mode の回帰防止 |
+| AC15 | §19.11、§19.13 | `--agents` の 1 回だけの厳格な parse、canonical set 共有、side effect 前検証 |
+| AC16 | §19.5、§19.6、§19.13 | canonical path root containment と shared symlink の collision 拒否 |
+| AC17 | §19.8、§19.9、§19.13 | post-write / hook failure および rollback failure を含む transaction rollback |
+| AC18 | §19.2、§19.6、§19.13 | legacy prompt warning、selective / `all` 共存 guard、upgrade integration |
+
+#### 主要リスクと緩和策
+
+| リスク | 緩和策 |
+|---|---|
+| ユーザー管理の同名 Skill を上書き | sentinel 無しの同名 directory は preflight collision（§19.5） |
+| 壊れた marker でユーザー本文を誤置換 | marker 重複・片側欠損・入れ子を write 前に拒否（§19.5） |
+| 複数 Agent 同期の途中失敗 | 全対象 preflight、staged apply、ChronosGraph 所有部分の rollback（§19.6、§19.8） |
+| 外部 root を指す instructions symlink で非所有領域を変更 | canonical path containment、shared root opt-in、preflight collision（§19.6） |
+| post-write 検証 / `all` hook setup 失敗による部分更新 | hook artifact を含む transaction journal、逆順 rollback、rollback failure 報告（§19.8） |
+| mode 切替で古い Save rules が誤発火 | block と Skill description の mode guard を更新（§19.4） |
+| 旧 Save prompt と `all` managed block の併存で Agent が直接保存 | legacy prompt の read-only 検出、warning、`all` preflight collision、手動移行後再実行（§19.6） |
+| SSOT 更新漏れ | target と current source の SHA-256 digest を完了時に再照合（§19.9） |
+| dry-run の隠れた副作用 | staging を含む write API を呼ばず filesystem snapshot test で保証（§19.10、§19.13） |
+| 将来 Agent の不確実な配置仕様 | 公式 global paths と検証方法が確定するまで adapter を追加しない（§19.3） |
+
+---
+
 ## 参考文献
 
 - [sui-memory](https://zenn.dev/noprogllama/articles/7c24b2c2410213) — SQLite + FTS5 + Ruri v3 によるローカル長期記憶

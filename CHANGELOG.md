@@ -1,5 +1,28 @@
 # Changelog
 
+## [3.2.0](https://github.com/yohi/chronos-graph/compare/v3.1.0...v3.2.0) (2026-09-02)
+
+
+### Features
+
+* **agent-assets:** メモリSkillのSSOTを追加 ([#369](https://github.com/yohi/chronos-graph/issues/369)) ([e717d0e](https://github.com/yohi/chronos-graph/commit/e717d0e5ade0281ff320898ae57bc098cff32422))
+* **agent-sync:** Agent資産のSSOT検証を追加 ([#364](https://github.com/yohi/chronos-graph/issues/364)) ([20bc085](https://github.com/yohi/chronos-graph/commit/20bc085f7ae260bc84fe7ca073ba652b820443de))
+* **bootstrap:** Agent資産同期を統合 ([#366](https://github.com/yohi/chronos-graph/issues/366)) ([5df164d](https://github.com/yohi/chronos-graph/commit/5df164d4b1e075b1ee3fed59ac27ae6bc1a0396e))
+
+
+### Bug Fixes
+
+* **agent-assets:** SSOT検証と同期契約を強化 ([#373](https://github.com/yohi/chronos-graph/issues/373)) ([3e3365e](https://github.com/yohi/chronos-graph/commit/3e3365e0b656660cdb98f1007ea06af6305b6951))
+* **agent-assets:** 設計仕様との乖離を修正 ([#372](https://github.com/yohi/chronos-graph/issues/372)) ([9b483be](https://github.com/yohi/chronos-graph/commit/9b483be87f4e8e3f1a95429f0d8bbe790568ec05))
+
+
+### Documentation
+
+* Agent Skill Distribution 設計仕様書 ([#361](https://github.com/yohi/chronos-graph/issues/361)) ([f9c8a80](https://github.com/yohi/chronos-graph/commit/f9c8a80ed12cb9571da0c1fd7e6442e39693d730))
+* Agnet Skill Distribution 実装計画書 ([#363](https://github.com/yohi/chronos-graph/issues/363)) ([0d95be1](https://github.com/yohi/chronos-graph/commit/0d95be1161f330f3746001dba46e0a9d725d245b))
+* メモリSkill配布方式へ移行 ([#367](https://github.com/yohi/chronos-graph/issues/367)) ([d98330b](https://github.com/yohi/chronos-graph/commit/d98330bdf9a7e30184452805af688a1ab78695d4))
+* 強化学習の設計書・実装計画書削除 ([#371](https://github.com/yohi/chronos-graph/issues/371)) ([d3f7699](https://github.com/yohi/chronos-graph/commit/d3f7699599b56d2ab8830538acce6d33ebe662ab))
+
 ## [3.1.0](https://github.com/yohi/chronos-graph/compare/v3.0.1...v3.1.0) (2026-08-14)
 
 

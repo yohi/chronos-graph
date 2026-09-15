@@ -247,6 +247,32 @@ pnpm run test:unit
 
 For isolated test/static-analysis sandboxes, see [SPEC.md §18](SPEC.md).
 
+## Set up with an AI coding agent
+
+You can hand off setup of this repository to an AI coding agent (Claude Code,
+Cursor, OpenCode, etc.) by pasting one of the prompts below, depending on what
+you want to set up.
+
+### Use ChronosGraph as a long-term-memory MCP server
+
+```text
+Set up https://github.com/yohi/chronos-graph as a long-term-memory MCP server
+for an AI agent. Read docs/agent-setup-protocol.md as the canonical setup
+source, follow its installation instructions, ask before any privileged or
+destructive operation, and verify by running the repository-defined test
+command.
+```
+
+### Set up the repository for local development
+
+```text
+Set up this repository (https://github.com/yohi/chronos-graph) for local
+development. Read AGENTS.md as the canonical setup source, follow its
+installation and verification instructions, ask before any privileged or
+destructive operation, and verify by running the repository-defined test
+command.
+```
+
 ---
 
 ## Migration

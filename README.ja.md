@@ -243,6 +243,30 @@ pnpm run test:unit
 
 隔離されたテスト・静的解析サンドボックスについては [SPEC.md §18](SPEC.md) を参照してください。
 
+## AI コーディングエージェントでセットアップする
+
+セットアップしたい用途に応じて、以下のプロンプトのいずれかを AI コーディングエージェント
+（Claude Code、Cursor、OpenCode など）に貼り付けると、このリポジトリのセットアップを任せることができます。
+
+### ChronosGraph を長期記憶 MCP サーバーとして利用する
+
+```text
+Set up https://github.com/yohi/chronos-graph as a long-term-memory MCP server
+for an AI agent. Read docs/agent-setup-protocol.md as the canonical setup
+source, follow its installation instructions, ask before any privileged or
+destructive operation, and verify by running the repository-defined test
+command.
+```
+
+### リポジトリをローカル開発環境としてセットアップする
+
+```text
+Set up this repository (https://github.com/yohi/chronos-graph) for local
+development. Read AGENTS.md as the canonical setup source, follow its
+installation and verification instructions, ask before any privileged or
+destructive operation, and verify by running the repository-defined test
+command.
+```
 ---
 
 ## マイグレーション

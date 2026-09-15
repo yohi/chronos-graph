@@ -72,7 +72,7 @@ with the latest version from
       "command": "uvx",
       "args": [
         "--from",
-        "context-store-mcp[all] @ https://github.com/yohi/chronos-graph/archive/refs/tags/v2.0.0.tar.gz",
+        "context-store-mcp[all] @ https://github.com/yohi/chronos-graph/archive/<full-commit-sha>.tar.gz",
         "context-store"
       ],
       "env": {
@@ -85,7 +85,11 @@ with the latest version from
 }
 ```
 
-### Claude Desktop (latest `master`)
+For a production setup, replace `<full-commit-sha>` with the full commit SHA
+published for the release and verify the corresponding source archive checksum
+before registering the configuration. See the [Agent Setup Protocol](docs/agent-setup-protocol.md).
+
+### Claude Desktop (latest `master`, development only)
 
 To use the current `master` branch instead of waiting for a release:
 

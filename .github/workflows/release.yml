@@ -50,6 +50,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ needs.release-please.outputs.tag_name }}" dist/*
 
+      - name: Publish source archive checksum
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.release-please.outputs.tag_name }}"
+          COMMIT_SHA="$(git rev-parse HEAD)"
+          ARCHIVE_NAME="chronos-graph-${COMMIT_SHA}.tar.gz"
+          ARCHIVE_URL="https://github.com/${GITHUB_REPOSITORY}/archive/${COMMIT_SHA}.tar.gz"
+          curl --fail --location --retry 3 "$ARCHIVE_URL" --output "$ARCHIVE_NAME"
+          sha256sum "$ARCHIVE_NAME" > "${ARCHIVE_NAME}.sha256"
+          gh release upload "$TAG" "${ARCHIVE_NAME}.sha256"
+
       - name: Smoke test uvx install from release tarball
         env:
           UV_PYTHON: "3.12"

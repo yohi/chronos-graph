@@ -119,13 +119,28 @@ and it does not select `uvx` by itself. The SSOT for Agent assets is always
 `agent-assets/` in the checkout used to run bootstrap. Use `--mcp-method` and
 `--uv-from` to select the remote package launch command.
 
-For `remote`, obtain and extract the release tarball first, then run bootstrap
-from the extracted checkout with the collected parameters. For example:
+For `remote`, use the full commit SHA published for the release rather than a
+mutable tag. Obtain the checksum asset published with that release, verify the
+archive before extracting it, and then run bootstrap from the verified checkout.
+For example:
 
 ```bash
-RELEASE_TARBALL_URL="https://github.com/yohi/chronos-graph/archive/refs/tags/v<version>.tar.gz"
-curl -fL "$RELEASE_TARBALL_URL" -o chronos-graph.tar.gz
-tar -xzf chronos-graph.tar.gz
+RELEASE_TAG="v<version>"
+RELEASE_COMMIT_SHA="<full-40-character-commit-sha>"
+RELEASE_TARBALL_NAME="chronos-graph-${RELEASE_COMMIT_SHA}.tar.gz"
+RELEASE_TARBALL_URL="https://github.com/yohi/chronos-graph/archive/${RELEASE_COMMIT_SHA}.tar.gz"
+RELEASE_CHECKSUM_URL="https://github.com/yohi/chronos-graph/releases/download/${RELEASE_TAG}/${RELEASE_TARBALL_NAME}.sha256"
+curl -fL "$RELEASE_TARBALL_URL" -o "$RELEASE_TARBALL_NAME"
+curl -fL "$RELEASE_CHECKSUM_URL" -o "$RELEASE_TARBALL_NAME.sha256"
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum -c "$RELEASE_TARBALL_NAME.sha256"
+elif command -v shasum >/dev/null 2>&1; then
+  shasum -a 256 -c "$RELEASE_TARBALL_NAME.sha256"
+else
+  printf '%s\n' "sha256sum or shasum is required to verify the release archive" >&2
+  exit 1
+fi
+tar -xzf "$RELEASE_TARBALL_NAME"
 cd <extracted-checkout>
 
 ./scripts/bootstrap.sh \
@@ -147,10 +162,14 @@ cd <extracted-checkout>
 ```
 
 Use the corresponding collected values for other backends and modes. Complete
-Phase 6 in the `.env` inside this extracted checkout. If the generated
-`mcp_config.json` is registered with an MCP client, regenerate it after entering
-secrets, or provide those secrets through the client's environment; bootstrap
-generates the config before Phase 6.
+Phase 6 in the `.env` inside this extracted checkout. When Supabase is selected,
+write the collected project URL as `SUPABASE_URL` in `.env`; `bootstrap.sh` only
+enables the Supabase configuration and does not write this URL. If the generated
+`mcp_config.json` is registered with an MCP client, regenerate it after setting
+the URL and entering secrets by rerunning `scripts/generate_config.py` with the
+same backend, embedding, cache, method, and immutable `--uv-from` arguments, or
+provide those values through the client's environment. `generate_config.py`
+reads the URL from `.env`, and bootstrap generates the config before Phase 6.
 
 If `opencode` is selected in `all` mode, confirm before running that the user's `~/.npmrc` already has the `@yohi` GitHub Packages registry mapping and a credential source with read access. The agent must not create, update, or save `.npmrc` or tokens.
 
@@ -177,8 +196,15 @@ If `opencode` is selected in `all` mode, confirm before running that the user's 
 
 ### Phase 6: Enter secrets
 
-1. Ask the user to open the `.env` created in the checkout used in Phase 5 and replace placeholders such as `[YOUR-PASSWORD]` with real passwords and API keys (e.g. `OPENAI_API_KEY`, `SUPABASE_KEY`).
-2. Wait for the user to confirm that the secrets have been entered before proceeding.
+This phase applies only when the execution mode is `production`.
+
+- **production:** Ask the user to open the `.env` created in the checkout used
+  in Phase 5, set the collected Supabase URL as `SUPABASE_URL` when applicable,
+  and replace placeholders such as `[YOUR-PASSWORD]` with real passwords and
+  API keys (e.g. `OPENAI_API_KEY`, `SUPABASE_KEY`). Wait for confirmation before
+  proceeding.
+- **dry-run:** Do not open or edit `.env`, and do not collect or enter secrets.
+  Proceed directly to Phase 7.
 
 ---
 

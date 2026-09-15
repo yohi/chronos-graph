@@ -118,13 +118,27 @@ ChronosGate 側の手順に委譲します。このプロトコルでは、Chron
 checkout 内の `agent-assets/` です。リモートパッケージの起動方式とソースは
 `--mcp-method` と `--uv-from` で指定します。
 
-`remote` を選択する場合は、先に release tarball を取得して展開し、その展開先 checkout
-から収集済みパラメータを付けて bootstrap を実行します。例:
+`remote` を選択する場合は、リリースで公開された full commit SHA を使用し、可変なタグを
+使用しないでください。リリースと一緒に公開された checksum を取得し、展開前に tarball
+を検証してから、検証済み checkout で bootstrap を実行します。例:
 
 ```bash
-RELEASE_TARBALL_URL="https://github.com/yohi/chronos-graph/archive/refs/tags/v<version>.tar.gz"
-curl -fL "$RELEASE_TARBALL_URL" -o chronos-graph.tar.gz
-tar -xzf chronos-graph.tar.gz
+RELEASE_TAG="v<version>"
+RELEASE_COMMIT_SHA="<full-40-character-commit-sha>"
+RELEASE_TARBALL_NAME="chronos-graph-${RELEASE_COMMIT_SHA}.tar.gz"
+RELEASE_TARBALL_URL="https://github.com/yohi/chronos-graph/archive/${RELEASE_COMMIT_SHA}.tar.gz"
+RELEASE_CHECKSUM_URL="https://github.com/yohi/chronos-graph/releases/download/${RELEASE_TAG}/${RELEASE_TARBALL_NAME}.sha256"
+curl -fL "$RELEASE_TARBALL_URL" -o "$RELEASE_TARBALL_NAME"
+curl -fL "$RELEASE_CHECKSUM_URL" -o "$RELEASE_TARBALL_NAME.sha256"
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum -c "$RELEASE_TARBALL_NAME.sha256"
+elif command -v shasum >/dev/null 2>&1; then
+  shasum -a 256 -c "$RELEASE_TARBALL_NAME.sha256"
+else
+  printf '%s\n' "sha256sum or shasum is required to verify the release archive" >&2
+  exit 1
+fi
+tar -xzf "$RELEASE_TARBALL_NAME"
 cd <extracted-checkout>
 
 ./scripts/bootstrap.sh \
@@ -146,10 +160,13 @@ cd <extracted-checkout>
 ```
 
 他のバックエンドやモードを使う場合は、収集した値に置き換えてください。Phase 6では、
-この展開先 checkout 内に作成された `.env` を編集します。生成された `mcp_config.json`
-をMCPクライアントに登録する場合は、機密情報を入力した後に同じ設定で再生成するか、
-クライアントの環境変数から機密情報を渡してください。bootstrapはPhase 6より前に
-設定ファイルを生成するためです。
+この展開先 checkout 内の `.env` を編集します。Supabaseを選択した場合は、収集した
+プロジェクトURLを `.env` の `SUPABASE_URL` として設定してください。`bootstrap.sh` は
+Supabase設定を有効化するだけで、このURLを書き込みません。生成された `mcp_config.json`
+をMCPクライアントに登録する場合は、URLと機密情報を設定した後、同じbackend、embedding、
+cache、method、および不変の `--uv-from` 引数で `scripts/generate_config.py` を再実行するか、
+クライアントの環境変数からそれらの値を渡してください。`generate_config.py` は `.env` から
+URLを読み取り、bootstrapはPhase 6より前に設定ファイルを生成するためです。
 OpenCodeを`all`モードで選択する場合は、実行前にGitHub Packagesの `@yohi` registry mappingと読み取り権限を持つcredential sourceがユーザー管理の `~/.npmrc` にあることを確認してください。Agentは`.npmrc`やtokenを作成・更新・保存してはなりません。
 
 #### コマンド生成例：
@@ -175,8 +192,13 @@ OpenCodeを`all`モードで選択する場合は、実行前にGitHub Packages�
 
 ### Phase 6: 機密情報の入力
 
-1. スクリプトの実行後、ユーザーに対しPhase 5で使用した checkout 内の `.env` ファイルを開き、プレースホルダー（`[YOUR-PASSWORD]` 等）になっている部分のパスワードや、APIキー（`OPENAI_API_KEY`, `SUPABASE_KEY` など）を手動で直接入力してください、と求めます。
-2. ユーザーから入力完了の報告を受けたら、次のフェーズへ進みます。
+このフェーズは実行モードが `production` の場合だけ実施します。
+
+* **production**: Phase 5で使用した checkout 内の `.env` を開き、Supabaseを使用する場合は
+  収集済みURLを `SUPABASE_URL` に設定し、プレースホルダー（`[YOUR-PASSWORD]` 等）になっている
+  パスワードやAPIキー（`OPENAI_API_KEY`, `SUPABASE_KEY` など）を実際の値に置き換えるよう求めます。
+  入力完了の報告を受けてから次へ進みます。
+* **dry-run**: `.env` を開いたり編集したりせず、秘密情報の収集・入力も行いません。直接Phase 7へ進みます。
 
 ---
 

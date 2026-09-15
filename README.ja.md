@@ -71,7 +71,7 @@ GitHub tarball から直接インストールできます。
       "command": "uvx",
       "args": [
         "--from",
-        "context-store-mcp[all] @ https://github.com/yohi/chronos-graph/archive/refs/tags/v2.0.0.tar.gz",
+        "context-store-mcp[all] @ https://github.com/yohi/chronos-graph/archive/<full-commit-sha>.tar.gz",
         "context-store"
       ],
       "env": {
@@ -84,7 +84,11 @@ GitHub tarball から直接インストールできます。
 }
 ```
 
-### Claude Desktop（最新 `master`）
+本番環境では `<full-commit-sha>` をリリースで公開された full commit SHA に置き換え、
+対応する source archive の checksum を設定登録前に検証してください。詳細は
+[AIエージェント向け自動セットアップ](docs/agent-setup-protocol.ja.md) を参照してください。
+
+### Claude Desktop（最新 `master`、開発用のみ）
 
 リリースを待たずに最新の `master` ブランチを使う場合:
 

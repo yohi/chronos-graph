@@ -99,6 +99,10 @@ vectors before a backup is available.
 
 ### Errors and troubleshooting
 
+Do not resolve a dimension mismatch by changing the existing vector column type
+in place. Follow the backend-specific procedure above: preserve the old column,
+re-embed into a new column, validate every row, and switch only after validation.
+
 If you see `ConfigurationError` or `StorageError` at startup, verify that
 `.env` has `EMBEDDING_DIMENSION` set to the same dimension reported by the
 storage schema and the active embedding provider. A model change requires both

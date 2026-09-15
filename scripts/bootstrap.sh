@@ -1,5 +1,6 @@
 #!/bin/bash
 set -e
+umask 077
 
 # Ensure the script is run from the project root
 if [ ! -f "pyproject.toml" ]; then
@@ -361,11 +362,20 @@ case $EMBEDDING_PROVIDER in
 esac
 
 ENV_JUST_CREATED=false
-if [ ! -f .env ]; then
+if [ -L .env ]; then
+    echo "Error: .env must not be a symbolic link" >&2
+    exit 1
+fi
+if [ -e .env ] && [ ! -f .env ]; then
+    echo "Error: .env must be a regular file" >&2
+    exit 1
+fi
+if [ ! -e .env ]; then
     echo -e "${GREEN}Creating .env from .env.example...${NC}"
-    cp .env.example .env
+    (umask 077 && cp .env.example .env)
     ENV_JUST_CREATED=true
 fi
+chmod 600 .env
 
 # Helper function to comment/uncomment block
 modify_var_status() {

@@ -225,7 +225,7 @@ checkoutのuv環境を使うようにします。`all` モードで Claude Code 
 検証内容は選択した実行モードによって分かれます。
 
 * **dry-run**: 同期計画、bundle digest、diagnosticsだけが期待どおり出力されることを確認します。既存のcheckoutを使用し、release archiveの取得・展開、依存関係のインストール、`.env`の編集、クライアント登録、グローバルAgentファイルの変更を行いません。dry-runはtransaction commit、instructionsやSkillsのインストール、保持状態の検証、hook artifactの作成を行わないため、それらを要求してはいけません。
-* **production**: 同期が成功した場合は、transaction commit、選択したAgentのinstructions、各選択Agentの両方のSkills、digestの一致、marker外instructionsの保持、他Skillsの保持、許可されたlegacy warningの結果、`all`モードのhook artifact成功を検証してください。生成されたMCP設定を登録または明示的にユーザーへ引き渡し、クライアントをreloadし、MCP初期化と `memory_search` / `memory_save` のsmoke testを実行します。`all` モードではGatewayへの疎通と実際のターン終了イベントの到達も確認し、確認できなければ未完了として報告します。
+* **production**: 同期が成功した場合は、transaction commit、選択したAgentのinstructions、各選択Agentの両方のSkills、digestの一致、marker外instructionsの保持、他Skillsの保持、許可されたlegacy warningの結果、`all`モードのhook artifact成功を検証してください。生成されたMCP設定を登録または明示的にユーザーへ引き渡し、クライアントをreloadしてMCP初期化を実行します。`selective` モードでは `memory_search` / `memory_save` のsmoke testを実行します。`all` モードでは `memory_save` や `session_flush` を直接呼び出さず、Gatewayへの疎通と実際のターン終了イベントの到達を確認し、その結果として保存されたmemoryをread-side checkに使います。確認できなければ未完了として報告します。
 
 dimension mismatch がある場合は、[Migration Guide](https://raw.githubusercontent.com/yohi/chronos-graph/master/docs/migration.md)を参照し、再埋め込みと検証が完了するまで旧ベクトルを保持します。
 

@@ -267,11 +267,12 @@ def generate_postgres_config(
 def generate_supabase_config(
     python_path: str,
     embedding: str,
-    graph: bool,
     cache: str,
     ssl: bool,
     method: str = "python",
     uv_from: str | None = None,
+    *,
+    graph: bool = False,
 ) -> dict[str, Any]:
     """Supabase モードの設定を生成する。"""
     settings = get_settings()
@@ -362,7 +363,12 @@ def main() -> None:
         default=default_embedding,
         help=f"Embedding provider (default: {default_embedding})",
     )
-    parser.add_argument("--graph", type=str_to_bool, default=True, help="Enable graph features")
+    parser.add_argument(
+        "--graph",
+        type=str_to_bool,
+        default=None,
+        help="Enable graph features (default: enabled except for Supabase)",
+    )
     parser.add_argument("--ssl", action="store_true", help="Enable SSL for PostgreSQL/Redis")
     parser.add_argument(
         "--method", choices=["python", "uv", "uvx"], default="python", help="Execution method"
@@ -379,10 +385,11 @@ def main() -> None:
     args = parser.parse_args()
 
     python_path = find_python()
+    graph_enabled = args.graph if args.graph is not None else args.backend != "supabase"
 
     if args.backend == "sqlite":
         config = generate_sqlite_config(
-            python_path, args.embedding, args.graph, args.method, args.uv_from
+            python_path, args.embedding, graph_enabled, args.method, args.uv_from
         )
     elif args.backend == "postgres":
         # ユーザーが指定していない場合のみ、デフォルト値を決定する
@@ -394,7 +401,7 @@ def main() -> None:
         config = generate_postgres_config(
             python_path,
             args.embedding,
-            args.graph,
+            graph_enabled,
             args.ssl,
             cache_backend,
             args.method,
@@ -405,11 +412,11 @@ def main() -> None:
         config = generate_supabase_config(
             python_path,
             args.embedding,
-            args.graph,
             cache_backend,
             args.ssl,
             args.method,
             args.uv_from,
+            graph=graph_enabled,
         )
 
     if args.output == "cursor":

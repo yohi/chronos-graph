@@ -243,10 +243,12 @@ Verification depends on the selected execution mode:
   selected Agent, digest match, preservation of out-of-marker instructions,
   preservation of other Skills, allowed legacy warnings, and hook-artifact
   success for `all` mode. Register or explicitly hand off the generated MCP
-  configuration, reload the client, perform an MCP initialization, and run a
-  `memory_search`/`memory_save` smoke test. For `all` mode, also verify that
-  the configured gateway is reachable and that a real turn-end event reaches
-  the gateway; otherwise report setup as incomplete.
+  configuration, reload the client, and perform an MCP initialization. In
+  `selective` mode, run a `memory_search`/`memory_save` smoke test. In `all`
+  mode, do not call `memory_save` or `session_flush` directly; verify the
+  configured gateway is reachable and that a real turn-end event reaches the
+  gateway, then use the resulting stored memory for the read-side check.
+  Otherwise report setup as incomplete.
 
 For dimension mismatches, read the [Migration Guide](https://raw.githubusercontent.com/yohi/chronos-graph/master/docs/migration.md)
 and preserve the old vectors until re-embedding and validation are complete.

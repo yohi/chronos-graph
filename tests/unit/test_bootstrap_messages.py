@@ -31,3 +31,11 @@ def test_bootstrap_accepts_required_provider_endpoints() -> None:
     assert "--custom-api-endpoint" in bootstrap_text
     assert 'update_env_key "LITELLM_API_BASE"' in bootstrap_text
     assert 'update_env_key "CUSTOM_API_ENDPOINT"' in bootstrap_text
+
+
+def test_bootstrap_protects_env_files() -> None:
+    bootstrap_text = (REPO_ROOT / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
+
+    assert "umask 077" in bootstrap_text
+    assert "[ -L .env ]" in bootstrap_text
+    assert "chmod 600 .env" in bootstrap_text

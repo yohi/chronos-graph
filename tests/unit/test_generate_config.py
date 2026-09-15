@@ -99,8 +99,26 @@ def test_generate_config_supports_explicit_supabase_inmemory_cache(monkeypatch, 
 
     assert env["STORAGE_BACKEND"] == "supabase"
     assert env["CACHE_BACKEND"] == "inmemory"
+    assert env["GRAPH_ENABLED"] == "false"
+    assert env["GRAPH_SYNC_MODE"] == "sync"
+    assert "NEO4J_URI" not in env
     assert "REDIS_URL" not in env
     assert "REDIS_SSL" not in env
+
+
+def test_generate_supabase_config_preserves_legacy_positional_arguments(monkeypatch) -> None:
+    monkeypatch.setenv("ENV_FILE", "/dev/null")
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_KEY", "<supabase-service-role-key>")
+
+    repo_root = Path(__file__).resolve().parents[2]
+    module = load_generate_config(repo_root / "scripts" / "generate_config.py")
+
+    config = module.generate_supabase_config("python3", "local-model", "inmemory", False)
+
+    env = config["mcpServers"]["chronos-graph"]["env"]
+    assert env["GRAPH_ENABLED"] == "false"
+    assert env["GRAPH_SYNC_MODE"] == "sync"
 
 
 def test_generate_config_supports_supabase_graph_with_async_outbox(monkeypatch, capsys) -> None:

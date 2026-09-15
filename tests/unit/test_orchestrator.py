@@ -235,6 +235,9 @@ class TestDimensionCheck:
 
         msg = str(exc_info.value)
         assert "migrate_dimension" in msg
+        assert "docs/migration.md" in msg
+        assert "embedding_old" in msg
+        assert "ALTER TABLE memories ALTER COLUMN embedding TYPE" not in msg
 
     @pytest.mark.asyncio
     async def test_dimension_unknown_logs_warning_and_continues(self, caplog):

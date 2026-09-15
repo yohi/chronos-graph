@@ -48,15 +48,29 @@ jobs:
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ needs.release-please.outputs.tag_name }}" dist/*
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: gh release upload "$TAG" dist/*
+
+      - name: Publish source archive checksum
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          COMMIT_SHA="$(git rev-parse HEAD)"
+          ARCHIVE_NAME="chronos-graph-${COMMIT_SHA}.tar.gz"
+          ARCHIVE_URL="https://github.com/${GITHUB_REPOSITORY}/archive/${COMMIT_SHA}.tar.gz"
+          curl --fail --location --retry 3 "$ARCHIVE_URL" --output "$ARCHIVE_NAME"
+          sha256sum "$ARCHIVE_NAME" > "${ARCHIVE_NAME}.sha256"
+          gh release upload "$TAG" "${ARCHIVE_NAME}.sha256"
 
       - name: Smoke test uvx install from release tarball
         env:
           UV_PYTHON: "3.12"
+          TAG: ${{ needs.release-please.outputs.tag_name }}
         run: |
-          TAG="${{ needs.release-please.outputs.tag_name }}"
           set +e
-          timeout 300s uvx --from "context-store-mcp[all] @ https://github.com/${{ github.repository }}/archive/refs/tags/${TAG}.tar.gz" context-store \
+          timeout 300s uvx --from "context-store-mcp[all] @ https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${TAG}.tar.gz" context-store \
             > >(tee /tmp/context-store-stdout.log) 2> >(tee /tmp/context-store-stderr.log >&2)
           exit_code=$?
           set -e

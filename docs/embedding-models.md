@@ -1,55 +1,119 @@
-# 埋め込みモデルの選定ガイド (Embedding Models Guide)
+# Embedding Models Guide
 
-ChronosGraph では、デフォルトのローカル埋め込みモデルとして **`cl-nagoya/ruri-v3-310m`** を採用しています。このドキュメントでは、その選定理由と、環境に応じた代替モデルの候補について解説します。
+ChronosGraph uses **`cl-nagoya/ruri-v3-310m`** as its default local embedding
+model. This document explains why it was chosen and lists alternatives you can
+switch to based on your environment.
 
 ---
 
-## 推奨モデル: cl-nagoya/ruri-v3-310m
+## Recommended Model: `cl-nagoya/ruri-v3-310m`
 
-現在の日本語コンテキストにおいて、ローカルで利用可能な最もバランスの良いモデルです。
+This is the most balanced local embedding model currently available for
+Japanese contexts.
 
-### 選定理由
-1. **圧倒的な日本語性能**: 最新の JMTEB (Japanese Mixed Text Embedding Benchmark) でトップクラスのスコアを記録しており、日本語の微妙なニュアンスを正確に捉えます。
-2. **標準的な出力次元 (768次元)**: 多くの現代的な日本語モデルと共通の 768 次元出力を採用しており、ストレージ効率と精度のバランスに優れています。
-3. **長いコンテキスト窓 (8,192トークン)**: 従来の軽量モデル（512トークンなど）に比べ、圧倒的に長い文書を一度に埋め込めます。これにより、RAG における文書の断片化を最小限に抑えられます。
-4. **導入の容易さ**: `ModernBERT` アーキテクチャを採用しており、標準的な `transformers` ライブラリのみで動作します。MeCab や Sudachi などの外部ツールを別途インストール・管理する必要がありません。
-5. **実用的なサイズ**: 310M パラメータは、GPU はもちろん、最近の CPU 環境でも十分に実用的な速度で動作します。
+### Why it was chosen
+
+1. **Strong Japanese performance**: It scores near the top on the latest JMTEB
+   (Japanese Mixed Text Embedding Benchmark), capturing subtle Japanese nuances
+   accurately.
+2. **Standard output dimension (768)**: The 768-dimension output matches many
+   modern Japanese models and offers a good balance between storage efficiency
+   and accuracy.
+3. **Long context window (8,192 tokens)**: Compared with older lightweight
+   models (often 512 tokens), it embeds much longer documents in one pass,
+   reducing fragmentation for RAG.
+4. **Easy to install**: It uses the `ModernBERT` architecture and works with
+   standard `transformers`. No separate MeCab or Sudachi installation is needed.
+5. **Practical size**: At 310M parameters it runs at reasonable speed even on
+   recent CPUs, with or without a GPU.
 
 > [!NOTE]
-> `LocalModelEmbeddingProvider` は、`.env` の `EMBEDDING_DIMENSION`（デフォルト: 768）で指定された次元数に従って動作します。モデルを変更する場合は、そのモデルの出力次元数と一致するように設定を更新してください。
+> `LocalModelEmbeddingProvider` follows the `EMBEDDING_DIMENSION` value in
+> `.env` (default: 768). If you change the model, update the setting to match
+> the new model's output dimension.
+
+### Dimension contract
+
+The embedding provider, `EMBEDDING_DIMENSION`, and the storage schema must all
+use the same vector dimension. The dimensions relevant to the default setup are:
+
+| Provider or storage | Dimension |
+| --- | ---: |
+| `cl-nagoya/ruri-v3-310m` | `768` |
+| OpenAI `text-embedding-3-small` | `1536` |
+| Supabase schema (`SUPABASE_VECTOR_DIM`) | `768` |
+
+LiteLLM and custom API models do not have a fixed dimension in this repository;
+set `EMBEDDING_DIMENSION` to the dimension returned by the selected model or API.
+OpenAI providers report the model's dimension, so an OpenAI model also requires
+a matching storage schema even when `EMBEDDING_DIMENSION` still has its default
+value.
 
 ---
 
-## 代替モデルの候補 (Alternatives)
+## Alternatives
 
-環境や用途に応じて、以下のモデルへの切り替えを検討してください。モデルを切り替える際は、まず `.env` で `EMBEDDING_PROVIDER=local-model` が設定されていることを確認した上で、`LOCAL_MODEL_NAME` を書き換えてください。
+Consider the following models depending on your environment and use case. When
+switching, first confirm `EMBEDDING_PROVIDER=local-model` in `.env`, then update
+`LOCAL_MODEL_NAME`.
 
-### 1. 軽量・高速化を優先する場合
-`ruri-v3-310m` が重いと感じる環境や、極限までレスポンス速度を優先する場合の選択肢です。
+### 1. Prefer lighter / faster models
 
-- **`cl-nagoya/ruri-v3-130m`**: 精度と速度のバランスが良く、310m からの最初の移行先として最適です。
-- **`cl-nagoya/ruri-v3-70m`**: CPU 環境やエッジデバイスでも高速に動作する超軽量モデルです。
+Use these if `ruri-v3-310m` feels too heavy or if you need the fastest possible
+response.
 
-### 2. 多言語対応・実績を優先する場合
-日本語以外の言語も扱う場合や、より広く普及しているモデルを使用したい場合。
+- **`cl-nagoya/ruri-v3-130m`**: A good balance of speed and accuracy; a natural
+  first step down from 310m.
+- **`cl-nagoya/ruri-v3-70m`**: An ultra-lightweight model that runs fast on CPUs
+  and edge devices.
 
-- **`intfloat/multilingual-e5-large`**: 世界的に最も普及している多言語モデルの一つで、非常に安定しています。
-- **`BAAI/bge-m3`**: 8,192 トークンの長文対応に加え、密ベクトルだけでなく疎ベクトル検索にも対応可能な多機能モデルです。
+### 2. Prefer multilingual coverage / proven track record
 
-### 3. 最高精度を追求する場合
-計算リソース（GPU VRAM 10GB以上など）に余裕があり、複雑な文脈理解が必要な場合。
+Use these if you handle languages other than Japanese or want a widely adopted
+model.
 
-- **`oshizo/japanese-e5-mistral-7b_slerp`**: 7B パラメータという巨大なモデルで、短いモデルでは捉えきれない深い意味理解が可能です。
+- **`intfloat/multilingual-e5-large`**: One of the most widely used multilingual
+  models; very stable.
+- **`BAAI/bge-m3`**: Supports long contexts up to 8,192 tokens and can do both
+  dense and sparse vector search.
+
+### 3. Prefer maximum accuracy
+
+Use this when you have plenty of compute (e.g. 10 GB+ GPU VRAM) and need deep
+contextual understanding.
+
+- **`oshizo/japanese-e5-mistral-7b_slerp`**: A large 7B-parameter model capable
+  of understanding meaning that shorter models miss.
 
 ---
 
-## 設定方法
+## Configuration
 
-`.env` ファイルで以下のように設定します。
+Set the following in `.env`:
 
 ```bash
 EMBEDDING_PROVIDER=local-model
 LOCAL_MODEL_NAME=cl-nagoya/ruri-v3-310m
 ```
 
-詳細は [README.md](../README.md) の設定リファレンスを参照してください。
+For the full configuration reference, see
+[Configuration Reference](./configuration.md).
+
+## Switching Models Safely
+
+Changing `LOCAL_MODEL_NAME` changes the vector representation and may change its
+dimension. Before switching a model in an existing environment:
+
+1. Back up the database.
+2. Confirm the new model's output dimension.
+3. Set `EMBEDDING_DIMENSION` to that dimension.
+4. Update the storage schema to the same dimension.
+5. Run `uv run python scripts/migrate_dimension.py` to re-embed every memory.
+6. Verify that no memory has a missing embedding before restarting the service.
+
+See the [Migration Guide](./migration.md) for the PostgreSQL runbook. Supabase
+currently fixes `SUPABASE_VECTOR_DIM` and all vector RPC signatures at `768`.
+Use a 768-dimensional model with the existing Supabase schema. Supporting another
+dimension requires a new Supabase migration that updates the memories column,
+vector indexes, every vector RPC declaration, and the application validation
+together; changing only `.env` is not sufficient.

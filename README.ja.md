@@ -43,7 +43,7 @@ ChronosGraph は、AIエージェント（Claude Code / Gemini CLI / Cursor 等�
 | したいこと | 参照先 |
 | --- | --- |
 | MCP 長期記憶サーバーとして使う | [Quick Start](#quick-start) |
-| AIエージェントに設定させる | [Agent Setup Protocol](docs/agent-setup-protocol.md) または [AGENTS.md](AGENTS.md) |
+| AIエージェントに設定させる | [Agent Setup Protocol](docs/agent-setup-protocol.ja.md) または [AGENTS.md](AGENTS.md) |
 | ローカル開発環境を整える | [Development](#development) |
 | 設定項目をすべて確認する | [Configuration Reference](docs/configuration.md) |
 | 古いバージョンから移行する | [Migration Guide](docs/migration.md) |
@@ -146,7 +146,7 @@ ChronosGraph は Python 3.12+ の FastMCP サーバーとして動作します�
 単一のランキングリストに統合します。
 
 厳密なツール契約、状態遷移、設計不変条件については [SPEC.md](SPEC.md) を参照してください。
-埋め込みモデルの選定ガイドは [docs/embedding-models.md](docs/embedding-models.md)、
+埋め込みモデルの選定ガイドは [docs/embedding-models.ja.md](docs/embedding-models.ja.md)、
 運用上の問題解決は [docs/troubleshooting/](docs/troubleshooting/) を参照してください。
 
 ---
@@ -195,19 +195,19 @@ MCP サーバーの登録後、エージェントは以下のようなツール�
 
 完全な設定リファレンス、デフォルト値、必須項目、セキュリティ上の注意については
 [docs/configuration.md](docs/configuration.md) を参照してください。
-モデル固有のガイドは [docs/embedding-models.md](docs/embedding-models.md) を参照してください。
+モデル固有のガイドは [docs/embedding-models.ja.md](docs/embedding-models.ja.md) を参照してください。
 
 ---
 
 ## ドキュメント
 
-- [Agent Setup Protocol](docs/agent-setup-protocol.md) — AIエージェント向け長期記憶 MCP の
+- [Agent Setup Protocol](docs/agent-setup-protocol.ja.md) — AIエージェント向け長期記憶 MCP の
   インストール・設定手順
 - [AGENTS.md](AGENTS.md) — 本リポジトリで作業する AI コーディングエージェント向けの
   正規指示書
 - [Configuration Reference](docs/configuration.md) — 環境変数の完全な一覧
 - [Migration Guide](docs/migration.md) — バージョン間の移行手順
-- [Embedding Models Guide](docs/embedding-models.md) — 埋め込みモデルの選定・切り替えガイド
+- [Embedding Models Guide](docs/embedding-models.ja.md) — 埋め込みモデルの選定・切り替えガイド
 - [Troubleshooting](docs/troubleshooting/) — 運用上の問題解決
 - [SPEC.md](SPEC.md) — 正規の技術仕様書
 

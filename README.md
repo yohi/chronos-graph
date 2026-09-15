@@ -123,7 +123,7 @@ To use the current `master` branch instead of waiting for a release:
 - **Multi-layer memory** — episodic / semantic / procedural layers.
 - **Temporal decay** — exponential decay scores keep old memories tidy
   (explicit `memory_prune` currently runs only on the SQLite backend).
-- **Deduplication** — append-only replacement with `SUPSEDES` graph edges to
+- **Deduplication** — append-only replacement with `SUPERSEDES` graph edges to
   track evolution.
 - **Lightweight mode** — SQLite + `sqlite-vec` with zero external services.
 - **Scalable backends** — PostgreSQL + Neo4j + Redis, plus Supabase Data API

@@ -9,6 +9,7 @@
 > あなたの役割は、ユーザーに必要な設定事項を質問し、その回答を引数として `scripts/bootstrap.sh` に渡して実行することです。
 >
 > **たとえ `.env` や設定ファイルが既に存在していても、それが本プロトコル（ask ツールによる明示的承認）を経て作成された正当なものであるか確証が持てない場合は、決してスキップせず、必ず Phase 1 から再開してください。**
+<!-- alert boundary -->
 
 > [!IMPORTANT]
 > **🚨 ユーザー確認ツール（Askツール等）の使用強制 (STRICT ASK CONSTRAINT):**
@@ -40,7 +41,7 @@
 *(※ChronosGraph の長期記憶MCP設定では、LLM評価（Evaluator）の設定は不要です。安全評価は ChronosGate 側で扱います。)*
 
 1. **配置・起動方法 (Source)**:
-   * `remote` (🌟推奨: リポジトリをクローンせず `uvx` を用いてオンザフライで起動・実行する)
+   * `remote` (🌟推奨: サーバーはリポジトリをクローンせず、リリース済みパッケージを `uvx` で実行する。bootstrap の実行には `scripts/bootstrap.sh` と `agent-assets/` を含むローカル checkout または展開済み release tarball が必要)
    * `local` (ローカルにクローン済みの本リポジトリ内で直接実行する)
 2. **保存モード (Ingestion Mode)**:
    * `all` (全量保存モード: エージェントのターン終了時に会話ログをバックグラウンドで全量自動保存。フックスクリプトが必要です)
@@ -79,10 +80,16 @@ ChronosGraph 本体では安全評価Hookをセットアップしません。ユ
 
 #### 【ケース A】長期記憶MCPの場合
 
-* **Postgres接続URL**: `postgresql://postgres:[YOUR-PASSWORD]@localhost:5432/postgres` 等の形式（パスワードはプレースホルダー）。
+* **PostgreSQLホスト**: `localhost` またはデプロイ済みデータベースのホスト名。
+* **PostgreSQLポート**: `5432` 等。
+* **PostgreSQLデータベース名**: `context_store` 等。
+* **PostgreSQLユーザー**: `context_store` 等。
 * **SupabaseプロジェクトURL**: `https://your-project.supabase.co` 形式の接続先URL（APIキーはPhase 6で設定）。
 * **Neo4j接続URI**: `neo4j+s://[YOUR-USER]:[YOUR-PASSWORD]@host` 等の形式。
 * **Redis接続URL**: `redis://default:[YOUR-PASSWORD]@host:port` 等の形式。
+
+PostgreSQLのパスワードは `scripts/bootstrap.sh` の引数に渡さず、Phase 6で
+`.env` に設定してください。
 
 #### 【ケース B】安全評価Hookの場合
 
@@ -105,7 +112,44 @@ ChronosGate 側の手順に委譲します。このプロトコルでは、Chron
 
 収集したパラメータに基づいて、`scripts/bootstrap.sh` を引数付きで呼び出します。AIエージェント自身でファイルを直接編集したり作成したりすることはせず、必ずこのスクリプトに実行を委ねてください。
 `--agents`には1つのCSV値だけを渡します。bootstrapは副作用開始前に値をcanonicalizeし、両方のingestion modeでSkillsとinstructionsをインストールまたは同期します。
-`--source=local|remote` はMCP serverの実行方式だけを表し、Agent assetのSSOTは常に実行中のcheckoutまたはrelease tarball内の `agent-assets/` です。
+`--source=local|remote` は、MCP serverをローカル checkout またはリリース済み
+パッケージのどちらで実行するかを宣言します。この指定だけでは bootstrap 用ファイルの
+取得・展開や `uvx` の選択は行われません。Agent assetのSSOTは、bootstrapを実行する
+checkout 内の `agent-assets/` です。リモートパッケージの起動方式とソースは
+`--mcp-method` と `--uv-from` で指定します。
+
+`remote` を選択する場合は、先に release tarball を取得して展開し、その展開先 checkout
+から収集済みパラメータを付けて bootstrap を実行します。例:
+
+```bash
+RELEASE_TARBALL_URL="https://github.com/yohi/chronos-graph/archive/refs/tags/v<version>.tar.gz"
+curl -fL "$RELEASE_TARBALL_URL" -o chronos-graph.tar.gz
+tar -xzf chronos-graph.tar.gz
+cd <extracted-checkout>
+
+./scripts/bootstrap.sh \
+  --type mcp \
+  --mode production \
+  --backend postgres \
+  --embedding local-model \
+  --cache inmemory \
+  --graph false \
+  --source remote \
+  --mcp-method uvx \
+  --uv-from "$RELEASE_TARBALL_URL" \
+  --ingestion-mode selective \
+  --agents <comma_separated_agents> \
+  --db-host <db_host> \
+  --db-port <db_port> \
+  --db-name <db_name> \
+  --db-user <db_user>
+```
+
+他のバックエンドやモードを使う場合は、収集した値に置き換えてください。Phase 6では、
+この展開先 checkout 内に作成された `.env` を編集します。生成された `mcp_config.json`
+をMCPクライアントに登録する場合は、機密情報を入力した後に同じ設定で再生成するか、
+クライアントの環境変数から機密情報を渡してください。bootstrapはPhase 6より前に
+設定ファイルを生成するためです。
 OpenCodeを`all`モードで選択する場合は、実行前にGitHub Packagesの `@yohi` registry mappingと読み取り権限を持つcredential sourceがユーザー管理の `~/.npmrc` にあることを確認してください。Agentは`.npmrc`やtokenを作成・更新・保存してはなりません。
 
 #### コマンド生成例：
@@ -131,14 +175,17 @@ OpenCodeを`all`モードで選択する場合は、実行前にGitHub Packages�
 
 ### Phase 6: 機密情報の入力
 
-1. スクリプトの実行後、ユーザーに対し「`.env` ファイルを開き、プレースホルダー（`[YOUR-PASSWORD]` 等）になっている部分のパスワードや、APIキー（`OPENAI_API_KEY`, `SUPABASE_KEY` など）を手動で直接入力してください」と求めます。
+1. スクリプトの実行後、ユーザーに対しPhase 5で使用した checkout 内の `.env` ファイルを開き、プレースホルダー（`[YOUR-PASSWORD]` 等）になっている部分のパスワードや、APIキー（`OPENAI_API_KEY`, `SUPABASE_KEY` など）を手動で直接入力してください、と求めます。
 2. ユーザーから入力完了の報告を受けたら、次のフェーズへ進みます。
 
 ---
 
 ### Phase 7: 同期結果の検証
 
-同期が成功した場合はtransaction commit後、選択したinstructions、両方のSkills、digestの一致、marker外instructionsの保持、他Skillsの保持、許可されたlegacy warningの結果、`all`モードのhook artifact成功を検証してください。
+検証内容は選択した実行モードによって分かれます。
+
+* **dry-run**: 同期計画、bundle digest、diagnosticsだけが期待どおり出力されることを確認します。dry-runはtransaction commit、instructionsやSkillsのインストール、保持状態の検証、hook artifactの作成を行わないため、それらを要求してはいけません。
+* **production**: 同期が成功した場合は、transaction commit、選択したAgentのinstructions、各選択Agentの両方のSkills、digestの一致、marker外instructionsの保持、他Skillsの保持、許可されたlegacy warningの結果、`all`モードのhook artifact成功を検証してください。
 
 `all`モードで旧Save promptが検出されてpreflight collisionとして同期が拒否された場合は、検出された旧Save promptをユーザーが手動で削除してからbootstrapを再実行してください。この拒否はwriteとhook setupの前に発生し、bootstrapは旧promptやユーザーが複製したpromptを自動削除しません。
 

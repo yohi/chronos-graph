@@ -71,7 +71,7 @@ differs from the stored schema will raise a `ConfigurationError` or
 
 | Variable | Default | Required | Description |
 | --- | --- | --- | --- |
-| `REDIS_URL` | `redis://localhost:6379` | Yes | Redis connection URL. No implicit fallback on connection failure. |
+| `REDIS_URL` | `redis://localhost:6379` | No | Redis connection URL. This default is used when `CACHE_BACKEND=redis`. There is no implicit fallback on connection failure. |
 | `REDIS_SSL` | `false` | No | Enable SSL for Redis. |
 | `REDIS_SOCKET_CONNECT_TIMEOUT` | `5.0` | No | Redis socket connect timeout. |
 | `REDIS_SOCKET_TIMEOUT` | `5.0` | No | Redis socket timeout. |

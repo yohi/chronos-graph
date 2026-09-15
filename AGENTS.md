@@ -66,7 +66,9 @@ The agent may use the following generic capabilities to perform the setup:
 
 The agent may decide the following without asking:
 
-- Whether `uv` is available and whether to use it as the Python runner.
+- All Python commands MUST run through `uv`. If `uv` is unavailable, do not run
+  Python commands or use an alternative runner; report the limitation, current
+  repository state, and next safe action as described below.
 - Whether dependencies are already installed and whether `uv sync --all-extras`
   needs to be run.
 - Which verification commands to run based on the changed files (unit tests,

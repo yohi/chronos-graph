@@ -32,6 +32,23 @@ Japanese contexts.
 > `.env` (default: 768). If you change the model, update the setting to match
 > the new model's output dimension.
 
+### Dimension contract
+
+The embedding provider, `EMBEDDING_DIMENSION`, and the storage schema must all
+use the same vector dimension. The dimensions relevant to the default setup are:
+
+| Provider or storage | Dimension |
+| --- | ---: |
+| `cl-nagoya/ruri-v3-310m` | `768` |
+| OpenAI `text-embedding-3-small` | `1536` |
+| Supabase schema (`SUPABASE_VECTOR_DIM`) | `768` |
+
+LiteLLM and custom API models do not have a fixed dimension in this repository;
+set `EMBEDDING_DIMENSION` to the dimension returned by the selected model or API.
+OpenAI providers report the model's dimension, so an OpenAI model also requires
+a matching storage schema even when `EMBEDDING_DIMENSION` still has its default
+value.
+
 ---
 
 ## Alternatives
@@ -81,3 +98,22 @@ LOCAL_MODEL_NAME=cl-nagoya/ruri-v3-310m
 
 For the full configuration reference, see
 [Configuration Reference](./configuration.md).
+
+## Switching Models Safely
+
+Changing `LOCAL_MODEL_NAME` changes the vector representation and may change its
+dimension. Before switching a model in an existing environment:
+
+1. Back up the database.
+2. Confirm the new model's output dimension.
+3. Set `EMBEDDING_DIMENSION` to that dimension.
+4. Update the storage schema to the same dimension.
+5. Run `uv run python scripts/migrate_dimension.py` to re-embed every memory.
+6. Verify that no memory has a missing embedding before restarting the service.
+
+See the [Migration Guide](./migration.md) for the PostgreSQL runbook. Supabase
+currently fixes `SUPABASE_VECTOR_DIM` and all vector RPC signatures at `768`.
+Use a 768-dimensional model with the existing Supabase schema. Supporting another
+dimension requires a new Supabase migration that updates the memories column,
+vector indexes, every vector RPC declaration, and the application validation
+together; changing only `.env` is not sufficient.

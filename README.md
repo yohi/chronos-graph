@@ -61,9 +61,9 @@ installed directly from a GitHub tarball.
 
 Add the following block to
 `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or
-`%APPDATA%\Claude\claude_desktop_config.json` (Windows). Replace `v2.0.0`
-with the latest version from
-[Releases](https://github.com/yohi/chronos-graph/releases).
+`%APPDATA%\Claude\claude_desktop_config.json` (Windows). Use the full commit
+SHA published for the release and verify its archive checksum as described in
+the setup protocol.
 
 ```json
 {
@@ -261,20 +261,24 @@ you want to set up.
 
 ```text
 Set up https://github.com/yohi/chronos-graph as a long-term-memory MCP server
-for an AI agent. Read docs/agent-setup-protocol.md as the canonical setup
-source, follow its installation instructions, ask before any privileged or
-destructive operation, and verify by running the repository-defined test
-command.
+for an AI agent. First read the canonical setup source at
+https://raw.githubusercontent.com/yohi/chronos-graph/master/docs/agent-setup-protocol.md.
+Use a structured question tool for every blocking step and before any side
+effect. Follow the protocol, register the generated MCP configuration only
+after approval, reload the client, and verify MCP initialization plus a
+memory_search/memory_save smoke test. Do not create configuration or hook
+files manually.
 ```
 
 ### Set up the repository for local development
 
 ```text
 Set up this repository (https://github.com/yohi/chronos-graph) for local
-development. Read AGENTS.md as the canonical setup source, follow its
-installation and verification instructions, ask before any privileged or
-destructive operation, and verify by running the repository-defined test
-command.
+development. First read the canonical setup source at
+https://raw.githubusercontent.com/yohi/chronos-graph/master/AGENTS.md.
+Use a structured question tool for every blocking step and before any side
+effect. Follow its installation and verification instructions, and report
+the exact commands and results without committing or pushing changes.
 ```
 
 ---

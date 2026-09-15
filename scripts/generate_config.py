@@ -267,6 +267,7 @@ def generate_postgres_config(
 def generate_supabase_config(
     python_path: str,
     embedding: str,
+    graph: bool,
     cache: str,
     ssl: bool,
     method: str = "python",
@@ -281,12 +282,21 @@ def generate_supabase_config(
         "STORAGE_BACKEND": "supabase",
         "SUPABASE_URL": supabase_url,
         "SUPABASE_KEY": supabase_key,
-        "GRAPH_ENABLED": "false",
+        "GRAPH_ENABLED": "true" if graph else "false",
+        "GRAPH_SYNC_MODE": "async_outbox" if graph else "sync",
         "CACHE_BACKEND": cache,
         "DECAY_HALF_LIFE_DAYS": str(getattr(settings, "decay_half_life_days", "30")),
         "SIMILARITY_THRESHOLD": f"{getattr(settings, 'similarity_threshold', 0.70):.2f}",
         "DEDUP_THRESHOLD": f"{getattr(settings, 'dedup_threshold', 0.90):.2f}",
     }
+    if graph:
+        env.update(
+            {
+                "NEO4J_URI": getattr(settings, "neo4j_uri", ""),
+                "NEO4J_USER": getattr(settings, "neo4j_user", ""),
+                "NEO4J_PASSWORD": get_secret(settings, "neo4j_password", ""),
+            }
+        )
     if cache == "redis":
         # Redis 設定の解決
         redis_url, redis_ssl = _resolve_redis_config(ssl)
@@ -395,6 +405,7 @@ def main() -> None:
         config = generate_supabase_config(
             python_path,
             args.embedding,
+            args.graph,
             cache_backend,
             args.ssl,
             args.method,

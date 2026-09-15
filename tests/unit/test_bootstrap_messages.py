@@ -16,3 +16,18 @@ def test_bootstrap_joins_canonical_agents_without_ifs_assignment() -> None:
     bootstrap_text = (REPO_ROOT / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
 
     assert "IFS=," not in bootstrap_text
+
+
+def test_bootstrap_uses_uv_for_local_mcp_launch_by_default() -> None:
+    bootstrap_text = (REPO_ROOT / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
+
+    assert 'MCP_METHOD="uv"' in bootstrap_text
+
+
+def test_bootstrap_accepts_required_provider_endpoints() -> None:
+    bootstrap_text = (REPO_ROOT / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
+
+    assert "--litellm-api-base" in bootstrap_text
+    assert "--custom-api-endpoint" in bootstrap_text
+    assert 'update_env_key "LITELLM_API_BASE"' in bootstrap_text
+    assert 'update_env_key "CUSTOM_API_ENDPOINT"' in bootstrap_text

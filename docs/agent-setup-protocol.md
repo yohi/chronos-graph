@@ -51,7 +51,7 @@ Use `ask_question` (or equivalent) to collect the following choices at once.
    - `postgres`: production backend with pgvector.
    - `supabase`: production backend through the Supabase Data API.
 4. **Graph relationships:**
-   - enabled: SQLite uses an internal graph; PostgreSQL uses an external Neo4j.
+   - enabled: SQLite uses an internal graph; PostgreSQL and Supabase use an external Neo4j. Supabase graph mode also requires `async_outbox`.
    - disabled (recommended): fast, simple, lightweight setup.
 5. **Cache:**
    - `inmemory` (recommended): managed in process memory.
@@ -67,6 +67,10 @@ Additional inputs:
 - **When PostgreSQL is selected:** confirm that pgvector is enabled.
 - **When `local-model` is selected:** ask for the local model name (default: `cl-nagoya/ruri-v3-310m`).
 - **When `openai`, `litellm`, or `custom-api` is selected:** ask for the embedding model name (e.g. `text-embedding-3-small`).
+- **When `litellm` is selected:** ask for the LiteLLM base URL.
+- **When `custom-api` is selected:** ask for the custom embedding API endpoint.
+
+For the complete required-variable list, read the [Configuration Reference](https://raw.githubusercontent.com/yohi/chronos-graph/master/docs/configuration.md).
 
 #### Case B: Safety-evaluation hook
 
@@ -89,6 +93,10 @@ Based on the answers above, use input tools to collect any required parameters.
 - **Supabase project URL:** e.g. `https://your-project.supabase.co` (enter the API key in Phase 6).
 - **Neo4j connection URI:** e.g. `neo4j+s://[YOUR-USER]:[YOUR-PASSWORD]@host`.
 - **Redis connection URL:** e.g. `redis://default:[YOUR-PASSWORD]@host:port`.
+- **LiteLLM base URL:** required when `litellm` is selected.
+- **Custom embedding API endpoint:** required when `custom-api` is selected.
+- **Gateway URL:** required for `all` mode; ChronosGraph does not install the gateway.
+  Set it as `MCP_GATEWAY_URL` and verify it before registering the hook.
 
 Do not pass the PostgreSQL password to `scripts/bootstrap.sh`; enter it in `.env`
 in Phase 6.
@@ -189,8 +197,17 @@ If `opencode` is selected in `all` mode, confirm before running that the user's 
   [--db-host <db_host>] [--db-port <db_port>] [--db-name <db_name>] [--db-user <db_user>] \
   [--neo4j-uri <neo4j_uri>] [--neo4j-user <neo4j_user>] \
   [--redis-url <redis_url>] \
-  [--embedding-model <embedding_model>]
+  [--embedding-model <embedding_model>] \
+  [--litellm-api-base <litellm_api_base>] \
+  [--custom-api-endpoint <custom_api_endpoint>]
 ```
+
+For a local checkout, use `--mcp-method uv` so the generated MCP configuration
+uses the checkout's uv environment. For `all` mode with Claude Code or Codex,
+register the generated `scripts/chronos-turn-hook.sh` (or `.cmd` on Windows)
+as the client's turn-end/Stop hook. OpenCode uses the plugin configuration
+managed by the synchronization step and still requires the documented
+GitHub Packages credential prerequisite.
 
 ---
 
@@ -202,7 +219,10 @@ This phase applies only when the execution mode is `production`.
   in Phase 5, set the collected Supabase URL as `SUPABASE_URL` when applicable,
   and replace placeholders such as `[YOUR-PASSWORD]` with real passwords and
   API keys (e.g. `OPENAI_API_KEY`, `SUPABASE_KEY`). Wait for confirmation before
-  proceeding.
+  proceeding. Never paste secret values into chat or command arguments. The
+  generated `mcp_config.json` may contain secrets after regeneration; protect
+  it as a secret-bearing file and remove it after registering the client when
+  the client can receive values through its environment instead.
 - **dry-run:** Do not open or edit `.env`, and do not collect or enter secrets.
   Proceed directly to Phase 7.
 
@@ -215,11 +235,21 @@ Verification depends on the selected execution mode:
 - **dry-run:** Verify only the synchronization plan, bundle digest, and
   diagnostics. Do not require a transaction commit, installed instructions or
   Skills, preservation checks, or hook artifacts; dry-run does not create them.
+  Use an already available checkout. Do not download or extract a release
+  archive, install dependencies, edit `.env`, register a client, or modify
+  global Agent files during dry-run.
 - **production:** After successful synchronization, verify the transaction
   commit, installed instructions for the selected Agents, both Skills for each
   selected Agent, digest match, preservation of out-of-marker instructions,
   preservation of other Skills, allowed legacy warnings, and hook-artifact
-  success for `all` mode.
+  success for `all` mode. Register or explicitly hand off the generated MCP
+  configuration, reload the client, perform an MCP initialization, and run a
+  `memory_search`/`memory_save` smoke test. For `all` mode, also verify that
+  the configured gateway is reachable and that a real turn-end event reaches
+  the gateway; otherwise report setup as incomplete.
+
+For dimension mismatches, read the [Migration Guide](https://raw.githubusercontent.com/yohi/chronos-graph/master/docs/migration.md)
+and preserve the old vectors until re-embedding and validation are complete.
 
 If `all` mode is rejected because an old Save prompt is detected as a preflight collision, ask the user to delete the detected old Save prompt manually and re-run bootstrap. The rejection happens before writes and hook setup, and bootstrap does not automatically delete old or duplicated prompts.
 

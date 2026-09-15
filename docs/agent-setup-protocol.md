@@ -1,103 +1,117 @@
-# AIエージェント向け自動セットアップ（Agent Setup Protocol）
+# Agent Setup Protocol
 
 > [!CAUTION]
-> **AIエージェントへの強制命令 (CRITICAL):**
-> あなたが AI エージェント（Claude Code / Gemini CLI / Cursor 等）である場合、いかなる副作用（インストール、ファイルの作成・修正、コマンド実行）を伴うアクションを開始する前に、必ず以下の **Agent Setup Protocol** を遵守してください。
-> **セットアップの実体は `scripts/bootstrap.sh` を介して機械的に行われます。AIエージェントが自ら設定ファイルをスクラッチから直接作成したり、フックスクリプトを手動で個別に書き込んだりすることは、設定のブレを防ぐために厳格に禁止されています。**
-> あなたの役割は、ユーザーに必要な設定事項を質問し、その回答を引数として `scripts/bootstrap.sh` に渡して実行することです。
-> **たとえ `.env` や設定ファイルが既に存在していても、それが本プロトコル（ask ツールによる明示的承認）を経て作成された正当なものであるか確証が持てない場合は、決してスキップせず、必ず Phase 1 から再開してください。**
+> **Mandatory instruction for AI agents:**
+> If you are an AI agent (Claude Code, Gemini CLI, Cursor, etc.), you MUST follow this protocol before taking any action with side effects (installing software, creating or modifying files, running commands).
+>
+> The actual setup is performed mechanically through `scripts/bootstrap.sh`. AI agents are strictly forbidden from creating configuration files or hook scripts from scratch, in order to avoid configuration drift.
+>
+> Your role is to ask the user for the required settings, then pass the answers as arguments to `scripts/bootstrap.sh`.
+>
+> Even if `.env` or configuration files already exist, start again from Phase 1 unless you are certain they were created through this protocol.
 
 > [!IMPORTANT]
-> **🚨 ユーザー確認ツール（Askツール等）の使用強制 (STRICT ASK CONSTRAINT):**
-> あなた（AIエージェント）が各フェーズの **`BLOCKING STEP`** を実行する際は、**絶対にチャットテキスト上の対話だけで自己完結して進めてはいけません。**
-> 必ず `ask_question` 等のツールを明示的に呼び出し、ユーザーがUI上で明示的に選択・合意するプロセスを確実に踏んでください。
+> **Strict ask constraint:**
+> When executing any **BLOCKING STEP** in this protocol, do not rely on plain chat interaction. Use `ask_question` or an equivalent tool so the user explicitly selects or agrees in the UI.
 
 ---
 
-## 🟦 Setup Phases
+## Setup Phases
 
-### Phase 1: 目的の確定と実行モードの選択 (BLOCKING STEP)
-いかなる変更を伴うツールを呼び出す前に、必ずユーザーに以下の質問を提示し、セットアップ目的および **実行モード** を確定させてください。
+### Phase 1: Determine the goal and execution mode (BLOCKING STEP)
 
-1. **セットアップ対象の選択**:
-   * `mcp` (長期記憶MCP: MCPサーバーとしての起動・登録)
-   * ツール実行前の安全評価Hookを設定したい場合は、このプロトコルではなく独立リポジトリ ChronosGate のセットアップ手順を使用してください。
-2. **実行モードの選択**:
-   * `production` (本番モード: 実際に環境構築・ファイルの変更を行う)
-   * `dry-run` (デバッグモード: ファイルを一切変更せず、シミュレーションと解説のみを行う)
+Before calling any tool that makes changes, ask the user:
 
----
-
-### Phase 2: 詳細設定の確認とロックイン (BLOCKING STEP)
-
-#### 【ケース A】長期記憶MCPの場合
-以下の項目を `ask_question` 等を用いて一括でユーザーに提示し、回答を確定させてください。
-*(※ChronosGraph の長期記憶MCP設定では、LLM評価（Evaluator）の設定は不要です。安全評価は ChronosGate 側で扱います。)*
-
-1. **配置・起動方法 (Source)**:
-   * `remote` (🌟推奨: リポジトリをクローンせず `uvx` を用いてオンザフライで起動・実行する)
-   * `local` (ローカルにクローン済みの本リポジトリ内で直接実行する)
-2. **保存モード (Ingestion Mode)**:
-   * `all` (全量保存モード: エージェントのターン終了時に会話ログをバックグラウンドで全量自動保存。フックスクリプトが必要です)
-   * `selective` (自律判断保存モード: AIが重要と判断した情報のみを `memory_save` ツール経由で保存。フックスクリプトは不要です)
-3. **ストレージ (Storage Backend)**:
-   * `sqlite` (🌟推奨: ゼロ設定かつ軽量に動作)
-   * `postgres` (本番用: pgvector が必要)
-   * `supabase` (本番用: クラウドベースの Supabase Data API を経由)
-4. **Neo4j接続（グラフ関係性機能）**:
-   * `有効` (SQLiteは内部グラフ、Postgresは外部Neo4jを使用)
-   * `無効` (🌟推奨: 高速かつシンプルな軽量構成)
-5. **キャッシュ**:
-   * `inmemory` (🌟推奨: プロセス内メモリで管理)
-   * `redis` (本番用: 外部の Redis キャッシュサーバーを使用)
-6. **埋め込みベクトルモデル**:
-   * `local-model` (🌟推奨: ローカルのモデル `cl-nagoya/ruri-v3-310m` 等を使用)
-   * `openai` (OpenAI の Embedding API を利用)
-   * `litellm` (LiteLLM 経由でモデルを利用)
-   * `custom-api` (独自のカスタムAPIを利用)
-
-*(※追加情報の入力)*
-* **PostgreSQL選択時**: ベクトル検索（pgvector拡張）が有効であることを事前に確認します。
-* **local-model選択時**: ローカルモデル名（デフォルト: `cl-nagoya/ruri-v3-310m`）の入力を求めます。
-* **openai/litellm/custom-api選択時**: 使用する埋め込みモデル名（例: `text-embedding-3-small`）の入力を求めます。
-
-#### 【ケース B】安全評価Hookの場合
-ChronosGraph 本体では安全評価Hookをセットアップしません。ユーザーが安全評価Hookを求めている場合は、ChronosGate リポジトリの README / setup protocol を参照するよう案内し、この `scripts/bootstrap.sh` は実行しないでください。
+1. **Setup target:**
+   - `mcp` — configure the long-term-memory MCP server.
+   - If the user wants a pre-execution safety-evaluation hook, stop and point them to the separate [ChronosGate](https://github.com/yohi/chronos-gate) repository instead.
+2. **Execution mode:**
+   - `production` — actually build or change the environment.
+   - `dry-run` — only simulate and explain; make no changes.
 
 ---
 
-### Phase 3: パラメータの収集 (BLOCKING STEP)
-上記の回答結果に基づいて、必要なパラメータの入力を `ask_question` 等の入力ツールを用いてユーザーに求めてください。
-**注意**: セキュリティ保護のため、パスワード等の機密情報が含まれるURLを入力する際は、パスワード部分を `[YOUR-PASSWORD]` などのプレースホルダーにした状態で入力してもらい、Phase 6 で直接 `.env` に設定します。
+### Phase 2: Confirm detailed settings (BLOCKING STEP)
 
-#### 【ケース A】長期記憶MCPの場合
-* **Postgres接続URL**: `postgresql://postgres:[YOUR-PASSWORD]@localhost:5432/postgres` 等の形式（パスワードはプレースホルダー）。
-* **SupabaseプロジェクトURL**: `https://your-project.supabase.co` 形式の接続先URL（APIキーはPhase 6で設定）。
-* **Neo4j接続URI**: `neo4j+s://[YOUR-USER]:[YOUR-PASSWORD]@host` 等の形式。
-* **Redis接続URL**: `redis://default:[YOUR-PASSWORD]@host:port` 等の形式。
+#### Case A: Long-term-memory MCP
 
-#### 【ケース B】安全評価Hookの場合
-ChronosGate 側の手順に委譲します。このプロトコルでは、ChronosGraph の `.env` に `CHRONOS_EVALUATOR_*` 系の設定を書き込みません。
+Use `ask_question` (or equivalent) to collect the following choices at once.
+
+*(Note: ChronosGraph's long-term-memory MCP setup does not include an LLM evaluator. Safety evaluation is handled by ChronosGate.)*
+
+1. **Source / launch method:**
+   - `remote` (recommended): run on-the-fly with `uvx` without cloning the repository.
+   - `local`: run directly inside a local clone of this repository.
+2. **Ingestion mode:**
+   - `all`: automatically save the full conversation log at the end of each agent turn. Requires a hook script.
+   - `selective` (recommended): the agent saves only important information via the `memory_save` tool. No hook script is required.
+3. **Storage backend:**
+   - `sqlite` (recommended): zero-config, lightweight.
+   - `postgres`: production backend with pgvector.
+   - `supabase`: production backend through the Supabase Data API.
+4. **Graph relationships:**
+   - enabled: SQLite uses an internal graph; PostgreSQL uses an external Neo4j.
+   - disabled (recommended): fast, simple, lightweight setup.
+5. **Cache:**
+   - `inmemory` (recommended): managed in process memory.
+   - `redis`: external Redis cache server.
+6. **Embedding provider:**
+   - `local-model` (recommended): local model such as `cl-nagoya/ruri-v3-310m`.
+   - `openai`: OpenAI Embedding API.
+   - `litellm`: model accessed through LiteLLM.
+   - `custom-api`: your own custom API.
+
+Additional inputs:
+
+- **When PostgreSQL is selected:** confirm that pgvector is enabled.
+- **When `local-model` is selected:** ask for the local model name (default: `cl-nagoya/ruri-v3-310m`).
+- **When `openai`, `litellm`, or `custom-api` is selected:** ask for the embedding model name (e.g. `text-embedding-3-small`).
+
+#### Case B: Safety-evaluation hook
+
+ChronosGraph itself does not set up safety-evaluation hooks. If the user asks for one, point them to the ChronosGate repository and do **not** run `scripts/bootstrap.sh`.
 
 ---
 
-### Phase 4: 対象AIエージェントの選択 (BLOCKING STEP)
-必ず `ask_question` 等のツールを使用して、ChronosGraphの対象環境として `claudecode`、`codex`、`opencode` の1つ以上を複数選択可能な形式で提示し、ユーザーに選択させてください。空選択は無効です。
-`--non-interactive` でも対象Agentを暗黙選択してはなりません。必ず収集済みの明示選択を `--agents` に渡してください。
+### Phase 3: Collect parameters (BLOCKING STEP)
 
-* `[ ] claudecode`
-* `[ ] codex`
-* `[ ] opencode`
+Based on the answers above, use input tools to collect any required parameters.
+
+> **Security note:** When a URL contains a password, ask the user to enter the password part as a placeholder such as `[YOUR-PASSWORD]`. Set the real password directly in `.env` in Phase 6.
+
+#### Case A: Long-term-memory MCP
+
+- **PostgreSQL connection URL:** e.g. `postgresql://postgres:[YOUR-PASSWORD]@localhost:5432/postgres`.
+- **Supabase project URL:** e.g. `https://your-project.supabase.co` (enter the API key in Phase 6).
+- **Neo4j connection URI:** e.g. `neo4j+s://[YOUR-USER]:[YOUR-PASSWORD]@host`.
+- **Redis connection URL:** e.g. `redis://default:[YOUR-PASSWORD]@host:port`.
+
+#### Case B: Safety-evaluation hook
+
+Defer to the ChronosGate instructions. Do **not** write `CHRONOS_EVALUATOR_*` settings into ChronosGraph's `.env` from this protocol.
 
 ---
 
-### Phase 5: scripts/bootstrap.sh の実行
-収集したパラメータに基づいて、`scripts/bootstrap.sh` を引数付きで呼び出します。AIエージェント自身でファイルを直接編集したり作成したりすることはせず、必ずこのスクリプトに実行を委ねてください。
-`--agents`には1つのCSV値だけを渡します。bootstrapは副作用開始前に値をcanonicalizeし、両方のingestion modeでSkillsとinstructionsをインストールまたは同期します。
-`--source=local|remote` はMCP serverの実行方式だけを表し、Agent assetのSSOTは常に実行中のcheckoutまたはrelease tarball内の `agent-assets/` です。
-OpenCodeを`all`モードで選択する場合は、実行前にGitHub Packagesの `@yohi` registry mappingと読み取り権限を持つcredential sourceがユーザー管理の `~/.npmrc` にあることを確認してください。Agentは`.npmrc`やtokenを作成・更新・保存してはなりません。
+### Phase 4: Select target AI agents (BLOCKING STEP)
 
-#### コマンド生成例：
+Use `ask_question` (or equivalent) to let the user select one or more of `claudecode`, `codex`, or `opencode`. Empty selection is invalid.
+
+Even in `--non-interactive` mode, do not implicitly select an agent. Pass the explicit selection to `--agents` as a single CSV value.
+
+---
+
+### Phase 5: Run `scripts/bootstrap.sh`
+
+Invoke `scripts/bootstrap.sh` with the collected parameters. Do not edit or create files directly; let the script do all the work.
+
+`--agents` must be a single CSV value. The bootstrap script canonicalizes the value before it starts side effects and installs or synchronizes the Skills and instructions for both ingestion modes.
+
+`--source=local|remote` only controls how the MCP server runs. The SSOT for agent assets is always `agent-assets/` in the current checkout or release tarball.
+
+If `opencode` is selected in `all` mode, confirm before running that the user's `~/.npmrc` already has the `@yohi` GitHub Packages registry mapping and a credential source with read access. The agent must not create, update, or save `.npmrc` or tokens.
+
+#### Example command
+
 ```bash
 ./scripts/bootstrap.sh \
   --type <type> \
@@ -117,15 +131,17 @@ OpenCodeを`all`モードで選択する場合は、実行前にGitHub Packages�
 
 ---
 
-### Phase 6: 機密情報の入力
-1. スクリプトの実行後、ユーザーに対し「`.env` ファイルを開き、プレースホルダー（`[YOUR-PASSWORD]` 等）になっている部分のパスワードや、APIキー（`OPENAI_API_KEY`, `SUPABASE_KEY` など）を手動で直接入力してください」と求めます。
-2. ユーザーから入力完了の報告を受けたら、次のフェーズへ進みます。
+### Phase 6: Enter secrets
+
+1. Ask the user to open `.env` and replace placeholders such as `[YOUR-PASSWORD]` with real passwords and API keys (e.g. `OPENAI_API_KEY`, `SUPABASE_KEY`).
+2. Wait for the user to confirm that the secrets have been entered before proceeding.
 
 ---
 
-### Phase 7: 同期結果の検証
-同期が成功した場合はtransaction commit後、選択したinstructions、両方のSkills、digestの一致、marker外instructionsの保持、他Skillsの保持、許可されたlegacy warningの結果、`all`モードのhook artifact成功を検証してください。
+### Phase 7: Verify the synchronization result
 
-`all`モードで旧Save promptが検出されてpreflight collisionとして同期が拒否された場合は、検出された旧Save promptをユーザーが手動で削除してからbootstrapを再実行してください。この拒否はwriteとhook setupの前に発生し、bootstrapは旧promptやユーザーが複製したpromptを自動削除しません。
+After a successful synchronization, verify the transaction commit, installed instructions, both Skills, digest match, preservation of out-of-marker instructions, preservation of other Skills, allowed legacy warnings, and hook-artifact success for `all` mode.
 
-`selective`モード、または`all`モードで旧Recall promptが検出された場合は、warningを確認し、必要に応じて手動削除後に再実行してください。
+If `all` mode is rejected because an old Save prompt is detected as a preflight collision, ask the user to delete the detected old Save prompt manually and re-run bootstrap. The rejection happens before writes and hook setup, and bootstrap does not automatically delete old or duplicated prompts.
+
+If `selective` mode is used, or if an old Recall prompt is detected in `all` mode, confirm the warning and re-run after manual deletion if needed.

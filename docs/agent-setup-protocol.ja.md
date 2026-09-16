@@ -119,6 +119,9 @@ ChronosGate 側の手順に委譲します。このプロトコルでは、Chron
 ### Phase 5: scripts/bootstrap.sh の実行
 
 収集したパラメータに基づいて、`scripts/bootstrap.sh` を引数付きで呼び出します。AIエージェント自身でファイルを直接編集したり作成したりすることはせず、必ずこのスクリプトに実行を委ねてください。
+`production` を実行する直前にstructured Askを使い、選択したAgentのマシン全体の
+instructions/Skillsパスを同期処理が更新することを確認してください。ユーザーが承認しない
+場合は `dry-run` のみ実行するか、停止してください。
 `--agents`には1つのCSV値だけを渡します。bootstrapは副作用開始前に値をcanonicalizeし、両方のingestion modeでSkillsとinstructionsをインストールまたは同期します。
 `--source=local|remote` は、MCP serverをローカル checkout またはリリース済み
 パッケージのどちらで実行するかを宣言します。この指定だけでは bootstrap 用ファイルの
@@ -170,11 +173,11 @@ cd <extracted-checkout>
 他のバックエンドやモードを使う場合は、収集した値に置き換えてください。Phase 6では、
 この展開先 checkout 内の `.env` を編集します。Supabaseを選択した場合は、収集した
 プロジェクトURLを `.env` の `SUPABASE_URL` として設定してください。`bootstrap.sh` は
-Supabase設定を有効化するだけで、このURLを書き込みません。生成された `mcp_config.json`
-をMCPクライアントに登録する場合は、URLと機密情報を設定した後、同じbackend、embedding、
-cache、method、および不変の `--uv-from` 引数で `scripts/generate_config.py` を再実行するか、
-クライアントの環境変数からそれらの値を渡してください。`generate_config.py` は `.env` から
-URLを読み取り、bootstrapはPhase 6より前に設定ファイルを生成するためです。
+Supabase設定を有効化するだけで、このURLを書き込みません。必要な機密情報がまだ設定されて
+いない場合、bootstrapはPhase 6より前に失敗せず、MCP設定生成とローカル接続確認をスキップします。
+入力後、同じbackend、embedding、graph、cache、method、および不変の `--uv-from` 引数で
+`scripts/generate_config.py` を実行して `mcp_config.json` を生成するか、クライアントの
+環境変数からそれらの値を渡してください。`generate_config.py` は `.env` からURLと認証情報を読み取ります。
 OpenCodeを`all`モードで選択する場合は、実行前にGitHub Packagesの `@yohi` registry mappingと読み取り権限を持つcredential sourceがユーザー管理の `~/.npmrc` にあることを確認してください。Agentは`.npmrc`やtokenを作成・更新・保存してはなりません。
 
 #### コマンド生成例：

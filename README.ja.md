@@ -88,29 +88,11 @@ source archive の checksum を検証してください。
 対応する source archive の checksum を設定登録前に検証してください。詳細は
 [AIエージェント向け自動セットアップ](docs/agent-setup-protocol.ja.md) を参照してください。
 
-### Claude Desktop（最新 `master`、開発用のみ）
+### 開発用 checkout
 
-リリースを待たずに最新の `master` ブランチを使う場合:
-
-```json
-{
-  "mcpServers": {
-    "chronos-graph-dev": {
-      "command": "uvx",
-      "args": [
-        "--from",
-        "context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git",
-        "context-store"
-      ],
-      "env": {
-        "STORAGE_BACKEND": "sqlite",
-        "GRAPH_ENABLED": "true",
-        "CACHE_BACKEND": "inmemory"
-      }
-    }
-  }
-}
-```
+開発時は検証済みのローカル checkout と Agent Setup Protocol を使用します。
+mutableなブランチやタグをクライアント設定へ直接指定せず、リモート実行では
+full commit SHAを使い、source archiveのchecksumを検証してください。
 
 > 💡 **環境変数について**: この Quick Start は長期記憶 MCP サーバー (`context-store`)
 > の最小構成例です。Claude Desktop は JSON 設定ファイル内の `${VAR}` 構文を展開しません。
@@ -261,8 +243,10 @@ https://raw.githubusercontent.com/yohi/chronos-graph/master/docs/agent-setup-pro
 Use a structured question tool for every blocking step and before any side
 effect. Follow the protocol, register the generated MCP configuration only
 after approval, reload the client, and verify MCP initialization plus a
-memory_search/memory_save smoke test. Do not create configuration or hook
-files manually.
+mode-appropriate memory tool smoke test. In selective mode, use
+memory_search/memory_save; in all mode, verify the turn-end hook/plugin and
+read back the stored memory instead of calling memory_save directly. Do not
+create configuration or hook files manually.
 ```
 
 ### リポジトリをローカル開発環境としてセットアップする

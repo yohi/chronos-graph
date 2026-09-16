@@ -118,6 +118,10 @@ Even in `--non-interactive` mode, do not implicitly select an agent. Pass the ex
 ### Phase 5: Run `scripts/bootstrap.sh`
 
 Invoke `scripts/bootstrap.sh` with the collected parameters. Do not edit or create files directly; let the script do all the work.
+Before a `production` run, use a structured Ask immediately before invoking
+the script to confirm that synchronization may update the selected Agent's
+machine-global instruction/Skill paths. If the user does not approve those
+paths, run `dry-run` only or stop.
 
 `--agents` must be a single CSV value. The bootstrap script canonicalizes the value before it starts side effects and installs or synchronizes the Skills and instructions for both ingestion modes.
 
@@ -172,12 +176,13 @@ cd <extracted-checkout>
 Use the corresponding collected values for other backends and modes. Complete
 Phase 6 in the `.env` inside this extracted checkout. When Supabase is selected,
 write the collected project URL as `SUPABASE_URL` in `.env`; `bootstrap.sh` only
-enables the Supabase configuration and does not write this URL. If the generated
-`mcp_config.json` is registered with an MCP client, regenerate it after setting
-the URL and entering secrets by rerunning `scripts/generate_config.py` with the
-same backend, embedding, cache, method, and immutable `--uv-from` arguments, or
-provide those values through the client's environment. `generate_config.py`
-reads the URL from `.env`, and bootstrap generates the config before Phase 6.
+enables the Supabase configuration and does not write this URL. If required
+credentials are not already present, bootstrap skips MCP configuration and the
+local connection check instead of failing before Phase 6. After entering the
+values, generate `mcp_config.json` with `scripts/generate_config.py` using the
+same backend, embedding, graph, cache, method, and immutable `--uv-from`
+arguments, or provide those values through the client's environment.
+`generate_config.py` reads the URL and credentials from `.env`.
 
 If `opencode` is selected in `all` mode, confirm before running that the user's `~/.npmrc` already has the `@yohi` GitHub Packages registry mapping and a credential source with read access. The agent must not create, update, or save `.npmrc` or tokens.
 

@@ -39,3 +39,14 @@ def test_bootstrap_protects_env_files() -> None:
     assert "umask 077" in bootstrap_text
     assert "[ -L .env ]" in bootstrap_text
     assert "chmod 600 .env" in bootstrap_text
+
+
+def test_bootstrap_uses_safe_supabase_defaults_and_defers_missing_config() -> None:
+    bootstrap_text = (REPO_ROOT / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
+
+    assert (
+        'if [ "$BACKEND" = "supabase" ] && [[ "$EXPLICIT_FLAGS" != *"GRAPH_ENABLED"* ]]; then'
+        in bootstrap_text
+    )
+    assert "MCP_CONFIG_READY=false" in bootstrap_text
+    assert "Skipping MCP configuration generation until required secrets are set" in bootstrap_text

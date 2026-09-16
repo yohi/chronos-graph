@@ -89,29 +89,11 @@ For a production setup, replace `<full-commit-sha>` with the full commit SHA
 published for the release and verify the corresponding source archive checksum
 before registering the configuration. See the [Agent Setup Protocol](docs/agent-setup-protocol.md).
 
-### Claude Desktop (latest `master`, development only)
+### Development checkout
 
-To use the current `master` branch instead of waiting for a release:
-
-```json
-{
-  "mcpServers": {
-    "chronos-graph-dev": {
-      "command": "uvx",
-      "args": [
-        "--from",
-        "context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git",
-        "context-store"
-      ],
-      "env": {
-        "STORAGE_BACKEND": "sqlite",
-        "GRAPH_ENABLED": "true",
-        "CACHE_BACKEND": "inmemory"
-      }
-    }
-  }
-}
-```
+For development, use a verified local checkout and the Agent Setup Protocol.
+Do not put a mutable branch or tag directly in a client configuration; use a
+full commit SHA and verify the source archive checksum for remote execution.
 
 > 💡 **Environment variables**: This Quick Start is the minimal configuration
 > for the long-term memory MCP server (`context-store`). Claude Desktop does
@@ -266,8 +248,10 @@ https://raw.githubusercontent.com/yohi/chronos-graph/master/docs/agent-setup-pro
 Use a structured question tool for every blocking step and before any side
 effect. Follow the protocol, register the generated MCP configuration only
 after approval, reload the client, and verify MCP initialization plus a
-memory_search/memory_save smoke test. Do not create configuration or hook
-files manually.
+mode-appropriate memory tool smoke test. In selective mode, use
+memory_search/memory_save; in all mode, verify the turn-end hook/plugin and
+read back the stored memory instead of calling memory_save directly. Do not
+create configuration or hook files manually.
 ```
 
 ### Set up the repository for local development

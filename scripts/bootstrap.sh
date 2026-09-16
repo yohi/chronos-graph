@@ -298,6 +298,10 @@ if [[ -z "$BACKEND" || -z "$EMBEDDING_PROVIDER" ]]; then
     fi
 fi
 
+if [ "$BACKEND" = "supabase" ] && [[ "$EXPLICIT_FLAGS" != *"GRAPH_ENABLED"* ]]; then
+    GRAPH_ENABLED=false
+fi
+
 # Colors for output
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
@@ -537,6 +541,28 @@ if [ "$BACKEND" = "postgres" ]; then
     done
 fi
 
+has_env_value() {
+    local key=$1
+    [[ -n "${!key:-}" ]] || grep -Eq "^${key}=.+$" .env
+}
+
+MCP_CONFIG_READY=true
+case "$BACKEND" in
+    postgres)
+        has_env_value "POSTGRES_PASSWORD" || MCP_CONFIG_READY=false
+        if [ "$GRAPH_ENABLED" = "true" ]; then
+            has_env_value "NEO4J_PASSWORD" || MCP_CONFIG_READY=false
+        fi
+        ;;
+    supabase)
+        has_env_value "SUPABASE_URL" || MCP_CONFIG_READY=false
+        has_env_value "SUPABASE_KEY" || MCP_CONFIG_READY=false
+        if [ "$GRAPH_ENABLED" = "true" ]; then
+            has_env_value "NEO4J_PASSWORD" || MCP_CONFIG_READY=false
+        fi
+        ;;
+esac
+
 echo -e "${BLUE}NOTE: Please edit .env to add your API keys (e.g., OPENAI_API_KEY).${NC}"
 
 # 3. Verification
@@ -552,7 +578,7 @@ else
 fi
 
 # 4. MCP Configuration Generation
-if [ "$TYPE" = "mcp" ]; then
+if [ "$TYPE" = "mcp" ] && [ "$MCP_CONFIG_READY" = "true" ]; then
     echo -e "${BLUE}Generating MCP configuration for ${MCP_OUTPUT}...${NC}"
     TMP_CONFIG=$(mktemp)
     trap 'rm -f "$TMP_CONFIG"' EXIT
@@ -583,10 +609,12 @@ if [ "$TYPE" = "mcp" ]; then
         echo -e "\033[0;31mError: Failed to generate MCP configuration.\033[0m"
         exit 1
     fi
+elif [ "$TYPE" = "mcp" ]; then
+    echo -e "${BLUE}Skipping MCP configuration generation until required secrets are set; rerun scripts/generate_config.py after updating .env.${NC}"
 fi
 
 # 5. Connection test
-if [ "$TYPE" = "mcp" ] && [ "$SOURCE" = "local" ]; then
+if [ "$TYPE" = "mcp" ] && [ "$SOURCE" = "local" ] && [ "$MCP_CONFIG_READY" = "true" ]; then
     echo -e "${BLUE}Running connection check...${NC}"
     if command -v uv &> /dev/null; then
         uv run python scripts/check_connectivity.py

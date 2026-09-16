@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.2.1](https://github.com/yohi/chronos-graph/compare/v3.2.0...v3.2.1) (2026-09-16)
+
+
+### Bug Fixes
+
+* AIエージェントセットアップの整合性を強化 ([#376](https://github.com/yohi/chronos-graph/issues/376)) ([59b0319](https://github.com/yohi/chronos-graph/commit/59b0319ef33546a7f1db2b756b6860543cea3214))
+
+
+### Documentation
+
+* ドキュメント群を documentation-architecture 標準に再構成 ([#374](https://github.com/yohi/chronos-graph/issues/374)) ([5e2f7ce](https://github.com/yohi/chronos-graph/commit/5e2f7ce4e55c55d9b408a06a7fc40951f11b64a0))
+
 ## [3.2.0](https://github.com/yohi/chronos-graph/compare/v3.1.0...v3.2.0) (2026-09-02)
 
 

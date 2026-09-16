@@ -61,8 +61,8 @@ GitHub tarball から直接インストールできます。
 
 `~/Library/Application Support/Claude/claude_desktop_config.json`（macOS）または
 `%APPDATA%\Claude\claude_desktop_config.json`（Windows）に以下を追加します。
-`v2.0.0` は [Releases](https://github.com/yohi/chronos-graph/releases) で確認できる
-最新バージョンに置き換えてください。
+リリースで公開された full commit SHA を使用し、セットアップ手順に従って
+source archive の checksum を検証してください。
 
 ```json
 {
@@ -88,29 +88,11 @@ GitHub tarball から直接インストールできます。
 対応する source archive の checksum を設定登録前に検証してください。詳細は
 [AIエージェント向け自動セットアップ](docs/agent-setup-protocol.ja.md) を参照してください。
 
-### Claude Desktop（最新 `master`、開発用のみ）
+### 開発用 checkout
 
-リリースを待たずに最新の `master` ブランチを使う場合:
-
-```json
-{
-  "mcpServers": {
-    "chronos-graph-dev": {
-      "command": "uvx",
-      "args": [
-        "--from",
-        "context-store-mcp[all] @ git+https://github.com/yohi/chronos-graph.git",
-        "context-store"
-      ],
-      "env": {
-        "STORAGE_BACKEND": "sqlite",
-        "GRAPH_ENABLED": "true",
-        "CACHE_BACKEND": "inmemory"
-      }
-    }
-  }
-}
-```
+開発時は検証済みのローカル checkout と Agent Setup Protocol を使用します。
+mutableなブランチやタグをクライアント設定へ直接指定せず、リモート実行では
+full commit SHAを使い、source archiveのchecksumを検証してください。
 
 > 💡 **環境変数について**: この Quick Start は長期記憶 MCP サーバー (`context-store`)
 > の最小構成例です。Claude Desktop は JSON 設定ファイル内の `${VAR}` 構文を展開しません。
@@ -256,20 +238,26 @@ pnpm run test:unit
 
 ```text
 Set up https://github.com/yohi/chronos-graph as a long-term-memory MCP server
-for an AI agent. Read docs/agent-setup-protocol.md as the canonical setup
-source, follow its installation instructions, ask before any privileged or
-destructive operation, and verify by running the repository-defined test
-command.
+for an AI agent. First read the canonical setup source at
+https://raw.githubusercontent.com/yohi/chronos-graph/master/docs/agent-setup-protocol.md.
+Use a structured question tool for every blocking step and before any side
+effect. Follow the protocol, register the generated MCP configuration only
+after approval, reload the client, and verify MCP initialization plus a
+mode-appropriate memory tool smoke test. In selective mode, use
+memory_search/memory_save; in all mode, verify the turn-end hook/plugin and
+read back the stored memory instead of calling memory_save directly. Do not
+create configuration or hook files manually.
 ```
 
 ### リポジトリをローカル開発環境としてセットアップする
 
 ```text
 Set up this repository (https://github.com/yohi/chronos-graph) for local
-development. Read AGENTS.md as the canonical setup source, follow its
-installation and verification instructions, ask before any privileged or
-destructive operation, and verify by running the repository-defined test
-command.
+development. First read the canonical setup source at
+https://raw.githubusercontent.com/yohi/chronos-graph/master/AGENTS.md.
+Use a structured question tool for every blocking step and before any side
+effect. Follow its installation and verification instructions, and report
+the exact commands and results without committing or pushing changes.
 ```
 ---
 

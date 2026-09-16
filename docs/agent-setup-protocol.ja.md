@@ -51,7 +51,7 @@
    * `postgres` (本番用: pgvector が必要)
    * `supabase` (本番用: クラウドベースの Supabase Data API を経由)
 4. **Neo4j接続（グラフ関係性機能）**:
-   * `有効` (SQLiteは内部グラフ、Postgresは外部Neo4jを使用)
+   * `有効` (SQLiteは内部グラフ、PostgresとSupabaseは外部Neo4jを使用。Supabaseで有効にする場合は `async_outbox` も必要)
    * `無効` (🌟推奨: 高速かつシンプルな軽量構成)
 5. **キャッシュ**:
    * `inmemory` (🌟推奨: プロセス内メモリで管理)
@@ -66,6 +66,10 @@
 * **PostgreSQL選択時**: ベクトル検索（pgvector拡張）が有効であることを事前に確認します。
 * **local-model選択時**: ローカルモデル名（デフォルト: `cl-nagoya/ruri-v3-310m`）の入力を求めます。
 * **openai/litellm/custom-api選択時**: 使用する埋め込みモデル名（例: `text-embedding-3-small`）の入力を求めます。
+* **litellm選択時**: LiteLLMのベースURLの入力を求めます。
+* **custom-api選択時**: カスタム埋め込みAPIエンドポイントの入力を求めます。
+
+必要な環境変数の一覧は、[Configuration Reference](https://raw.githubusercontent.com/yohi/chronos-graph/master/docs/configuration.md)を参照してください。
 
 #### 【ケース B】安全評価Hookの場合
 
@@ -87,6 +91,10 @@ ChronosGraph 本体では安全評価Hookをセットアップしません。ユ
 * **SupabaseプロジェクトURL**: `https://your-project.supabase.co` 形式の接続先URL（APIキーはPhase 6で設定）。
 * **Neo4j接続URI**: `neo4j+s://[YOUR-USER]:[YOUR-PASSWORD]@host` 等の形式。
 * **Redis接続URL**: `redis://default:[YOUR-PASSWORD]@host:port` 等の形式。
+* **LiteLLMベースURL**: `litellm` 選択時に必須。
+* **カスタム埋め込みAPIエンドポイント**: `custom-api` 選択時に必須。
+* **Gateway URL**: `all` モードで必須。ChronosGraphはGatewayをインストールしません。
+  `MCP_GATEWAY_URL` として設定し、hook登録前に疎通を確認します。
 
 PostgreSQLのパスワードは `scripts/bootstrap.sh` の引数に渡さず、Phase 6で
 `.env` に設定してください。
@@ -111,6 +119,9 @@ ChronosGate 側の手順に委譲します。このプロトコルでは、Chron
 ### Phase 5: scripts/bootstrap.sh の実行
 
 収集したパラメータに基づいて、`scripts/bootstrap.sh` を引数付きで呼び出します。AIエージェント自身でファイルを直接編集したり作成したりすることはせず、必ずこのスクリプトに実行を委ねてください。
+`production` を実行する直前にstructured Askを使い、選択したAgentのマシン全体の
+instructions/Skillsパスを同期処理が更新することを確認してください。ユーザーが承認しない
+場合は `dry-run` のみ実行するか、停止してください。
 `--agents`には1つのCSV値だけを渡します。bootstrapは副作用開始前に値をcanonicalizeし、両方のingestion modeでSkillsとinstructionsをインストールまたは同期します。
 `--source=local|remote` は、MCP serverをローカル checkout またはリリース済み
 パッケージのどちらで実行するかを宣言します。この指定だけでは bootstrap 用ファイルの
@@ -162,11 +173,11 @@ cd <extracted-checkout>
 他のバックエンドやモードを使う場合は、収集した値に置き換えてください。Phase 6では、
 この展開先 checkout 内の `.env` を編集します。Supabaseを選択した場合は、収集した
 プロジェクトURLを `.env` の `SUPABASE_URL` として設定してください。`bootstrap.sh` は
-Supabase設定を有効化するだけで、このURLを書き込みません。生成された `mcp_config.json`
-をMCPクライアントに登録する場合は、URLと機密情報を設定した後、同じbackend、embedding、
-cache、method、および不変の `--uv-from` 引数で `scripts/generate_config.py` を再実行するか、
-クライアントの環境変数からそれらの値を渡してください。`generate_config.py` は `.env` から
-URLを読み取り、bootstrapはPhase 6より前に設定ファイルを生成するためです。
+Supabase設定を有効化するだけで、このURLを書き込みません。必要な機密情報がまだ設定されて
+いない場合、bootstrapはPhase 6より前に失敗せず、MCP設定生成とローカル接続確認をスキップします。
+入力後、同じbackend、embedding、graph、cache、method、および不変の `--uv-from` 引数で
+`scripts/generate_config.py` を実行して `mcp_config.json` を生成するか、クライアントの
+環境変数からそれらの値を渡してください。`generate_config.py` は `.env` からURLと認証情報を読み取ります。
 OpenCodeを`all`モードで選択する場合は、実行前にGitHub Packagesの `@yohi` registry mappingと読み取り権限を持つcredential sourceがユーザー管理の `~/.npmrc` にあることを確認してください。Agentは`.npmrc`やtokenを作成・更新・保存してはなりません。
 
 #### コマンド生成例：
@@ -185,8 +196,16 @@ OpenCodeを`all`モードで選択する場合は、実行前にGitHub Packages�
   [--db-host <db_host>] [--db-port <db_port>] [--db-name <db_name>] [--db-user <db_user>] \
   [--neo4j-uri <neo4j_uri>] [--neo4j-user <neo4j_user>] \
   [--redis-url <redis_url>] \
-  [--embedding-model <embedding_model>]
+  [--embedding-model <embedding_model>] \
+  [--litellm-api-base <litellm_api_base>] \
+  [--custom-api-endpoint <custom_api_endpoint>]
 ```
+
+ローカル checkout では `--mcp-method uv` を使用し、生成されるMCP設定が
+checkoutのuv環境を使うようにします。`all` モードで Claude Code または Codex
+を選択した場合は、生成された `scripts/chronos-turn-hook.sh`（Windowsでは
+`.cmd`）をターン終了またはStop hookとして登録します。OpenCodeでは同期処理が
+管理するplugin設定を使用し、GitHub Packagesのcredential前提も満たす必要があります。
 
 ---
 
@@ -197,7 +216,9 @@ OpenCodeを`all`モードで選択する場合は、実行前にGitHub Packages�
 * **production**: Phase 5で使用した checkout 内の `.env` を開き、Supabaseを使用する場合は
   収集済みURLを `SUPABASE_URL` に設定し、プレースホルダー（`[YOUR-PASSWORD]` 等）になっている
   パスワードやAPIキー（`OPENAI_API_KEY`, `SUPABASE_KEY` など）を実際の値に置き換えるよう求めます。
-  入力完了の報告を受けてから次へ進みます。
+  入力完了の報告を受けてから次へ進みます。秘密情報をチャットやコマンド引数に貼り付けてはいけません。
+  再生成後の `mcp_config.json` は秘密情報を含む可能性があるため保護し、クライアントが環境変数を
+  使える場合は登録後に削除します。
 * **dry-run**: `.env` を開いたり編集したりせず、秘密情報の収集・入力も行いません。直接Phase 7へ進みます。
 
 ---
@@ -206,8 +227,10 @@ OpenCodeを`all`モードで選択する場合は、実行前にGitHub Packages�
 
 検証内容は選択した実行モードによって分かれます。
 
-* **dry-run**: 同期計画、bundle digest、diagnosticsだけが期待どおり出力されることを確認します。dry-runはtransaction commit、instructionsやSkillsのインストール、保持状態の検証、hook artifactの作成を行わないため、それらを要求してはいけません。
-* **production**: 同期が成功した場合は、transaction commit、選択したAgentのinstructions、各選択Agentの両方のSkills、digestの一致、marker外instructionsの保持、他Skillsの保持、許可されたlegacy warningの結果、`all`モードのhook artifact成功を検証してください。
+* **dry-run**: 同期計画、bundle digest、diagnosticsだけが期待どおり出力されることを確認します。既存のcheckoutを使用し、release archiveの取得・展開、依存関係のインストール、`.env`の編集、クライアント登録、グローバルAgentファイルの変更を行いません。dry-runはtransaction commit、instructionsやSkillsのインストール、保持状態の検証、hook artifactの作成を行わないため、それらを要求してはいけません。
+* **production**: 同期が成功した場合は、transaction commit、選択したAgentのinstructions、各選択Agentの両方のSkills、digestの一致、marker外instructionsの保持、他Skillsの保持、許可されたlegacy warningの結果、`all`モードのhook artifact成功を検証してください。生成されたMCP設定を登録または明示的にユーザーへ引き渡し、クライアントをreloadしてMCP初期化を実行します。`selective` モードでは `memory_search` / `memory_save` のsmoke testを実行します。`all` モードでは `memory_save` や `session_flush` を直接呼び出さず、Gatewayへの疎通と実際のターン終了イベントの到達を確認し、その結果として保存されたmemoryをread-side checkに使います。確認できなければ未完了として報告します。
+
+dimension mismatch がある場合は、[Migration Guide](https://raw.githubusercontent.com/yohi/chronos-graph/master/docs/migration.md)を参照し、再埋め込みと検証が完了するまで旧ベクトルを保持します。
 
 `all`モードで旧Save promptが検出されてpreflight collisionとして同期が拒否された場合は、検出された旧Save promptをユーザーが手動で削除してからbootstrapを再実行してください。この拒否はwriteとhook setupの前に発生し、bootstrapは旧promptやユーザーが複製したpromptを自動削除しません。
 

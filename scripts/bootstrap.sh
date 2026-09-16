@@ -1,5 +1,6 @@
 #!/bin/bash
 set -e
+umask 077
 
 # Ensure the script is run from the project root
 if [ ! -f "pyproject.toml" ]; then
@@ -27,7 +28,7 @@ EMBEDDING_PROVIDER=""
 FORCE_DEFAULTS=false
 SKIP_TESTS=false
 MCP_OUTPUT="generic"
-MCP_METHOD="python"
+MCP_METHOD="uv"
 UV_FROM=""
 GRAPH_ENABLED=true  # bootstrap.sh では利便性のためデフォルトで有効（アプリデフォルトは false）
 POSTGRES_SSL=false
@@ -50,6 +51,8 @@ NEO4J_URI=""
 NEO4J_USER=""
 REDIS_URL=""
 EMBEDDING_MODEL=""
+LITELLM_API_BASE=""
+CUSTOM_API_ENDPOINT=""
 GRAPH_SYNC_MODE="sync" # sync | async_outbox
 
 # Track which flags were explicitly set to allow overwriting .env
@@ -176,6 +179,12 @@ while [[ "$#" -gt 0 ]]; do
         --embedding-model)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --embedding-model requires a value"; exit 1; fi
             EMBEDDING_MODEL="$2"; shift ;;
+        --litellm-api-base)
+            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --litellm-api-base requires a value"; exit 1; fi
+            LITELLM_API_BASE="$2"; shift ;;
+        --custom-api-endpoint)
+            if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --custom-api-endpoint requires a value"; exit 1; fi
+            CUSTOM_API_ENDPOINT="$2"; shift ;;
         --graph-sync-mode)
             if [[ -z "$2" || "$2" == -* ]]; then echo "Error: --graph-sync-mode requires a value (sync|async_outbox)"; exit 1; fi
             GRAPH_SYNC_MODE="$2"
@@ -198,7 +207,7 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --ssl-no-verify                   Enable SSL without certificate verification (for Supabase/pgBouncer)"
             echo "  --cache [inmemory|redis]          Set cache backend (default: inmemory)"
             echo "  --mcp-output [claude|cursor|generic] Set MCP configuration output format (default: generic)"
-            echo "  --mcp-method [python|uv|uvx]         Set MCP activation method (default: python)"
+            echo "  --mcp-method [python|uv|uvx]         Set MCP activation method (default: uv)"
             echo "  --uv-from [source]                Set source for uvx (e.g. git URL or PyPI package)"
             echo "  --graph [true|false]             Enable/disable graph features (default: true)"
             echo "  --type [mcp]                      Set setup target type (default: mcp). Security evaluator setup moved to chronos-gate"
@@ -214,6 +223,8 @@ while [[ "$#" -gt 0 ]]; do
             echo "  --neo4j-user [user]               Neo4j username"
             echo "  --redis-url [url]                 Redis connection URL"
             echo "  --embedding-model [model]         OpenAI/LiteLLM embedding model name"
+            echo "  --litellm-api-base [url]          LiteLLM proxy base URL"
+            echo "  --custom-api-endpoint [url]       Custom embedding API endpoint"
             echo "  --graph-sync-mode [mode]          Set graph sync mode (sync|async_outbox)"
             echo "  --rotate-keys                     Rotate MCP Gateway API keys (generate new keys even if they already exist)"
             echo "  --non-interactive, -y, --yes      Run silently with default settings if parameters are missing"
@@ -287,6 +298,10 @@ if [[ -z "$BACKEND" || -z "$EMBEDDING_PROVIDER" ]]; then
     fi
 fi
 
+if [ "$BACKEND" = "supabase" ] && [[ "$EXPLICIT_FLAGS" != *"GRAPH_ENABLED"* ]]; then
+    GRAPH_ENABLED=false
+fi
+
 # Colors for output
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
@@ -351,11 +366,20 @@ case $EMBEDDING_PROVIDER in
 esac
 
 ENV_JUST_CREATED=false
-if [ ! -f .env ]; then
+if [ -L .env ]; then
+    echo "Error: .env must not be a symbolic link" >&2
+    exit 1
+fi
+if [ -e .env ] && [ ! -f .env ]; then
+    echo "Error: .env must be a regular file" >&2
+    exit 1
+fi
+if [ ! -e .env ]; then
     echo -e "${GREEN}Creating .env from .env.example...${NC}"
-    cp .env.example .env
+    (umask 077 && cp .env.example .env)
     ENV_JUST_CREATED=true
 fi
+chmod 600 .env
 
 # Helper function to comment/uncomment block
 modify_var_status() {
@@ -492,6 +516,9 @@ if [[ -n "$EMBEDDING_MODEL" ]]; then
     fi
 fi
 
+if [[ -n "$LITELLM_API_BASE" ]]; then update_env_key "LITELLM_API_BASE" "$LITELLM_API_BASE"; fi
+if [[ -n "$CUSTOM_API_ENDPOINT" ]]; then update_env_key "CUSTOM_API_ENDPOINT" "$CUSTOM_API_ENDPOINT"; fi
+
 if [ "$BACKEND" = "postgres" ]; then
     for VAR in "POSTGRES_SSL" "POSTGRES_SSL_NO_VERIFY" "POSTGRES_STATEMENT_CACHE_SIZE"; do
         case $VAR in
@@ -514,6 +541,35 @@ if [ "$BACKEND" = "postgres" ]; then
     done
 fi
 
+has_env_value() {
+    local key=$1
+    local value="${!key:-}"
+    if [[ -z "$value" ]]; then
+        value=$(grep -E "^${key}=" .env | cut -d'=' -f2- | tail -n 1)
+    fi
+    case "$value" in
+        ""|your-*|https://your-*|"<"*">"|"[YOUR-"*"]") return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+MCP_CONFIG_READY=true
+case "$BACKEND" in
+    postgres)
+        has_env_value "POSTGRES_PASSWORD" || MCP_CONFIG_READY=false
+        if [ "$GRAPH_ENABLED" = "true" ]; then
+            has_env_value "NEO4J_PASSWORD" || MCP_CONFIG_READY=false
+        fi
+        ;;
+    supabase)
+        has_env_value "SUPABASE_URL" || MCP_CONFIG_READY=false
+        has_env_value "SUPABASE_KEY" || MCP_CONFIG_READY=false
+        if [ "$GRAPH_ENABLED" = "true" ]; then
+            has_env_value "NEO4J_PASSWORD" || MCP_CONFIG_READY=false
+        fi
+        ;;
+esac
+
 echo -e "${BLUE}NOTE: Please edit .env to add your API keys (e.g., OPENAI_API_KEY).${NC}"
 
 # 3. Verification
@@ -529,7 +585,7 @@ else
 fi
 
 # 4. MCP Configuration Generation
-if [ "$TYPE" = "mcp" ]; then
+if [ "$TYPE" = "mcp" ] && [ "$MCP_CONFIG_READY" = "true" ]; then
     echo -e "${BLUE}Generating MCP configuration for ${MCP_OUTPUT}...${NC}"
     TMP_CONFIG=$(mktemp)
     trap 'rm -f "$TMP_CONFIG"' EXIT
@@ -560,10 +616,12 @@ if [ "$TYPE" = "mcp" ]; then
         echo -e "\033[0;31mError: Failed to generate MCP configuration.\033[0m"
         exit 1
     fi
+elif [ "$TYPE" = "mcp" ]; then
+    echo -e "${BLUE}Skipping MCP configuration generation until required secrets are set; rerun scripts/generate_config.py after updating .env.${NC}"
 fi
 
 # 5. Connection test
-if [ "$TYPE" = "mcp" ] && [ "$SOURCE" = "local" ]; then
+if [ "$TYPE" = "mcp" ] && [ "$SOURCE" = "local" ] && [ "$MCP_CONFIG_READY" = "true" ]; then
     echo -e "${BLUE}Running connection check...${NC}"
     if command -v uv &> /dev/null; then
         uv run python scripts/check_connectivity.py

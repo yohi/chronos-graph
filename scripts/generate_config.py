@@ -271,6 +271,8 @@ def generate_supabase_config(
     ssl: bool,
     method: str = "python",
     uv_from: str | None = None,
+    *,
+    graph: bool = False,
 ) -> dict[str, Any]:
     """Supabase モードの設定を生成する。"""
     settings = get_settings()
@@ -281,12 +283,21 @@ def generate_supabase_config(
         "STORAGE_BACKEND": "supabase",
         "SUPABASE_URL": supabase_url,
         "SUPABASE_KEY": supabase_key,
-        "GRAPH_ENABLED": "false",
+        "GRAPH_ENABLED": "true" if graph else "false",
+        "GRAPH_SYNC_MODE": "async_outbox" if graph else "sync",
         "CACHE_BACKEND": cache,
         "DECAY_HALF_LIFE_DAYS": str(getattr(settings, "decay_half_life_days", "30")),
         "SIMILARITY_THRESHOLD": f"{getattr(settings, 'similarity_threshold', 0.70):.2f}",
         "DEDUP_THRESHOLD": f"{getattr(settings, 'dedup_threshold', 0.90):.2f}",
     }
+    if graph:
+        env.update(
+            {
+                "NEO4J_URI": getattr(settings, "neo4j_uri", ""),
+                "NEO4J_USER": getattr(settings, "neo4j_user", ""),
+                "NEO4J_PASSWORD": get_secret(settings, "neo4j_password", ""),
+            }
+        )
     if cache == "redis":
         # Redis 設定の解決
         redis_url, redis_ssl = _resolve_redis_config(ssl)
@@ -352,7 +363,12 @@ def main() -> None:
         default=default_embedding,
         help=f"Embedding provider (default: {default_embedding})",
     )
-    parser.add_argument("--graph", type=str_to_bool, default=True, help="Enable graph features")
+    parser.add_argument(
+        "--graph",
+        type=str_to_bool,
+        default=None,
+        help="Enable graph features (default: enabled except for Supabase)",
+    )
     parser.add_argument("--ssl", action="store_true", help="Enable SSL for PostgreSQL/Redis")
     parser.add_argument(
         "--method", choices=["python", "uv", "uvx"], default="python", help="Execution method"
@@ -369,10 +385,11 @@ def main() -> None:
     args = parser.parse_args()
 
     python_path = find_python()
+    graph_enabled = args.graph if args.graph is not None else args.backend != "supabase"
 
     if args.backend == "sqlite":
         config = generate_sqlite_config(
-            python_path, args.embedding, args.graph, args.method, args.uv_from
+            python_path, args.embedding, graph_enabled, args.method, args.uv_from
         )
     elif args.backend == "postgres":
         # ユーザーが指定していない場合のみ、デフォルト値を決定する
@@ -384,7 +401,7 @@ def main() -> None:
         config = generate_postgres_config(
             python_path,
             args.embedding,
-            args.graph,
+            graph_enabled,
             args.ssl,
             cache_backend,
             args.method,
@@ -399,6 +416,7 @@ def main() -> None:
             args.ssl,
             args.method,
             args.uv_from,
+            graph=graph_enabled,
         )
 
     if args.output == "cursor":

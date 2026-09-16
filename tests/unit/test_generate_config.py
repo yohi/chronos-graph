@@ -42,6 +42,8 @@ def test_generate_config_supports_supabase_uvx_backend(monkeypatch, capsys) -> N
             "--uv-from",
             "git+https://github.com/yohi/chronos-graph.git",
             "--ssl",
+            "--graph",
+            "false",
         ],
     )
 
@@ -97,5 +99,53 @@ def test_generate_config_supports_explicit_supabase_inmemory_cache(monkeypatch, 
 
     assert env["STORAGE_BACKEND"] == "supabase"
     assert env["CACHE_BACKEND"] == "inmemory"
+    assert env["GRAPH_ENABLED"] == "false"
+    assert env["GRAPH_SYNC_MODE"] == "sync"
+    assert "NEO4J_URI" not in env
     assert "REDIS_URL" not in env
     assert "REDIS_SSL" not in env
+
+
+def test_generate_supabase_config_preserves_legacy_positional_arguments(monkeypatch) -> None:
+    monkeypatch.setenv("ENV_FILE", "/dev/null")
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_KEY", "<supabase-service-role-key>")
+
+    repo_root = Path(__file__).resolve().parents[2]
+    module = load_generate_config(repo_root / "scripts" / "generate_config.py")
+
+    config = module.generate_supabase_config("python3", "local-model", "inmemory", False)
+
+    env = config["mcpServers"]["chronos-graph"]["env"]
+    assert env["GRAPH_ENABLED"] == "false"
+    assert env["GRAPH_SYNC_MODE"] == "sync"
+
+
+def test_generate_config_supports_supabase_graph_with_async_outbox(monkeypatch, capsys) -> None:
+    monkeypatch.setenv("ENV_FILE", "/dev/null")
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_KEY", "test-service-role-key")
+    monkeypatch.setenv("GRAPH_ENABLED", "true")
+    monkeypatch.setenv("GRAPH_SYNC_MODE", "async_outbox")
+    monkeypatch.setenv("NEO4J_URI", "neo4j+s://example.databases.neo4j.io")
+    monkeypatch.setenv("NEO4J_USER", "neo4j")
+    monkeypatch.setenv("NEO4J_PASSWORD", "test-neo4j-password")
+
+    repo_root = Path(__file__).resolve().parents[2]
+    module = load_generate_config(repo_root / "scripts" / "generate_config.py")
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["generate_config.py", "--backend", "supabase", "--graph", "true"],
+    )
+
+    module.main()
+
+    config = json.loads(capsys.readouterr().out)
+    env = config["mcpServers"]["chronos-graph"]["env"]
+
+    assert env["GRAPH_ENABLED"] == "true"
+    assert env["GRAPH_SYNC_MODE"] == "async_outbox"
+    assert env["NEO4J_URI"] == "neo4j+s://example.databases.neo4j.io"
+    assert env["NEO4J_USER"] == "neo4j"
+    assert env["NEO4J_PASSWORD"] == "test-neo4j-password"

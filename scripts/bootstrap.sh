@@ -543,7 +543,14 @@ fi
 
 has_env_value() {
     local key=$1
-    [[ -n "${!key:-}" ]] || grep -Eq "^${key}=.+$" .env
+    local value="${!key:-}"
+    if [[ -z "$value" ]]; then
+        value=$(grep -E "^${key}=" .env | cut -d'=' -f2- | tail -n 1)
+    fi
+    case "$value" in
+        ""|your-*|https://your-*|"<"*">"|"[YOUR-"*"]") return 1 ;;
+        *) return 0 ;;
+    esac
 }
 
 MCP_CONFIG_READY=true

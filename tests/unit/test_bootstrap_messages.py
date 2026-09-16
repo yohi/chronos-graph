@@ -50,3 +50,12 @@ def test_bootstrap_uses_safe_supabase_defaults_and_defers_missing_config() -> No
     )
     assert "MCP_CONFIG_READY=false" in bootstrap_text
     assert "Skipping MCP configuration generation until required secrets are set" in bootstrap_text
+    assert "https://your-*" in bootstrap_text
+
+
+def test_checked_in_turn_hook_has_the_managed_marker() -> None:
+    hook_lines = (
+        (REPO_ROOT / "scripts/chronos-turn-hook.sh").read_text(encoding="utf-8").splitlines()
+    )
+
+    assert hook_lines[1] == "# chronosgraph-managed: turn-hook-wrapper format=1"

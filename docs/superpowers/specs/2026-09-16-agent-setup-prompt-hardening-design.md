@@ -23,8 +23,9 @@ local paths.
 6. Supabase configuration generation will preserve graph enablement, emit the
    required `async_outbox` mode, and include Neo4j settings when graph mode is
    enabled.
-7. Dry-run documentation will prohibit archive download/extraction and other
-   persistent writes unless the input checkout was already supplied.
+7. Dry-run documentation will require an existing checkout as input. Archive
+   download, extraction, and all filesystem writes remain prohibited in every
+   dry-run; supplying a checkout never authorizes persistent writes.
 
 ## Scope
 

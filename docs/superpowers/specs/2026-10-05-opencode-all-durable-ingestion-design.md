@@ -543,7 +543,26 @@ manifest-required key missing locally:
 
 A local keyring may contain additional **inactive staging keys** not yet present in the manifest. They are ignored for durable operations until an explicit manifest rotation promotes/adds them. This permits safe fleet staging without treating local extras as authority.
 
-On mismatch:
+Readiness also validates manifest coverage against durable authority:
+
+```text
+every identity_key_version referenced by any ingestion receipt
+  -> MUST appear in identity.required_versions
+
+every source-alias key version still required by persisted alias-token retirement rules
+  -> MUST remain represented as required
+```
+
+If durable state references a version that the manifest no longer declares, the manifest itself is inconsistent:
+
+```text
+INGESTION_KEYRING_MANIFEST_INCONSISTENT
+durable-all readiness = failed
+all control mutations = disabled
+automatic repair/retirement = forbidden
+```
+
+On local-vs-manifest mismatch:
 
 ```text
 INGESTION_KEYRING_MISMATCH
@@ -611,7 +630,9 @@ If the primary manifest is absent after migrations, normal runtime also remains 
 
 The active identity key version is used for new canonical identity tokens/receipts. Old identity key versions remain loaded while any durable receipt references that version.
 
-An identity key version may be retired only when authoritative receipt inventory proves that no receipt references it. Unexpected loss of a referenced identity key does not create a new identity; receipt comparison requiring it returns `IDEMPOTENCY_REBASE_UNAVAILABLE` and health reports degraded keyring state.
+An identity key version may be retired only when authoritative receipt inventory proves that no receipt references it, and the manifest update removing that version must be generation-CAS protected.
+
+If a manifest-required referenced identity key is unexpectedly absent locally, the instance is NOT READY and performs no control mutation. As a defense-in-depth domain rule, any duplicate-validation path that nevertheless reaches canonicalization without the receipt-pinned key returns `IDEMPOTENCY_REBASE_UNAVAILABLE` and performs no mutation. A healthy READY instance must not reach that condition.
 
 ### Source-alias lookup key lifecycle
 
@@ -1700,6 +1721,7 @@ LOCAL_STATE_RECOVERY_UNAVAILABLE
 LOCAL_STATE_SOURCE_SCOPE_MISMATCH
 INGESTION_KEYRING_NOT_READY
 INGESTION_KEYRING_MISMATCH
+INGESTION_KEYRING_MANIFEST_INCONSISTENT
 ```
 
 ### Divergence
@@ -2147,10 +2169,19 @@ identity old key:
   old receipt remains comparable while manifest-required
 
 missing referenced identity key:
-  -> NOT READY when manifest-required key is absent
-  -> if a receipt-pinned historical contract becomes unavailable due to an operator-approved retired key,
-     duplicate comparison returns IDEMPOTENCY_REBASE_UNAVAILABLE
+  manifest still requires that version
+  -> instance NOT READY
+  -> source/receipt/turn mutation == 0
+
+defense-in-depth direct duplicate-validation fixture with receipt-pinned key unavailable:
+  -> IDEMPOTENCY_REBASE_UNAVAILABLE
   -> no receipt rewrite
+  -> no memory/outbox mutation
+
+manifest incorrectly omits a receipt-referenced identity version:
+  -> INGESTION_KEYRING_MANIFEST_INCONSISTENT
+  -> durable-all NOT READY
+  -> automatic manifest repair == 0
 
 source-alias key rotation:
   old alias token resolves
@@ -2290,8 +2321,9 @@ Acceptance evidence should be machine-checkable and must itself avoid raw sensit
 38. Legacy MCP ingestion, OpenCode durable control, and setup/operator control use distinct raw Bearer credentials and distinct principals; a control credential is never valid for regular SSE/messages MCP access.
 39. Existing non-OpenCode hooks retain `MCP_GATEWAY_API_KEY`; OpenCode durable-all uses `MCP_GATEWAY_CONTROL_API_KEY` and must not repurpose the legacy credential.
 40. Every shared receipt namespace has one authoritative non-secret `ingestion_keyring_manifest`; each control instance must mechanically verify manifest-required key fingerprints before durable-all mutation.
-41. Runtime never auto-generates/replaces a missing or malformed ingestion keyring or missing manifest; initial provisioning and rotation are explicit operator actions.
-42. Keyring manifest updates are generation-CAS protected, and local inactive staging keys may not become active authority until represented by the committed manifest.
+41. The authoritative manifest must cover every identity key version still referenced by receipts and every alias key version still required by alias-retirement rules; missing durable-reference coverage is a fail-closed manifest inconsistency.
+42. Runtime never auto-generates/replaces a missing or malformed ingestion keyring or missing manifest; initial provisioning and rotation are explicit operator actions.
+43. Keyring manifest updates are generation-CAS protected, and local inactive staging keys may not become active authority until represented by the committed manifest.
 
 ## Implementation-order constraint
 

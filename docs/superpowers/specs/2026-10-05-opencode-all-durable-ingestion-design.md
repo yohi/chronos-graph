@@ -220,6 +220,106 @@ identity_key_version
 
 Receipt creation is atomic with the primary memory mutation and graph-intent durability.
 
+## 1.7 Transaction-capable ingestion persistence boundary
+
+The existing operation-oriented `StorageAdapter` is not the COMMIT transaction owner. OpenCode durable-all adds a dedicated ChronosGraph persistence boundary, conceptually named `IngestionCommitStore`.
+
+`IngestionCommitStore` is owned by ChronosGraph and is the **only** component allowed to perform the authoritative turn COMMIT transaction. Existing `StorageAdapter.save_memory()` / `update_memory()` calls are not composed to emulate atomic turn commit.
+
+PREPARE uses a new side-effect-free dedupe planner. The existing side-effecting `Deduplicator.deduplicate()`, which may archive a REPLACE target immediately, is forbidden on the OpenCode durable-all PREPARE path.
+
+Conceptually:
+
+```text
+IngestionDedupePlanner
+  -> read-only candidate search
+  -> PreparedTurn {
+       prepared embeddings,
+       desired memory mutations,
+       destructive target ids,
+       destructive concurrency tokens,
+       receipt/canonicalization inputs
+     }
+
+IngestionCommitStore.commit_ingested_turn(PreparedTurn)
+  -> one backend transaction
+```
+
+The COMMIT transaction owns, in order:
+
+```text
+1. authoritative receipt read/revalidation
+2. receipt-pinned rebase decision, if required
+3. destructive-target concurrency-token validation
+4. archive/replace/insert memory mutations
+5. durable graph-intent/outbox mutations
+6. receipt insert/update
+7. atomic commit
+```
+
+If receipt-pinned recanonicalization is required, the current transaction performs no mutation and returns a rebase requirement to the orchestration layer. Recanonicalization occurs outside the transaction and a fresh COMMIT attempt follows.
+
+## 1.8 Destructive concurrency token
+
+Every persisted memory row participating in durable-all dedupe has an authoritative integer `ingestion_revision`.
+
+Normative semantics:
+
+```text
+insert:
+  ingestion_revision = 1
+
+any mutation that can invalidate a prepared dedupe/destructive assumption:
+  ingestion_revision = ingestion_revision + 1
+
+delete:
+  row absence invalidates the prepared token
+```
+
+PREPARE captures at least:
+
+```text
+target_memory_id
+target_ingestion_revision
+relevant prepared target state
+```
+
+COMMIT performs an atomic compare against the current row. A missing row or revision mismatch is `STALE_DEDUPE_PLAN`.
+
+All ordinary ChronosGraph mutation paths that can change dedupe-relevant memory state must maintain `ingestion_revision`; the durable-all path must not rely on timestamps as the concurrency authority.
+
+## 1.9 Backend support matrix
+
+OpenCode durable-all is supported on all three primary storage backends, with one transaction boundary per turn:
+
+```text
+SQLite:
+  one aiosqlite connection
+  BEGIN IMMEDIATE (or equivalent write transaction)
+  receipt + CAS + memory + outbox + receipt mutation
+  one COMMIT / ROLLBACK
+
+PostgreSQL:
+  one asyncpg connection
+  one asyncpg transaction
+  receipt/target locking as needed
+  ingestion_revision CAS
+  memory + outbox + receipt mutation
+  one COMMIT / ROLLBACK
+
+Supabase:
+  one versioned server-side PostgreSQL RPC/function
+  (commit_ingested_turn_v1)
+  performs receipt + CAS + memory + outbox + receipt mutation
+  in one database transaction
+```
+
+Multiple PostgREST mutations are never accepted as an atomic Supabase COMMIT implementation.
+
+When external graph projection is enabled, COMMIT persists a primary-store graph intent/outbox record inside the same transaction. External Neo4j I/O occurs only after primary COMMIT; a configuration that cannot provide durable primary graph intent is unsupported for OpenCode durable-all and must fail fast.
+
+The canonical source-scope registry, source aliases/tokens, and ingestion receipts are part of the same primary durable storage family and are migrated through the repository's normal backend migration mechanism.
+
 ---
 
 # 2. Server-authoritative canonicalization
@@ -325,6 +425,79 @@ rebased hash != receipt hash
 required old comparison contract unavailable
   -> IDEMPOTENCY_REBASE_UNAVAILABLE
 ```
+
+## 2.5 Cryptographic keyring ownership and persistence
+
+All ingestion identity/source-continuity cryptographic key material is owned and consumed by **ChronosGraph**, never by the OpenCode plugin and never by ChronosGate policy code.
+
+ChronosGraph loads a server-side keyring file from:
+
+```text
+CHRONOS_INGESTION_KEYRING_PATH
+```
+
+Default:
+
+```text
+~/.context-store/ingestion-keyring.json
+```
+
+The file is a Graph-owned secret file (mode 0600 on POSIX), is never committed, and is created/rotated by setup/operator tooling using atomic replace. Container/cloud deployments may mount the same file from their secret manager.
+
+Normative logical shape:
+
+```json
+{
+  "schema": "chronos.ingestion-keyring.v1",
+  "identity": {
+    "active": "identity-vN",
+    "keys": {
+      "identity-vN": "<base64url secret>"
+    }
+  },
+  "source_alias": {
+    "active": "alias-vN",
+    "keys": {
+      "alias-vN": "<base64url secret>"
+    }
+  },
+  "source_binding": {
+    "active": "binding-vN",
+    "keys": {
+      "binding-vN": "<base64url secret>"
+    }
+  }
+}
+```
+
+Each key is independently generated cryptographic random material of at least 256 bits. Key contents never appear in receipts, local checkpoints, API responses, logs, traces, or metrics.
+
+### Identity key lifecycle
+
+The active identity key version is used for new canonical identity tokens/receipts. Old identity key versions remain loaded while any durable receipt references that version.
+
+An identity key version may be retired only when authoritative receipt inventory proves that no receipt references it. Unexpected loss of a referenced identity key does not create a new identity; receipt comparison requiring it returns `IDEMPOTENCY_REBASE_UNAVAILABLE` and health reports degraded keyring state.
+
+### Source-alias lookup key lifecycle
+
+Source aliases have stable opaque `alias_id` rows plus one or more keyed alias-token rows:
+
+```text
+SourceAlias(alias_id, canonical_source_scope_id, alias_schema_version, ...)
+SourceAliasToken(alias_id, key_version, keyed_token)
+```
+
+Raw project/directory/workspace/path evidence is not durable registry state.
+
+On resolution, the server tries every retained source-alias key against current alias evidence. If an old-key token resolves an alias and the active-key token is absent, the active-key token is added to that same `alias_id`.
+
+A source-alias key version may be retired only after every still-supported alias has a token under a retained successor key. Unexpected key loss must fail closed and must not create a new canonical source scope.
+
+### Source-binding key lifecycle
+
+Authenticated local source bindings use a separate source-binding keyring. Old binding keys are retained for verification until an explicit operator-managed fleet refresh/retirement declares old local bindings invalid.
+
+A binding signed by a missing/retired key is not accepted as candidate-scope authentication. It cannot trigger implicit enrollment or migration.
 
 ---
 
@@ -463,7 +636,9 @@ FAILED and ABORTED persist:
 - canonical user intent only;
 - no unfinished/error-aborted/partial assistant content as confirmed durable memory.
 
-Later normal completion is handled as a later confirmed increment according to the fixed lineage/ordering rules.
+A FAILED/ABORTED receipt terminally closes that logical-turn identity. A later confirmed increment is durable only when OpenCode creates a **new eligible user anchor**, and therefore a new `turn_key`.
+
+If OpenCode later resumes generation under the **same already-committed eligible user anchor**, that later assistant output does not mutate or supersede the immutable FAILED/ABORTED receipt. It is classified as committed-history divergence (`POST_TERMINAL_CONTINUATION` / `COMMITTED_TURN_SEMANTICS_CHANGED`) and requires a new eligible user input before additional assistant content can become a new durable turn.
 
 ## 3.8 Tool context
 
@@ -512,6 +687,27 @@ UNRESOLVED_USER_INPUT_IDENTITY
 -> no checkpoint advance
 -> observable blocked root state
 ```
+
+## 3.11 Post-terminal lineage is immutable
+
+Once a FAILED or ABORTED logical turn is durably acknowledged, its `turn_key` and user-only payload are immutable and terminal.
+
+```text
+FAILED/ABORTED turn T committed
+  -> T is closed permanently
+
+same eligible user anchor later receives another assistant generation
+  -> NOT a new increment
+  -> NOT a receipt rewrite
+  -> NOT ALREADY_COMMITTED
+  -> committed-history divergence:
+       POST_TERMINAL_CONTINUATION
+       / COMMITTED_TURN_SEMANTICS_CHANGED
+```
+
+A later durable success requires a **new eligible user message anchor**, producing a new normal `turn_key`.
+
+This rule intentionally preserves the fixed one-user-anchor/one-receipt identity contract even though OpenCode v1.18.34 can resume its loop against the same last user message after an interrupted/failed assistant. Such same-anchor post-terminal output remains observable current OpenCode history but is not silently folded into immutable durable memory.
 
 ---
 
@@ -807,6 +1003,104 @@ Explicit new-source enrollment and alias migration are different state transitio
 
 Until source resolution succeeds, normal ingest, checkpoint mutation, receipt creation, and source alias mutation are forbidden.
 
+## 5.8 Canonical source registry persistence
+
+Canonical source continuity is persisted in the primary ChronosGraph backend through migration-managed ingestion tables:
+
+```text
+ingestion_source_scopes
+  canonical_source_scope_id
+  scope_schema_version
+  integration
+  created_at
+
+ingestion_source_aliases
+  alias_id
+  canonical_source_scope_id
+  alias_schema_version
+  status
+  created_at
+
+ingestion_source_alias_tokens
+  alias_id
+  key_version
+  keyed_token
+
+ingestion_receipts
+  ...
+```
+
+The exact SQL type names may be backend-specific, but these ownership/uniqueness semantics are fixed:
+
+```text
+canonical_source_scope_id:
+  stable opaque server-issued identity
+
+(alias_schema_version, key_version, keyed_token):
+  globally unique alias lookup key
+
+alias_id:
+  stable grouping that allows key rotation without raw alias evidence
+
+receipt:
+  unique by (canonical_source_scope_id, turn_key)
+```
+
+Source registration and explicit alias migration use their own atomic primary-store transactions. They never rewrite historical receipts.
+
+## 5.9 Authenticated local source binding
+
+`source.json` stores an integrity-protected Graph-issued candidate-scope binding, not a source-continuity proof and not an authorization credential.
+
+Normative shape:
+
+```json
+{
+  "schema": "chronos.opencode.local-source.v1",
+  "canonical_source_scope_id": "<opaque S>",
+  "binding": {
+    "schema": "chronos.source-binding.v1",
+    "issuer": "chronos-graph",
+    "key_version": "binding-vN",
+    "token": "<base64url MAC>"
+  }
+}
+```
+
+The MAC authenticates the JCS-encoded tuple:
+
+```text
+binding schema version
+issuer = chronos-graph
+canonical_source_scope_id
+```
+
+It deliberately does **not** bind mutable project/directory/workspace/path alias evidence. Continuity still requires the independent edge fixed in §5.6.
+
+Properties:
+
+```text
+issuer:
+  ChronosGraph control plane
+
+verifier:
+  ChronosGraph control plane
+
+secret?:
+  no; it is integrity-protected candidate-scope evidence,
+  not an authorization bearer credential
+
+logging:
+  full token forbidden
+
+invalid MAC / unknown key version:
+  local candidate binding is unusable
+  -> SOURCE_SCOPE_CONTINUITY_UNRESOLVED
+  -> no source/receipt/checkpoint mutation
+```
+
+When a retained old binding key verifies a token, Graph may return a refreshed token under the active binding key. Local replacement uses the same crash-safe atomic state-write rules.
+
 ---
 
 # 6. Corrupt local-state recovery
@@ -952,6 +1246,230 @@ These operations do not mutate memory, receipts, graph state, or checkpoints.
 npm and repository-local OpenCode plugin entrypoints use one shared `OpenCodeIngestionRuntime` implementation.
 
 Correctness logic must not fork by packaging path.
+
+## 8.4 OpenCode runtime -> ChronosGate control protocol
+
+The control plane uses a dedicated HTTP JSON endpoint owned by ChronosGate:
+
+```text
+POST /internal/v1/opencode/control
+Authorization: Bearer <control credential>
+Content-Type: application/json
+```
+
+It does **not** use `GET /sse`, `POST /messages`, `tools/list`, or externally accepted `tools/call`.
+
+Versioned request envelope:
+
+```json
+{
+  "protocol": "chronos.opencode-control.v1",
+  "request_id": "<opaque request id>",
+  "operation": "<operation name>",
+  "payload": {}
+}
+```
+
+Versioned success/domain-result envelope:
+
+```json
+{
+  "protocol": "chronos.opencode-control.v1",
+  "request_id": "<same id>",
+  "ok": true,
+  "result": {}
+}
+```
+
+Versioned control error envelope:
+
+```json
+{
+  "protocol": "chronos.opencode-control.v1",
+  "request_id": "<same id when available>",
+  "ok": false,
+  "error": {
+    "code": "<stable control error code>",
+    "retryable": true
+  }
+}
+```
+
+Allowed operation names are fixed by protocol version:
+
+```text
+source.resolve
+source.register
+source.authorize_alias_migration
+receipt.list_roots
+receipt.list
+receipt.lookup
+receipt.validate
+turn.ingest
+```
+
+Raw sensitive identity evidence may occur only inside the authenticated request payload needed by the corresponding operation and follows the existing ephemeral/redaction contract.
+
+## 8.5 ChronosGate authentication and authorization
+
+The dedicated control endpoint reuses ChronosGate's existing Bearer API-key authenticator and server-side `MCP_GATEWAY_API_KEYS_JSON` principal registry, but uses a **separate control capability matrix**, not MCP intent/tool authorization.
+
+Runtime credential source:
+
+```text
+MCP_GATEWAY_URL
+MCP_GATEWAY_API_KEY
+```
+
+The runtime key must authenticate as reserved principal:
+
+```text
+opencode-ingestion
+```
+
+Operator/setup credential source:
+
+```text
+MCP_GATEWAY_URL
+MCP_GATEWAY_OPERATOR_API_KEY
+```
+
+The operator key must authenticate as reserved principal:
+
+```text
+chronos-setup
+```
+
+Normative capability matrix:
+
+```text
+opencode-ingestion:
+  source.resolve
+  receipt.list_roots
+  receipt.list
+  receipt.lookup
+  receipt.validate
+  turn.ingest
+
+chronos-setup:
+  source.resolve
+  source.register
+  source.authorize_alias_migration
+  receipt.list_roots
+  receipt.list
+  receipt.lookup
+  receipt.validate
+```
+
+Safe automatic alias migration proven by §5.6 is part of `source.resolve`; manual authorization remains setup-only.
+
+Normal agent principals, including existing OpenCode/default MCP principals, receive HTTP 403 from the control endpoint even if their MCP intent permits `memory_save`. Control capability is never inferred from `memory.ingest`, `developer_access`, or any allowed MCP tool.
+
+Bearer credentials are never request-body fields and are never logged. Runtime/operator credential rotation is independent from receipt/keyring identity; authentication failure never advances a checkpoint.
+
+## 8.6 ChronosGate -> ChronosGraph private transport
+
+ChronosGate reaches the Graph control plane through a **second, private, long-lived local stdio subprocess**, distinct from the normal MCP subprocess:
+
+```text
+ChronosGate
+  |
+  +-- normal MCP upstream:
+  |     context-store
+  |     -> tools/list / tools/call
+  |
+  +-- private control upstream:
+        context-store-control --stdio
+        -> chronos.control.v1 JSON-RPC
+```
+
+The private wire protocol is newline/framed JSON-RPC 2.0 over stdio with method family:
+
+```text
+chronos.control.v1.source.resolve
+chronos.control.v1.source.register
+chronos.control.v1.source.authorize_alias_migration
+chronos.control.v1.receipt.list_roots
+chronos.control.v1.receipt.list
+chronos.control.v1.receipt.lookup
+chronos.control.v1.receipt.validate
+chronos.control.v1.turn.ingest
+```
+
+These methods are implemented by a dedicated ChronosGraph control server/dispatcher and are **not registered as FastMCP tools/resources/prompts**. Consequently they cannot appear in `tools/list` and cannot be reached through regular external `tools/call`.
+
+ChronosGate does not import `context_store`. The cross-repository wire schemas/error enums live in Graph-owned `chronos_shared` versioned protocol primitives, which ChronosGate may consume as it already consumes shared ingestion-mode primitives.
+
+The control subprocess reads Graph-owned storage/keyring configuration itself. ChronosGate never receives or interprets identity/source-alias/source-binding HMAC key material.
+
+## 8.7 Control error mapping
+
+HTTP status is reserved for transport/auth/envelope failures:
+
+```text
+400:
+  malformed/unsupported control envelope
+
+401:
+  missing/invalid Bearer credential
+
+403:
+  authenticated principal lacks requested control capability
+
+413:
+  request exceeds control-plane size limit
+
+503:
+  Graph control subprocess unavailable/timeout
+```
+
+A syntactically accepted domain request returns HTTP 200 and a versioned domain result.
+
+For `turn.ingest`, the result kind is exactly:
+
+```text
+COMMITTED
+ALREADY_COMMITTED
+RETRYABLE_FAILED
+TERMINAL_FAILED
+IDEMPOTENCY_CONFLICT
+IDEMPOTENCY_REBASE_UNAVAILABLE
+```
+
+Network/HTTP 5xx/control-process timeout is a transport-level retryable failure and is **not** rewritten into `TERMINAL_FAILED`. It leaves checkpoint unchanged.
+
+Source/receipt operations return their fixed structured source-resolution/validation statuses. Unsupported protocol versions fail before mutation.
+
+## 8.8 Repository ownership boundary
+
+```text
+chronos-gate:
+  /internal/v1/opencode/control HTTP surface
+  Bearer authentication
+  control capability authorization
+  request size/schema gate
+  audit/redaction
+  private control-subprocess client
+  HTTP <-> control wire error mapping
+
+chronos-graph:
+  context-store-control --stdio server
+  chronos.control.v1 dispatcher
+  canonicalization / PREPARE / COMMIT orchestration
+  IngestionCommitStore
+  source-scope/alias/receipt registry
+  keyring loading/rotation validation
+  binding issue/verify
+  backend migrations/RPCs
+  domain result/error authority
+
+chronos_shared (Graph-owned package surface):
+  versioned control wire schemas
+  operation/result/error enums
+  no Gate policy implementation
+```
+
+ChronosGraph never depends on ChronosGate, preserving the repository separation constraint.
 
 ---
 
@@ -1301,6 +1819,96 @@ plugin/process restarts
 
 A leftover lock file by itself must not make the test remain blocked forever.
 
+## Y. Control-plane isolation and authorization
+
+Exercise the real ChronosGate control endpoint and private Graph control subprocess.
+
+Required assertions:
+
+```text
+opencode-ingestion principal:
+  turn.ingest allowed
+  receipt read/validate allowed
+  source.register denied
+  source.authorize_alias_migration denied
+
+chronos-setup principal:
+  source.register allowed
+  source.authorize_alias_migration allowed
+
+normal MCP/OpenCode agent principal:
+  POST /internal/v1/opencode/control -> 403
+
+tools/list:
+  no control operations visible
+
+tools/call(control-operation-name):
+  unreachable/denied
+
+private control subprocess unavailable:
+  HTTP 503
+  checkpoint advance == 0
+```
+
+## Z. Backend atomic-COMMIT matrix
+
+For SQLite, PostgreSQL, and Supabase, run a backend-specific deterministic failure after at least one proposed memory mutation but before receipt commit.
+
+Required result for every backend:
+
+```text
+transaction abort
+memory mutation == 0
+graph/outbox mutation == 0
+receipt mutation == 0
+checkpoint advance == 0
+```
+
+Supabase acceptance must prove one `commit_ingested_turn_v1` transactional RPC/function is used; multiple PostgREST writes are release-blocking.
+
+Also verify an `ingestion_revision` mismatch produces `RETRYABLE_FAILED(STALE_DEDUPE_PLAN)`.
+
+## AA. Keyring rotation and local binding
+
+Exercise:
+
+```text
+identity key rotation:
+  old receipt remains comparable through retained old key
+
+missing referenced identity key:
+  -> IDEMPOTENCY_REBASE_UNAVAILABLE
+  -> no receipt rewrite
+
+source-alias key rotation:
+  old alias token resolves
+  active-key token added to same alias_id
+  canonical scope unchanged
+
+binding token:
+  valid token authenticates candidate S only
+  tampered/unknown-key token fails closed
+  full token/key material absent from logs
+```
+
+## AB. Post-terminal same-anchor continuation
+
+Create a real FAILED or ABORTED root turn, let its user-only receipt commit, then resume OpenCode v1.18.34 against the same eligible user anchor and obtain a later successful assistant.
+
+Required assertions:
+
+```text
+original turn_key unchanged
+original receipt/hash unchanged
+new same-anchor success receipt == 0
+checkpoint does not roll back
+divergence recorded:
+  POST_TERMINAL_CONTINUATION /
+  COMMITTED_TURN_SEMANTICS_CHANGED
+```
+
+Then create a new eligible user message and verify it receives a new normal `turn_key` and can commit successfully.
+
 ---
 
 # 14. Release gate
@@ -1333,6 +1941,21 @@ source continuity:
   unknown alias fails closed
   ambiguous continuity fails closed
   explicit enrollment transition is required
+
+control plane:
+  normal MCP/tool path cannot reach control operations
+  runtime/setup capabilities are separated
+
+storage:
+  SQLite/PostgreSQL/Supabase atomic COMMIT matrix green
+  ingestion_revision stale-plan CAS green
+
+crypto/binding:
+  retained-key rebase/rotation green
+  invalid binding fails closed
+
+post-terminal lineage:
+  same-anchor continuation does not rewrite immutable receipt
 ```
 
 A positive result cannot mask a forbidden side effect. For example, a correct root receipt plus one child receipt is release-blocking; a successful `ingest_turn` plus one legacy `memory_save` call is release-blocking.
@@ -1372,6 +1995,14 @@ Acceptance evidence should be machine-checkable and must itself avoid raw sensit
 27. Native acceptance must prove forbidden side effects are zero, not merely prove a successful positive path.
 28. COMMIT performs no external embedding/model/network work; destructive dedupe is transactionally revalidated using prepared embeddings and stale plans roll back as `RETRYABLE_FAILED(STALE_DEDUPE_PLAN)`.
 29. Inter-process root ownership is crash-recoverable; persistent lock-file existence alone can never permanently suppress reconciliation.
+30. OpenCode control-plane operations are carried over a dedicated authenticated HTTP control protocol and a private non-MCP Graph stdio control protocol; regular `tools/list` / `tools/call` cannot reach them.
+31. ChronosGraph `IngestionCommitStore` owns one backend transaction per turn COMMIT; operation-oriented `StorageAdapter` calls cannot emulate that transaction.
+32. `ingestion_revision` is the authoritative destructive dedupe concurrency token; timestamps are not CAS authority.
+33. SQLite, PostgreSQL, and Supabase all-mode support requires the backend-specific atomic COMMIT strategy fixed in §1.9.
+34. Identity/source-alias/source-binding key material is Graph-owned, versioned, and loaded from the Graph-owned ingestion keyring; it never becomes plugin/Gate policy state.
+35. Canonical source scope / alias / receipt registries are primary durable storage owned by ChronosGraph migrations.
+36. A Graph-issued local binding authenticates a candidate scope only; invalid/stale bindings fail closed and never authorize source mutation.
+37. FAILED/ABORTED commit permanently closes that user-anchor receipt; same-anchor later success is divergence, while only a new eligible user anchor creates a later durable increment.
 
 ## Implementation-order constraint
 

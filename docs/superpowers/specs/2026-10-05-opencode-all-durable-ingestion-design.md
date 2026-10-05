@@ -472,6 +472,8 @@ Normative logical shape:
 
 Each key is independently generated cryptographic random material of at least 256 bits. Key contents never appear in receipts, local checkpoints, API responses, logs, traces, or metrics.
 
+All ChronosGraph control instances that share one primary durable backend/receipt namespace must load the same keyring state. A mismatched active/retained keyring across instances is a configuration error and must fail health/readiness for durable-all rather than create divergent identity or alias namespaces.
+
 ### Identity key lifecycle
 
 The active identity key version is used for new canonical identity tokens/receipts. Old identity key versions remain loaded while any durable receipt references that version.

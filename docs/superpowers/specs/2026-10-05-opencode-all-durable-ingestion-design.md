@@ -476,7 +476,9 @@ All ChronosGraph control instances that share one primary durable backend/receip
 
 ### Keyring consistency manifest
 
-ChronosGraph migrations create one authoritative singleton manifest per primary durable receipt namespace, conceptually:
+ChronosGraph migrations create the **storage schema, constraints, and singleton identity slot** for exactly one authoritative manifest per primary durable receipt namespace. Migrations do **not** populate the manifest value/row itself.
+
+The manifest value is created only by explicit setup/operator provisioning, conceptually:
 
 ```text
 ingestion_keyring_manifest
@@ -582,14 +584,23 @@ Runtime startup never auto-generates a missing keyring and never initializes/rep
 Fresh installation requires an explicit setup/operator provisioning operation:
 
 ```text
-1. generate/write Graph-owned local keyring atomically
-2. derive non-secret manifest
-3. create ingestion_keyring_manifest with create-if-absent semantics
-4. verify local keyring against committed manifest
-5. only then durable-all becomes READY
+migration:
+  create manifest schema/constraints/singleton identity only
+  manifest value row remains absent
+
+explicit provisioning:
+  1. generate/write Graph-owned local keyring atomically
+  2. derive non-secret manifest
+  3. INSERT singleton ingestion_keyring_manifest with create-if-absent semantics
+  4. if INSERT loses because a row already exists:
+       read existing row
+       require exact compatible manifest identity/fingerprints
+       never overwrite it implicitly
+  5. verify local keyring against the committed manifest
+  6. only then durable-all becomes READY
 ```
 
-If the manifest already exists, provisioning must verify it; it must not overwrite an unrelated manifest.
+The initial manifest INSERT and all later manifest-generation changes are operator/setup-owned control-plane mutations. Normal runtime code never creates the row, never fills a migration-created placeholder, and never replaces an existing manifest.
 
 Rotation is explicit and operator-driven:
 
@@ -624,7 +635,7 @@ control mutations = disabled
 status = INGESTION_KEYRING_NOT_READY
 ```
 
-If the primary manifest is absent after migrations, normal runtime also remains NOT READY. Only explicit setup/operator provisioning may create the initial manifest.
+If the primary manifest **value row** is absent after schema migrations, normal runtime remains NOT READY. Only explicit setup/operator provisioning may create that initial row.
 
 ### Identity key lifecycle
 
@@ -1520,29 +1531,78 @@ Server-side provisioning in `MCP_GATEWAY_API_KEYS_JSON` therefore contains disti
 
 A deployment may have only the legacy principals it actually uses, but `opencode-ingestion` and `chronos-setup` may never reuse a legacy raw key.
 
-### Path separation
+### Path separation and session-bound Bearer authorization
 
 Authentication success does not imply access to both protocol families.
 
+The regular MCP transport is strengthened so both legs are authenticated. `session_id` possession alone is never authorization authority.
+
+```text
+GET /sse:
+  require Bearer
+  authenticate principal P
+  reject reserved control principals opencode-ingestion / chronos-setup with 403
+  apply existing intent/tool policy
+  create regular MCP session S with immutable owner_principal = P
+
+POST /messages?session_id=S:
+  require Bearer
+  authenticate principal Q
+  lookup S
+  require Q == S.owner_principal
+  require Q is a regular MCP principal, not a reserved control principal
+  then apply the existing session capability / tool-policy handling
+```
+
+Authorization/error ordering is fixed:
+
+```text
+POST /messages:
+
+missing Bearer
+  -> 401
+
+invalid Bearer
+  -> 401
+
+valid Bearer + unknown/expired session_id
+  -> 404
+
+valid Bearer + existing session + Q != session.owner_principal
+  -> 403
+
+reserved control principal + any existing regular MCP session
+  -> 403
+
+matching regular principal + owned live session
+  -> normal JSON-RPC handling
+```
+
+The Bearer is authenticated **before** session lookup, so an unauthenticated caller cannot use `/messages` as a session-id existence oracle. After successful Bearer authentication, an unknown/expired session remains the existing 404 condition.
+
+Normative protocol-family matrix:
+
 ```text
 legacy MCP agent principal:
-  /sse + /messages according to existing MCP intent policy
+  /sse + /messages only with its own Bearer and owned session
   /internal/v1/opencode/control -> 403
 
 opencode-ingestion:
   /internal/v1/opencode/control according to control capabilities
   /sse -> 403
-  /messages -> 403
+  /messages against any regular MCP session -> 403
 
 chronos-setup:
   /internal/v1/opencode/control according to control capabilities
   /sse -> 403
-  /messages -> 403
+  /messages against any regular MCP session -> 403
 ```
 
-The SSE handshake must reject the reserved control principals before creating an MCP session. The messages endpoint must never accept a session owned by a reserved control principal.
+A session owner principal is immutable for the lifetime of that MCP session. Session refresh/touch/approval flow must not change its owner.
 
-This preserves existing Claude Code / Codex `memory.ingest -> memory_save` behavior without granting the OpenCode control credential access to the legacy durable side channel.
+Supported regular MCP clients must repeat the same Bearer credential used for the SSE handshake on every `POST /messages`. The existing `scripts/agent_turn_hook.py` already follows this contract for its SSE handshake and subsequent `tools/call memory_save` POST.
+
+This changes regular MCP `/messages` security semantics from session-id capability alone to **Bearer + session ownership**, while preserving the regression-protected Claude Code / Codex turn-end hook behavior.
 
 ### Control capability matrix
 
@@ -1649,7 +1709,8 @@ Source/receipt operations return their fixed structured source-resolution/valida
 ```text
 chronos-gate:
   /internal/v1/opencode/control HTTP surface
-  Bearer authentication
+  regular /sse + /messages Bearer authentication
+  immutable MCP session owner-principal binding
   control capability authorization
   request size/schema gate
   audit/redaction
@@ -1820,7 +1881,7 @@ The OpenCode `all` reconciler must not mutate turns in selective mode.
 
 Existing Claude Code / Codex `all` hook behavior remains a compatibility surface and is not redesigned here.
 
-Shared `scripts/agent_turn_hook.py` behavior for non-OpenCode consumers must remain regression-protected, including continued use of the legacy `MCP_GATEWAY_API_KEY` on the regular SSE/messages `memory.ingest -> memory_save` path. OpenCode durable-all must not repurpose that credential.
+Shared `scripts/agent_turn_hook.py` behavior for non-OpenCode consumers must remain regression-protected, including continued use of the legacy `MCP_GATEWAY_API_KEY` on the regular SSE/messages `memory.ingest -> memory_save` path. The same Bearer used to create the SSE session is required on the subsequent `POST /messages`, matching the existing hook behavior. OpenCode durable-all must not repurpose that credential.
 
 ---
 
@@ -2041,16 +2102,37 @@ plugin/process restarts
 
 A leftover lock file by itself must not make the test remain blocked forever.
 
-## Y. Control-plane isolation, credential separation, and coexistence
+## Y. Control-plane isolation, credential separation, session ownership, and coexistence
 
 Exercise one ChronosGate installation with distinct legacy/control/operator credentials and the real private Graph control subprocess.
+
+Create at least two regular MCP principals, A and B, plus the reserved control principals.
 
 Required assertions:
 
 ```text
-legacy Claude/Codex MCP credential:
-  GET /sse with allowed memory.ingest intent succeeds
-  POST /messages tools/call memory_save retains existing behavior
+legacy principal A:
+  GET /sse with Bearer A + allowed memory.ingest intent
+    -> succeeds
+    -> creates session SA owned by A
+
+Bearer A + SA:
+  POST /messages tools/call memory_save
+    -> existing behavior succeeds
+
+missing Bearer + SA:
+  POST /messages -> 401
+
+invalid Bearer + SA:
+  POST /messages -> 401
+
+Bearer B + SA:
+  POST /messages -> 403
+
+Bearer A + unknown/expired session:
+  POST /messages -> 404
+
+legacy principal A:
   POST /internal/v1/opencode/control -> 403
 
 OpenCode MCP/control credential separation:
@@ -2062,13 +2144,13 @@ opencode-ingestion control credential:
   source.register denied
   source.authorize_alias_migration denied
   GET /sse -> 403
-  POST /messages -> 403
+  POST /messages with SA -> 403
 
 chronos-setup operator credential:
   source.register allowed
   source.authorize_alias_migration allowed
   GET /sse -> 403
-  POST /messages -> 403
+  POST /messages with SA -> 403
 
 normal MCP/OpenCode agent principal:
   POST /internal/v1/opencode/control -> 403
@@ -2084,7 +2166,7 @@ private control subprocess unavailable:
   checkpoint advance == 0
 ```
 
-The acceptance installation must run the regression-protected legacy hook path and the OpenCode durable control path side-by-side, proving Claude Code/Codex compatibility does not require credential dual-use.
+The acceptance installation must run the regression-protected legacy Claude/Codex hook path and the OpenCode durable control path side-by-side. It must prove both credential separation and that a control/operator credential cannot successfully reuse a regular MCP session ID.
 
 ## Z. Backend atomic-COMMIT matrix
 
@@ -2120,14 +2202,22 @@ missing CHRONOS_INGESTION_KEYRING_PATH:
 malformed/invalid/insecure keyring where enforceable:
   same fail-closed result
 
+schema migration on fresh backend:
+  manifest schema/constraints/singleton identity exist
+  manifest value row == absent
+
 manifest absent in normal runtime:
   durable-all NOT READY
   automatic manifest creation == 0
 
 explicit setup provisioning:
   creates local keyring
-  creates manifest with create-if-absent
+  INSERTs initial manifest row with create-if-absent
   readiness becomes healthy only after verification
+
+second provisioning attempt:
+  does not overwrite existing manifest
+  verifies existing manifest or fails closed
 ```
 
 ### Cross-instance mismatch
@@ -2255,8 +2345,10 @@ source continuity:
 control plane:
   normal MCP/tool path cannot reach control operations
   legacy/control/operator credentials are distinct
+  regular /messages requires Bearer == immutable MCP session owner
+  cross-principal /messages reuse is rejected
   legacy MCP hook and OpenCode control path coexist
-  reserved control principals cannot open regular MCP sessions
+  reserved control principals cannot open or reuse regular MCP sessions
 
 storage:
   SQLite/PostgreSQL/Supabase atomic COMMIT matrix green
@@ -2319,11 +2411,13 @@ Acceptance evidence should be machine-checkable and must itself avoid raw sensit
 36. A Graph-issued local binding authenticates a candidate scope only; invalid/stale bindings fail closed and never authorize source mutation.
 37. FAILED/ABORTED commit permanently closes that user-anchor receipt; same-anchor later success is divergence, while only a new eligible user anchor creates a later durable increment.
 38. Legacy MCP ingestion, OpenCode durable control, and setup/operator control use distinct raw Bearer credentials and distinct principals; a control credential is never valid for regular SSE/messages MCP access.
-39. Existing non-OpenCode hooks retain `MCP_GATEWAY_API_KEY`; OpenCode durable-all uses `MCP_GATEWAY_CONTROL_API_KEY` and must not repurpose the legacy credential.
-40. Every shared receipt namespace has one authoritative non-secret `ingestion_keyring_manifest`; each control instance must mechanically verify manifest-required key fingerprints before durable-all mutation.
-41. The authoritative manifest must cover every identity key version still referenced by receipts and every alias key version still required by alias-retirement rules; missing durable-reference coverage is a fail-closed manifest inconsistency.
-42. Runtime never auto-generates/replaces a missing or malformed ingestion keyring or missing manifest; initial provisioning and rotation are explicit operator actions.
-43. Keyring manifest updates are generation-CAS protected, and local inactive staging keys may not become active authority until represented by the committed manifest.
+39. Regular MCP `POST /messages` requires a valid Bearer whose authenticated principal exactly matches the immutable owner principal of the referenced live MCP session; missing/invalid Bearer is 401, owner mismatch is 403, and authenticated unknown/expired session is 404.
+40. Existing non-OpenCode hooks retain `MCP_GATEWAY_API_KEY`; OpenCode durable-all uses `MCP_GATEWAY_CONTROL_API_KEY` and must not repurpose the legacy credential.
+41. Every shared receipt namespace has one authoritative non-secret `ingestion_keyring_manifest`; each control instance must mechanically verify manifest-required key fingerprints before durable-all mutation.
+42. Migrations create only manifest schema/constraints/singleton identity; only explicit setup/operator provisioning may create the initial manifest value row.
+43. The authoritative manifest must cover every identity key version still referenced by receipts and every alias key version still required by alias-retirement rules; missing durable-reference coverage is a fail-closed manifest inconsistency.
+44. Runtime never auto-generates/replaces a missing or malformed ingestion keyring or missing manifest; initial provisioning and rotation are explicit operator actions.
+45. Keyring manifest updates are generation-CAS protected, and local inactive staging keys may not become active authority until represented by the committed manifest.
 
 ## Implementation-order constraint
 

@@ -352,6 +352,8 @@ File-only, AgentPart-only, and SubtaskPart-only prompts are valid turns.
 
 Canonical user input preserves cross-kind part order as one ordered heterogeneous sequence.
 
+For the pinned v1.18.34 representation, persisted parts are ordered by `part.id` ascending before heterogeneous canonical projection. Generated user-derived expansion fragments are then collapsed according to their recognized source-input grouping while preserving the group's position at its earliest persisted part.
+
 Kind-separated arrays may exist only as derived views; they are not the hash authority.
 
 Relative reordering of meaningful user inputs changes canonical identity.
@@ -387,6 +389,8 @@ Compaction summaries/control assistants may participate in lineage and terminal 
 An OpenCode-generated replay of a prior user prompt is continuation control, not new user intent.
 
 Replay recognition must reproduce the exact v1.18.34 transition and deterministic replay transform. Text similarity is never sufficient.
+
+For the pinned v1.18.34 contract, recognition requires the overflow-compaction transition: an owned `CompactionPart` with `overflow = true`; its successful compaction summary assistant (`summary = true`, parented by the compaction control); the source user selected using OpenCode's nearest-prior non-compaction-user replay rule and its `hasContent` guard; and a candidate replay whose message-level execution fields (`agent`, `model`, `format`, `tools`, `system`) and transformed parts match the upstream replay transform. The transform omits `CompactionPart`, converts media `FilePart` values to the `[Attached <mime>: <filename-or-file>]` text descriptor, and otherwise semantically copies parts. Generated message/part IDs, session IDs, and creation timestamps are excluded from replay semantic equality.
 
 Recognized replay:
 
@@ -511,7 +515,7 @@ A root state conceptually contains:
 
 - canonical source scope binding;
 - committed checkpoint cursor/turn key/server-returned payload hash;
-- pending retry metadata;
+- pending retry metadata, including the pinned `evidence_contract_version` used to re-extract that pending turn across plugin upgrades;
 - blocked/recovery status;
 - bounded divergence diagnostics.
 
@@ -568,6 +572,8 @@ Correctness uses all of:
 3. deprecated `session.idle` hint;
 4. finite periodic exhaustive correctness sweep.
 
+The baseline periodic correctness interval is 60 seconds (configurable without permitting normal `all` mode to disable the finite recovery sweep entirely).
+
 Busy/retry/update/delete events may mark roots dirty, but event delivery is not required.
 
 ## 4.6 Exhaustive root discovery
@@ -608,7 +614,20 @@ For shared/global project identifiers, project ID alone is insufficient. `Projec
 
 Detected alias/query domain mismatch fails closed as `SOURCE_ROUTING_SCOPE_MISMATCH` before receipt/checkpoint correctness decisions.
 
-## 4.8 Contiguous-prefix drain
+## 4.8 Full snapshot reconstruction, incremental durable drain
+
+Reconciliation may fetch the complete persisted root-session message snapshot required to reconstruct v1.18.34 lineage, compaction, replay, and ownership correctly. This does not mean full-history durable re-ingestion.
+
+```text
+fetch full persisted root snapshot
+  -> reconstruct lineage locally
+  -> select the next eligible logical turn after checkpoint
+  -> call ingest_turn only for that turn
+```
+
+Optimization of snapshot reads is allowed only if it preserves the same reconstruction semantics.
+
+## 4.9 Contiguous-prefix drain
 
 Eligible turns are processed in deterministic order after the checkpoint.
 
@@ -626,7 +645,7 @@ INCOMPLETE / retryable / blocked/conflict
 
 Later terminal turns never pass an unresolved earlier eligible turn.
 
-## 4.9 Retry
+## 4.10 Retry
 
 `RETRYABLE_FAILED` keeps the checkpoint unchanged and persists bounded retry metadata with exponential backoff.
 
@@ -634,7 +653,7 @@ Retry timers are not the only recovery mechanism; activation and periodic sweeps
 
 Repeated quiescent `INCOMPLETE` may emit `STUCK_INCOMPLETE` diagnostics without changing the outcome classification.
 
-## 4.10 Crash windows
+## 4.11 Crash windows
 
 Supported convergence:
 
@@ -656,7 +675,7 @@ checkpoint write succeeds, crash before next turn
   -> resume after checkpoint
 ```
 
-## 4.11 Post-drain recheck
+## 4.12 Post-drain recheck
 
 Before declaring a root caught up, the reconciler refreshes current status/persisted state.
 
@@ -1017,6 +1036,8 @@ Direct calls to `memory_save`, `session_flush`, or `ingest_turn` cannot substitu
 
 A unique random setup probe marker and exact IDs are used so verification/cleanup cannot accidentally target unrelated memories.
 
+Cleanup, when supported, is restricted to the exact IDs produced by that probe. Broad search-and-delete cleanup is forbidden. If the backend/configuration cannot safely complete exact probe cleanup, report `SMOKE_CLEANUP_INCOMPLETE` rather than claiming cleanup succeeded.
+
 Setup is incomplete if the real turn does not reach durable commit and readback.
 
 ---
@@ -1201,6 +1222,10 @@ Following scenario S, only explicit `REGISTER_NEW_SOURCE_SCOPE` resolves the sou
 ## U. Ambiguous continuity fails closed
 
 Two valid candidate scopes with ambiguous continuity must attach to neither, create no new scope, and perform no ingest/checkpoint mutation.
+
+## V. Explicit alias-migration authorization
+
+From an unresolved source state, an operator-authorized `AUTHORIZE_SOURCE_SCOPE_ALIAS_MIGRATION` may bind the current alias to one selected existing canonical scope. The operation must not recreate the canonical scope or rewrite historical receipts, and normal reconciliation begins only after the explicit migration succeeds.
 
 ---
 

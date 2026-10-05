@@ -121,9 +121,12 @@ It may:
 - reconstruct the logical turn;
 - classify terminal outcome;
 - validate/canonicalize semantic content;
+- complete all external embedding/model work required by the prepared turn;
 - derive privacy-preserving identity tokens;
-- produce a dedupe/mutation proposal;
+- produce a dedupe/mutation proposal together with the embeddings and destructive-state assumptions required to revalidate that proposal at COMMIT;
 - derive a candidate canonical envelope and payload hash.
+
+`PreparedTurn` conceptually carries all embeddings required by COMMIT. COMMIT must never need to call an embedding/model provider to reconstruct dedupe state.
 
 It must not:
 
@@ -141,11 +144,28 @@ COMMIT is the authoritative durability boundary.
 Within the primary storage transaction it performs:
 
 1. authoritative receipt/idempotency revalidation;
-2. commit-time dedupe revalidation;
-3. all primary memory mutations for the logical turn;
-4. durable graph intent/outbox writes when graph mode requires them;
-5. ingestion receipt creation/update as applicable;
-6. atomic transaction commit.
+2. commit-time dedupe revalidation against current transactional state using only the prepared embeddings/data carried by `PreparedTurn`;
+3. optimistic validation of every destructive dedupe assumption, including the current identity/version/state of any memory planned for archive/replace;
+4. all primary memory mutations for the logical turn;
+5. durable graph intent/outbox writes when graph mode requires them;
+6. ingestion receipt creation/update as applicable;
+7. atomic transaction commit.
+
+External embedding/model/network calls are forbidden inside the COMMIT transaction.
+
+If any destructive prepared dedupe assumption is stale at COMMIT:
+
+```text
+stale prepared dedupe assumption
+  -> rollback the entire turn transaction
+  -> memory mutations == 0
+  -> graph/outbox mutations == 0
+  -> receipt mutations == 0
+  -> RETRYABLE_FAILED(STALE_DEDUPE_PLAN)
+  -> perform a fresh PREPARE before retry
+```
+
+COMMIT must not silently adapt a stale destructive plan in-place. The fresh PREPARE owns any newly required embedding/model work and derives a new proposal from current state.
 
 Neo4j projection is post-commit convergence. It is not required for `COMMITTED`.
 
@@ -543,7 +563,13 @@ The reverse ordering is forbidden.
 
 Same source scope + same root has at most one active local reconciler.
 
-In-process triggers coalesce into `dirty/queued/running` state. Inter-process duplicate work is suppressed with the per-root file lock.
+In-process triggers coalesce into `dirty/queued/running` state. Inter-process duplicate work is suppressed with the per-root lock.
+
+Inter-process lock ownership must be crash-recoverable. A crashed, terminated, or restarted owner must never leave the root permanently unreconcilable.
+
+Valid implementations include process-lifetime OS advisory locking or an explicit owner/lease/stale-reclamation protocol. Persistent lock-file existence alone is never ownership authority.
+
+After owner loss, activation/periodic reconciliation must be able to reacquire ownership in finite time and resume pending work.
 
 Local locking is optimization/suppression; the server receipt remains the final correctness boundary.
 
@@ -1227,6 +1253,54 @@ Two valid candidate scopes with ambiguous continuity must attach to neither, cre
 
 From an unresolved source state, an operator-authorized `AUTHORIZE_SOURCE_SCOPE_ALIAS_MIGRATION` may bind the current alias to one selected existing canonical scope. The operation must not recreate the canonical scope or rewrite historical receipts, and normal reconciliation begins only after the explicit migration succeeds.
 
+## W. Stale dedupe plan rollback
+
+Use deterministic fault injection around the PREPARE/COMMIT boundary:
+
+```text
+PREPARE
+  -> destructive dedupe plan targets memory M
+  -> PreparedTurn contains all required embeddings
+
+concurrent transaction
+  -> changes the dedupe-relevant state/version of M
+
+COMMIT
+  -> revalidation detects stale assumption
+  -> RETRYABLE_FAILED(STALE_DEDUPE_PLAN)
+```
+
+Required assertions:
+
+```text
+external embedding/model/network calls inside COMMIT == 0
+memory mutations from failed COMMIT == 0
+graph/outbox mutations from failed COMMIT == 0
+receipt mutations from failed COMMIT == 0
+checkpoint advance == 0
+
+fresh PREPARE
+  -> current dedupe state
+  -> later COMMIT may succeed normally
+```
+
+## X. Inter-process root-lock crash recovery
+
+Exercise real inter-process lock ownership:
+
+```text
+process A acquires root reconciliation ownership
+  -> A is hard-terminated before release
+
+plugin/process restarts
+  -> activation/periodic recovery rediscovers the root
+  -> stale/dead ownership does not permanently block acquisition
+  -> a live process reacquires root ownership
+  -> pending root eventually reconciles
+```
+
+A leftover lock file by itself must not make the test remain blocked forever.
+
 ---
 
 # 14. Release gate
@@ -1296,6 +1370,8 @@ Acceptance evidence should be machine-checkable and must itself avoid raw sensit
 25. New-source enrollment and alias migration are explicit distinct transitions.
 26. OpenCode `all` uses no legacy `memory_save` / `session_flush` / detached-hook durable side channel.
 27. Native acceptance must prove forbidden side effects are zero, not merely prove a successful positive path.
+28. COMMIT performs no external embedding/model/network work; destructive dedupe is transactionally revalidated using prepared embeddings and stale plans roll back as `RETRYABLE_FAILED(STALE_DEDUPE_PLAN)`.
+29. Inter-process root ownership is crash-recoverable; persistent lock-file existence alone can never permanently suppress reconciliation.
 
 ## Implementation-order constraint
 

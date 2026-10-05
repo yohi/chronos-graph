@@ -472,7 +472,140 @@ Normative logical shape:
 
 Each key is independently generated cryptographic random material of at least 256 bits. Key contents never appear in receipts, local checkpoints, API responses, logs, traces, or metrics.
 
-All ChronosGraph control instances that share one primary durable backend/receipt namespace must load the same keyring state. A mismatched active/retained keyring across instances is a configuration error and must fail health/readiness for durable-all rather than create divergent identity or alias namespaces.
+All ChronosGraph control instances that share one primary durable backend/receipt namespace must load cryptographically equivalent keyring material for every manifest-required key version. Consistency is enforced mechanically through a **non-secret keyring manifest stored in that primary durable backend**; local version names alone are never trusted.
+
+### Keyring consistency manifest
+
+ChronosGraph migrations create one authoritative singleton manifest per primary durable receipt namespace, conceptually:
+
+```text
+ingestion_keyring_manifest
+
+schema = chronos.ingestion-keyring-manifest.v1
+generation = monotonic integer
+
+identity:
+  active_version
+  required_versions[] {
+    version
+    fingerprint
+  }
+
+source_alias:
+  active_version
+  required_versions[] {
+    version
+    fingerprint
+  }
+
+source_binding:
+  active_version
+  required_versions[] {
+    version
+    fingerprint
+  }
+
+updated_at
+```
+
+For each local secret key, ChronosGraph derives a non-secret verification fingerprint:
+
+```text
+SHA-256(
+  "chronos.ingestion-key-fingerprint.v1"
+  || 0x00
+  || key_family
+  || 0x00
+  || key_version
+  || 0x00
+  || raw_256bit_or_stronger_key_bytes
+)
+```
+
+Only this fingerprint is persisted in the manifest. Raw key material never enters the database.
+
+Durable-all readiness requires:
+
+```text
+for each family:
+  local active version == manifest active version
+
+for every manifest-required version:
+  local key exists
+  derived fingerprint == manifest fingerprint
+
+local key with same version but different secret:
+  mismatch -> NOT READY
+
+manifest-required key missing locally:
+  mismatch -> NOT READY
+```
+
+A local keyring may contain additional **inactive staging keys** not yet present in the manifest. They are ignored for durable operations until an explicit manifest rotation promotes/adds them. This permits safe fleet staging without treating local extras as authority.
+
+On mismatch:
+
+```text
+INGESTION_KEYRING_MISMATCH
+durable-all readiness = failed
+source mutation = disabled
+receipt mutation = disabled
+turn.ingest mutation = disabled
+automatic key/manifest replacement = forbidden
+```
+
+Read-only health/diagnostic reporting may remain available, but key-dependent source/receipt resolution must fail closed.
+
+### Explicit provisioning and rotation
+
+Runtime startup never auto-generates a missing keyring and never initializes/replaces the backend manifest.
+
+Fresh installation requires an explicit setup/operator provisioning operation:
+
+```text
+1. generate/write Graph-owned local keyring atomically
+2. derive non-secret manifest
+3. create ingestion_keyring_manifest with create-if-absent semantics
+4. verify local keyring against committed manifest
+5. only then durable-all becomes READY
+```
+
+If the manifest already exists, provisioning must verify it; it must not overwrite an unrelated manifest.
+
+Rotation is explicit and operator-driven:
+
+```text
+PREPARE:
+  distribute/stage new local inactive key material to every intended control instance
+
+COMMIT ROTATION:
+  atomically update backend manifest generation
+  add/promote the new version/fingerprint
+  retain every old version still required by receipt/alias/binding rules
+
+INSTANCE READINESS:
+  reload local keyring
+  compare to new authoritative manifest
+  instance lacking/mismatching required material becomes NOT READY before mutation
+```
+
+Retirement updates the manifest only after the family-specific retirement rules below are satisfied. A locally retained key omitted from the manifest is inactive historical/staging material and is not selected for new operations.
+
+The manifest generation is monotonic; stale manifest updates use compare-and-swap on the expected generation so concurrent operator rotations cannot overwrite one another.
+
+### Whole-keyring failure semantics
+
+If `CHRONOS_INGESTION_KEYRING_PATH` is absent, unreadable, malformed, has unsupported schema, contains invalid/duplicate versions, lacks an active key, references an active key not present in its family, contains invalid key material, or has insecure permissions where enforceable:
+
+```text
+runtime MUST NOT generate replacement keys
+runtime MUST NOT rewrite the keyring
+durable-all readiness = failed
+control mutations = disabled
+status = INGESTION_KEYRING_NOT_READY
+```
+
+If the primary manifest is absent after migrations, normal runtime also remains NOT READY. Only explicit setup/operator provisioning may create the initial manifest.
 
 ### Identity key lifecycle
 
@@ -1028,6 +1161,12 @@ ingestion_source_alias_tokens
   key_version
   keyed_token
 
+ingestion_keyring_manifest
+  schema
+  generation
+  active/required version metadata
+  non-secret key fingerprints
+
 ingestion_receipts
   ...
 ```
@@ -1314,35 +1453,77 @@ Raw sensitive identity evidence may occur only inside the authenticated request 
 
 ## 8.5 ChronosGate authentication and authorization
 
-The dedicated control endpoint reuses ChronosGate's existing Bearer API-key authenticator and server-side `MCP_GATEWAY_API_KEYS_JSON` principal registry, but uses a **separate control capability matrix**, not MCP intent/tool authorization.
+The dedicated control endpoint reuses ChronosGate's Bearer API-key authenticator implementation and server-side `MCP_GATEWAY_API_KEYS_JSON` principal registry, but **control credentials are separate raw secrets from every legacy/regular MCP agent credential**.
 
-Runtime credential source:
+### Credential ownership
+
+Legacy MCP turn-end hooks retain the existing compatibility contract:
 
 ```text
-MCP_GATEWAY_URL
 MCP_GATEWAY_API_KEY
+  -> legacy agent principal (for example claude-code / codex)
+  -> GET /sse
+  -> x-mcp-intent: memory.ingest
+  -> POST /messages
+  -> tools/call memory_save
 ```
 
-The runtime key must authenticate as reserved principal:
+OpenCode durable-all uses a new dedicated credential:
 
 ```text
-opencode-ingestion
+MCP_GATEWAY_CONTROL_API_KEY
+  -> reserved principal opencode-ingestion
+  -> POST /internal/v1/opencode/control only
 ```
 
-Operator/setup credential source:
+Setup/operator control uses a third dedicated credential:
 
 ```text
-MCP_GATEWAY_URL
 MCP_GATEWAY_OPERATOR_API_KEY
+  -> reserved principal chronos-setup
+  -> POST /internal/v1/opencode/control only
 ```
 
-The operator key must authenticate as reserved principal:
+The three raw secrets must be distinct. ChronosGate's existing duplicate-key rejection remains authoritative.
+
+Server-side provisioning in `MCP_GATEWAY_API_KEYS_JSON` therefore contains distinct principal/key entries, conceptually:
+
+```json
+{
+  "claude-code": "<legacy-key-A>",
+  "codex": "<legacy-key-B>",
+  "opencode-ingestion": "<control-key-C>",
+  "chronos-setup": "<operator-key-D>"
+}
+```
+
+A deployment may have only the legacy principals it actually uses, but `opencode-ingestion` and `chronos-setup` may never reuse a legacy raw key.
+
+### Path separation
+
+Authentication success does not imply access to both protocol families.
 
 ```text
-chronos-setup
+legacy MCP agent principal:
+  /sse + /messages according to existing MCP intent policy
+  /internal/v1/opencode/control -> 403
+
+opencode-ingestion:
+  /internal/v1/opencode/control according to control capabilities
+  /sse -> 403
+  /messages -> 403
+
+chronos-setup:
+  /internal/v1/opencode/control according to control capabilities
+  /sse -> 403
+  /messages -> 403
 ```
 
-Normative capability matrix:
+The SSE handshake must reject the reserved control principals before creating an MCP session. The messages endpoint must never accept a session owned by a reserved control principal.
+
+This preserves existing Claude Code / Codex `memory.ingest -> memory_save` behavior without granting the OpenCode control credential access to the legacy durable side channel.
+
+### Control capability matrix
 
 ```text
 opencode-ingestion:
@@ -1365,7 +1546,7 @@ chronos-setup:
 
 Safe automatic alias migration proven by §5.6 is part of `source.resolve`; manual authorization remains setup-only.
 
-Normal agent principals, including existing OpenCode/default MCP principals, receive HTTP 403 from the control endpoint even if their MCP intent permits `memory_save`. Control capability is never inferred from `memory.ingest`, `developer_access`, or any allowed MCP tool.
+Control capability is never inferred from `memory.ingest`, `developer_access`, or any allowed MCP tool. Legacy MCP intent authorization is never inferred from control capability.
 
 Bearer credentials are never request-body fields and are never logged. Runtime/operator credential rotation is independent from receipt/keyring identity; authentication failure never advances a checkpoint.
 
@@ -1510,13 +1691,15 @@ IDEMPOTENCY_CONFLICT
 IDEMPOTENCY_REBASE_UNAVAILABLE
 ```
 
-### Local recovery
+### Local recovery / cryptographic readiness
 
 ```text
 LOCAL_STATE_CORRUPT
 LOCAL_STATE_RECOVERY_RETRYABLE
 LOCAL_STATE_RECOVERY_UNAVAILABLE
 LOCAL_STATE_SOURCE_SCOPE_MISMATCH
+INGESTION_KEYRING_NOT_READY
+INGESTION_KEYRING_MISMATCH
 ```
 
 ### Divergence
@@ -1538,9 +1721,12 @@ A read-only health/status projection should expose at least:
 - root counts by caught-up/pending/retrying/blocked/diverged;
 - oldest pending age;
 - last successful exhaustive sweep;
-- last successful durable commit.
+- last successful durable commit;
+- local ingestion keyring validity;
+- authoritative keyring manifest generation;
+- local-vs-manifest keyring match status.
 
-`plugin loaded` alone is never sufficient to report ingestion healthy.
+`plugin loaded` alone is never sufficient to report ingestion healthy. Keyring/manifest mismatch makes durable-all NOT READY even when the control process is otherwise reachable.
 
 ## 9.3 Sensitive-data discipline
 
@@ -1562,6 +1748,18 @@ Unknown source continuity must be resolved explicitly by either:
 - authorized/proven `SOURCE_SCOPE_ALIAS_MIGRATION` for an existing source.
 
 Background reconciliation may not guess.
+
+Before source enrollment or smoke ingestion, setup must explicitly provision/verify the Graph ingestion keyring and authoritative backend keyring manifest described in §2.5. Normal runtime is never allowed to bootstrap replacement cryptographic state implicitly.
+
+Credential provisioning must also preserve §8.5 separation:
+
+```text
+legacy MCP agent key(s)
+OpenCode control key
+setup/operator key
+```
+
+must be distinct raw secrets mapped to their distinct principals.
 
 ## 10.2 Real-turn smoke test
 
@@ -1600,7 +1798,7 @@ The OpenCode `all` reconciler must not mutate turns in selective mode.
 
 Existing Claude Code / Codex `all` hook behavior remains a compatibility surface and is not redesigned here.
 
-Shared `scripts/agent_turn_hook.py` behavior for non-OpenCode consumers must remain regression-protected.
+Shared `scripts/agent_turn_hook.py` behavior for non-OpenCode consumers must remain regression-protected, including continued use of the legacy `MCP_GATEWAY_API_KEY` on the regular SSE/messages `memory.ingest -> memory_save` path. OpenCode durable-all must not repurpose that credential.
 
 ---
 
@@ -1821,22 +2019,34 @@ plugin/process restarts
 
 A leftover lock file by itself must not make the test remain blocked forever.
 
-## Y. Control-plane isolation and authorization
+## Y. Control-plane isolation, credential separation, and coexistence
 
-Exercise the real ChronosGate control endpoint and private Graph control subprocess.
+Exercise one ChronosGate installation with distinct legacy/control/operator credentials and the real private Graph control subprocess.
 
 Required assertions:
 
 ```text
-opencode-ingestion principal:
+legacy Claude/Codex MCP credential:
+  GET /sse with allowed memory.ingest intent succeeds
+  POST /messages tools/call memory_save retains existing behavior
+  POST /internal/v1/opencode/control -> 403
+
+OpenCode MCP/control credential separation:
+  MCP_GATEWAY_CONTROL_API_KEY != MCP_GATEWAY_API_KEY
+
+opencode-ingestion control credential:
   turn.ingest allowed
   receipt read/validate allowed
   source.register denied
   source.authorize_alias_migration denied
+  GET /sse -> 403
+  POST /messages -> 403
 
-chronos-setup principal:
+chronos-setup operator credential:
   source.register allowed
   source.authorize_alias_migration allowed
+  GET /sse -> 403
+  POST /messages -> 403
 
 normal MCP/OpenCode agent principal:
   POST /internal/v1/opencode/control -> 403
@@ -1851,6 +2061,8 @@ private control subprocess unavailable:
   HTTP 503
   checkpoint advance == 0
 ```
+
+The acceptance installation must run the regression-protected legacy hook path and the OpenCode durable control path side-by-side, proving Claude Code/Codex compatibility does not require credential dual-use.
 
 ## Z. Backend atomic-COMMIT matrix
 
@@ -1870,16 +2082,74 @@ Supabase acceptance must prove one `commit_ingested_turn_v1` transactional RPC/f
 
 Also verify an `ingestion_revision` mismatch produces `RETRYABLE_FAILED(STALE_DEDUPE_PLAN)`.
 
-## AA. Keyring rotation and local binding
+## AA. Keyring provisioning, cross-instance consistency, rotation, and local binding
 
-Exercise:
+Exercise at least two ChronosGraph control instances against the same primary receipt namespace.
+
+### Provisioning / whole-keyring failure
 
 ```text
-identity key rotation:
-  old receipt remains comparable through retained old key
+missing CHRONOS_INGESTION_KEYRING_PATH:
+  INGESTION_KEYRING_NOT_READY
+  durable-all NOT READY
+  automatic key generation == 0
+  source/receipt/turn mutation == 0
+
+malformed/invalid/insecure keyring where enforceable:
+  same fail-closed result
+
+manifest absent in normal runtime:
+  durable-all NOT READY
+  automatic manifest creation == 0
+
+explicit setup provisioning:
+  creates local keyring
+  creates manifest with create-if-absent
+  readiness becomes healthy only after verification
+```
+
+### Cross-instance mismatch
+
+Configure:
+
+```text
+instance A and B:
+  same backend/receipt namespace
+  same family/version names
+  different raw key material for at least one required version
+```
+
+Expected:
+
+```text
+derived fingerprint mismatch detected mechanically
+mismatched instance -> INGESTION_KEYRING_MISMATCH
+mismatched instance durable-all NOT READY
+turn.ingest mutation == 0
+source alias mutation == 0
+receipt mutation == 0
+```
+
+### Rotation / retirement
+
+```text
+stage new inactive key on A and B
+  -> current readiness remains valid
+
+operator CAS-updates manifest generation:
+  add/promote new key fingerprint
+  retain old required version
+
+A and B reload:
+  -> both verify same manifest generation/fingerprints
+
+identity old key:
+  old receipt remains comparable while manifest-required
 
 missing referenced identity key:
-  -> IDEMPOTENCY_REBASE_UNAVAILABLE
+  -> NOT READY when manifest-required key is absent
+  -> if a receipt-pinned historical contract becomes unavailable due to an operator-approved retired key,
+     duplicate comparison returns IDEMPOTENCY_REBASE_UNAVAILABLE
   -> no receipt rewrite
 
 source-alias key rotation:
@@ -1887,10 +2157,17 @@ source-alias key rotation:
   active-key token added to same alias_id
   canonical scope unchanged
 
-binding token:
-  valid token authenticates candidate S only
-  tampered/unknown-key token fails closed
-  full token/key material absent from logs
+stale concurrent manifest update:
+  generation CAS fails
+  manifest is not overwritten
+```
+
+### Binding token
+
+```text
+valid token authenticates candidate S only
+tampered/unknown-key token fails closed
+full token/key material absent from logs
 ```
 
 ## AB. Post-terminal same-anchor continuation
@@ -1946,13 +2223,18 @@ source continuity:
 
 control plane:
   normal MCP/tool path cannot reach control operations
-  runtime/setup capabilities are separated
+  legacy/control/operator credentials are distinct
+  legacy MCP hook and OpenCode control path coexist
+  reserved control principals cannot open regular MCP sessions
 
 storage:
   SQLite/PostgreSQL/Supabase atomic COMMIT matrix green
   ingestion_revision stale-plan CAS green
 
 crypto/binding:
+  explicit keyring/manifest provisioning green
+  multi-instance manifest fingerprint consistency green
+  missing/malformed/mismatched keyring fails readiness with zero mutation
   retained-key rebase/rotation green
   invalid binding fails closed
 
@@ -2005,6 +2287,11 @@ Acceptance evidence should be machine-checkable and must itself avoid raw sensit
 35. Canonical source scope / alias / receipt registries are primary durable storage owned by ChronosGraph migrations.
 36. A Graph-issued local binding authenticates a candidate scope only; invalid/stale bindings fail closed and never authorize source mutation.
 37. FAILED/ABORTED commit permanently closes that user-anchor receipt; same-anchor later success is divergence, while only a new eligible user anchor creates a later durable increment.
+38. Legacy MCP ingestion, OpenCode durable control, and setup/operator control use distinct raw Bearer credentials and distinct principals; a control credential is never valid for regular SSE/messages MCP access.
+39. Existing non-OpenCode hooks retain `MCP_GATEWAY_API_KEY`; OpenCode durable-all uses `MCP_GATEWAY_CONTROL_API_KEY` and must not repurpose the legacy credential.
+40. Every shared receipt namespace has one authoritative non-secret `ingestion_keyring_manifest`; each control instance must mechanically verify manifest-required key fingerprints before durable-all mutation.
+41. Runtime never auto-generates/replaces a missing or malformed ingestion keyring or missing manifest; initial provisioning and rotation are explicit operator actions.
+42. Keyring manifest updates are generation-CAS protected, and local inactive staging keys may not become active authority until represented by the committed manifest.
 
 ## Implementation-order constraint
 

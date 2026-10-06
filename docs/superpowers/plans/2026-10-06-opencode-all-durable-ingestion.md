@@ -48,6 +48,7 @@
 - `src/context_store/storage/ingestion/postgres.py` — asyncpg atomic authority implementation.
 - `src/context_store/storage/ingestion/supabase.py` — Supabase RPC-backed authority implementation.
 - `src/context_store/storage/ingestion/factory.py` — select durable-ingestion store for configured backend.
+- `src/context_store/control/composition.py` — focused private-control composition root; creates only Settings, primary storage/read source, durable-ingestion authority store, embedding provider, keyring authority, and `DurableIngestionService`.
 - `src/context_store/control/server.py`, `src/context_store/control/__main__.py` — private `chronos.control.v1` stdio server.
 - `src/context_store/admin/ingestion_keyring.py`, `src/context_store/admin/__main__.py` — Graph-local `context-store-admin ingestion-keyring {provision,verify,rotate}`.
 - `.opencode/plugins/chronos/{canonicalize,lineage,control-client,state-store,source-scope,lock,reconciler,runtime}.js` — shared npm/local OpenCode runtime implementation.
@@ -423,7 +424,15 @@ git commit -m "feat: PostgreSQL と Supabase durable commit を追加"
   - commands `ingestion-keyring provision|verify|rotate`.
   - `provision(settings: Settings, store: IngestionRegistryStore) -> KeyringAdminResult`.
   - `verify(...) -> KeyringAdminResult` read-only.
+  - `FamilyVersion(family: Literal["identity", "source_alias", "source_binding"], version: str)`.
+  - `KeyringTransition(promotions: tuple[FamilyVersion, ...], retirements: tuple[FamilyVersion, ...])`.
   - `rotate(..., expected_generation: int, transition: KeyringTransition) -> KeyringAdminResult`.
+  - exact CLI:
+    - `context-store-admin ingestion-keyring provision`
+    - `context-store-admin ingestion-keyring verify`
+    - `context-store-admin ingestion-keyring rotate --expected-generation <int> [--promote <family>:<version>]... [--retire <family>:<version>]...`
+  - `rotate` requires at least one `--promote` or `--retire`; promoted keys must already exist in the staged local file.
+  - one invocation may not promote a successor and retire that family's previous active key simultaneously.
   - manifest CAS plus transactionally current receipt/alias/binding retirement validation.
   - no raw-key CLI arguments or Gate/RPC transport.
 
@@ -441,9 +450,9 @@ Expected: FAIL because admin entrypoint/service do not exist.
 
 Provision consumes a pre-staged local keyring only; runtime/CLI never auto-generates replacement keys.
 
-- [ ] **Step 4: Implement rotate/retire with the manifest fence**
+- [ ] **Step 4: Implement exact rotate/retire CLI parsing and the manifest fence**
 
-Promotion G→G+1 keeps the previous active version required. Retirement is a later generation and re-reads authoritative references in the same transaction as manifest update.
+Parse repeatable `--promote family:version` / `--retire family:version` into `KeyringTransition`. Promotion G→G+1 keeps the previous active version required. Reject same-family promote+previous-active-retire in one command. Retirement is a later generation and re-reads authoritative references in the same transaction as manifest update.
 
 - [ ] **Step 5: Add Scenario AA concurrency schedules**
 
@@ -480,6 +489,8 @@ git commit -m "feat: ingestion keyring admin CLI を追加"
 **Interfaces:**
 - Consumes: Tasks 3-7.
 - Produces:
+  - `DedupeReadStore` protocol exposing only `vector_search(embedding: list[float], top_k: int, project: str | None) -> list[ScoredMemory]`; a normal `StorageAdapter` satisfies it but the planner receives only this read interface.
+  - `DurableIngestionService(*, read_store: DedupeReadStore, authority_store: IngestionCommitStore, registry_store: IngestionRegistryStore, embedding_provider: EmbeddingProvider, keyring: IngestionKeyring)`.
   - `DurableIngestionService.resolve_source(...)`.
   - `register_source(...)`, `authorize_alias_migration(...)`.
   - receipt `list_roots/list/lookup/validate`.
@@ -530,6 +541,7 @@ git commit -m "feat: durable ingestion authority service を追加"
 ### Task 9: Add the private Graph control stdio server
 
 **Files:**
+- ChronosGraph — Create: `src/context_store/control/composition.py`
 - ChronosGraph — Create: `src/context_store/control/server.py`
 - ChronosGraph — Create: `src/context_store/control/__main__.py`
 - ChronosGraph — Modify: `pyproject.toml`
@@ -541,6 +553,9 @@ git commit -m "feat: durable ingestion authority service を追加"
 - Consumes: Task 1 protocol; Task 8 service.
 - Produces:
   - console script `context-store-control = "context_store.control.__main__:main"`.
+  - `async def create_control_service(settings: Settings) -> DurableIngestionService` in `control/composition.py`.
+  - composition uses `_create_storage_adapter(settings)` as the read source, `create_ingestion_store(settings)`, `create_embedding_provider(settings)`, and `load_ingestion_keyring(Path(os.path.expanduser(settings.ingestion_keyring_path)))`.
+  - composition does **not** construct the full `Orchestrator`, cache adapters, dashboard, FastMCP server, lifecycle manager, or external Neo4j client.
   - newline/framed JSON-RPC 2.0 stdio methods `chronos.control.v1.<operation>`.
   - one dispatcher mapping exactly the Task 1 operation set to `DurableIngestionService`.
   - no registration as FastMCP tool/resource/prompt.
@@ -555,15 +570,19 @@ Run: `cd "$GRAPH_ROOT" && uv run pytest tests/unit/control/test_control_dispatch
 
 Expected: FAIL because the private server/entrypoint are absent.
 
-- [ ] **Step 3: Implement dispatcher and stdio process**
+- [ ] **Step 3: Implement the focused composition root**
 
-Initialize Settings, keyring readiness, ingestion store, and service in the private process. Keep stdout protocol-clean; diagnostics go to stderr/logging.
+Implement `create_control_service(settings)` with the exact factories in Interfaces. Own and dispose the read storage adapter, durable-ingestion store, and embedding provider where their protocols expose disposal; do not start cache/lifecycle/outbox workers unrelated to durable COMMIT.
 
-- [ ] **Step 4: Run GREEN**
+- [ ] **Step 4: Implement dispatcher and stdio process**
+
+Use the focused service composition. Keep stdout protocol-clean; diagnostics go to stderr/logging.
+
+- [ ] **Step 5: Run GREEN**
 
 Run the same focused command. Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 cd "$GRAPH_ROOT"
@@ -640,7 +659,19 @@ git commit -m "feat: MCP session Bearer ownership を強制"
 - Consumes: Task 1 shared envelopes; Task 9 private server.
 - Produces:
   - `ControlUpstreamClient.start()/stop()/call(operation, payload, request_id)`.
-  - dedicated subprocess command default `["context-store-control", "--stdio"]`.
+  - `GatewaySettings.control_upstream_command: list[str] = ["context-store-control", "--stdio"]`.
+  - `GatewaySettings.control_upstream_env_passthrough` exactly allows:
+    `CHRONOS_INGESTION_MODE`, `STORAGE_BACKEND`, `SQLITE_DB_PATH`,
+    `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`,
+    `POSTGRES_SSL`, `POSTGRES_SSL_NO_VERIFY`, `POSTGRES_STATEMENT_CACHE_SIZE`,
+    `SUPABASE_URL`, `SUPABASE_KEY`, `SUPABASE_REQUEST_TIMEOUT_SECONDS`,
+    `GRAPH_ENABLED`, `GRAPH_SYNC_MODE`,
+    `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`,
+    `EMBEDDING_PROVIDER`, `EMBEDDING_DIMENSION`, `OPENAI_API_KEY`, `LOCAL_MODEL_NAME`,
+    `LITELLM_API_BASE`, `LITELLM_MODEL`, `CUSTOM_API_ENDPOINT`, `CUSTOM_API_MODEL_NAME`,
+    `CHRONOS_INGESTION_KEYRING_PATH`, and `LOG_LEVEL`.
+  - reuse `build_upstream_env()`, so its existing base passthrough remains only `PATH`, `HOME`, `LANG`, `LC_ALL`, `TZ`.
+  - raw key **contents** are never copied by Gate; only the keyring path may pass.
   - `POST /internal/v1/opencode/control`.
   - capability matrix:
     - `opencode-ingestion`: source.resolve, receipt reads/validate, turn.ingest.
@@ -665,7 +696,7 @@ Expected: FAIL because control client/endpoint do not exist.
 
 - [ ] **Step 4: Implement client/app lifecycle/config**
 
-Start/stop normal MCP upstream and private control upstream independently; pass only allowlisted storage/config variables and the keyring **path**, never raw key contents.
+Add the exact `control_upstream_command` and `control_upstream_env_passthrough` settings above. Build its environment through the existing `build_upstream_env()`; add a test proving an unrelated secret such as `MCP_GATEWAY_CONTROL_API_KEY` is **not** inherited by the Graph subprocess. Start/stop normal MCP upstream and private control upstream independently.
 
 - [ ] **Step 5: Implement endpoint/capability dispatcher**
 
@@ -707,9 +738,13 @@ git commit -m "feat: OpenCode durable control endpoint を追加"
   - exact overflow-compaction replay recognizer; no text-similarity fallback.
   - unresolved file/resource identity blocks canonical turn emission.
 
-- [ ] **Step 1: Write RED fixtures for all prompt kinds**
+- [ ] **Step 1: Write RED fixtures for all prompt kinds and identity evidence**
 
 Include text-only, file-only, AgentPart-only, SubtaskPart-only, mixed ordered parts, user-executed synthetic shell control, compaction summary/continue, and failed/aborted turns.
+
+For FilePart identity fixtures, pin persisted v1.18.34 execution-relevant fields: `mime`, `filename?`, `url`, and when present `source.type`, `source.text.value/start/end`, file/symbol `path`, symbol `name/kind/range`, or resource `clientName/uri`. Prove reconciliation never rereads the filesystem/network.
+
+For SubtaskPart identity fixtures, pin `prompt`, `description`, `agent`, optional `model {providerID, modelID}`, and optional `command`. Distinct model/command values must not collapse.
 
 - [ ] **Step 2: Write exact replay RED fixtures**
 
@@ -802,16 +837,17 @@ git commit -m "feat: OpenCode durable runtime state を追加"
 - Produces:
   - activation + `session.status idle` + deprecated `session.idle` + 60s periodic sweep triggers.
   - exhaustive root discovery using widening limits 100→200→400… until unsaturated.
-  - root-only event mapping; child events may dirty owning root but never create child state.
+  - `resolveRootSessionId(client, sessionId) -> Promise<string>` follows persisted `parentID` links to the root; missing/cyclic ancestry fails closed and creates no reconciliation state.
+  - root-only event mapping; child events resolve to/dirty the owning root but never create child state.
   - full persisted root snapshot reconstruction followed by one eligible turn at a time.
   - contiguous checkpoint advance on `COMMITTED/ALREADY_COMMITTED` only.
   - retry backoff/pending state, same-root single flight + dirty coalescing.
   - lost-ACK retry, receipt-backed corrupt-state recovery, full committed-prefix divergence validation.
   - FAILED/ABORTED terminal closure and same-anchor `POST_TERMINAL_CONTINUATION`.
 
-- [ ] **Step 1: Write RED trigger/discovery tests**
+- [ ] **Step 1: Write RED trigger/discovery/root-resolution tests**
 
-Assert lost event still converges via periodic sweep, >100 roots require widening, saturated maximum is incomplete, busy/retry roots defer, root-only ownership.
+Assert lost event still converges via periodic sweep, >100 roots require widening, saturated maximum is incomplete, busy/retry roots defer, child→root parent-chain resolution works, and missing/cyclic ancestry fails closed with zero child/root state creation.
 
 - [ ] **Step 2: Write RED checkpoint/retry tests**
 
@@ -917,7 +953,10 @@ git commit -m "feat: OpenCode all-mode を durable reconciler へ切替"
 - Consumes: Tasks 7, 11, 15.
 - Produces:
   - distinct documented `MCP_GATEWAY_API_KEY`, `MCP_GATEWAY_CONTROL_API_KEY`, `MCP_GATEWAY_OPERATOR_API_KEY`.
-  - setup verifies `context-store-admin ingestion-keyring verify`; first-time provisioning invokes the admin CLI rather than direct DB/file mutation.
+  - setup verifies `context-store-admin ingestion-keyring verify`.
+  - bootstrap never generates/distributes ingestion key material. For all-mode production, `CHRONOS_INGESTION_KEYRING_PATH` must already point to an operator/secret-manager staged file.
+  - when the staged keyring exists and the migrated manifest value row is absent, first-time setup invokes `context-store-admin ingestion-keyring provision`; when the file is absent/malformed, setup stops incomplete with staging instructions rather than generating keys.
+  - existing manifests use `verify`; rotation remains an explicit operator `rotate` action and is not implicit bootstrap behavior.
   - explicit source `REGISTER_NEW_SOURCE_SCOPE`/alias migration via operator control only.
   - OpenCode all-mode smoke creates a unique real turn, waits for receipt/checkpoint, performs read-side verification, and exact-ID cleanup or reports `SMOKE_CLEANUP_INCOMPLETE`.
   - setup never substitutes direct `memory_save`/`session_flush`/`ingest_turn` calls.
@@ -935,7 +974,7 @@ Expected: FAIL on new durable setup expectations.
 
 - [ ] **Step 3: Implement setup wiring**
 
-Do not write `.npmrc` or raw keys. Setup may invoke Graph-local admin CLI but must not implement keyring DB/file mutation itself.
+Do not write `.npmrc`, generate ingestion key material, or accept raw ingestion keys as CLI arguments. If the staged keyring is absent/malformed, fail setup before source enrollment. If the keyring is valid and the manifest row is absent, invoke `context-store-admin ingestion-keyring provision`; otherwise invoke `verify`. Setup may invoke the Graph-local admin CLI but must not implement keyring DB/file mutation itself.
 
 - [ ] **Step 4: Update English/Japanese docs and config reference**
 
@@ -969,13 +1008,15 @@ git commit -m "feat: durable OpenCode setup と smoke を統合"
 - Consumes: Tasks 11, 15-16.
 - Produces:
   - exact command target `npx --yes opencode-ai@1.18.34`.
-  - local OpenAI-compatible deterministic provider configured with `@ai-sdk/openai-compatible`, local `baseURL`, and fixture key.
+  - local OpenAI-compatible deterministic provider configured in generated `opencode.json` as provider id `chronos-fixture`, npm `@ai-sdk/openai-compatible`, model id `fixture-model`, local `baseURL=http://127.0.0.1:<fixture-port>/v1`, and non-secret fixture API key.
+  - OpenCode model selection is exactly `chronos-fixture/fixture-model`.
   - clean temp HOME/project/npm-path and repository-local plugin acceptance modes.
-  - fixture controls SUCCESS, FAILED, ABORTED, tool call, compaction pressure, and child/sub-agent behavior without external LLM credits.
+  - fixture scripts deterministic SUCCESS, provider-error FAILED, tool call, compaction pressure, and child/sub-agent behavior without external LLM credits.
+  - ABORTED is produced by starting a deliberately long streaming fixture response and invoking OpenCode's session-abort path while generation is in flight; do not fake the persisted `MessageAbortedError` record.
 
 - [ ] **Step 1: Write native harness RED smoke**
 
-Start deterministic provider, Gate, Graph control process, and OpenCode v1.18.34 in a temporary environment; assert actual plugin load and a root persisted session.
+Generate the exact `chronos-fixture` provider/model configuration above, start the deterministic provider, Gate, Graph control process, and OpenCode v1.18.34 in a temporary environment; assert actual plugin load and a root persisted session.
 
 - [ ] **Step 2: Run RED**
 
@@ -1035,18 +1076,24 @@ Run:
 
 Expected: a 40-character SHA after all Graph implementation commits.
 
-- [ ] **Step 2: Pin ChronosGate to that Graph SHA**
+- [ ] **Step 2: Publish the Graph implementation review branch without merging**
+
+Run: `cd "$GRAPH_ROOT" && git push origin HEAD`
+
+Expected: the exact `$GRAPH_IMPLEMENTATION_SHA` is reachable from the remote review branch; do not merge it.
+
+- [ ] **Step 3: Pin ChronosGate to that Graph SHA**
 
 Replace the existing `context-store-mcp @ git+https://github.com/yohi/chronos-graph.git@...` SHA in `$GATE_ROOT/pyproject.toml` with `$GRAPH_IMPLEMENTATION_SHA`.
 
-- [ ] **Step 3: Run Scenario Y in Gate**
+- [ ] **Step 4: Run Scenario Y in Gate**
 
 Run:
 `cd "$GATE_ROOT" && uv sync --extra dev && uv run pytest tests/test_session_bound_messages.py tests/test_control_client.py tests/test_opencode_control_endpoint.py -v`
 
 Expected: PASS, including legacy/control/operator credential separation and no control operation through normal MCP.
 
-- [ ] **Step 4: Run Scenario Z/AA Graph suites**
+- [ ] **Step 5: Run Scenario Z/AA Graph suites**
 
 Run:
 `cd "$GRAPH_ROOT" && uv run pytest tests/integration/storage/test_ingestion_authority_sqlite.py tests/integration/admin/test_ingestion_keyring_admin.py -v`
@@ -1055,13 +1102,13 @@ Run configured PostgreSQL/Supabase equivalents in the repository integration env
 
 Expected: PASS with zero partial mutation on injected failures and both rotation orderings.
 
-- [ ] **Step 5: Run native Scenario AB and zero-legacy acceptance**
+- [ ] **Step 6: Run native Scenario AB and zero-legacy acceptance**
 
 Run: `cd "$GRAPH_ROOT" && uv run pytest tests/native/opencode/test_native_opencode_all.py -v`
 
 Expected: PASS; actual v1.18.34 npm/local loader paths both satisfy negative invariants.
 
-- [ ] **Step 6: Run full Graph verification**
+- [ ] **Step 7: Run full Graph verification**
 
 Run:
 ```bash
@@ -1077,7 +1124,7 @@ git diff --check
 
 Expected: all commands succeed.
 
-- [ ] **Step 7: Run full Gate verification**
+- [ ] **Step 8: Run full Gate verification**
 
 Run:
 ```bash
@@ -1091,7 +1138,7 @@ git diff --check
 
 Expected: all commands succeed.
 
-- [ ] **Step 8: Commit the Gate dependency pin**
+- [ ] **Step 9: Commit the Gate dependency pin**
 
 ```bash
 cd "$GATE_ROOT"
@@ -1099,7 +1146,7 @@ git add pyproject.toml
 git commit -m "chore: ChronosGraph durable control contract を固定"
 ```
 
-- [ ] **Step 9: Inspect both final diffs**
+- [ ] **Step 10: Inspect both final diffs**
 
 Run:
 `cd "$GRAPH_ROOT" && git status --short --branch && git diff --stat && git log --oneline -20`
@@ -1109,7 +1156,7 @@ Run:
 
 Expected: no uncommitted production changes; each commit maps to one reviewed Task; no secrets/key bytes are present.
 
-- [ ] **Step 10: Stop before production merge**
+- [ ] **Step 11: Stop before production merge**
 
 Do not merge or begin a deployment. Submit the completed implementation branches for the normal implementation/code Review Gate defined by the workflow.
 
@@ -1182,6 +1229,8 @@ Task 18 cross-repo verification + Gate pin
 - [x] Shared names are introduced once and consumed through Interfaces blocks.
 - [x] No Task asks the implementer to choose transport, credential architecture, transaction authority, keyring administration surface, or rotation serialization.
 - [x] SQLite/PostgreSQL/Supabase responsibilities are explicit.
+- [x] Private Graph control composition and Gate→Graph environment allowlist are explicit.
+- [x] Admin CLI transition syntax, setup key staging rules, and native fixture provider configuration are explicit.
 - [x] RED commands and expected failure reasons precede implementation steps.
 - [x] Scenario Y/Z/AA/AB have executable owning Tasks.
 - [x] Review Focus conditions are each pinned by a named Task/test.

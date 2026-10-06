@@ -8,8 +8,7 @@
 
 **Tech Stack:** Python 3.12+, Pydantic v2, asyncio, aiosqlite, asyncpg, Supabase/PostgREST RPC, FastAPI, FastMCP/MCP v1, Node.js CommonJS, OpenCode `opencode-ai@1.18.34`, node:test, pytest/pytest-asyncio, uv.
 
-**Spec:** `docs/superpowers/specs/2026-10-05-opencode-all-durable-ingestion-design.md` at approved baseline `bafcef8b78b7bdc7506162f97e95b181a32ac518`.
-
+**Design/Spec:** `docs/superpowers/specs/2026-10-05-opencode-all-durable-ingestion-design.md` at approved baseline `bafcef8b78b7bdc7506162f97e95b181a32ac518`. This plan embeds the design contracts required for implementation; the spec remains the authoritative source for background and rationale.
 **Repositories:**
 - ChronosGraph baseline: `yohi/chronos-graph@bafcef8b78b7bdc7506162f97e95b181a32ac518`
 - ChronosGate planning baseline: `yohi/chronos-gate@45938202c9542e76fa6c59c8b085cb2457ce20d8`
@@ -35,10 +34,12 @@
 - **Mandatory TDD order for every implementation Task:** write the named RED test → run the named RED command and observe the expected design-specific failure → implement the minimum GREEN behavior → run the named GREEN command → **REFACTOR only inside that Task's listed files without adding behavior** → rerun the same GREEN command → commit. Task 18 has its own dependency-pin RED/GREEN plus final integrated verification.
 - A Task must not commit while its focused GREEN command is failing or while a required backend/native acceptance case is skipped.
 
+- **Canonicalization contract:** `semantic_projection` and `identity_evidence` are JSON-serializable dicts derived deterministically from OpenCode v1.18.34 message lineage (Task 12). `identity_evidence` must be stable across key promotion and must not include mutable routing aliases. `turn_key` is derived from the deterministic root session ID, user message ID, and a stable ordering of the user anchor and immediate context. The exact derivation is owned by Task 12 and pinned by native acceptance.
+- **Dedupe classification contract:** `DedupePlan` classification values are `BACKFILL` (existing alias token maps to canonical scope), `NEW_SCOPE` (no match; requires operator registration), `MIGRATE_ALIAS` (operator authorizes alias migration), `CONFLICT` (alias matches multiple scopes or scope mismatch; terminal), `NO_MATCH` (keyring not ready or lookup degraded; retryable). A `STALE_DEDUPE_PLAN` is raised when the keyring generation or source alias state changes between PREPARE and COMMIT.
+- **Local source state contract:** `LocalSourceStateV1` stores `source.json` with `canonical_source_scope_id`, active binding (key_version + token, never raw key), alias_schema_version. `CheckpointStateV1` is stored in `checkpoint.json` with `committed_turns: tuple[CheckpointEntry, ...]`, `pending_turn_key: str | None`, and `pending_since: int | None` (Unix ms). Both files are persisted atomically with write-then-rename.
+
 ## File Structure
-
 ### ChronosGraph — new focused modules
-
 - `src/chronos_shared/opencode_control.py` — versioned Gate↔Graph/OpenCode control enums/envelopes shared without importing Gate policy.
 - `src/context_store/ingestion/durable/models.py` — prepared-turn, dedupe, receipt, source, and key-authority domain types.
 - `src/context_store/ingestion/durable/planner.py` — side-effect-free dedupe planning.
@@ -52,12 +53,11 @@
 - `src/context_store/storage/ingestion/factory.py` — select durable-ingestion store for configured backend.
 - `src/context_store/control/composition.py` — focused private-control composition root; creates only Settings, primary storage/read source, durable-ingestion authority store, embedding provider, keyring authority, and `DurableIngestionService`.
 - `src/context_store/control/server.py`, `src/context_store/control/__main__.py` — private `chronos.control.v1` stdio server.
-- `src/context_store/admin/ingestion_keyring.py`, `src/context_store/admin/__main__.py` — Graph-local `context-store-admin ingestion-keyring {provision,verify,rotate}`.
-- `.opencode/plugins/chronos/{canonicalize,lineage,control-client,state-store,source-scope,lock,reconciler,runtime}.js` — shared npm/local OpenCode runtime implementation.
+- `src/context_store/admin/ingestion_keyring.py`, `src/context_store/admin/__main__.py` — Graph-local `context-store-admin ingestion-keyring {provision,verify,promote,retire}`.
+- `.opencode/plugins/chronos/{canonicalize,lineage,control-client,state-store,source-scope,lock,reconciler,runtime}.js` — shared npm/local OpenCode runtime implementation. These are regular source files under the repository-owned `.opencode/plugins/` path, not new agent config directories.
 - `tests/native/opencode/` — exact v1.18.34 deterministic-provider/native-loader acceptance harness.
 
 ### ChronosGraph — existing files modified
-
 - `pyproject.toml` — add `context-store-control` and `context-store-admin` console scripts.
 - `src/context_store/config.py` — add `CHRONOS_INGESTION_KEYRING_PATH` setting.
 - `src/context_store/models/memory.py` and storage row conversion/write paths — add/maintain `ingestion_revision`.
@@ -68,12 +68,10 @@
 - `scripts/bootstrap.sh`, `scripts/agent_assets/hooks.py`, `.env.example`, setup docs — control credential/keyring/source enrollment/smoke integration.
 
 ### ChronosGate — new focused modules
-
 - `src/chronos_gate/control/client.py` — private long-lived `context-store-control --stdio` JSON-RPC client.
 - `src/chronos_gate/control/http.py` — versioned `/internal/v1/opencode/control` operation/capability dispatcher.
 
 ### ChronosGate — existing files modified
-
 - `src/chronos_gate/server.py` — Bearer+session-owner `/messages` authority and control route wiring.
 - `src/chronos_gate/auth/handshake.py` — reject reserved control principals from regular MCP sessions.
 - `src/chronos_gate/config.py` — private control subprocess settings/passthrough.
@@ -100,9 +98,9 @@
 - Consumes: approved spec §§1.4, 8.4-8.7.
 - Produces:
   - `CONTROL_PROTOCOL: Final[str] = "chronos.opencode-control.v1"`
-  - `CONTROL_METHOD_PREFIX: Final[str] = "chronos.control.v1."`
-  - `RESERVED_CONTROL_PRINCIPALS = frozenset({"opencode-ingestion", "chronos-setup"})`
-  - `ControlOperation(StrEnum)` values: `source.resolve`, `source.register`, `source.authorize_alias_migration`, `receipt.list_roots`, `receipt.list`, `receipt.lookup`, `receipt.validate`, `turn.ingest`.
+  - `RESERVED_CONTROL_PRINCIPALS: Final[frozenset[str]] = frozenset({"opencode-ingestion", "chronos-setup"})`.
+  - `ControlOperation(StrEnum)` values: `source.resolve`, `source.register`, `source.authorize_alias_migration`, `source.backfill_alias`, `receipt.list_roots`, `receipt.list`, `receipt.lookup`, `receipt.validate`, `turn.ingest`.
+  - `SourceBackfillStatus(StrEnum)`: `BACKFILLED`, `ALREADY_BOUND`, `ALIAS_NOT_FOUND`, `CONFLICT`.
   - `TurnIngestResultKind(StrEnum)`: `COMMITTED`, `ALREADY_COMMITTED`, `RETRYABLE_FAILED`, `TERMINAL_FAILED`, `IDEMPOTENCY_CONFLICT`, `IDEMPOTENCY_REBASE_UNAVAILABLE`.
   - `RetryReason(StrEnum)`: `STALE_DEDUPE_PLAN`, `KEYRING_GENERATION_CHANGED`.
   - `SourceResolutionStatus(StrEnum)`: `RESOLVED`, `REGISTERED`, `MIGRATED`, `UNRESOLVED`, `NOT_READY`.
@@ -114,31 +112,43 @@
   - `CandidateSourceBindingWire(canonical_source_scope_id: str, binding: SourceBindingWire)`; candidate scope identity and its MAC are one indivisible wire value.
   - operation payload models:
     - `SourceResolvePayload(alias_schema_version: str, discovery_scope: dict[str, JsonValue], candidate: CandidateSourceBindingWire | None, current_root_session_ids: tuple[str, ...])`
-    - `SourceRegisterPayload(alias_schema_version: str, discovery_scope: dict[str, JsonValue], current_root_session_ids: tuple[str, ...])`
-    - `SourceAliasMigrationPayload(alias_schema_version: str, discovery_scope: dict[str, JsonValue], canonical_source_scope_id: str)`
+    - `SourceRegisterPayload(alias_schema_version: str, discovery_scope: dict[str, JsonValue], current_root_session_ids: tuple[str, ...])` — operator-only; creates a new source scope.
+    - `SourceRegisterResult(status: SourceResolutionStatus, code: SourceResolutionCode | None, canonical_source_scope_id: str | None, source_binding: SourceBindingWire | None)` — reuses `SourceResolutionResult` shape.
+    - `SourceAliasMigrationPayload(alias_schema_version: str, discovery_scope: dict[str, JsonValue], canonical_source_scope_id: str)` — operator-only alias migration.
+    - `SourceAliasMigrationResult(status: SourceBackfillStatus, alias_id: str, canonical_source_scope_id: str)` — reuses `SourceBackfillWireResult` shape.
     - `ReceiptListRootsPayload(canonical_source_scope_id: str, page_token: str | None, limit: int)`
     - `ReceiptListPayload(canonical_source_scope_id: str, root_session_id: str, page_token: str | None, limit: int)`
     - `ReceiptLookupPayload(canonical_source_scope_id: str, turn_keys: tuple[str, ...])`
-    - `ReceiptEvidence(turn_key: str, current_semantic_projection: dict[str, JsonValue] | None, current_identity_evidence: dict[str, JsonValue] | None)`
-    - `ReceiptValidatePayload(canonical_source_scope_id: str, root_session_id: str, evidence: tuple[ReceiptEvidence, ...])`
-    - `TurnIngestPayload(canonical_source_scope_id: str, source_binding: dict[str, JsonValue], turn_key: str, root_session_id: str, user_message_id: str, source_cursor_created_at: int, evidence_contract_version: str, semantic_projection: dict[str, JsonValue], identity_evidence: dict[str, JsonValue])`
+    - `ReceiptEvidence(turn_key: str, current_semantic_projection: dict[str, JsonValue] | None, current_identity_evidence: dict[str, JsonValue] | None, current_payload_hash: str | None)` — when `current_payload_hash` differs from the stored receipt's `payload_hash`, the divergence code is `COMMITTED_TURN_SEMANTICS_CHANGED`; when the turn is missing from the committed prefix, the code is `COMMITTED_TURN_REMOVED`.
+    - `ReceiptValidatePayload(canonical_source_scope_id: str, root_session_id: str, evidence: tuple[ReceiptEvidence, ...])` — validates the committed prefix for the given root session. The caller supplies the current `(turn_key, current_semantic_projection, current_identity_evidence, current_payload_hash)` for each turn in the committed prefix; the service compares each against the stored receipt and reports `MATCH`, `DIVERGED` (with `ReceiptDivergence` codes), or `UNAVAILABLE` (receipt inventory unreachable).
+    - `SourceBackfillAliasPayload(alias_schema_version: str, canonical_source_scope_id: str, alias_id: str)` — operator-only backfill of an existing alias token into the canonical scope.
+    - `TurnIngestPayload(canonical_source_scope_id: str, source_binding: dict[str, JsonValue], turn_key: str, root_session_id: str, user_message_id: str, source_cursor_created_at: int, evidence_contract_version: str, semantic_projection: dict[str, JsonValue], identity_evidence: dict[str, JsonValue])` — `identity_evidence` is a stable, key-version-independent canonicalization of identity; `source_binding` carries the current key_version and MAC for verification only. `graph_intent` is **not** a client input; it is produced by the Graph-side PREPARE (Task 8) and passed internally to COMMIT (Task 5/6).
   - wire result models:
     - `SourceResolutionResult(status: SourceResolutionStatus, code: SourceResolutionCode | None, canonical_source_scope_id: str | None, source_binding: SourceBindingWire | None)`.
-    - `ReceiptWireRecord(canonical_source_scope_id: str, turn_key: str, root_session_id: str, user_message_id: str, source_cursor_created_at: int, payload_hash: str, canonical_schema_version: str, evidence_contract_version: str, identity_key_version: str)`.
+    - `ReceiptWireRecord(canonical_source_scope_id: str, turn_key: str, root_session_id: str, user_message_id: str, source_cursor_created_at: int, payload_hash: str, canonical_schema_version: str, evidence_contract_version: str, identity_key_version: str, memory_id: str | None)` — `memory_id` is `None` for `ALREADY_COMMITTED` or dedupe-resolved receipts, and a non-empty string for newly committed memories.
     - `ReceiptRootRecord(canonical_source_scope_id: str, root_session_id: str)`.
     - `ReceiptRootPage(items: tuple[ReceiptRootRecord, ...], next_page_token: str | None)`.
     - `ReceiptPage(items: tuple[ReceiptWireRecord, ...], next_page_token: str | None)`.
-    - `ReceiptLookupResult(items: tuple[ReceiptWireRecord, ...])`.
+    - `ReceiptLookupResult(items: tuple[ReceiptWireRecord, ...]).`
     - `ReceiptDivergence(code: DivergenceCode, canonical_source_scope_id: str, root_session_id: str, turn_key: str | None, receipt_payload_hash: str | None, current_payload_hash: str | None)`.
     - `ReceiptValidationStatus(StrEnum)`: `MATCH`, `DIVERGED`, `UNAVAILABLE`.
     - `ReceiptValidationResult(status: ReceiptValidationStatus, divergences: tuple[ReceiptDivergence, ...])`.
-    - `TurnIngestWireResult(kind: TurnIngestResultKind, retry_reason: RetryReason | None, payload_hash: str | None)`.
+    - `SourceBackfillWireResult(status: SourceBackfillStatus, alias_id: str, canonical_source_scope_id: str)`.
+    - `TurnIngestWireResult(kind: TurnIngestResultKind, retry_reason: RetryReason | None, payload_hash: str | None, memory_id: str | None)` — `memory_id` is `None` for `ALREADY_COMMITTED` and dedupe results.
   - `control_method(operation: ControlOperation) -> str`.
-  - dispatcher/client tests must map every `ControlOperation` to exactly one payload model/result family; unknown fields remain rejected except inside the explicit JSON evidence/projection containers.
-
-- [ ] **Step 1: Write shared protocol RED tests**
-
-Add tests asserting all exact enum values, `chronos.control.v1.<operation>` mapping, reserved principal set, operation→payload/result mapping, page limit validation, and rejection of unsupported protocol strings or extra top-level operation fields. Add exact round-trip tests for `SourceBindingWire`, `CandidateSourceBindingWire`, `ReceiptWireRecord`, `ReceiptDivergence`, and every status enum; missing required receipt fields and unknown top-level receipt/divergence fields must fail validation. `source.resolve` must reject a binding supplied without its candidate canonical scope or a candidate scope supplied without its binding, because only the pair type is accepted.
+  - Exact operation→payload/result mapping:
+    | Operation | Payload | Result |
+    |---|---|---|
+    | `source.resolve` | `SourceResolvePayload` | `SourceResolutionResult` |
+    | `source.register` | `SourceRegisterPayload` | `SourceRegisterResult` |
+    | `source.authorize_alias_migration` | `SourceAliasMigrationPayload` | `SourceAliasMigrationResult` |
+    | `source.backfill_alias` | `SourceBackfillAliasPayload` | `SourceBackfillWireResult` |
+    | `receipt.list_roots` | `ReceiptListRootsPayload` | `ReceiptRootPage` |
+    | `receipt.list` | `ReceiptListPayload` | `ReceiptPage` |
+    | `receipt.lookup` | `ReceiptLookupPayload` | `ReceiptLookupResult` |
+    | `receipt.validate` | `ReceiptValidatePayload` | `ReceiptValidationResult` |
+    Add tests asserting all exact enum values, `chronos.control.v1.<operation>` mapping, reserved principal set, exact operation→payload/result mapping table (all ten operations: `source.resolve`, `source.register`, `source.authorize_alias_migration`, `source.backfill_alias`, `receipt.list_roots`, `receipt.list`, `receipt.lookup`, `receipt.validate`, `turn.ingest`), page limit validation, and rejection of unsupported protocol strings or extra top-level operation fields. Add exact round-trip tests for `SourceBindingWire`, `CandidateSourceBindingWire`, `ReceiptWireRecord`, `ReceiptDivergence`, `TurnIngestWireResult`, `ReceiptValidatePayload`, and every status enum;
+missing required receipt fields and unknown top-level receipt/divergence fields must fail validation. `source.resolve` must reject a binding supplied without its candidate canonical scope or a candidate scope supplied without its binding, because only the pair type is accepted. `source.backfill_alias` must map to `SourceBackfillAliasPayload` and return `SourceBackfillWireResult`, and the dispatcher test must assert it is operator-only at the Gate layer (Task 11 tests the actual enforcement).
 
 - [ ] **Step 2: Run RED**
 
@@ -178,9 +188,8 @@ git commit -m "feat: OpenCode control protocol contract を追加"
 - ChronosGraph — Modify: `src/context_store/storage/postgres.py`
 - ChronosGraph — Modify: `src/context_store/storage/postgres_helpers.py`
 - ChronosGraph — Modify: `src/context_store/storage/supabase.py`
-- ChronosGraph — Modify: `tests/unit/test_migration_runner.py`
-- ChronosGraph — Modify: `tests/unit/storage/test_supabase_migrations.py`
-- ChronosGraph — Create: `tests/unit/storage/test_ingestion_schema_contract.py`
+- ChronosGraph — Create: `src/context_store/storage/migrations/{sqlite,postgres}/0005_opencode_graph_intent_edges.sql` — follow-up migration for `memory_graph_edges`.
+- ChronosGraph — Create: `supabase/migrations/20261006000005_opencode_graph_intent_edges.sql` — follow-up migration for `memory_graph_edges`.
 
 **Interfaces:**
 - Consumes: Task 1 enum names only for tests/documentation.
@@ -188,93 +197,78 @@ git commit -m "feat: OpenCode control protocol contract を追加"
   - `Memory.ingestion_revision: int = 1`.
   - tables `ingestion_source_scopes`, `ingestion_source_aliases`, `ingestion_source_alias_tokens`, `ingestion_receipts`, `ingestion_keyring_manifest`.
   - receipt uniqueness `(canonical_source_scope_id, turn_key)`.
-  - `ingestion_receipts` columns map one-for-one to Task 1 `ReceiptWireRecord`: `canonical_source_scope_id`, `turn_key`, `root_session_id`, `user_message_id`, `source_cursor_created_at`, `payload_hash`, `canonical_schema_version`, `evidence_contract_version`, `identity_key_version`.
+  - `ingestion_receipts` columns map one-for-one to Task 1 `ReceiptWireRecord`, including a nullable `memory_id` column; a `NULL` value means the receipt resolved to an existing memory (`ALREADY_COMMITTED` or dedupe) and no new memory row was created.
   - alias-token uniqueness `(alias_schema_version, key_version, keyed_token)`.
   - singleton manifest row identity, but migration creates schema/constraint only — no manifest value row.
   - `memories.ingestion_revision NOT NULL DEFAULT 1`.
-  - Supabase durable-ingestion tables enable RLS and add no anonymous/user write policy; durable mutation is reserved for the service-role/admin backend path.
   - ordinary update paths increment `ingestion_revision` for dedupe-relevant updates.
-
+  - `durable_graph_intents` table (created in this migration). `memory_graph_edges` is deliberately **not** created here; it is added by the follow-up migration `0005_opencode_graph_intent_edges.sql` so that Task 2/6 schema validation can complete before Task 9 adds the graph-worker schema.
 - [ ] **Step 1: Add RED migration/model tests**
 
-Pin table/column/unique constraints, assert fresh migrations leave `ingestion_keyring_manifest` empty, assert `Memory(...).ingestion_revision == 1`, and assert row conversion preserves a non-default revision.
+Pin table/column/unique constraints for `ingestion_receipts`, `durable_graph_intents`, and related tables; assert the `ingestion_receipts.memory_id` nullable column exists; assert fresh migrations leave `ingestion_keyring_manifest` empty; assert `Memory(...).ingestion_revision == 1`; assert row conversion preserves a non-default revision. Add RED tests that verify every ordinary update path able to invalidate a prepared destructive dedupe assumption increments `ingestion_revision`; these tests must fail if any such path is missed. Add a Supabase-specific contract asserting RLS is on and only service-role writes reach durable tables.
 
 - [ ] **Step 2: Run RED**
 
-Run: `cd "$GRAPH_ROOT" && uv run pytest tests/unit/test_migration_runner.py tests/unit/storage/test_supabase_migrations.py tests/unit/storage/test_ingestion_schema_contract.py -v`
+Run: `cd "$GRAPH_ROOT" && uv run pytest tests/unit/storage/test_ingestion_schema_contract.py tests/unit/test_migration_runner.py -v`
 
-Expected: FAIL for missing migration/table/revision fields.
+Expected: FAIL on missing migration/table expectations.
 
-- [ ] **Step 3: Add migration SQL and revision mapping**
+Keep schema changes in the named migration files only, including the new `durable_graph_intents` table. Update `Memory`, row conversion, and ordinary write paths to maintain `ingestion_revision`.
 
-Use `0004` for both native DB runners and `20261006000003` for Supabase. Update `MigrationRunner._handle_baseline()` requirements for the new durable tables without treating the manifest row as baseline data.
+- [ ] **Step 4: Run GREEN and full Graph schema tests**
 
-- [ ] **Step 4: Make existing mutation paths maintain `ingestion_revision`**
-
-Update SQLite/PostgreSQL/Supabase insert/read/update projections. Every successful dedupe-relevant `update_memory` increments the revision atomically; read-only/access-count-only behavior follows the spec-defined dedupe relevance and must be pinned by tests.
-
-- [ ] **Step 5: Run GREEN**
-
-Run: `cd "$GRAPH_ROOT" && uv run pytest tests/unit/test_migration_runner.py tests/unit/storage/test_supabase_migrations.py tests/unit/storage/test_ingestion_schema_contract.py -v`
-
-Run: `cd "$GRAPH_ROOT" && uv run pytest tests/unit/storage -v`
+Run:
+```bash
+cd "$GRAPH_ROOT"
+uv run pytest tests/unit/storage/test_ingestion_schema_contract.py tests/unit/test_migration_runner.py tests/unit/storage/test_supabase_migrations.py -v
+uv run mypy src/context_store/models/memory.py src/context_store/storage/sqlite.py src/context_store/storage/postgres.py
+uv run ruff check src/context_store tests/unit/storage
+```
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
-```bash
-cd "$GRAPH_ROOT"
-git add src/context_store/storage/migrations src/context_store/models/memory.py   src/context_store/storage/sqlite.py src/context_store/storage/postgres.py   src/context_store/storage/postgres_helpers.py src/context_store/storage/supabase.py   supabase/migrations/20261006000003_opencode_durable_ingestion.sql   tests/unit/test_migration_runner.py tests/unit/storage
-git commit -m "feat: durable ingestion schema と revision authority を追加"
+git add src/context_store/storage/migrations/ src/context_store/models/memory.py src/context_store/storage/sqlite.py src/context_store/storage/postgres.py src/context_store/storage/postgres_helpers.py src/context_store/storage/supabase.py src/context_store/storage/migrations/runner.py supabase/migrations/20261006000003_opencode_durable_ingestion.sql tests/unit/storage/test_ingestion_schema_contract.py tests/unit/test_migration_runner.py tests/unit/storage/test_supabase_migrations.py
+git commit -m "feat: durable ingestion schema と memory ingestion_revision を追加"
 ```
 
 ---
 
-### Task 3: Implement keyring parsing, fingerprints, binding MACs, and readiness
+### Task 3: Build ingestion-keyring primitives
 
 **Files:**
 - ChronosGraph — Create: `src/context_store/security/ingestion_keyring.py`
-- ChronosGraph — Modify: `src/context_store/config.py`
 - ChronosGraph — Create: `tests/unit/security/test_ingestion_keyring.py`
-- ChronosGraph — Modify: `.env.example`
 
 **Interfaces:**
-- Consumes: Task 2 manifest schema.
+- Consumes: approved spec §2, Task 1 `SourceBindingWire`/`CandidateSourceBindingWire` shape.
 - Produces:
-  - `Settings.ingestion_keyring_path: str = "~/.context-store/ingestion-keyring.json"` via `CHRONOS_INGESTION_KEYRING_PATH`.
-  - immutable `IngestionKeyring`, `KeyFamilyState`, `KeyringManifest`, `KeyringAuthority` models.
-  - `KeyFamily(StrEnum)` with `identity`, `source_alias`, `source_binding`.
-  - `FamilyVersion(family: KeyFamily, version: str)`.
-  - `KeyringTransition(promotions: tuple[FamilyVersion, ...], retirements: tuple[FamilyVersion, ...])`.
-  - `KeyringAdminResult(status: str, generation: int | None, readiness_code: str | None)` containing no raw secrets.
-  - `load_ingestion_keyring(path: Path) -> IngestionKeyring`.
-  - `IngestionKeyringProvider(Protocol).load_snapshot() -> IngestionKeyring`.
-  - `FileIngestionKeyringProvider(path: Path)` whose every `load_snapshot()` re-opens and validates the atomically replaceable file; it does not cache a successful snapshot across PREPARE attempts.
-  - `derive_key_fingerprint(family: str, version: str, raw_key: bytes) -> str` using the spec domain string.
-  - `derive_identity_token(...)->str`.
-  - immutable `SourceBinding(schema: str, issuer: Literal["chronos-graph"], key_version: str, token: str)`.
-  - `issue_source_binding(scope_id: str, keyring: IngestionKeyring) -> SourceBinding`.
-  - `verify_source_binding(scope_id: str, binding: SourceBinding, keyring: IngestionKeyring) -> bool`; verification reconstructs the MAC input from binding schema + issuer + the supplied candidate canonical scope.
-  - readiness codes `INGESTION_KEYRING_NOT_READY`, `INGESTION_KEYRING_MISMATCH`, `INGESTION_KEYRING_MANIFEST_INCONSISTENT`.
+  - `IngestionKeyring` parsed from a local JSON file (path from `CHRONOS_INGESTION_KEYRING_PATH`).
+  - `KeyPair` with `key_id`, `generation`, `algorithm`, `sealed_key_material` (never leaves keyring module).
+  - `KeyFingerprint` and public `key_version` strings derived only from non-secret material.
+  - `IngestionKeyringProvider.reload()` returns current-or-new instance and reports `keyring_generation`.
+  - `verify_source_binding(scope_id, binding, keyring)` uses candidate scope and keyed MAC; returns `VerifyBindingResult` with `valid: bool`, `code`, `current_generation`.
+  - `compute_binding_mac(scope_id, key)` returns deterministic token for `SourceBindingWire.token`. The MAC tuple is `(binding_schema_version, issuer="chronos-graph", canonical_source_scope_id)`; mutable routing evidence such as project/directory/workspace/path aliases is deliberately excluded per spec §5.9.
+  - Errors raise `IngestionKeyringError`; never log or return raw key bytes.
 
 - [ ] **Step 1: Write RED keyring tests**
 
-Cover 0600 enforcement where POSIX supports it, malformed schema, missing active key, <256-bit material, deterministic domain-separated fingerprints, no raw secret in model repr/serialization, binding tamper failure, same-version/different-secret fingerprint mismatch, provider reread after atomic file replacement, and scope-bound binding verification: binding issued for scope A verifies for A and fails for scope B.
+Test file parsing, generation ordering, fingerprint/version derivation, binding MAC round-trip, tampered binding rejection, unknown key version, promotion/retirement reference checks, and raw-key non-exposure (no `__dict__` leak, no str/logging leak).
 
 - [ ] **Step 2: Run RED**
 
 Run: `cd "$GRAPH_ROOT" && uv run pytest tests/unit/security/test_ingestion_keyring.py -v`
 
-Expected: FAIL because the module/settings do not exist.
+Expected: FAIL; module missing.
 
-- [ ] **Step 3: Implement keyring primitives**
+- [ ] **Step 3: Implement keyring module**
 
-Do not create/write keys in runtime loader. Parsing/verification is pure local I/O plus cryptographic derivation; no backend mutation in this task.
+No persistence here; only parsing/verification/derivation. Keep cryptography explicit (HMAC-SHA256 for binding tokens over the fixed tuple `(binding_schema_version, issuer, canonical_source_scope_id)`).
 
 - [ ] **Step 4: Run GREEN**
 
-Run: `cd "$GRAPH_ROOT" && uv run pytest tests/unit/security/test_ingestion_keyring.py -v && uv run mypy src/context_store/security src/context_store/config.py`
+Run: `cd "$GRAPH_ROOT" && uv run pytest tests/unit/security/test_ingestion_keyring.py -v && uv run mypy src/context_store/security/ingestion_keyring.py && uv run ruff check src/context_store/security tests/unit/security`
 
 Expected: PASS.
 
@@ -282,55 +276,35 @@ Expected: PASS.
 
 ```bash
 cd "$GRAPH_ROOT"
-git add src/context_store/security/ingestion_keyring.py src/context_store/config.py   tests/unit/security/test_ingestion_keyring.py .env.example
-git commit -m "feat: ingestion keyring authority を追加"
+git add src/context_store/security/ingestion_keyring.py tests/unit/security/test_ingestion_keyring.py
+git commit -m "feat: ingestion keyring primitives を追加"
 ```
 
 ---
 
-### Task 4: Add durable domain models and the side-effect-free dedupe planner
+### Task 4: Add prepared-turn dedupe planning
 
 **Files:**
 - ChronosGraph — Create: `src/context_store/ingestion/durable/models.py`
 - ChronosGraph — Create: `src/context_store/ingestion/durable/planner.py`
-- ChronosGraph — Create: `tests/unit/ingestion/test_durable_models.py`
-- ChronosGraph — Create: `tests/unit/ingestion/test_durable_planner.py`
+- ChronosGraph — Create: `tests/unit/ingestion/durable/test_planner.py`
 
 **Interfaces:**
-- Consumes: Task 1 `JsonValue`; Task 2 `Memory.ingestion_revision`; Task 3 `KeyringAuthority` and `SourceBinding`.
-- Produces:
-  - `DedupeReadStore` protocol exposing only `vector_search(embedding: list[float], top_k: int, project: str | None) -> list[ScoredMemory]`; existing storage adapters satisfy it structurally.
-  - `DestructiveAssumption(memory_id: str, ingestion_revision: int)`.
-  - `DedupePlan(action: DeduplicationAction, existing_memory: Memory | None, similarity: float, assumption: DestructiveAssumption | None)`.
-  - `TurnIngestRequest(canonical_source_scope_id: str, source_binding: SourceBinding, turn_key: str, root_session_id: str, user_message_id: str, source_cursor_created_at: int, evidence_contract_version: str, semantic_projection: dict[str, JsonValue], identity_evidence: dict[str, JsonValue])`.
-  - `SourceMutationKind(StrEnum)`: `REGISTER_NEW_SOURCE_SCOPE`, `ATTACH_ALIAS`, `MIGRATE_ALIAS`, `BACKFILL_ALIAS_TOKEN`, `ISSUE_OR_REFRESH_BINDING`.
-  - `PreparedSourceMutation(kind: SourceMutationKind, keyring_manifest_generation: int, target_canonical_source_scope_id: str, target_alias_id: str | None, alias_schema_version: str, alias_key_version_used: str | None, keyed_alias_token: str | None, binding_key_version_used: str | None, prepared_source_binding: SourceBinding | None)`. It contains only non-secret keyed artifacts plus pinned authority; raw key bytes and raw mutable routing evidence are not carried into COMMIT. `BACKFILL_ALIAS_TOKEN` requires `target_alias_id`; the transaction may only add the new token to that exact existing alias identity.
-  - `PreparedAliasLookup(alias_schema_version: str, key_version: str, keyed_token: str)` for read-only current/retained alias lookup before mutation.
-  - `AliasLookupStatus(StrEnum)`: `NOT_FOUND`, `UNIQUE`, `AMBIGUOUS`.
-  - `ResolvedAliasMatch(alias_id: str, canonical_source_scope_id: str, alias_schema_version: str, matched_key_version: str)`.
-  - `AliasLookupResult(status: AliasLookupStatus, match: ResolvedAliasMatch | None)`; `UNIQUE` requires exactly one match, while `NOT_FOUND/AMBIGUOUS` require `match is None`.
-  - `PreparedTurn` fields required by the spec, including `keyring_manifest_generation`, `identity_active_version_at_prepare`, `identity_key_version_used`, prepared embeddings, turn/source identifiers, canonical hash inputs, desired mutation, and destructive assumptions.
-  - `CommitResult(kind: TurnIngestResultKind, retry_reason: RetryReason | None, payload_hash: str | None)`.
-  - `IngestionDedupePlanner(read_store: DedupeReadStore)`.
-  - `IngestionDedupePlanner.plan(new_memory: Memory) -> DedupePlan` with **no mutation**.
+- Consumes: spec §§1, 4, 5; Task 1 enums.
+  - `PreparedTurn`, `PreparedSourceMutation`, `DedupePlan`, `CanonicalMatch`, `ResolvedAliasMatch`, `AliasConflict`, `NewSourceScope` domain models. `PreparedSourceMutation` fields: `classification` (one of `BACKFILL`/`NEW_SCOPE`/`MIGRATE_ALIAS`/`CONFLICT`/`NO_MATCH`), `canonical_source_scope_id` (optional), `alias_id` (optional), `planned_generation` (int), `candidate_binding` (`CandidateSourceBindingWire` | None). No raw key bytes.
+  - `PreparedTurn` carries `prepared_embeddings: tuple[EmbeddingVector, ...] | None` so that COMMIT performs **zero** embedding/model/network calls. `PreparedTurn` does **not** include `graph_intent`; graph intent is produced by the Graph-side `DurableIngestionService` during PREPARE (Task 8) and passed internally to COMMIT (Task 5/6). The OpenCode runtime never constructs or transmits `graph_intent`.
+  - `DurableGraphIntent` is a JSON-serializable value produced during PREPARE by `DurableIngestionService.build_graph_intent(prepared_turn, existing_receipt_hint)`. It contains a list of graph edges to create and any vertex properties to set. When `GRAPH_ENABLED=true`, a missing or incomplete `DurableGraphIntent` causes COMMIT to fail fast with `TERMINAL_FAILED` and no mutation. When `GRAPH_ENABLED=false`, `DurableGraphIntent` may be `None` and the intent/outbox row is skipped.
+- [ ] **Step 1: RED tests for planner**
 
-- [ ] **Step 1: Write RED planner tests**
+Cover exact dedupe classifications (`BACKFILL`, `NEW_SCOPE`, `MIGRATE_ALIAS`, `CONFLICT`, `NO_MATCH`), stale-generation rollback, alias migration planning, conflict cases, `PreparedSourceMutation` field contract, and JSON-serializability.
 
-Reuse current similarity thresholds but assert a REPLACE plan leaves the existing memory unarchived and captures its exact `ingestion_revision`. Add an explicit regression proving existing `Deduplicator.deduplicate()` is not called. Add model tests proving `PreparedSourceMutation` requires a pinned manifest generation and the key version matching every present keyed artifact, cannot serialize raw key material, and rejects `BACKFILL_ALIAS_TOKEN` without `target_alias_id`. Add `AliasLookupResult` invariants so ambiguous/not-found lookup cannot accidentally carry a chosen alias.
+Run: `cd "$GRAPH_ROOT" && uv run pytest tests/unit/ingestion/durable/test_planner.py -v`
 
-- [ ] **Step 2: Run RED**
-
-Run: `cd "$GRAPH_ROOT" && uv run pytest tests/unit/ingestion/test_durable_models.py tests/unit/ingestion/test_durable_planner.py -v`
-
-Expected: FAIL because durable models/planner do not exist.
-
-- [ ] **Step 3: Implement models and pure planner**
-
-Depend only on `DedupeReadStore.vector_search()` for candidate discovery. A normal StorageAdapter may be injected structurally, but the durable planner receives no mutation methods. Do not modify the legacy `Deduplicator`; selective mode continues to use it.
+Pure logic; no I/O, no embedding. `PreparedTurn` does not include `graph_intent`; graph intent generation is a Task 8 service responsibility.
 
 - [ ] **Step 4: Run GREEN**
 
-Run: `cd "$GRAPH_ROOT" && uv run pytest tests/unit/ingestion/test_durable_models.py tests/unit/ingestion/test_durable_planner.py -v`
+Run: `cd "$GRAPH_ROOT" && uv run pytest tests/unit/ingestion/durable/test_planner.py -v && uv run mypy src/context_store/ingestion/durable && uv run ruff check src/context_store/ingestion/durable tests/unit/ingestion/durable`
 
 Expected: PASS.
 
@@ -338,337 +312,239 @@ Expected: PASS.
 
 ```bash
 cd "$GRAPH_ROOT"
-git add src/context_store/ingestion/durable tests/unit/ingestion/test_durable_*.py
-git commit -m "feat: side-effect-free durable ingestion planner を追加"
+git add src/context_store/ingestion/durable/models.py src/context_store/ingestion/durable/planner.py tests/unit/ingestion/durable/test_planner.py
+git commit -m "feat: durable ingestion dedupe planner を追加"
 ```
 
 ---
 
-### Task 5: Define the ingestion authority store interfaces and SQLite implementation
+### Task 5: Implement SQLite durable-ingestion authority store
 
 **Files:**
 - ChronosGraph — Create: `src/context_store/storage/ingestion/protocols.py`
 - ChronosGraph — Create: `src/context_store/storage/ingestion/sqlite.py`
-- ChronosGraph — Create: `src/context_store/storage/ingestion/factory.py`
 - ChronosGraph — Create: `tests/integration/storage/test_ingestion_authority_sqlite.py`
 
 **Interfaces:**
-- Consumes: Tasks 1-4.
+- Consumes: Tasks 2, 4; Task 1 wire models.
 - Produces:
-  - `IngestionCommitStore.commit_turn(prepared: PreparedTurn) -> CommitResult`.
-  - `IngestionRegistryStore.read_manifest() -> KeyringManifest | None`.
-  - `IngestionRegistryStore.lookup_source_alias(candidates: tuple[PreparedAliasLookup, ...]) -> AliasLookupResult` is read-only and never creates/backfills tokens or bindings. A unique lookup returns the stable `alias_id` plus canonical scope/schema/matched-key identity in `ResolvedAliasMatch`; ambiguity returns no selected match.
-  - `IngestionRegistryStore.commit_source_mutation(prepared: PreparedSourceMutation) -> SourceResolutionResult` is the **only** source/alias/binding durable mutation entrypoint. It acquires the manifest fence first, requires `current_manifest.generation == prepared.keyring_manifest_generation`, requires every `*_key_version_used` is still authorized/active as applicable, then applies the source/alias/token/binding mutation atomically.
-  - `KEYRING_GENERATION_CHANGED` from `commit_source_mutation` means zero source/alias/binding mutation and the returned `SourceResolutionResult.source_binding` is `None`; a prepared binding token is released to the caller only after the transaction commits successfully.
-  - `IngestionRegistryStore.list_receipt_roots(scope_id: str, *, page_token: str | None, limit: int) -> ReceiptRootPage`.
-  - `IngestionRegistryStore.list_receipts(scope_id: str, root_session_id: str, *, page_token: str | None, limit: int) -> ReceiptPage`.
-  - `IngestionRegistryStore.lookup_receipts(scope_id: str, turn_keys: tuple[str, ...]) -> ReceiptLookupResult`.
-  - `IngestionRegistryStore.validate_receipts(scope_id: str, root_session_id: str, evidence: tuple[ReceiptEvidence, ...]) -> ReceiptValidationResult`.
-  - source registration, alias attachment/migration, active-key alias-token backfill, and binding issuance/refresh all enter the backend only as `PreparedSourceMutation`; no storage implementation receives the raw keyring or derives HMAC/MAC values inside the transaction.
-  - for `BACKFILL_ALIAS_TOKEN`, `commit_source_mutation` requires `target_alias_id` to identify an already-existing alias row and inserts the prepared active-key token under that **same alias_id**. It must not choose an alias by canonical scope alone or create a sibling alias implicitly.
-  - `IngestionKeyringAdminStore.provision_manifest(candidate: KeyringManifest) -> KeyringAdminResult` with create-if-absent semantics.
-  - `IngestionKeyringAdminStore.rotate_manifest(*, expected_generation: int, transition: KeyringTransition, candidate_manifest: KeyringManifest) -> KeyringAdminResult` whose backend transaction reacquires the manifest fence and re-reads current receipt/alias/binding retirement authority before update.
-  - `IngestionAuthorityStore` protocol combines `IngestionCommitStore`, `IngestionRegistryStore`, `IngestionKeyringAdminStore`, and `async dispose() -> None`.
-  - `async def create_ingestion_store(settings: Settings) -> IngestionAuthorityStore`.
-  - SQLite transaction fence: one `BEGIN IMMEDIATE` transaction reads manifest generation first, validates key authority/CAS assumptions, mutates memory/outbox/receipt, then commits.
-  - source/alias key-dependent writes use the same manifest row/generation fence.
+  - `IngestionCommitStore` protocol with `prepare_source_mutation`, `commit_turn`, `list_receipt_roots`, `list_receipts`, `lookup_receipts`, `validate_receipts`, `current_manifest_generation`.
+  - SQLite implementation with explicit `BEGIN IMMEDIATE` and short transactions; embedding/model work done **outside** transactions.
+  - If `GRAPH_ENABLED=true` and the commit's `graph_intent` is `None`/incomplete, COMMIT fails fast with `TERMINAL_FAILED` before writing anything.
+  - Returns `TurnIngestWireResult`/`ReceiptPage`/etc. from Task 1 with `memory_id` populated for new memories and `None` for idempotent/dedupe results.
+  - `STALE_DEDUPE_PLAN`/`KEYRING_GENERATION_CHANGED` surfaced as retryable.
 
-- [ ] **Step 1: Write RED SQLite atomicity tests**
-
-Cover:
-  - successful COMMIT writes memory+outbox+receipt atomically;
-  - injected failure after memory mutation leaves all three absent;
-  - stale `ingestion_revision` returns `STALE_DEDUPE_PLAN` with zero mutation;
-  - stale manifest generation returns `KEYRING_GENERATION_CHANGED` with zero mutation;
-  - source registration, alias migration, alias-token backfill, and binding refresh prepared under stale generation each return `KEYRING_GENERATION_CHANGED`, perform zero durable mutation, and release no binding token;
-  - one canonical scope with sibling aliases A and B where an old-key token resolves B: active-key backfill mutates token rows for B only, leaves A unchanged, and preserves B's stable `alias_id`.
-
-- [ ] **Step 2: Run RED**
+Test happy-path commit, idempotency, duplicate detection, stale plan, key-generation mismatch, lost-ACK recovery, partial-mutation injection, atomic durable graph intent/outbox persistence, and fail-fast when graph mode is enabled without a complete durable intent.
 
 Run: `cd "$GRAPH_ROOT" && uv run pytest tests/integration/storage/test_ingestion_authority_sqlite.py -v`
 
-Expected: FAIL because authority store/factory do not exist.
+Expected: FAIL, missing store.
 
-- [ ] **Step 3: Implement protocols and SQLite store**
+Use aiosqlite. COMMIT writes the receipt, memory, and `durable_graph_intents` row in one transaction. Keep embedding provider out of the transaction.
 
-Keep all SQL inside the backend implementation. COMMIT must consume prepared embeddings/data only. Do not call `EmbeddingProvider`, HTTP, Neo4j, or the legacy side-effecting deduplicator.
+- [ ] **Step 4: Run GREEN**
 
-- [ ] **Step 4: Add deterministic manifest-fence concurrency test**
-
-Use asyncio barriers around two SQLite write transactions. Assert:
-  - turn-first → receipt commits and retirement reread refuses to remove its key;
-  - rotate-first → old turn gets `KEYRING_GENERATION_CHANGED` and zero mutation.
-
-- [ ] **Step 5: Run GREEN**
-
-Run: `cd "$GRAPH_ROOT" && uv run pytest tests/integration/storage/test_ingestion_authority_sqlite.py -v`
+Run: `cd "$GRAPH_ROOT" && uv run pytest tests/integration/storage/test_ingestion_authority_sqlite.py -v && uv run mypy src/context_store/storage/ingestion/sqlite.py && uv run ruff check src/context_store/storage/ingestion tests/integration/storage`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-cd "$GRAPH_ROOT"
-git add src/context_store/storage/ingestion tests/integration/storage/test_ingestion_authority_sqlite.py
-git commit -m "feat: SQLite durable ingestion transaction boundary を追加"
+git commit -m "feat: SQLite durable ingestion authority store を追加"
 ```
 
 ---
 
-### Task 6: Implement PostgreSQL and Supabase authority stores and transactional RPCs
+### Task 6: Implement PostgreSQL/Supabase durable-ingestion authority stores
 
 **Files:**
 - ChronosGraph — Create: `src/context_store/storage/ingestion/postgres.py`
 - ChronosGraph — Create: `src/context_store/storage/ingestion/supabase.py`
-- ChronosGraph — Create: `supabase/migrations/20261006000004_opencode_durable_rpc.sql`
-- ChronosGraph — Modify: `src/context_store/storage/ingestion/factory.py`
 - ChronosGraph — Create: `tests/integration/storage/test_ingestion_authority_postgres.py`
-- ChronosGraph — Create: `tests/unit/storage/test_supabase_durable_rpc.py`
 - ChronosGraph — Create: `tests/integration/storage/test_ingestion_authority_supabase.py`
+- ChronosGraph — Modify: `supabase/migrations/20261006000004_opencode_durable_rpc.sql` — durable RPC only (no `memory_graph_edges`).
 
 **Interfaces:**
-- Consumes: Task 5 protocols.
+- Consumes: Task 5 protocol; Task 1 wire models.
 - Produces:
-  - PostgreSQL implementation using one asyncpg connection/transaction and manifest-row serialization before key-dependent writes.
-  - Supabase adapter calling `commit_ingested_turn_v1` for turn COMMIT and versioned server-side functions `commit_ingestion_source_mutation_v1` and `rotate_ingestion_keyring_manifest_v1` for key-dependent transactions.
-  - `commit_ingestion_source_mutation_v1` receives at minimum `expected_manifest_generation`, operation kind, target canonical scope, exact `target_alias_id` when the operation targets an existing alias (mandatory for `BACKFILL_ALIAS_TOKEN`), alias schema/version + non-secret keyed alias token when present, and binding key version + prepared binding token when present. It receives no raw key bytes or raw keyring JSON and returns the binding only after transactional generation/key-authority revalidation succeeds.
-  - Supabase durable mutation functions use invoker permissions with a fixed public schema search path; execution is granted only to the service-role backend identity, not anonymous/user roles.
-  - identical `CommitResult` / retry reason semantics across backends.
-  - external integration fixture contract:
-    - PostgreSQL: `TEST_POSTGRES_DSN`.
-    - Supabase: `TEST_SUPABASE_URL` + `TEST_SUPABASE_SERVICE_ROLE_KEY`.
-    - ordinary developer runs may skip an unavailable external backend, but when `CHRONOS_REQUIRE_EXTERNAL_BACKENDS=1`, missing fixture variables are a test failure, never a skip.
+  - asyncpg implementation matching SQLite semantics, including atomic durable graph intent/outbox persistence and graph-mode fail-fast.
+  - Supabase implementation using PostgREST RPC; migration adds durable RPC functions inside a single Supabase transaction.
+  - Same atomicity/invariant surface as SQLite.
 
-- [ ] **Step 1: Write RED backend tests**
+Same scenario coverage as SQLite plus backend-specific failure injection. Distinguish two cases:
+  - **Pre-commit failure:** a network or RPC error before the backend commits the transaction must leave no partial receipt/memory/intent/outbox.
+  - **Lost-ACK/post-commit response failure:** a network error after the backend has committed but before the client receives the response must be recoverable. The same `turn_key` + `canonical_source_scope_id` idempotency key is used to look up the existing receipt on retry; the retry must converge to `ALREADY_COMMITTED` and must not create a duplicate memory. Test this by injecting a response failure after commit and then reissuing the same `turn.ingest`.
+Required env: `TEST_POSTGRES_DSN`, `TEST_SUPABASE_URL`, `TEST_SUPABASE_SERVICE_ROLE_KEY`. The tests use `pytest.fail` instead of `skip` when these env vars are absent **and** `CHRONOS_REQUIRE_EXTERNAL_BACKENDS=1` is set, so the Task 18 release gate cannot pass by skipping. Expected: FAIL on missing stores.
 
-PostgreSQL mirrors Task 5 atomicity/fence schedules. SQL contract tests assert Supabase RPC contains receipt/CAS/memory/outbox/manifest-fence logic inside one PL/pgSQL transaction, does not rely on multiple PostgREST writes, and is executable only by the service-role backend identity.
+- [ ] **Step 3: Implement postgres and supabase stores**
 
-- [ ] **Step 2: Run RED**
+No I/O inside DB locks. Supabase RPC must validate manifest fence before mutation.
 
-Run: `cd "$GRAPH_ROOT" && uv run pytest tests/integration/storage/test_ingestion_authority_postgres.py tests/unit/storage/test_supabase_durable_rpc.py -v`
+- [ ] **Step 4: Run GREEN**
 
-Expected: FAIL for missing implementations/RPC.
-
-- [ ] **Step 3: Implement PostgreSQL authority store**
-
-Acquire the manifest row as the first key-dependent transaction fence. Keep exact SQL lock primitive private to this backend while preserving Task 5 semantics.
-
-- [ ] **Step 4: Implement Supabase RPC/store**
-
-Create `commit_ingested_turn_v1` and the required source/manifest transactional functions. The Python adapter sends prepared data and maps stable domain statuses; no client-side multi-call emulation of atomic COMMIT is allowed.
-
-- [ ] **Step 5: Run GREEN**
-
-Run: `cd "$GRAPH_ROOT" && uv run pytest tests/integration/storage/test_ingestion_authority_postgres.py tests/unit/storage/test_supabase_durable_rpc.py -v`
-
-Run the Supabase integration case whenever its fixture is available:
-`cd "$GRAPH_ROOT" && uv run pytest tests/integration/storage/test_ingestion_authority_supabase.py -v`
-
-Expected: PASS for every configured backend fixture. During ordinary Task development an intentionally unavailable external fixture may skip; Task 18 is the release gate and reruns PostgreSQL + Supabase with `CHRONOS_REQUIRE_EXTERNAL_BACKENDS=1`, where any skip or missing fixture configuration is a failure.
-
-- [ ] **Step 6: Commit**
-
+Run:
 ```bash
 cd "$GRAPH_ROOT"
-git add src/context_store/storage/ingestion/postgres.py   src/context_store/storage/ingestion/supabase.py   src/context_store/storage/ingestion/factory.py   supabase/migrations/20261006000004_opencode_durable_rpc.sql   tests/integration/storage tests/unit/storage/test_supabase_durable_rpc.py
-git commit -m "feat: PostgreSQL と Supabase durable commit を追加"
+uv run pytest tests/integration/storage/test_ingestion_authority_postgres.py tests/integration/storage/test_ingestion_authority_supabase.py -v
+uv run mypy src/context_store/storage/ingestion/postgres.py src/context_store/storage/ingestion/supabase.py
+uv run ruff check src/context_store/storage/ingestion tests/integration/storage
+```
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git commit -m "feat: PostgreSQL/Supabase durable ingestion authority stores を追加"
 ```
 
 ---
 
-### Task 7: Implement keyring admin service and the real Graph-local CLI
+### Task 7: Add ingestion-keyring admin CLI
 
 **Files:**
 - ChronosGraph — Create: `src/context_store/admin/ingestion_keyring.py`
 - ChronosGraph — Create: `src/context_store/admin/__main__.py`
 - ChronosGraph — Modify: `pyproject.toml`
-- ChronosGraph — Create: `tests/unit/admin/test_ingestion_keyring_cli.py`
 - ChronosGraph — Create: `tests/integration/admin/test_ingestion_keyring_admin.py`
 
 **Interfaces:**
-- Consumes: Task 3 keyring parser; Tasks 5-6 registry/manifest store.
+- Consumes: spec §2; Task 3 primitives; Task 2 manifest table.
 - Produces:
-  - console script `context-store-admin = "context_store.admin.__main__:main"`.
-  - commands `ingestion-keyring provision|verify|rotate`.
-  - consumes Task 3 `FamilyVersion`, `KeyringTransition`, and `KeyringAdminResult`; does not redefine them.
-  - `provision(settings: Settings, store: IngestionAuthorityStore) -> KeyringAdminResult`.
-  - `verify(settings: Settings, store: IngestionAuthorityStore) -> KeyringAdminResult` read-only.
-  - `rotate(settings: Settings, store: IngestionAuthorityStore, *, expected_generation: int, transition: KeyringTransition) -> KeyringAdminResult`.
-  - exact CLI:
-    - `context-store-admin ingestion-keyring provision`
-    - `context-store-admin ingestion-keyring verify`
-    - `context-store-admin ingestion-keyring rotate --expected-generation <int> [--promote <family>:<version>]... [--retire <family>:<version>]...`
-  - `rotate` requires at least one `--promote` or `--retire`; promoted keys must already exist in the staged local file.
-  - one invocation may not promote a successor and retire that family's previous active key simultaneously.
-  - manifest CAS plus transactionally current receipt/alias/binding retirement validation.
-  - no raw-key CLI arguments or Gate/RPC transport.
+  - `pyproject.toml` adds `context-store-admin = "context_store.admin.__main__:main"`.
+  - `src/context_store/config.py` adds `CHRONOS_INGESTION_KEYRING_PATH: Path | None`, validates that the path is absolute when set, and loads it into the private control composition root (Task 9) via `Settings`.
+  - `tests/unit/test_config.py` adds RED/GREEN assertions for parsing/validation of `CHRONOS_INGESTION_KEYRING_PATH` (unset, valid absolute path, relative path rejected, non-existent path allowed because the file may be staged after process start).
 
-- [ ] **Step 1: Write RED CLI/security tests**
-
-Assert command names, no raw-secret argument, missing/malformed keyring fails, verify is read-only, initial provision is create-if-absent, second incompatible provision does not overwrite, and output contains no raw key bytes.
+Cover provision idempotency, verify mismatch, promotion retains previous generation, promotion generation CAS failure, retirement blocked while receipts/tokens/bindings reference the generation, retirement succeeds only when unreferenced, raw-key non-exposure, and manifest-fence ordering.
 
 - [ ] **Step 2: Run RED**
 
-Run: `cd "$GRAPH_ROOT" && uv run pytest tests/unit/admin/test_ingestion_keyring_cli.py tests/integration/admin/test_ingestion_keyring_admin.py -v`
+Run: `cd "$GRAPH_ROOT" && uv run pytest tests/integration/admin/test_ingestion_keyring_admin.py -v`
 
-Expected: FAIL because admin entrypoint/service do not exist.
+Expected: FAIL; CLI missing.
 
-- [ ] **Step 3: Implement provision/verify**
+Use `argparse`. Add `CHRONOS_INGESTION_KEYRING_PATH` to `Settings`, wire it into the private control composition root so `IngestionKeyringProvider` receives the configured path, and keep DB writes short and serializable.
 
-Provision consumes a pre-staged local keyring only; runtime/CLI never auto-generates replacement keys.
+- [ ] **Step 4: Run GREEN**
 
-- [ ] **Step 4: Implement exact rotate/retire CLI parsing and the manifest fence**
-
-Parse repeatable `--promote family:version` / `--retire family:version` into `KeyringTransition`. Promotion G→G+1 keeps the previous active version required. Reject same-family promote+previous-active-retire in one command. Retirement is a later generation and re-reads authoritative references in the same transaction as manifest update.
-
-- [ ] **Step 5: Add Scenario AA concurrency schedules**
-
-Use real admin service calls plus transaction barriers:
-  - COMMIT-first → later retirement sees reference and rejects;
-  - rotate-first → stale prepared mutation returns `KEYRING_GENERATION_CHANGED`;
-  - equivalent alias/binding schedules;
-  - all successful receipts reference manifest-required identity versions.
-
-- [ ] **Step 6: Run GREEN**
-
-Run: `cd "$GRAPH_ROOT" && uv run pytest tests/unit/admin/test_ingestion_keyring_cli.py tests/integration/admin/test_ingestion_keyring_admin.py -v`
+Run:
+```bash
+cd "$GRAPH_ROOT"
+uv run pytest tests/integration/admin/test_ingestion_keyring_admin.py tests/unit/test_config.py -v
+uv run mypy src/context_store/admin src/context_store/config.py
+uv run ruff check src/context_store/admin src/context_store/config.py tests/integration/admin tests/unit/test_config.py
+```
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 cd "$GRAPH_ROOT"
-git add pyproject.toml src/context_store/admin tests/unit/admin tests/integration/admin
+git add src/context_store/admin/ingestion_keyring.py src/context_store/admin/__main__.py src/context_store/config.py pyproject.toml tests/integration/admin/test_ingestion_keyring_admin.py tests/unit/test_config.py
 git commit -m "feat: ingestion keyring admin CLI を追加"
-```
 
 ---
 
-### Task 8: Implement source authority, canonicalization, receipts, and turn ingestion service
+### Task 8: Add source/canonical/turn durable-ingestion service
 
 **Files:**
 - ChronosGraph — Create: `src/context_store/ingestion/durable/canonicalizer.py`
 - ChronosGraph — Create: `src/context_store/ingestion/durable/service.py`
-- ChronosGraph — Create: `tests/unit/ingestion/test_durable_canonicalizer.py`
-- ChronosGraph — Create: `tests/integration/ingestion/test_durable_ingestion_service.py`
+- ChronosGraph — Create: `src/context_store/storage/ingestion/factory.py`
+- ChronosGraph — Create: `tests/unit/ingestion/durable/test_service.py`
 
 **Interfaces:**
-- Consumes: Tasks 3-7, specifically Task 4 `DedupeReadStore` and Task 5 `IngestionAuthorityStore`.
+- Consumes: Tasks 1, 3, 4, 5, 7.
 - Produces:
-  - `DurableIngestionService(*, read_store: DedupeReadStore, authority_store: IngestionAuthorityStore, embedding_provider: EmbeddingProvider, keyring_provider: IngestionKeyringProvider)`; no long-lived immutable keyring snapshot is stored.
-  - `resolve_source(request: SourceResolvePayload) -> SourceResolutionResult`.
-  - `register_source(request: SourceRegisterPayload) -> SourceResolutionResult`.
-  - `authorize_alias_migration(request: SourceAliasMigrationPayload) -> SourceResolutionResult`.
-  - `list_receipt_roots(scope_id: str, page_token: str | None, limit: int) -> ReceiptRootPage`.
-  - `list_receipts(scope_id: str, root_session_id: str, page_token: str | None, limit: int) -> ReceiptPage`.
-  - `lookup_receipts(scope_id: str, turn_keys: tuple[str, ...]) -> ReceiptLookupResult`.
-  - `validate_receipts(scope_id: str, root_session_id: str, evidence: tuple[ReceiptEvidence, ...]) -> ReceiptValidationResult`.
-  - `ingest_turn(request: TurnIngestRequest) -> CommitResult`.
-  - server-authoritative HMAC identity derivation and final payload hash.
-  - receipt-pinned canonical/evidence/key rebase.
-  - `load_ready_key_authority() -> KeyringAuthority` starts every key-dependent PREPARE by calling `keyring_provider.load_snapshot()`, reading the authoritative manifest, verifying required fingerprints, and requiring local active versions to match manifest active versions. Any local/manifest mismatch returns the approved NOT READY code and performs zero source/receipt/turn mutation.
-  - `resolve_source` treats `SourceResolvePayload.candidate` as an indivisible pair and calls `verify_source_binding(request.candidate.canonical_source_scope_id, request.candidate.binding, fresh_keyring)`; the binding alone never selects or authenticates a scope.
-  - source wire methods perform read-only alias/continuity lookup, derive non-secret keyed artifacts from that fresh READY snapshot, build one or more exact `PreparedSourceMutation` objects, and call `commit_source_mutation`; raw wire payloads are never passed directly to a mutation transaction.
-  - when a retained-key alias lookup returns `ResolvedAliasMatch(alias_id=A, ...)` and active-key token A is absent, the service derives the active-key token and prepares `BACKFILL_ALIAS_TOKEN` with `target_alias_id=A`; the stable alias identity from lookup is carried unchanged across PREPARE→COMMIT.
-  - Graph-issued local source binding issue/verify/refresh uses the exact candidate scope from `CandidateSourceBindingWire`.
-  - after `KEYRING_GENERATION_CHANGED`, the service discards all prepared keyed artifacts and restarts the full PREPARE path, including a fresh keyring-file read and manifest verification.
-  - `IDEMPOTENCY_REBASE_UNAVAILABLE`, `IDEMPOTENCY_CONFLICT`, `STALE_DEDUPE_PLAN`, and `KEYRING_GENERATION_CHANGED` exact behavior.
+  - **Payload hash contract:** `payload_hash = SHA-256(canonical_json(hash_input_object))` where `hash_input_object` is a versioned dict with fixed key order:
+    ```json
+    {"v":1,"turn_key":"T","canonical_source_scope_id":"S","evidence_contract_version":"V","semantic_projection":{...},"identity_evidence":{...}}
+    ```
+    `canonical_json` means: UTF-8 JSON, object keys sorted lexicographically, no insignificant whitespace, arrays preserved, `null` for missing/None optional fields, floats rendered as decimal with at least one digit after the point, Unicode characters left unescaped. The nested `semantic_projection` and `identity_evidence` values are themselves canonicalized before being placed in `hash_input_object`, so the final input is a single well-defined JSON object. This rule is applied identically by Python and JavaScript implementations;
+  - **Durable graph intent contract:** during PREPARE, `DurableIngestionService.build_graph_intent(prepared_turn, existing_receipt_hint)` returns a `DurableGraphIntent` value. When `GRAPH_ENABLED=true`, a `None` or structurally incomplete intent causes `ingest_turn` to return `TERMINAL_FAILED` with no database mutation. When `GRAPH_ENABLED=false`, the intent may be `None` and no intent/outbox row is written. The intent is passed to `commit_turn` as an internal argument (not on the wire) and stored atomically with the receipt/memory in `durable_graph_intents`.
+  - **Idempotency comparison:** the service compares the candidate turn's `payload_hash` against the stored receipt's `payload_hash`. Because `identity_evidence` is key-independent and `turn_key` is stable across resumption (Task 12), the same turn submitted with a binding issued under a promoted key K2 still yields the same `payload_hash` and matches the receipt created under K1.
+Test source resolution, alias migration, turn commit/idempotency, retryable reasons, terminal divergence, key-promotion idempotency (resubmit with new active binding → `ALREADY_COMMITTED`, original `payload_hash`), retired-key `IDEMPOTENCY_REBASE_UNAVAILABLE`, and graph-mode fail-fast when `build_graph_intent` returns `None`/incomplete.
+Run: `cd "$GRAPH_ROOT" && uv run pytest tests/unit/ingestion/durable/test_service.py -v`
 
-- [ ] **Step 1: Write RED canonicalization tests**
+Expected: FAIL.
 
-Cover domain-separated keyed identity tokens, volatile evidence not present in receipt/memory/log model, receipt-pinned old-key comparison, unavailable old key, and canonical version mismatch rebase.
+- [ ] **Step 3: Implement service + canonicalizer + factory**
 
-- [ ] **Step 2: Write RED source/binding tests**
+Factory selects store by `STORAGE_BACKEND`. Canonicalizer delegates binding verification to Task 3. Implement `build_graph_intent` and wire the internal `graph_intent` argument from PREPARE to COMMIT.
 
-Cover unknown/ambiguous continuity fail-closed, explicit new-source enrollment, alias migration continuity proof, global+directory isolation, scope-bound binding MAC candidate authentication without continuity authority, and stale generation zero mutation/token release. Add candidate-pair tests: scope A + binding(A) authenticates the candidate; scope B + binding(A) yields `SOURCE_SCOPE_CONTINUITY_UNRESOLVED` with zero mutation; no unpaired candidate is accepted by the shared payload. Add sibling-alias backfill: one canonical scope has aliases A and B, retained-key lookup resolves B, and the prepared/committed active-key token targets B's exact `alias_id` while A remains unchanged. Add a service test proving local-active/manifest-active mismatch is NOT READY with zero mutation and that a fresh PREPARE after `KEYRING_GENERATION_CHANGED` reloads a newly atomically replaced keyring file before deriving new keyed artifacts.
+- [ ] **Step 4: Run GREEN**
 
-- [ ] **Step 3: Write RED turn service tests**
-
-Cover COMMITTED, ALREADY_COMMITTED, lost unique-insert race rebase, conflict, stale dedupe retry, keyring generation retry, FAILED/ABORTED user-only persistence, and post-terminal same-anchor divergence.
-
-- [ ] **Step 4: Run RED**
-
-Run: `cd "$GRAPH_ROOT" && uv run pytest tests/unit/ingestion/test_durable_canonicalizer.py tests/integration/ingestion/test_durable_ingestion_service.py -v`
-
-Expected: FAIL because canonicalizer/service do not exist.
-
-- [ ] **Step 5: Implement minimum service**
-
-Keep PREPARE side-effect-free. On receipt/version or manifest-generation changes, discard stale prepared state and restart PREPARE rather than adapting mutation in-place.
-
-- [ ] **Step 6: Run GREEN**
-
-Run: `cd "$GRAPH_ROOT" && uv run pytest tests/unit/ingestion/test_durable_canonicalizer.py tests/integration/ingestion/test_durable_ingestion_service.py -v`
+Run:
+```bash
+cd "$GRAPH_ROOT"
+uv run pytest tests/unit/ingestion/durable/test_service.py -v
+uv run mypy src/context_store/ingestion/durable/canonicalizer.py src/context_store/ingestion/durable/service.py src/context_store/storage/ingestion/factory.py
+uv run ruff check src/context_store/ingestion/durable src/context_store/storage/ingestion tests/unit/ingestion/durable
+```
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 cd "$GRAPH_ROOT"
-git add src/context_store/ingestion/durable tests/unit/ingestion tests/integration/ingestion
-git commit -m "feat: durable ingestion authority service を追加"
+git add src/context_store/ingestion/durable/canonicalizer.py src/context_store/ingestion/durable/service.py src/context_store/storage/ingestion/factory.py tests/unit/ingestion/durable/test_service.py
+git commit -m "feat: durable ingestion service と canonicalizer を追加"
 ```
 
 ---
 
-### Task 9: Add the private Graph control stdio server
+### Task 9: Add private Graph control server
 
 **Files:**
 - ChronosGraph — Create: `src/context_store/control/composition.py`
 - ChronosGraph — Create: `src/context_store/control/server.py`
 - ChronosGraph — Create: `src/context_store/control/__main__.py`
+- ChronosGraph — Create: `src/context_store/graph/intent_worker.py`
+- ChronosGraph — Modify: `src/context_store/storage/sqlite.py`, `src/context_store/storage/postgres.py`, `src/context_store/storage/supabase.py` — add graph edge upsert helpers.
 - ChronosGraph — Modify: `pyproject.toml`
-- ChronosGraph — Create: `tests/unit/control/test_control_dispatcher.py`
-- ChronosGraph — Create: `tests/integration/control/test_control_stdio.py`
-- ChronosGraph — Modify: `tests/unit/test_chronos_gate_migration_guards.py`
+- ChronosGraph — Create: `tests/integration/test_control_server.py`
+- ChronosGraph — Create: `tests/integration/graph/test_intent_worker.py`
 
 **Interfaces:**
-- Consumes: Task 1 protocol; Task 8 service.
+- Consumes: Tasks 1, 8; spec §8.
 - Produces:
-  - console script `context-store-control = "context_store.control.__main__:main"`.
-  - `async def create_control_service(settings: Settings) -> DurableIngestionService` in `control/composition.py`.
-  - composition uses `_create_storage_adapter(settings)` as the `DedupeReadStore`, `create_ingestion_store(settings)` as the single `IngestionAuthorityStore`, `create_embedding_provider(settings)`, and one `FileIngestionKeyringProvider(Path(os.path.expanduser(settings.ingestion_keyring_path)))`. The provider, not a loaded snapshot, is injected into `DurableIngestionService`.
-  - composition does **not** construct the full `Orchestrator`, cache adapters, dashboard, FastMCP server, lifecycle manager, or external Neo4j client.
-  - private wire framing is newline-delimited UTF-8 JSON (NDJSON): exactly one JSON-RPC 2.0 request/response object per line; no Content-Length/MCP framing.
-  - newline-framed JSON-RPC 2.0 stdio methods `chronos.control.v1.<operation>`.
-  - one dispatcher mapping exactly the Task 1 operation set to `DurableIngestionService`.
-  - no registration as FastMCP tool/resource/prompt.
+  - `DurableGraphIntentWorker` polls `durable_graph_intents` for unprocessed rows and materializes graph edges. The worker is started/stopped with the control server lifecycle. The `memory_graph_edges` table is created by the follow-up migration `0005_opencode_graph_intent_edges.sql` (SQLite/PostgreSQL) and `20261006000005_opencode_graph_intent_edges.sql` (Supabase); Task 9 tests run all migrations up to the latest version before asserting worker behavior.
+  - Graph edge upserts go through `src/context_store/graph/edges.py` into `memory_graph_edges` with a unique constraint on `(intent_id, edge_relationship, target_memory_id)`; duplicate processing after a crash, restart, or concurrent worker race does not create duplicate edges. After the graph upsert succeeds, the worker marks the intent processed with a CAS on `processed_at`/`processed_attempts`; if the CAS fails because another worker already processed it, the DB-level unique constraint makes the upsert harmless.
+- [ ] **Step 1: RED control-server tests**
 
-- [ ] **Step 1: Write RED dispatcher/isolation tests**
+Test stdio request/response framing, unknown method rejection, protocol/version mismatch, operation dispatch round-trip, durable graph intent worker start/stop/resume, idempotent intent processing, crash-after-mutation-before-CAS recovery, concurrent worker race producing no duplicate graph edges, and no direct network in COMMIT path.
 
-Assert all eight methods dispatch, unsupported method/version returns protocol error, malformed JSON is isolated, and `context_store.server.mcp` tool list does not contain any control method. Add a long-lived-process acceptance: start one `context-store-control` process READY on v1, atomically replace the keyring file with staged v2/local-active-v2, promote the backend manifest G→G+1, assert an old prepared G request returns `KEYRING_GENERATION_CHANGED`, then without process restart assert a fresh request reloads the file, uses v2, and becomes READY. Also assert local-active != manifest-active keeps the same process NOT READY with zero mutation until reverified.
+Run: `cd "$GRAPH_ROOT" && uv run pytest tests/integration/test_control_server.py tests/integration/graph/test_intent_worker.py -v`
 
-- [ ] **Step 2: Run RED**
+Expected: FAIL; modules missing.
 
-Run: `cd "$GRAPH_ROOT" && uv run pytest tests/unit/control/test_control_dispatcher.py tests/integration/control/test_control_stdio.py tests/unit/test_chronos_gate_migration_guards.py -v`
+Use asyncio stdin/stdout. Validate `CONTROL_PROTOCOL` and request-id. Implement `DurableGraphIntentWorker` and graph edge upsert helpers.
 
-Expected: FAIL because the private server/entrypoint are absent.
+- [ ] **Step 4: Run GREEN**
 
-- [ ] **Step 3: Implement the focused composition root**
+Run:
+```bash
+cd "$GRAPH_ROOT"
+uv run pytest tests/integration/test_control_server.py tests/integration/graph/test_intent_worker.py -v
+uv run mypy src/context_store/control src/context_store/graph
+uv run ruff check src/context_store/control src/context_store/graph tests/integration/test_control_server.py tests/integration/graph/test_intent_worker.py
+```
 
-Implement `create_control_service(settings)` with the exact factories in Interfaces. Own and dispose the read storage adapter, durable-ingestion store, and embedding provider where their protocols expose disposal; do not start cache/lifecycle/outbox workers unrelated to durable COMMIT.
+Expected: PASS.
 
-- [ ] **Step 4: Implement dispatcher and stdio process**
-
-Use the focused service composition. Keep stdout protocol-clean; diagnostics go to stderr/logging.
-
-- [ ] **Step 5: Run GREEN**
-
-Run the same focused command. Expected: PASS.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 cd "$GRAPH_ROOT"
-git add pyproject.toml src/context_store/control tests/unit/control tests/integration/control   tests/unit/test_chronos_gate_migration_guards.py
-git commit -m "feat: private durable ingestion control server を追加"
-```
+git add src/context_store/control/ src/context_store/graph/ src/context_store/storage/migrations/ src/context_store/storage/sqlite.py src/context_store/storage/postgres.py src/context_store/storage/supabase.py supabase/migrations/ pyproject.toml tests/integration/test_control_server.py tests/integration/graph/test_intent_worker.py
+git commit -m "feat: private Graph control server と durable graph intent worker を追加"
 
 ---
 
-### Task 10: Strengthen regular ChronosGate MCP sessions to Bearer+owner authorization
+### Task 10: Strengthen ChronosGate MCP session auth
 
 **Files:**
 - ChronosGate — Modify: `src/chronos_gate/auth/handshake.py`
@@ -676,375 +552,297 @@ git commit -m "feat: private durable ingestion control server を追加"
 - ChronosGate — Create: `tests/test_session_bound_messages.py`
 
 **Interfaces:**
-- Consumes: Task 1 `RESERVED_CONTROL_PRINCIPALS` via editable/current ChronosGraph package during development.
+- Consumes: Task 1 `RESERVED_CONTROL_PRINCIPALS`.
 - Produces:
-  - `HandshakeService(..., denied_agent_ids: frozenset[str])`.
-  - `_authenticate_message_principal(request: Request, api_authenticator: ApiKeyAuthenticator) -> str`.
-  - `_handle_messages(..., api_authenticator: ApiKeyAuthenticator, reserved_principals: frozenset[str])`.
-  - fixed status ordering: 401 missing/invalid Bearer; 404 authenticated unknown session; 403 owner mismatch/reserved principal.
-  - development dependency workflow is fixed: `uv sync --extra dev` first, then `uv pip install -e "$GRAPH_ROOT"`, then every Gate command in Tasks 10-11 uses `uv run --no-sync` until Task 18 removes the editable override. Before RED/GREEN, assert `chronos_shared.opencode_control.__file__` resolves under `$GRAPH_ROOT`.
+  - Regular MCP `/messages` enforces Bearer token present and resolves to a session owner; the resolved principal **must equal** the session owner; requests with a valid token belonging to a different principal return 403.
+  - Existing legacy principal `default` still authenticates regular MCP.
 
-- [ ] **Step 1: Write Scenario Y session RED tests**
+Run: `cd "$GATE_ROOT" && uv run --no-sync pytest tests/test_session_bound_messages.py -v`
 
-Create principal A session SA, then assert:
-  - A+SA allowed;
-  - no/bad Bearer+SA → 401;
-  - B+SA → 403;
-  - A+unknown session → 404;
-  - `opencode-ingestion`/`chronos-setup` cannot create/reuse regular sessions.
+Expected: FAIL on new auth expectations.
+Before running this RED, install the current Graph worktree editable into the Gate environment so `chronos_shared.opencode_control` is available:
 
-- [ ] **Step 2: Run RED**
+```bash
+cd "$GATE_ROOT"
+uv sync --extra dev
+uv --directory "$GATE_ROOT" pip install -e "$GRAPH_ROOT"
+uv run --no-sync python -c 'import chronos_shared.opencode_control; assert chronos_shared.opencode_control.__file__.startswith("'$GRAPH_ROOT'")'
+```
+
+Keep changes localized to handshake and server message handler. Run the editable-install preparation commands above before the RED/GREEN steps.
 
 Run:
 ```bash
 cd "$GATE_ROOT"
-uv sync --extra dev
-uv pip install -e "$GRAPH_ROOT"
-GRAPH_ROOT="$GRAPH_ROOT" uv run --no-sync python -c 'import os, pathlib, chronos_shared.opencode_control as m; p=pathlib.Path(m.__file__).resolve(); root=pathlib.Path(os.environ["GRAPH_ROOT"]).resolve(); assert p.is_relative_to(root), (p, root)'
 uv run --no-sync pytest tests/test_session_bound_messages.py -v
+uv run --no-sync mypy src/chronos_gate/auth/handshake.py src/chronos_gate/server.py
+uv run --no-sync ruff check src/chronos_gate tests/test_session_bound_messages.py
+uv run --no-sync python -c 'import chronos_shared.opencode_control; assert chronos_shared.opencode_control.__file__.startswith("'$GRAPH_ROOT'")'
 ```
-
-Expected: FAIL because `/messages` currently authorizes by session id only.
-
-- [ ] **Step 3: Implement Bearer/session-owner enforcement**
-
-Authenticate before lookup; compare authenticated principal to immutable `SessionRecord.agent_id`. Reject reserved principals before regular session creation and reuse.
-
-- [ ] **Step 4: Run GREEN and existing Gate tests**
-
-Run:
-`cd "$GATE_ROOT" && uv run --no-sync pytest tests/test_session_bound_messages.py -v && uv run --no-sync pytest tests -v`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit in ChronosGate**
+- [ ] **Step 5: Commit**
 
 ```bash
 cd "$GATE_ROOT"
 git add src/chronos_gate/auth/handshake.py src/chronos_gate/server.py tests/test_session_bound_messages.py
-git commit -m "feat: MCP session Bearer ownership を強制"
+git commit -m "feat: ChronosGate session-bound MCP auth を強化"
 ```
 
 ---
 
-### Task 11: Add ChronosGate private control client and HTTP control endpoint
+### Task 11: Add ChronosGate control plane
 
 **Files:**
 - ChronosGate — Create: `src/chronos_gate/control/client.py`
 - ChronosGate — Create: `src/chronos_gate/control/http.py`
+- ChronosGate — Modify: `src/chronos_gate/server.py`
 - ChronosGate — Modify: `src/chronos_gate/config.py`
 - ChronosGate — Modify: `src/chronos_gate/app.py`
-- ChronosGate — Modify: `src/chronos_gate/server.py`
 - ChronosGate — Create: `tests/test_control_client.py`
 - ChronosGate — Create: `tests/test_opencode_control_endpoint.py`
 
 **Interfaces:**
-- Consumes: Task 1 shared envelopes; Task 9 private server; Task 10's synchronized Gate env + editable current-Graph `--no-sync` development workflow.
+- Consumes: Tasks 1, 9; Task 10 auth.
 - Produces:
-  - `ControlUpstreamClient.start()/stop()/call(operation, payload, request_id)`.
-  - `GatewaySettings.control_upstream_command: list[str] = ["context-store-control", "--stdio"]`.
-  - `GatewaySettings.control_upstream_env_passthrough` exactly allows:
-    `CHRONOS_INGESTION_MODE`, `STORAGE_BACKEND`, `SQLITE_DB_PATH`,
-    `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`,
-    `POSTGRES_SSL`, `POSTGRES_SSL_NO_VERIFY`, `POSTGRES_STATEMENT_CACHE_SIZE`,
-    `SUPABASE_URL`, `SUPABASE_KEY`, `SUPABASE_REQUEST_TIMEOUT_SECONDS`,
-    `GRAPH_ENABLED`, `GRAPH_SYNC_MODE`,
-    `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`,
-    `EMBEDDING_PROVIDER`, `EMBEDDING_DIMENSION`, `OPENAI_API_KEY`, `LOCAL_MODEL_NAME`,
-    `LITELLM_API_BASE`, `LITELLM_MODEL`, `CUSTOM_API_ENDPOINT`, `CUSTOM_API_MODEL_NAME`,
-    `CHRONOS_INGESTION_KEYRING_PATH`, and `LOG_LEVEL`.
-  - reuse `build_upstream_env()`, so its existing base passthrough remains only `PATH`, `HOME`, `LANG`, `LC_ALL`, `TZ`.
-  - raw key **contents** are never copied by Gate; only the keyring path may pass.
-  - `POST /internal/v1/opencode/control`.
-  - capability matrix:
-    - `opencode-ingestion`: source.resolve, receipt reads/validate, turn.ingest.
-    - `chronos-setup`: source.resolve/register/authorize_alias_migration + receipt reads/validate.
-  - no keyring admin operations.
-  - HTTP 400/401/403/413/503 transport mapping; HTTP 200 domain result envelope.
+  - `/internal/v1/opencode/control` capability matrix:
+    | Operation | Allowed credential | Notes |
+    |---|---|---|
+    | `source.resolve` | control (`opencode-ingestion`) | read-only; must not mutate aliases/tokens |
+    | `source.register` | operator (`chronos-setup`) | creates new source scope |
+    | `source.authorize_alias_migration` | operator (`chronos-setup`) | migrates alias to canonical scope |
+    | `source.backfill_alias` | operator (`chronos-setup`) | backfills existing alias token |
+    | `receipt.list_roots` | control (`opencode-ingestion`) | read-only inventory |
+    | `receipt.list` | control (`opencode-ingestion`) | read-only inventory |
+    | `receipt.lookup` | control (`opencode-ingestion`) | read-only inventory |
+    | `receipt.validate` | control (`opencode-ingestion`) | read-only validation |
+    | `turn.ingest` | control (`opencode-ingestion`) | durable turn commit |
+    | all control methods | legacy (`default`) | denied (403) |
+    | all regular MCP methods | control/operator | denied (403) |
+  - The control client subprocess is launched with a **strict environment allowlist** that includes: storage backend (`STORAGE_BACKEND`, `DATABASE_URL`, `SQLITE_PATH`, `SQLITE_VEC_PATH`), Supabase/Postgres connection (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `TEST_SUPABASE_URL`, `TEST_SUPABASE_SERVICE_ROLE_KEY`, `TEST_POSTGRES_DSN`), graph mode (`GRAPH_ENABLED`, `GRAPH_BACKEND`, `NEO4J_*`, `NEO4J_URI`), embedding (`OPENAI_API_KEY`, `EMBEDDING_*`), keyring (`CHRONOS_INGESTION_KEYRING_PATH`), logging, and uv/Python runtime variables. **Gate credentials (`MCP_GATEWAY_*`) and the Gate HTTP port/listen config are explicitly stripped** so the private Graph control process cannot impersonate Gate or leak control/operator credentials. The subprocess inherits the Gate virtualenv but not the Gate service environment.
+Before running this RED, ensure the current Graph worktree is installed editable into the Gate environment:
 
-- [ ] **Step 1: Write RED control-client framing tests**
-
-Assert request-id correlation, timeout/subprocess failure → retryable upstream error, stderr does not corrupt stdout framing, and no raw payload logging.
-
-- [ ] **Step 2: Write RED endpoint capability tests**
-
-Assert control/legacy/operator credentials are distinct principals, legacy MCP credential → control 403, runtime cannot register/migrate manually, operator cannot `turn.ingest`, normal MCP cannot reach control methods, and no control method appears in regular `tools/list`.
-
-- [ ] **Step 3: Run RED**
-
-Run:
 ```bash
 cd "$GATE_ROOT"
 uv sync --extra dev
-uv pip install -e "$GRAPH_ROOT"
-GRAPH_ROOT="$GRAPH_ROOT" uv run --no-sync python -c 'import os, pathlib, chronos_shared.opencode_control as m; p=pathlib.Path(m.__file__).resolve(); root=pathlib.Path(os.environ["GRAPH_ROOT"]).resolve(); assert p.is_relative_to(root), (p, root)'
-uv run --no-sync pytest tests/test_control_client.py tests/test_opencode_control_endpoint.py -v
+uv --directory "$GATE_ROOT" pip install -e "$GRAPH_ROOT"
+uv run --no-sync python -c 'import chronos_shared.opencode_control; assert chronos_shared.opencode_control.__file__.startswith("'$GRAPH_ROOT'")'
 ```
 
-Expected: FAIL because control client/endpoint do not exist.
-
-- [ ] **Step 4: Implement client/app lifecycle/config**
-
-Add the exact `control_upstream_command` and `control_upstream_env_passthrough` settings above. Build its environment through the existing `build_upstream_env()`; add a test proving an unrelated secret such as `MCP_GATEWAY_CONTROL_API_KEY` is **not** inherited by the Graph subprocess. Start/stop normal MCP upstream and private control upstream independently.
-
-- [ ] **Step 5: Implement endpoint/capability dispatcher**
-
-Use Task 1 envelope parsing and operation enum. Keep control authorization separate from MCP intents.
-
-- [ ] **Step 6: Run GREEN**
-
+Then run:
+`cd "$GATE_ROOT" && uv run --no-sync pytest tests/test_control_client.py tests/test_opencode_control_endpoint.py -v`
+Expected: FAIL on missing control plane.
+Cover client start/stop, method routing, HTTP 401/403 for wrong credentials, control operation round-trip, operator-only source enrollment paths, control credential denied on operator-only methods, startup duplicate-credential rejection, read-only `source.resolve` behavior, capability matrix denial tests for every non-allowed (credential, operation) pair, subprocess environment isolation (Gate credentials stripped, allowlist enforced in both editable and locked modes), and concurrent request safety.
+The control client launches `context-store-control` as a subprocess with the strict environment allowlist and speaks JSON-RPC. HTTP layer maps to Task 1 operations and enforces the operator/control method allowlist. Add a config switch `CHRONOS_GRAPH_CONTROL_FROM_LOCKED` (default 0); when set, the Gate launches `uv run --frozen context-store-control` from the locked Graph dependency instead of the editable worktree executable used in development. In both modes the subprocess must receive only the allowlisted environment; verify this with a dedicated test.
 Run:
-`cd "$GATE_ROOT" && uv run --no-sync pytest tests/test_control_client.py tests/test_opencode_control_endpoint.py tests/test_session_bound_messages.py -v`
+```bash
+cd "$GATE_ROOT"
+uv run --no-sync pytest tests/test_control_client.py tests/test_opencode_control_endpoint.py -v
+uv run --no-sync mypy src/chronos_gate/control src/chronos_gate/app.py src/chronos_gate/config.py src/chronos_gate/server.py
+uv run --no-sync ruff check src/chronos_gate tests/test_control_client.py tests/test_opencode_control_endpoint.py
+uv run --no-sync python -c 'import chronos_shared.opencode_control; assert chronos_shared.opencode_control.__file__.startswith("'$GRAPH_ROOT'")'
+```
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit in ChronosGate**
+- [ ] **Step 5: Commit**
 
 ```bash
 cd "$GATE_ROOT"
-git add src/chronos_gate/control src/chronos_gate/config.py src/chronos_gate/app.py   src/chronos_gate/server.py tests/test_control_client.py tests/test_opencode_control_endpoint.py
-git commit -m "feat: OpenCode durable control endpoint を追加"
+git add src/chronos_gate/control src/chronos_gate/server.py src/chronos_gate/config.py src/chronos_gate/app.py tests/test_control_client.py tests/test_opencode_control_endpoint.py
+git commit -m "feat: ChronosGate OpenCode control plane を追加"
 ```
 
 ---
 
-### Task 12: Implement deterministic OpenCode v1.18.34 turn extraction and lineage
+### Task 12: Implement deterministic OpenCode v1.18.34 turn extraction
 
 **Files:**
 - ChronosGraph — Create: `.opencode/plugins/chronos/canonicalize.js`
 - ChronosGraph — Create: `.opencode/plugins/chronos/lineage.js`
-- ChronosGraph — Create: `tests/integration/opencode/test_turn_canonicalization.cjs`
+- ChronosGraph — Create: `.opencode/plugins/chronos/control-client.js`
+- ChronosGraph — Create: `tests/integration/opencode/test_canonicalize.cjs`
+- ChronosGraph — Create: `tests/integration/opencode/test_lineage.cjs`
 
 **Interfaces:**
-- Consumes: persisted OpenCode v1.18.34 message/part shapes fixed by the spec.
+- Consumes: spec §3; opencode-ai@1.18.34 internal message shapes.
 - Produces:
-  - `orderMessages(messages) -> messages` by `(time.created, id)`.
-  - `orderParts(parts) -> parts` by persisted part id.
-  - `classifyUserProvenance(message, parts)`.
-  - `buildLogicalTurns(snapshot) -> LogicalTurn[]`.
-  - `classifyTerminalOutcome(turn) -> SUCCESS|FAILED|ABORTED|INCOMPLETE`.
-  - `buildSemanticProjection(turn)` preserving heterogeneous order.
-  - exact overflow-compaction replay recognizer; no text-similarity fallback.
-  - unresolved file/resource identity blocks canonical turn emission.
+  - Deterministic extraction of user anchor, assistant response, tool results, child-session events, compaction continuation, overflow replay, and synthetic shell/control messages.
+  - **Eligible turn contract:** a turn is eligible for durable ingestion only when it is owned by a **root** OpenCode session and ends with a deterministic terminal status. The user anchor is the first user message in the root session that has not yet been committed. A root session is identified by `root_session_id` being equal to the session's own stable ID (child sessions have a non-root `root_session_id`). Eligible terminal statuses are `SUCCESS`, `FAILED` (provider/tool error), and `ABORTED` (user-initiated abort). Synthetic inputs (file-only turns with no user message, shell/control messages not authored by the user, AgentPart/SubtaskPart continuation messages, overflow replay markers, and compaction continuation frames) are **not** eligible as user anchors but must be captured inside `semantic_projection` so that history changes affecting the turn are detected by `receipt.validate`.
+  - **Turn key derivation:** `turn_key` is derived from immutable OpenCode native identifiers only, so it is recoverable from an empty or corrupted local state. `turn_key = canonical_source_scope_id + ":" + root_session_id + ":" + user_message_id + ":" + lineage_hash` where `lineage_hash = SHA-256(canonical_json(lineage_vector))`. `lineage_vector` is the ordered list of `(root_session_id, user_message_id)` pairs for the eligible user anchor and every immediately preceding eligible user anchor in the same root session, truncated to the last 32 entries for compaction resistance. `user_message_id` is OpenCode's stable native message ID for the user anchor. The derivation uses **only** native IDs, not local `committed_turns`;
+  therefore reconstituting the local state from scratch or recovering a missing earlier turn does not change `turn_key`.
 
-- [ ] **Step 1: Write RED fixtures for all prompt kinds and identity evidence**
+Use fixed v1.18.34 fixtures (or minimal synthetic objects where native loader unavailable). Cover normal success, failed, aborted, child events, compaction, overflow, file-only, AgentPart/SubtaskPart. For each fixture, assert the exact `turn_key`, `semantic_projection`, and `identity_evidence` JSON values; assert that resubmitting the same fixture after a no-op change produces identical outputs; assert that compaction, history rebase, or adding/removing a synthetic context changes either `turn_key` or the payload hash; assert that child-session events do not produce a separate eligible user anchor; assert that the same fixture with an empty/corrupt local state reproduces the same `turn_key` and converges to `ALREADY_COMMITTED` when the receipt already exists.
 
-Include text-only, file-only, AgentPart-only, SubtaskPart-only, mixed ordered parts, user-executed synthetic shell control, compaction summary/continue, and failed/aborted turns.
+Run:
+```bash
+cd "$GRAPH_ROOT"
+node --test tests/integration/opencode/test_canonicalize.cjs tests/integration/opencode/test_lineage.cjs
+Expected: FAIL; modules missing.
 
-For FilePart identity fixtures, pin persisted v1.18.34 execution-relevant fields: `mime`, `filename?`, `url`, and when present `source.type`, `source.text.value/start/end`, file/symbol `path`, symbol `name/kind/range`, or resource `clientName/uri`. Prove reconciliation never rereads the filesystem/network.
+- [ ] **Step 3: Implement canonicalizer + lineage modules**
 
-For SubtaskPart identity fixtures, pin `prompt`, `description`, `agent`, optional `model {providerID, modelID}`, and optional `command`. Distinct model/command values must not collapse.
+No external I/O. Keep extraction rules explicit and versioned. Implement the eligible turn contract, turn key derivation, `semantic_projection` JSON shape, and `identity_evidence` JSON shape described in the Interfaces above.
+```bash
+cd "$GRAPH_ROOT"
+node --test tests/integration/opencode/test_canonicalize.cjs tests/integration/opencode/test_lineage.cjs
+```
 
-- [ ] **Step 2: Write exact replay RED fixtures**
+Expected: FAIL; modules missing.
 
-Pin v1.18.34 overflow replay transform including CompactionPart omission and media FilePart `[Attached <mime>: <filename-or-file>]` conversion.
+- [ ] **Step 3: Implement canonicalizer + lineage modules**
 
-- [ ] **Step 3: Run RED**
+No external I/O. Keep extraction rules explicit and versioned.
 
-Run: `cd "$GRAPH_ROOT" && node --test tests/integration/opencode/test_turn_canonicalization.cjs`
+- [ ] **Step 4: Run GREEN**
 
-Expected: FAIL because modules do not exist.
+Run the same node --test command plus `uv run ruff check .opencode/plugins/chronos` (if Python wrappers exist).
 
-- [ ] **Step 4: Implement extractor/lineage only**
+Expected: PASS.
 
-No storage/network calls in these modules.
-
-- [ ] **Step 5: Run GREEN**
-
-Run the same command. Expected: PASS.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 cd "$GRAPH_ROOT"
-git add .opencode/plugins/chronos/canonicalize.js .opencode/plugins/chronos/lineage.js   tests/integration/opencode/test_turn_canonicalization.cjs
-git commit -m "feat: OpenCode v1.18.34 turn canonicalization を追加"
+git add .opencode/plugins/chronos/canonicalize.js .opencode/plugins/chronos/lineage.js .opencode/plugins/chronos/control-client.js tests/integration/opencode/test_canonicalize.cjs tests/integration/opencode/test_lineage.cjs
+git commit -m "feat: OpenCode v1.18.34 extraction helpers を追加"
 ```
 
 ---
 
-### Task 13: Implement OpenCode control client, source scope, crash-safe state, and root lock
+### Task 13: Add source scope, local state, and lock modules
 
 **Files:**
-- ChronosGraph — Create: `.opencode/plugins/chronos/control-client.js`
 - ChronosGraph — Create: `.opencode/plugins/chronos/source-scope.js`
 - ChronosGraph — Create: `.opencode/plugins/chronos/state-store.js`
 - ChronosGraph — Create: `.opencode/plugins/chronos/lock.js`
-- ChronosGraph — Create: `tests/integration/opencode/test_runtime_state.cjs`
-
+- ChronosGraph — Create: `tests/integration/opencode/test_source_scope.cjs`
+- ChronosGraph — Create: `tests/integration/opencode/test_state_store.cjs`
+- ChronosGraph — Create: `tests/integration/opencode/test_lock.cjs`
 **Interfaces:**
-- Consumes: Task 1 HTTP envelope; Task 11 Gate endpoint.
+- Consumes: spec §§4-5; Task 1 control operations.
 - Produces:
-  - `ControlClient.call(operation, payload) -> result` using `MCP_GATEWAY_CONTROL_API_KEY`.
-  - `DiscoveryScopeV1` builder as single source for alias evidence and `Session.list` query.
-  - local state under `~/.context-store/opencode-ingestion/<canonical-scope-id>/` owns exactly `source.json`, `<root-session-hash>.json`, and `<root-session-hash>.lock`.
-  - `LocalSourceStateV1 { schema: "chronos.opencode.local-source.v1", canonical_source_scope_id, binding: SourceBindingWire }`.
-  - `loadSourceState(scopeId)`, `writeSourceStateAtomic(state)`, and `quarantineInvalidSourceState(scopeId)` own `source.json`; successful enrollment/migration/binding refresh writes temp → fsync temp → rename → fsync directory.
-  - startup/source resolution loads `source.json` and sends `CandidateSourceBindingWire { canonical_source_scope_id: state.canonical_source_scope_id, binding: state.binding }` as `SourceResolvePayload.candidate`; the client never sends an unpaired binding or substitutes mutable routing evidence for the candidate scope ID. Graph remains the verifier/continuity authority.
-  - a Graph response containing a refreshed active-key binding atomically replaces the retained old binding only after successful source resolution/commit.
-  - invalid/tampered/unknown-key local binding is unusable, is quarantined/diagnosed, and resolves as `SOURCE_SCOPE_CONTINUITY_UNRESOLVED` without receipt/checkpoint/source mutation.
-  - `RootStateV1` stores only canonical scope/root opaque ids, committed cursor/turn/hash, pending retry state, blocked/divergence codes, and for pending work the pinned `evidence_contract_version`; raw path/URI/command/identity evidence is forbidden.
-  - atomic temp+fsync+rename state replacement.
-  - corrupt-state quarantine.
-  - per-root inter-process lease lock with owner token, PID, expiry, 30s heartbeat, 120s lease; dead/stale owner reclaim; file existence alone is not authority.
+  - `source-scope.js` calls `source.resolve` with the control credential and caches the returned binding. If `source.resolve` returns `UNRESOLVED` or `NOT_READY`, the plugin stops durable ingestion for this turn **without side effects**; it must **not** call `source.register` or `source.authorize_alias_migration` itself. Source registration and alias migration are operator-only actions performed through the setup path (Task 16) using the operator credential.
+  - `state-store.js` persists `LocalSourceStateV1` to `source.json` and `CheckpointStateV1` to `checkpoint.json` atomically using write-then-rename; restart refreshes from receipt inventory. `source.json` fields: `canonical_source_scope_id`, `binding` (`SourceBindingWire` token/key_version, never raw key), `alias_schema_version`. `checkpoint.json` fields: `committed_turns: tuple[CheckpointEntry, ...]`, `pending_turn_key: str | None`, `pending_since: int | None` (Unix ms).
+Run:
+```bash
+cd "$GRAPH_ROOT"
+node --test tests/integration/opencode/test_source_scope.cjs tests/integration/opencode/test_state_store.cjs tests/integration/opencode/test_lock.cjs
+```
 
-- [ ] **Step 1: Write RED source-scope tests**
+Expected: FAIL; modules missing.
 
-Assert `global + directory A != global + directory B`, alias/query scope symmetry, project-wide global invalidity, relocation produces unknown alias rather than new canonical identity.
+Use Node fs/promises and proper-lockfile-like behavior. No network in state writes.
 
-- [ ] **Step 2: Write RED state/lock tests**
+- [ ] **Step 4: Run GREEN**
 
-Assert atomic root/source state replacement, binding survives plugin restart, source resolution emits the exact stored scope ID + binding pair, tampered binding fails closed, refreshed binding atomically replaces the old token, raw routing/path evidence is absent from `source.json`, corruption quarantine, lock same-root exclusion, hard-owner death/stale lease reclaim, and finite reacquisition.
+Run:
+```bash
+cd "$GRAPH_ROOT"
+node --test tests/integration/opencode/test_source_scope.cjs tests/integration/opencode/test_state_store.cjs tests/integration/opencode/test_lock.cjs
+```
 
-- [ ] **Step 3: Run RED**
+Expected: PASS.
 
-Run: `cd "$GRAPH_ROOT" && node --test tests/integration/opencode/test_runtime_state.cjs`
-
-Expected: FAIL because runtime state modules do not exist.
-
-- [ ] **Step 4: Implement minimum client/source/state/lock modules**
-
-Keep lock correctness local-only; server receipts remain final exactly-once authority.
-
-- [ ] **Step 5: Run GREEN**
-
-Run the same command. Expected: PASS.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 cd "$GRAPH_ROOT"
-git add .opencode/plugins/chronos/control-client.js .opencode/plugins/chronos/source-scope.js   .opencode/plugins/chronos/state-store.js .opencode/plugins/chronos/lock.js   tests/integration/opencode/test_runtime_state.cjs
-git commit -m "feat: OpenCode durable runtime state を追加"
+git add .opencode/plugins/chronos/source-scope.js .opencode/plugins/chronos/state-store.js .opencode/plugins/chronos/lock.js tests/integration/opencode/
+git commit -m "feat: OpenCode source scope, state store, lock helpers を追加"
 ```
 
 ---
 
-### Task 14: Implement root reconciliation, checkpointing, recovery, and divergence
+### Task 14: Implement reconciler and recovery
 
 **Files:**
 - ChronosGraph — Create: `.opencode/plugins/chronos/reconciler.js`
 - ChronosGraph — Create: `.opencode/plugins/chronos/runtime.js`
 - ChronosGraph — Create: `tests/integration/opencode/test_reconciler.cjs`
-
+- ChronosGraph — Create: `tests/integration/opencode/test_recovery.cjs`
+- ChronosGraph — Create: `tests/integration/opencode/test_divergence.cjs`
 **Interfaces:**
-- Consumes: Tasks 12-13.
+- Consumes: Tasks 12-13; Task 1 result kinds/retry reasons.
 - Produces:
-  - activation + `session.status idle` + deprecated `session.idle` + 60s periodic sweep triggers.
-  - exhaustive root discovery using widening limits 100→200→400… until unsaturated.
-  - correctness targets per resolved scope are exactly: exhaustive current roots UNION locally known roots UNION exhaustively paged server receipt roots.
-  - recovery/divergence consumes Task 1 `ReceiptRootRecord`, `ReceiptWireRecord`, `ReceiptValidationResult`, and `ReceiptDivergence` only. It reads the fixed receipt fields `root_session_id`, `turn_key`, `user_message_id`, `source_cursor_created_at`, `payload_hash`, `canonical_schema_version`, `evidence_contract_version`, and `identity_key_version`; no plugin-local interpretation of generic result dictionaries is allowed.
-  - every `receipt.list_roots` / `receipt.list` recovery/divergence loop follows `next_page_token` until null; first-page-only inventory is forbidden.
-  - `resolveRootSessionId(client, sessionId) -> Promise<string>` follows persisted `parentID` links to the root; missing/cyclic ancestry fails closed and creates no reconciliation state.
-  - root-only event mapping; child events resolve to/dirty the owning root but never create child state.
-  - full persisted root snapshot reconstruction followed by one eligible turn at a time.
-  - contiguous checkpoint advance on `COMMITTED/ALREADY_COMMITTED` only.
-  - retry backoff/pending state, same-root single flight + dirty coalescing.
-  - lost-ACK retry, receipt-backed corrupt-state recovery, full committed-prefix divergence validation.
-  - FAILED/ABORTED terminal closure and same-anchor `POST_TERMINAL_CONTINUATION`.
-
-- [ ] **Step 1: Write RED trigger/discovery/root-resolution tests**
-
-Assert lost event still converges via periodic sweep, >100 roots require widening, saturated maximum is incomplete, busy/retry roots defer, child→root parent-chain resolution works, and missing/cyclic ancestry fails closed with zero child/root state creation.
-
-- [ ] **Step 2: Write RED checkpoint/retry tests**
-
-Assert contiguous barrier, INCOMPLETE blocks later turns, retryable failure does not advance, lost ACK → ALREADY → checkpoint, trigger storm remains one active root reconciler.
-
-- [ ] **Step 3: Write RED recovery/divergence tests**
-
-Corrupt local state rebuilds from typed `ReceiptWireRecord` inventory without skipping a gap; missing required wire fields are rejected before checkpoint logic; lost delete/update events are detected by periodic whole-prefix validation using typed `ReceiptDivergence.code`; root deletion remains discoverable via local/server root union.
-
-- [ ] **Step 4: Run RED**
-
-Run: `cd "$GRAPH_ROOT" && node --test tests/integration/opencode/test_reconciler.cjs`
-
-Expected: FAIL because reconciler/runtime do not exist.
-
-- [ ] **Step 5: Implement reconciler**
-
-Treat events as hints only. Do not introduce a code path that directly durable-writes from an event callback.
-
-- [ ] **Step 6: Run GREEN**
-
-Run the same command. Expected: PASS.
-
-- [ ] **Step 7: Commit**
-
+  - Reconciler processes turn-end events, performs 60-second correctness sweep, contiguous checkpointing, and recovers lost ACK/corrupt state via `receipt.list`/`receipt.lookup`. The confirmed checkpoint prefix is the longest prefix of eligible turns (ordered by `(source_cursor_created_at, root_session_id, turn_key)`) where every earlier eligible turn is either present in the receipt inventory or still pending within the timeout. A gap is detected when the OpenCode-side eligible-turn enumeration (from native history) contains a turn older than the current checkpoint prefix that is **not** present in `committed_turns` and not in `pending_turn_key`; the reconciler pauses advancing the checkpoint and issues `turn.ingest` for the missing eligible turn(s) before accepting new turns.
+Run:
 ```bash
 cd "$GRAPH_ROOT"
-git add .opencode/plugins/chronos/reconciler.js .opencode/plugins/chronos/runtime.js   tests/integration/opencode/test_reconciler.cjs
-git commit -m "feat: OpenCode durable reconciliation loop を追加"
+node --test tests/integration/opencode/test_reconciler.cjs tests/integration/opencode/test_recovery.cjs tests/integration/opencode/test_divergence.cjs
+Expected: FAIL; modules missing.
+- [ ] **Step 3: Implement reconciler + runtime**
+
+Runtime wires canonicalizer, source-scope, state-store, lock, control-client, reconciler. Keep side effects explicit. The OpenCode runtime must not construct or consume `graph_intent`; Graph-side worker owns materialization.
+
+Run:
+```bash
+node --test tests/integration/opencode/test_reconciler.cjs tests/integration/opencode/test_recovery.cjs tests/integration/opencode/test_divergence.cjs
+uv run ruff check .opencode/plugins/chronos
 ```
-
----
-
-### Task 15: Replace the OpenCode plugin adapter and prove zero legacy side channel
-
-**Files:**
-- ChronosGraph — Modify: `.opencode/plugins/chronos-turn-end.js`
-- ChronosGraph — Modify: `package.json`
-- ChronosGraph — Modify: `tests/integration/test_opencode_turn_end_plugin.cjs`
-- ChronosGraph — Modify: `tests/unit/test_chronos_gate_migration_guards.py`
-
-**Interfaces:**
-- Consumes: Task 14 `OpenCodeIngestionRuntime`.
-- Produces:
-  - plugin entrypoint is loader/adapter only.
-  - npm/local path both instantiate the same runtime.
-  - package ships `.opencode/plugins/chronos/**`.
-  - OpenCode `all` never spawns `agent_turn_hook.py`; selective mode does not start durable reconciliation.
-  - legacy non-OpenCode `scripts/agent_turn_hook.py` remains unchanged.
-
-- [ ] **Step 1: Rewrite existing integration test as RED negative proof**
-
-For `all`, assert runtime reconcile is invoked while fake `spawn` count is zero. Add spies proving no legacy hook script is opened/executed. For `selective`, assert no durable reconciler mutation.
-
-- [ ] **Step 2: Run RED**
-
-Run: `cd "$GRAPH_ROOT" && node --test tests/integration/test_opencode_turn_end_plugin.cjs`
-
-Expected: FAIL because current plugin spawns the detached hook.
-
-- [ ] **Step 3: Replace plugin internals with runtime adapter**
-
-Keep existing package id/SSOT guard; remove conversation rendering/detached subprocess path from OpenCode plugin.
-
-- [ ] **Step 4: Update package export guard**
-
-Update `package.json.files` and `test_package_exports_only_turn_end_opencode_plugin` to include runtime modules while keeping a single public plugin entrypoint.
-
-- [ ] **Step 5: Run GREEN**
-
-Run:
-`cd "$GRAPH_ROOT" && node --test tests/integration/test_opencode_turn_end_plugin.cjs tests/integration/opencode/*.cjs`
-
-Run:
-`cd "$GRAPH_ROOT" && uv run pytest tests/unit/test_chronos_gate_migration_guards.py -v`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 cd "$GRAPH_ROOT"
-git add .opencode/plugins package.json tests/integration tests/unit/test_chronos_gate_migration_guards.py
-git commit -m "feat: OpenCode all-mode を durable reconciler へ切替"
+git add .opencode/plugins/chronos/reconciler.js .opencode/plugins/chronos/runtime.js tests/integration/opencode/test_reconciler.cjs tests/integration/opencode/test_recovery.cjs tests/integration/opencode/test_divergence.cjs
+git commit -m "feat: OpenCode durable reconciler と runtime を追加"
 ```
 
 ---
 
-### Task 16: Integrate bootstrap/setup, credentials, source enrollment, and real-turn smoke
+### Task 15: Wire loader-only plugin and package runtime
+
+**Files:**
+- ChronosGraph — Modify: `package.json` (root) if needed for npm pack
+
+**Interfaces:**
+- Consumes: Tasks 12-14.
+- Produces:
+  - `.opencode/plugins/chronos-turn-end.js` is updated to be a loader-only adapter that imports runtime from `chronos/` submodules.
+  - npm package `@yohi/opencode-plugin-chronos-turn-end` exposes the same loader via `package.json`.
+  - Root `package.json` `files` list and `tests/unit/test_chronos_gate_migration_guards.py` exact-files assertion are updated to include the new `.opencode/plugins/chronos/` runtime modules and the loader adapter; otherwise `npm pack` omits required files or the guard test fails. No new agent config directory is created; `.opencode/plugins/` is an existing repository-owned path.
+
+Cover root activation, child no-op, npm pack install, local plugin path, `files` list correctness through the existing migration guard, and negative invariants (memory_save==0, session_flush==0, detached hook==0).
+
+Run:
+```bash
+cd "$GRAPH_ROOT"
+node --test tests/integration/test_opencode_turn_end_plugin.cjs
+```
+
+Expected: FAIL; module missing.
+
+Keep the top-level plugin minimal; delegate to runtime. Update root `package.json` `files` and `tests/unit/test_chronos_gate_migration_guards.py` expectations so the new runtime modules are included and the guard passes.
+
+- [ ] **Step 4: Run GREEN**
+
+Run the same node --test command.
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+cd "$GRAPH_ROOT"
+git add .opencode/plugins/chronos-turn-end.js .opencode/plugins/chronos/package.json .opencode/plugins/chronos/*.js tests/integration/test_opencode_turn_end_plugin.cjs tests/unit/test_chronos_gate_migration_guards.py package.json
+git commit -m "feat: OpenCode turn-end loader plugin と package runtime を追加"
+```
+
+---
+
+### Task 16: Integrate durable setup and smoke
 
 **Files:**
 - ChronosGraph — Modify: `scripts/bootstrap.sh`
-- ChronosGraph — Modify: `scripts/agent_assets/hooks.py`
+- ChronosGraph — Modify: `scripts/agent_assets/hooks.py` (update the legacy hook to reference the new loader-only plugin path `@yohi/opencode-plugin-chronos-turn-end` for all-mode, keep selective mode intact, and update npm registry validation to cover the package runtime)
 - ChronosGraph — Modify: `.env.example`
 - ChronosGraph — Modify: `docs/agent-setup-protocol.md`
-- ChronosGraph — Modify: `docs/agent-setup-protocol.ja.md`
-- ChronosGraph — Modify: `docs/configuration.md`
-- ChronosGraph — Modify: `tests/unit/test_sync_agent_assets.py`
-- ChronosGraph — Modify: `tests/integration/test_sync_agent_assets.py`
+- ChronosGraph — Create/Modify: `tests/unit/test_sync_agent_assets.py`
+- ChronosGraph — Create/Modify: `tests/integration/test_sync_agent_assets.py`
 - ChronosGraph — Create: `tests/integration/test_opencode_durable_setup.py`
 
 **Interfaces:**
@@ -1060,11 +858,11 @@ git commit -m "feat: OpenCode all-mode を durable reconciler へ切替"
   - all three managed raw values must be pairwise distinct and must not duplicate any preserved registry value; otherwise setup fails before writing, matching `ApiKeyAuthenticator` duplicate-key authority.
   - setup verifies `context-store-admin ingestion-keyring verify`.
   - bootstrap never generates/distributes ingestion key material. For all-mode production, `CHRONOS_INGESTION_KEYRING_PATH` must already point to an operator/secret-manager staged file.
-  - when the staged keyring exists and the migrated manifest value row is absent, first-time setup invokes `context-store-admin ingestion-keyring provision`; when the file is absent/malformed, setup stops incomplete with staging instructions rather than generating keys.
-  - existing manifests use `verify`; rotation remains an explicit operator `rotate` action and is not implicit bootstrap behavior.
+  - existing manifests use `verify`;
+  key promotion/retirement remain explicit operator `promote`/`retire` actions and are not implicit bootstrap behavior.
   - explicit source `REGISTER_NEW_SOURCE_SCOPE`/alias migration via operator control only.
-  - OpenCode all-mode smoke creates a unique real turn, waits for receipt/checkpoint, and performs read-side verification.
-  - cleanup may use only the exact memory IDs/receipt IDs captured from that probe. If the setup context has an existing exact-ID deletion capability (for example an authorized regular MCP `memory_delete` call), use it only for those IDs; otherwise report `SMOKE_CLEANUP_INCOMPLETE`. Search-by-marker/broad deletion is forbidden.
+  - OpenCode all-mode smoke creates a unique real turn, waits for receipt/checkpoint, and performs read-side verification. The receipt returned by `turn.ingest` (or looked up via `receipt.list`/`receipt.lookup`) MUST include a `memory_id` field when the commit produced a new memory, and MUST be `None` when the commit resolved to an already-committed receipt (`ALREADY_COMMITTED`) or to an existing deduplicated memory. The probe turn MUST embed a deterministic `probe_marker` (`chronos:smoke:<iso-now-utc>:<random-hex-8>`) in the user message content so that the saved memory can be unambiguously attributed to the probe and never confused with pre-existing user data.
+  - cleanup may use only the exact `memory_id` captured from the probe's own receipt. If `memory_id` is `None` because the receipt was already committed or deduplicated, skip deletion and report `SMOKE_CLEANUP_NOT_REQUIRED`. If the setup context has an authorized exact-ID deletion capability (for example a regular MCP `memory_delete` call), use it only for the probe-owned `memory_id`; otherwise report `SMOKE_CLEANUP_INCOMPLETE`. Search-by-marker/broad deletion is forbidden.
   - setup never substitutes direct `memory_save`/`session_flush`/`ingest_turn` calls.
 
 - [ ] **Step 1: Write RED setup tests**
@@ -1078,9 +876,7 @@ Run:
 
 Expected: FAIL on new durable setup expectations.
 
-- [ ] **Step 3: Implement setup wiring**
-
-Do not write `.npmrc`, generate ingestion key material, or accept raw ingestion keys as CLI arguments. For Gate API credentials, parse/preserve the existing principal registry, materialize the three managed env values, validate global raw-key uniqueness, then atomically rewrite the effective registry plus managed env values; `--rotate-keys` rotates the whole managed set only. If the staged ingestion keyring is absent/malformed, fail setup before source enrollment. If the keyring is valid and the manifest row is absent, invoke `context-store-admin ingestion-keyring provision`; otherwise invoke `verify`. Setup may invoke the Graph-local admin CLI but must not implement keyring DB/file mutation itself.
+Do not write `.npmrc`, generate ingestion key material, or accept raw ingestion keys as CLI arguments. For Gate API credentials, parse/preserve the existing principal registry, materialize the three managed env values, validate global raw-key uniqueness, then atomically rewrite the effective registry plus managed env values; `--rotate-keys` rotates the whole managed set only. If the staged ingestion keyring is absent/malformed, fail setup before source enrollment. If the keyring is valid and the manifest row is absent, invoke `context-store-admin ingestion-keyring provision`; otherwise invoke `verify`. Setup may invoke the Graph-local admin CLI but must not implement keyring DB/file mutation itself. In `scripts/agent_assets/hooks.py`, replace the legacy all-mode plugin registration path with the loader-only adapter and update npm registry validation to use the new package runtime.
 
 - [ ] **Step 4: Update English/Japanese docs and config reference**
 
@@ -1096,7 +892,7 @@ Expected: PASS, including the real Gate `ApiKeyAuthenticator` principal mapping 
 
 ```bash
 cd "$GRAPH_ROOT"
-git add scripts/bootstrap.sh scripts/agent_assets/hooks.py .env.example docs   tests/unit/test_sync_agent_assets.py tests/integration/test_sync_agent_assets.py   tests/integration/test_opencode_durable_setup.py
+git add scripts/bootstrap.sh scripts/agent_assets/hooks.py .env.example docs   tests/unit/test_sync_agent_assets.py tests/integration/test_sync_agent_assets.py tests/integration/test_opencode_durable_setup.py
 git commit -m "feat: durable OpenCode setup と smoke を統合"
 ```
 
@@ -1113,9 +909,8 @@ git commit -m "feat: durable OpenCode setup と smoke を統合"
 **Interfaces:**
 - Consumes: Tasks 11, 15-16.
 - Produces:
-  - exact command target `npx --yes opencode-ai@1.18.34`.
-  - harness requires `GATE_ROOT`; before starting Gate it runs `uv --directory "$GATE_ROOT" sync --extra dev`, then installs the current Graph worktree editable with `uv --directory "$GATE_ROOT" pip install -e "$GRAPH_ROOT"`, asserts `chronos_shared.opencode_control.__file__` resolves under `$GRAPH_ROOT`, and launches `uv --directory "$GATE_ROOT" run --no-sync chronos-gate`. No later native-harness Gate command may omit `--no-sync` before Task 18.
-  - local OpenAI-compatible deterministic provider configured in generated `opencode.json` as provider id `chronos-fixture`, npm `@ai-sdk/openai-compatible`, model id `fixture-model`, local `baseURL=http://127.0.0.1:<fixture-port>/v1`, and non-secret fixture API key.
+  - local OpenAI-compatible deterministic provider configured via a generated **per-test OpenCode configuration file** placed inside the temporary project directory. This file is created by the harness at runtime, is not committed, and is not placed under any repository-level `.opencode/` config directory. Its contents are limited to the deterministic provider entry (`chronos-fixture` using npm `@ai-sdk/openai-compatible`, model `fixture-model`, local `baseURL=http://127.0.0.1:<fixture-port>/v1`, and a non-secret fixture API key) and the plugin identity;
+  it does not create a new agent-level config directory. This is a test-only ephemeral artifact analogous to a temporary database file, not a repository-owned agent configuration file.
   - OpenCode model selection is exactly `chronos-fixture/fixture-model`.
   - npm-style mode builds the current implementation with `npm pack --json`, installs that tarball into the temporary project with `npm install --ignore-scripts <tarball>`, and configures OpenCode with plugin identity `@yohi/opencode-plugin-chronos-turn-end`; no package publication is required for acceptance.
   - repository-local mode loads the project-local `.opencode/plugins/chronos-turn-end.js`.
@@ -1123,36 +918,31 @@ git commit -m "feat: durable OpenCode setup と smoke を統合"
   - fixture scripts deterministic SUCCESS, provider-error FAILED, tool call, compaction pressure, and child/sub-agent behavior without external LLM credits.
   - ABORTED is produced by starting a deliberately long streaming fixture response and invoking OpenCode's session-abort path while generation is in flight; do not fake the persisted `MessageAbortedError` record.
 
-- [ ] **Step 1: Write native harness RED smoke**
-
-Require `GATE_ROOT`; run Gate `uv sync --extra dev` first, install current `$GRAPH_ROOT` editable second, assert the loaded shared module path is under `$GRAPH_ROOT`, and launch Gate with `uv --directory "$GATE_ROOT" run --no-sync chronos-gate`. Generate the exact `chronos-fixture` provider/model configuration above. For npm-style mode run `npm pack --json` and install the produced tarball into the temporary project before configuring the package identity; for local mode use the repository-local plugin. Start the deterministic provider and OpenCode v1.18.34; Gate owns startup of the private Graph control subprocess. Assert actual plugin load and a root persisted session.
-
+The harness exposes `locked_mode` via a pytest CLI option or environment variable. Use `--chronos-locked-mode` (or env `CHRONOS_NATIVE_LOCKED_MODE=1`) to select `locked_mode=True`; absence selects editable development mode. `CHRONOS_GRAPH_CONTROL_FROM_LOCKED=1` additionally tells the Gate to launch its private control subprocess from the locked Graph package.
 - [ ] **Step 2: Run RED**
 
 Run: `cd "$GRAPH_ROOT" && uv run pytest tests/native/opencode/test_native_opencode_all.py -k smoke -v`
 
 Expected: FAIL until harness/config/plugin integration is complete.
 
-- [ ] **Step 3: Add native scenarios A-H/R/Q**
-
 At minimum execute:
   - normal success and failed/aborted;
   - event loss with periodic recovery;
-  - >100 roots;
-  - lost ACK/restart;
-  - duplicate hint storm;
   - real child session exists/events observed but child receipt/checkpoint/pending remain zero;
-  - npm and local plugin path both show `memory_save==0`, `session_flush==0`, detached hook spawn==0`.
+  - committed-history divergence scenarios I/J/K (removed turn, removed root session, changed prefix membership);
+  - npm and local plugin path both show `memory_save==0`, `session_flush==0`, detached hook spawn==0.
 
 - [ ] **Step 4: Add post-terminal Scenario AB**
 
 Commit FAILED/ABORTED user-only receipt, resume same user anchor to success, assert immutable receipt + divergence, then a new eligible user anchor commits normally.
 
-- [ ] **Step 5: Run GREEN**
+Run editable development mode:
+uv run pytest tests/native/opencode/test_native_opencode_all.py -v
+```
 
-Run: `cd "$GRAPH_ROOT" && uv run pytest tests/native/opencode/test_native_opencode_all.py -v`
+Expected: PASS using exact `opencode-ai@1.18.34`; no external provider/credit required. Locked-mode native acceptance is deferred to Task 18 because it requires the final pinned Graph SHA.
 
-Expected: PASS using exact `opencode-ai@1.18.34`; no external provider/credit required.
+Expected: PASS using exact `opencode-ai@1.18.34`; no external provider/credit required. Locked-mode native acceptance is deferred to Task 18 because it requires the final pinned Graph SHA.
 
 - [ ] **Step 6: Commit**
 
@@ -1226,12 +1016,18 @@ uv run --frozen python -c 'import chronos_shared.opencode_control'
 
 Expected: PASS without any editable Graph override.
 
-- [ ] **Step 7: Run Scenario Y in Gate**
+- [ ] **Step 7: Run Scenario Y in Gate against the locked Graph dependency**
 
 Run:
-`cd "$GATE_ROOT" && uv sync --frozen --extra dev && uv run --frozen pytest tests/test_session_bound_messages.py tests/test_control_client.py tests/test_opencode_control_endpoint.py -v`
+```bash
+cd "$GATE_ROOT"
+export EXPECTED_CHRONOS_GRAPH_SHA="$GRAPH_IMPLEMENTATION_SHA"
+uv sync --frozen --extra dev
+uv run --frozen pytest tests/test_session_bound_messages.py tests/test_control_client.py tests/test_opencode_control_endpoint.py -v
+EXPECTED_CHRONOS_GRAPH_SHA="$GRAPH_IMPLEMENTATION_SHA" uv run --frozen pytest tests/test_graph_dependency_pin.py -v
+```
 
-Expected: PASS, including legacy/control/operator credential separation and no control operation through normal MCP.
+Expected: PASS, including legacy/control/operator credential separation and no control operation through normal MCP. The dependency-pin test also passes, confirming the Gate environment is using the locked Graph dependency.
 
 - [ ] **Step 8: Run Scenario Z/AA Graph suites**
 
@@ -1249,12 +1045,13 @@ CHRONOS_REQUIRE_EXTERNAL_BACKENDS=1 \
 
 Required environment is `TEST_POSTGRES_DSN`, `TEST_SUPABASE_URL`, and `TEST_SUPABASE_SERVICE_ROLE_KEY`. Expected: PASS with **zero skipped backend tests**, zero partial mutation on injected failures, and both manifest-fence orderings.
 
-- [ ] **Step 9: Run native Scenario AB and zero-legacy acceptance**
+Use the Task 17 harness in `locked_mode=True`. In this mode the harness skips editable Graph installation, uses `uv --directory "$GATE_ROOT" sync --frozen --extra dev`, launches Gate with `uv --directory "$GATE_ROOT" run --frozen chronos-gate`, and asserts `chronos_shared.opencode_control.__file__` resolves under the Gate virtualenv rather than `$GRAPH_ROOT`. The Gate's private control subprocess must also originate from the locked Graph package (`context-store-control` in the Gate venv). Set `CHRONOS_GRAPH_CONTROL_FROM_LOCKED=1` so the Gate explicitly selects the locked-package control executable.
 
-Run: `cd "$GRAPH_ROOT" && uv run pytest tests/native/opencode/test_native_opencode_all.py -v`
-
-Expected: PASS; actual v1.18.34 npm/local loader paths both satisfy negative invariants.
-
+Run:
+```bash
+cd "$GRAPH_ROOT"
+EXPECTED_CHRONOS_GRAPH_SHA="$GRAPH_IMPLEMENTATION_SHA" CHRONOS_NATIVE_LOCKED_MODE=1 CHRONOS_GRAPH_CONTROL_FROM_LOCKED=1 uv run pytest tests/native/opencode/test_native_opencode_all.py --chronos-locked-mode -v
+Expected: PASS; actual v1.18.34 npm/local loader paths both satisfy negative invariants, and both Gate and its private control subprocess use the locked Graph dependency, not the editable worktree. The Task 17 harness runs in `locked_mode=True` for this step.
 - [ ] **Step 10: Run full Graph verification**
 
 Run:
@@ -1273,18 +1070,21 @@ Expected: all commands succeed.
 
 - [ ] **Step 11: Run full Gate verification**
 
-Run:
+Export the expected Graph SHA for the dependency-pin test, then run the full frozen Gate verification suite:
+
 ```bash
 cd "$GATE_ROOT"
+export EXPECTED_CHRONOS_GRAPH_SHA="$GRAPH_IMPLEMENTATION_SHA"
 uv sync --frozen --extra dev
 uv run --frozen pytest tests -v
 uv run --frozen mypy src
 uv run --frozen ruff check src tests
 uv run --frozen ruff format --check src tests
 git diff --check
+EXPECTED_CHRONOS_GRAPH_SHA="$GRAPH_IMPLEMENTATION_SHA" uv run --frozen pytest tests/test_graph_dependency_pin.py -v
 ```
 
-Expected: all commands succeed.
+Expected: all commands succeed, including the dependency-pin guard.
 
 - [ ] **Step 12: REFACTOR boundary and commit the Gate dependency pin**
 
@@ -1320,7 +1120,7 @@ Task 1  shared protocol
   +--> Task 10 Gate session auth
   +--> Task 11 Gate control plane
   +--> Task 9 Graph private control
-
+  |
 Task 2  schema/revision
   |
 Task 3  keyring primitives
@@ -1390,14 +1190,14 @@ PLAN-RG-002:
   local/manifest active mismatch -> NOT READY / zero mutation
 
 PLAN-RG-003:
-  typed SourceBindingWire / ReceiptWireRecord / ReceiptDivergence
+  typed SourceBindingWire / ReceiptWireRecord / ReceiptDivergence / TurnIngestWireResult
   stable source/divergence/validation enums
+  exact operation→payload/result mapping table
   Task 14 consumes exact shared fields, never generic dict authority
-
 PLAN-RG-004:
-  LocalSourceStateV1 owns source.json
+  LocalSourceStateV1 and CheckpointStateV1 fields defined in Global Constraints and Task 13
   atomic persist/restart/refresh/tamper-failure tests
-
+  checkpoint gap detection via `source_cursor_created_at` continuity
 PLAN-RG-005:
   Tasks 10/11/17 use sync -> editable Graph -> uv run --no-sync
   Task 18 pins pyproject.toml + uv.lock, removes editable override with frozen sync,
@@ -1422,5 +1222,5 @@ PLAN-RG-006:
 - [x] Every implementation Task has an explicit global REFACTOR-before-commit boundary; Task 18 also has its own dependency-pin RED/GREEN.
 - [x] Required PostgreSQL/Supabase release acceptance cannot pass by skipping unavailable fixtures.
 - [x] Scenario Y/Z/AA/AB have executable owning Tasks.
-- [x] Review Focus conditions are each pinned by a named Task/test.
+- [x] Canonicalization, dedupe classification, checkpoint continuity, prepared source mutation, and local source state contracts are embedded in this plan.
 - [x] Production implementation remains blocked until this plan passes its own Review Gate.

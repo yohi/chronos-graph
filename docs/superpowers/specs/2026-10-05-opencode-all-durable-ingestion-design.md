@@ -442,7 +442,7 @@ Default:
 ~/.context-store/ingestion-keyring.json
 ```
 
-The file is a Graph-owned secret file (mode 0600 on POSIX), is never committed, and is created/rotated by setup/operator tooling using atomic replace. Container/cloud deployments may mount the same file from their secret manager.
+The file is a Graph-owned secret file (mode 0600 on POSIX), is never committed, and is generated/distributed/staged by the operator or secret manager using atomic replace or secret-manager mount semantics. The Graph-local `context-store-admin` surface validates and consumes this staged file but never transports raw key material. Container/cloud deployments may mount the same file from their secret manager.
 
 Normative logical shape:
 
@@ -478,7 +478,7 @@ All ChronosGraph control instances that share one primary durable backend/receip
 
 ChronosGraph migrations create the **storage schema, constraints, and singleton identity slot** for exactly one authoritative manifest per primary durable receipt namespace. Migrations do **not** populate the manifest value/row itself.
 
-The manifest value is created only by explicit setup/operator provisioning, conceptually:
+The manifest value is created only by the Graph-local `context-store-admin ingestion-keyring provision` operation after operator/secret-manager staging, conceptually:
 
 ```text
 ingestion_keyring_manifest
@@ -2605,7 +2605,7 @@ Acceptance evidence should be machine-checkable and must itself avoid raw sensit
 39. Regular MCP `POST /messages` requires a valid Bearer whose authenticated principal exactly matches the immutable owner principal of the referenced live MCP session; missing/invalid Bearer is 401, owner mismatch is 403, and authenticated unknown/expired session is 404.
 40. Existing non-OpenCode hooks retain `MCP_GATEWAY_API_KEY`; OpenCode durable-all uses `MCP_GATEWAY_CONTROL_API_KEY` and must not repurpose the legacy credential.
 41. Every shared receipt namespace has one authoritative non-secret `ingestion_keyring_manifest`; each control instance must mechanically verify manifest-required key fingerprints before durable-all mutation.
-42. Migrations create only manifest schema/constraints/singleton identity; only explicit setup/operator provisioning may create the initial manifest value row.
+42. Migrations create only manifest schema/constraints/singleton identity; only Graph-local `context-store-admin ingestion-keyring provision` may create the initial manifest value row.
 43. The authoritative manifest must cover every identity key version still referenced by receipts and every alias key version still required by alias-retirement rules; missing durable-reference coverage is a fail-closed manifest inconsistency.
 44. Runtime never auto-generates/replaces a missing or malformed ingestion keyring or missing manifest; initial provisioning and rotation are explicit operator actions.
 45. Keyring manifest updates are generation-CAS protected, and local inactive staging keys may not become active authority until represented by the committed manifest.

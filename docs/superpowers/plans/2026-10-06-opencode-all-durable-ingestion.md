@@ -1060,6 +1060,7 @@ git commit -m "feat: durable OpenCode setup と smoke を統合"
 - Consumes: Tasks 11, 15-16.
 - Produces:
   - exact command target `npx --yes opencode-ai@1.18.34`.
+  - harness requires `GATE_ROOT`; before starting Gate it installs the current Graph worktree editable into the Gate uv environment, then launches `uv --directory "$GATE_ROOT" run chronos-gate` so the private `context-store-control` executable and shared protocol come from the current Graph implementation worktree.
   - local OpenAI-compatible deterministic provider configured in generated `opencode.json` as provider id `chronos-fixture`, npm `@ai-sdk/openai-compatible`, model id `fixture-model`, local `baseURL=http://127.0.0.1:<fixture-port>/v1`, and non-secret fixture API key.
   - OpenCode model selection is exactly `chronos-fixture/fixture-model`.
   - npm-style mode builds the current implementation with `npm pack --json`, installs that tarball into the temporary project with `npm install --ignore-scripts <tarball>`, and configures OpenCode with plugin identity `@yohi/opencode-plugin-chronos-turn-end`; no package publication is required for acceptance.
@@ -1070,7 +1071,7 @@ git commit -m "feat: durable OpenCode setup と smoke を統合"
 
 - [ ] **Step 1: Write native harness RED smoke**
 
-Generate the exact `chronos-fixture` provider/model configuration above. For npm-style mode run `npm pack --json` and install the produced tarball into the temporary project before configuring the package identity; for local mode use the repository-local plugin. Start the deterministic provider, Gate, Graph control process, and OpenCode v1.18.34; assert actual plugin load and a root persisted session.
+Require `GATE_ROOT`, install the current Graph worktree editable into that Gate uv environment, and launch Gate through `uv --directory "$GATE_ROOT" run chronos-gate`. Generate the exact `chronos-fixture` provider/model configuration above. For npm-style mode run `npm pack --json` and install the produced tarball into the temporary project before configuring the package identity; for local mode use the repository-local plugin. Start the deterministic provider and OpenCode v1.18.34; Gate owns startup of the private Graph control subprocess. Assert actual plugin load and a root persisted session.
 
 - [ ] **Step 2: Run RED**
 

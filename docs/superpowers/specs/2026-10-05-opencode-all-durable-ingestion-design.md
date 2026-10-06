@@ -210,6 +210,8 @@ Neo4j projection is post-commit convergence. It is not required for `COMMITTED`.
 COMMITTED
 ALREADY_COMMITTED
 RETRYABLE_FAILED
+  - STALE_DEDUPE_PLAN
+  - KEYRING_GENERATION_CHANGED
 TERMINAL_FAILED
 IDEMPOTENCY_CONFLICT
 IDEMPOTENCY_REBASE_UNAVAILABLE
@@ -875,9 +877,10 @@ key-dependent mutation wins manifest fence first:
   -> validates generation G
   -> creates durable reference/state under key K
   -> commits and releases fence
-  -> rotate/retire acquires fence afterward
+  -> promotion/retirement acquires fence afterward
   -> re-reads newly committed reference/state
-  -> cannot retire K when that reference requires it
+  -> any proposed transition that would remove required K is rejected
+  -> an active-key promotion may proceed only while retaining K as required
 
 rotate/retire wins manifest fence first:
   -> validates references
@@ -2612,10 +2615,12 @@ Baseline:
 ```text
 manifest generation = G
 identity active = v1
+identity required = {v1}
 PreparedTurn T pins G / v1
+operator has staged successor v2
 ```
 
-Case A — turn COMMIT wins first:
+Case A — turn COMMIT wins before promotion:
 
 ```text
 T acquires manifest fence
@@ -2623,19 +2628,28 @@ T validates G / v1
 T commits receipt(identity_key_version=v1)
 T releases fence
 
-retirement transaction acquires fence
-re-reads authoritative receipt references
-sees v1 reference
-retirement of v1 -> rejected
-manifest still requires v1
+promotion transaction acquires fence
+re-reads authoritative state
+commits G+1 only as:
+  identity active = v2
+  identity required = {v1, v2}
+
+later retirement proposal G+1 -> G+2:
+  acquires fence
+  re-reads receipt references
+  sees receipt(identity_key_version=v1)
+  removal of v1 -> rejected
+  manifest still requires v1
 ```
 
-Case B — rotate wins first:
+Case B — promotion wins before stale turn COMMIT:
 
 ```text
-rotate acquires manifest fence
-rotate commits generation G+1
-rotate releases fence
+promotion acquires manifest fence
+commits G+1:
+  identity active = v2
+  identity required = {v1, v2}
+promotion releases fence
 
 old T acquires fence
 current generation != G
@@ -2645,6 +2659,7 @@ current generation != G
 -> receipt mutation == 0
 -> checkpoint advance == 0
 -> fresh PREPARE
+-> new receipt preparation uses active v2
 ```
 
 Machine-check after both schedules:

@@ -674,6 +674,7 @@ git commit -m "feat: private durable ingestion control server を追加"
   - `_authenticate_message_principal(request: Request, api_authenticator: ApiKeyAuthenticator) -> str`.
   - `_handle_messages(..., api_authenticator: ApiKeyAuthenticator, reserved_principals: frozenset[str])`.
   - fixed status ordering: 401 missing/invalid Bearer; 404 authenticated unknown session; 403 owner mismatch/reserved principal.
+  - development dependency workflow is fixed: `uv sync --extra dev` first, then `uv pip install -e "$GRAPH_ROOT"`, then every Gate command in Tasks 10-11 uses `uv run --no-sync` until Task 18 removes the editable override. Before RED/GREEN, assert `chronos_shared.opencode_control.__file__` resolves under `$GRAPH_ROOT`.
 
 - [ ] **Step 1: Write Scenario Y session RED tests**
 
@@ -687,7 +688,13 @@ Create principal A session SA, then assert:
 - [ ] **Step 2: Run RED**
 
 Run:
-`cd "$GATE_ROOT" && uv pip install -e "$GRAPH_ROOT" && uv run pytest tests/test_session_bound_messages.py -v`
+```bash
+cd "$GATE_ROOT"
+uv sync --extra dev
+uv pip install -e "$GRAPH_ROOT"
+GRAPH_ROOT="$GRAPH_ROOT" uv run --no-sync python -c 'import os, pathlib, chronos_shared.opencode_control as m; p=pathlib.Path(m.__file__).resolve(); root=pathlib.Path(os.environ["GRAPH_ROOT"]).resolve(); assert p.is_relative_to(root), (p, root)'
+uv run --no-sync pytest tests/test_session_bound_messages.py -v
+```
 
 Expected: FAIL because `/messages` currently authorizes by session id only.
 
@@ -698,7 +705,7 @@ Authenticate before lookup; compare authenticated principal to immutable `Sessio
 - [ ] **Step 4: Run GREEN and existing Gate tests**
 
 Run:
-`cd "$GATE_ROOT" && uv run pytest tests/test_session_bound_messages.py -v && uv run pytest tests -v`
+`cd "$GATE_ROOT" && uv run --no-sync pytest tests/test_session_bound_messages.py -v && uv run --no-sync pytest tests -v`
 
 Expected: PASS.
 
@@ -724,7 +731,7 @@ git commit -m "feat: MCP session Bearer ownership を強制"
 - ChronosGate — Create: `tests/test_opencode_control_endpoint.py`
 
 **Interfaces:**
-- Consumes: Task 1 shared envelopes; Task 9 private server.
+- Consumes: Task 1 shared envelopes; Task 9 private server; Task 10's synchronized Gate env + editable current-Graph `--no-sync` development workflow.
 - Produces:
   - `ControlUpstreamClient.start()/stop()/call(operation, payload, request_id)`.
   - `GatewaySettings.control_upstream_command: list[str] = ["context-store-control", "--stdio"]`.
@@ -758,7 +765,13 @@ Assert control/legacy/operator credentials are distinct principals, legacy MCP c
 - [ ] **Step 3: Run RED**
 
 Run:
-`cd "$GATE_ROOT" && uv pip install -e "$GRAPH_ROOT" && uv run pytest tests/test_control_client.py tests/test_opencode_control_endpoint.py -v`
+```bash
+cd "$GATE_ROOT"
+uv sync --extra dev
+uv pip install -e "$GRAPH_ROOT"
+GRAPH_ROOT="$GRAPH_ROOT" uv run --no-sync python -c 'import os, pathlib, chronos_shared.opencode_control as m; p=pathlib.Path(m.__file__).resolve(); root=pathlib.Path(os.environ["GRAPH_ROOT"]).resolve(); assert p.is_relative_to(root), (p, root)'
+uv run --no-sync pytest tests/test_control_client.py tests/test_opencode_control_endpoint.py -v
+```
 
 Expected: FAIL because control client/endpoint do not exist.
 
@@ -773,7 +786,7 @@ Use Task 1 envelope parsing and operation enum. Keep control authorization separ
 - [ ] **Step 6: Run GREEN**
 
 Run:
-`cd "$GATE_ROOT" && uv run pytest tests/test_control_client.py tests/test_opencode_control_endpoint.py tests/test_session_bound_messages.py -v`
+`cd "$GATE_ROOT" && uv run --no-sync pytest tests/test_control_client.py tests/test_opencode_control_endpoint.py tests/test_session_bound_messages.py -v`
 
 Expected: PASS.
 
@@ -1030,6 +1043,13 @@ git commit -m "feat: OpenCode all-mode を durable reconciler へ切替"
 - Consumes: Tasks 7, 11, 15.
 - Produces:
   - distinct documented `MCP_GATEWAY_API_KEY`, `MCP_GATEWAY_CONTROL_API_KEY`, `MCP_GATEWAY_OPERATOR_API_KEY`.
+  - bootstrap owns three **managed** `MCP_GATEWAY_API_KEYS_JSON` principal entries while preserving unrelated valid existing entries:
+    - `"default" -> MCP_GATEWAY_API_KEY` for the legacy regular-MCP compatibility principal used by existing hooks;
+    - `"opencode-ingestion" -> MCP_GATEWAY_CONTROL_API_KEY`;
+    - `"chronos-setup" -> MCP_GATEWAY_OPERATOR_API_KEY`.
+  - existing `MCP_GATEWAY_API_KEYS_JSON` is parsed as JSON before mutation; malformed/non-object JSON fails setup without overwrite. Managed principal entries are replaced from the three managed env values; every unrelated principal/key entry is preserved verbatim.
+  - on a normal all-mode setup, missing managed raw values are generated independently and existing managed values are retained. `--rotate-keys` rotates **all three managed Gate credentials together**, rewrites the three managed registry entries, and preserves unrelated entries. Partial managed rotation is not supported by bootstrap.
+  - all three managed raw values must be pairwise distinct and must not duplicate any preserved registry value; otherwise setup fails before writing, matching `ApiKeyAuthenticator` duplicate-key authority.
   - setup verifies `context-store-admin ingestion-keyring verify`.
   - bootstrap never generates/distributes ingestion key material. For all-mode production, `CHRONOS_INGESTION_KEYRING_PATH` must already point to an operator/secret-manager staged file.
   - when the staged keyring exists and the migrated manifest value row is absent, first-time setup invokes `context-store-admin ingestion-keyring provision`; when the file is absent/malformed, setup stops incomplete with staging instructions rather than generating keys.
@@ -1041,7 +1061,7 @@ git commit -m "feat: OpenCode all-mode を durable reconciler へ切替"
 
 - [ ] **Step 1: Write RED setup tests**
 
-Cover missing keyring/manifest, distinct credential requirement, unresolved source zero mutation, explicit new-source transition, local/npm plugin configuration preservation, smoke refusing to claim complete without real-turn receipt+readback, exact-ID-only cleanup, and `SMOKE_CLEANUP_INCOMPLETE` when exact deletion is unavailable.
+Cover missing keyring/manifest, distinct credential requirement, unresolved source zero mutation, explicit new-source transition, local/npm plugin configuration preservation, smoke refusing to claim complete without real-turn receipt+readback, exact-ID-only cleanup, and `SMOKE_CLEANUP_INCOMPLETE` when exact deletion is unavailable. Add effective-registry tests that parse the generated `MCP_GATEWAY_API_KEYS_JSON` through the real Gate `ApiKeyAuthenticator` semantics and prove: legacy key authenticates as `default`, control key as `opencode-ingestion`, operator key as `chronos-setup`; all raw values are distinct; unrelated registry entries survive; malformed/duplicate registry input fails before write; `--rotate-keys` rotates all three managed entries together. Reuse Scenario Y routing assertions so control/operator keys are denied on regular MCP and the legacy key is denied on the control endpoint.
 
 - [ ] **Step 2: Run RED**
 
@@ -1052,7 +1072,7 @@ Expected: FAIL on new durable setup expectations.
 
 - [ ] **Step 3: Implement setup wiring**
 
-Do not write `.npmrc`, generate ingestion key material, or accept raw ingestion keys as CLI arguments. If the staged keyring is absent/malformed, fail setup before source enrollment. If the keyring is valid and the manifest row is absent, invoke `context-store-admin ingestion-keyring provision`; otherwise invoke `verify`. Setup may invoke the Graph-local admin CLI but must not implement keyring DB/file mutation itself.
+Do not write `.npmrc`, generate ingestion key material, or accept raw ingestion keys as CLI arguments. For Gate API credentials, parse/preserve the existing principal registry, materialize the three managed env values, validate global raw-key uniqueness, then atomically rewrite the effective registry plus managed env values; `--rotate-keys` rotates the whole managed set only. If the staged ingestion keyring is absent/malformed, fail setup before source enrollment. If the keyring is valid and the manifest row is absent, invoke `context-store-admin ingestion-keyring provision`; otherwise invoke `verify`. Setup may invoke the Graph-local admin CLI but must not implement keyring DB/file mutation itself.
 
 - [ ] **Step 4: Update English/Japanese docs and config reference**
 
@@ -1086,7 +1106,7 @@ git commit -m "feat: durable OpenCode setup と smoke を統合"
 - Consumes: Tasks 11, 15-16.
 - Produces:
   - exact command target `npx --yes opencode-ai@1.18.34`.
-  - harness requires `GATE_ROOT`; before starting Gate it installs the current Graph worktree editable into the Gate uv environment, then launches `uv --directory "$GATE_ROOT" run chronos-gate` so the private `context-store-control` executable and shared protocol come from the current Graph implementation worktree.
+  - harness requires `GATE_ROOT`; before starting Gate it runs `uv --directory "$GATE_ROOT" sync --extra dev`, then installs the current Graph worktree editable with `uv --directory "$GATE_ROOT" pip install -e "$GRAPH_ROOT"`, asserts `chronos_shared.opencode_control.__file__` resolves under `$GRAPH_ROOT`, and launches `uv --directory "$GATE_ROOT" run --no-sync chronos-gate`. No later native-harness Gate command may omit `--no-sync` before Task 18.
   - local OpenAI-compatible deterministic provider configured in generated `opencode.json` as provider id `chronos-fixture`, npm `@ai-sdk/openai-compatible`, model id `fixture-model`, local `baseURL=http://127.0.0.1:<fixture-port>/v1`, and non-secret fixture API key.
   - OpenCode model selection is exactly `chronos-fixture/fixture-model`.
   - npm-style mode builds the current implementation with `npm pack --json`, installs that tarball into the temporary project with `npm install --ignore-scripts <tarball>`, and configures OpenCode with plugin identity `@yohi/opencode-plugin-chronos-turn-end`; no package publication is required for acceptance.
@@ -1097,7 +1117,7 @@ git commit -m "feat: durable OpenCode setup と smoke を統合"
 
 - [ ] **Step 1: Write native harness RED smoke**
 
-Require `GATE_ROOT`, install the current Graph worktree editable into that Gate uv environment, and launch Gate through `uv --directory "$GATE_ROOT" run chronos-gate`. Generate the exact `chronos-fixture` provider/model configuration above. For npm-style mode run `npm pack --json` and install the produced tarball into the temporary project before configuring the package identity; for local mode use the repository-local plugin. Start the deterministic provider and OpenCode v1.18.34; Gate owns startup of the private Graph control subprocess. Assert actual plugin load and a root persisted session.
+Require `GATE_ROOT`; run Gate `uv sync --extra dev` first, install current `$GRAPH_ROOT` editable second, assert the loaded shared module path is under `$GRAPH_ROOT`, and launch Gate with `uv --directory "$GATE_ROOT" run --no-sync chronos-gate`. Generate the exact `chronos-fixture` provider/model configuration above. For npm-style mode run `npm pack --json` and install the produced tarball into the temporary project before configuring the package identity; for local mode use the repository-local plugin. Start the deterministic provider and OpenCode v1.18.34; Gate owns startup of the private Graph control subprocess. Assert actual plugin load and a root persisted session.
 
 - [ ] **Step 2: Run RED**
 
@@ -1140,6 +1160,7 @@ git commit -m "test: OpenCode v1.18.34 native durable acceptance を追加"
 
 **Files:**
 - ChronosGate — Modify: `pyproject.toml`
+- ChronosGate — Modify: `uv.lock`
 - ChronosGate — Create: `tests/test_graph_dependency_pin.py`
 - ChronosGraph — Verify: all files/tasks above
 - ChronosGate — Verify: all files/tasks above
@@ -1166,30 +1187,41 @@ Expected: the exact `$GRAPH_IMPLEMENTATION_SHA` is reachable from the remote rev
 
 - [ ] **Step 3: Add the Gate dependency-pin RED guard**
 
-Create `tests/test_graph_dependency_pin.py` to parse `pyproject.toml` with `tomllib`, extract the `context-store-mcp @ git+...` dependency SHA, read required env `EXPECTED_CHRONOS_GRAPH_SHA`, and assert exact equality.
+Create `tests/test_graph_dependency_pin.py` to parse both `pyproject.toml` and tracked `uv.lock` with `tomllib`. Extract the Graph SHA from the direct `context-store-mcp @ git+...` dependency and the locked `context-store-mcp` Git source/revision; read required env `EXPECTED_CHRONOS_GRAPH_SHA`; assert **both** equal that exact 40-character SHA and equal each other.
 
 - [ ] **Step 4: Run RED before updating Gate**
 
 Run:
-`cd "$GATE_ROOT" && EXPECTED_CHRONOS_GRAPH_SHA="$GRAPH_IMPLEMENTATION_SHA" uv run pytest tests/test_graph_dependency_pin.py -v`
+`cd "$GATE_ROOT" && EXPECTED_CHRONOS_GRAPH_SHA="$GRAPH_IMPLEMENTATION_SHA" uv run --no-sync pytest tests/test_graph_dependency_pin.py -v`
 
-Expected: FAIL because Gate still references its previous ChronosGraph SHA.
+Expected: FAIL because Gate `pyproject.toml` and `uv.lock` still reference the previous ChronosGraph SHA.
 
 - [ ] **Step 5: Pin ChronosGate to that Graph SHA**
 
-Replace the existing `context-store-mcp @ git+https://github.com/yohi/chronos-graph.git@...` SHA in `$GATE_ROOT/pyproject.toml` with `$GRAPH_IMPLEMENTATION_SHA`.
+Replace the existing `context-store-mcp @ git+https://github.com/yohi/chronos-graph.git@...` SHA in `$GATE_ROOT/pyproject.toml` with `$GRAPH_IMPLEMENTATION_SHA`, then run `cd "$GATE_ROOT" && uv lock` so tracked `uv.lock` resolves the same remote Graph commit. Do not hand-edit the lockfile.
 
 - [ ] **Step 6: Run dependency-pin GREEN**
 
 Run:
-`cd "$GATE_ROOT" && EXPECTED_CHRONOS_GRAPH_SHA="$GRAPH_IMPLEMENTATION_SHA" uv run pytest tests/test_graph_dependency_pin.py -v`
+`cd "$GATE_ROOT" && EXPECTED_CHRONOS_GRAPH_SHA="$GRAPH_IMPLEMENTATION_SHA" uv run --no-sync pytest tests/test_graph_dependency_pin.py -v`
 
-Expected: PASS.
+Expected: PASS for both project and lock metadata.
+
+Then remove the development editable override and prove the normal locked environment is authoritative:
+
+```bash
+cd "$GATE_ROOT"
+uv sync --frozen --extra dev
+EXPECTED_CHRONOS_GRAPH_SHA="$GRAPH_IMPLEMENTATION_SHA" uv run --frozen pytest tests/test_graph_dependency_pin.py -v
+uv run --frozen python -c 'import chronos_shared.opencode_control'
+```
+
+Expected: PASS without any editable Graph override.
 
 - [ ] **Step 7: Run Scenario Y in Gate**
 
 Run:
-`cd "$GATE_ROOT" && uv sync --extra dev && uv run pytest tests/test_session_bound_messages.py tests/test_control_client.py tests/test_opencode_control_endpoint.py -v`
+`cd "$GATE_ROOT" && uv sync --frozen --extra dev && uv run --frozen pytest tests/test_session_bound_messages.py tests/test_control_client.py tests/test_opencode_control_endpoint.py -v`
 
 Expected: PASS, including legacy/control/operator credential separation and no control operation through normal MCP.
 
@@ -1236,10 +1268,11 @@ Expected: all commands succeed.
 Run:
 ```bash
 cd "$GATE_ROOT"
-uv run pytest tests -v
-uv run mypy src
-uv run ruff check src tests
-uv run ruff format --check src tests
+uv sync --frozen --extra dev
+uv run --frozen pytest tests -v
+uv run --frozen mypy src
+uv run --frozen ruff check src tests
+uv run --frozen ruff format --check src tests
 git diff --check
 ```
 
@@ -1250,8 +1283,8 @@ Expected: all commands succeed.
 ```bash
 cd "$GATE_ROOT"
 # REFACTOR only dependency-pin test/helper naming if needed; do not change behavior.
-EXPECTED_CHRONOS_GRAPH_SHA="$GRAPH_IMPLEMENTATION_SHA" uv run pytest tests/test_graph_dependency_pin.py -v
-git add pyproject.toml tests/test_graph_dependency_pin.py
+EXPECTED_CHRONOS_GRAPH_SHA="$GRAPH_IMPLEMENTATION_SHA" uv run --frozen pytest tests/test_graph_dependency_pin.py -v
+git add pyproject.toml uv.lock tests/test_graph_dependency_pin.py
 git commit -m "chore: ChronosGraph durable control contract を固定"
 ```
 

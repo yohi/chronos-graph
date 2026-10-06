@@ -111,8 +111,9 @@
   - recursive `JsonValue` wire alias; semantic projection / identity evidence remain JSON values, never arbitrary Python objects.
   - Pydantic `ControlRequest`, `ControlSuccess`, `ControlFailure` envelopes with fixed protocol/request-id fields.
   - `SourceBindingWire(schema: str, issuer: Literal["chronos-graph"], key_version: str, token: str)`.
+  - `CandidateSourceBindingWire(canonical_source_scope_id: str, binding: SourceBindingWire)`; candidate scope identity and its MAC are one indivisible wire value.
   - operation payload models:
-    - `SourceResolvePayload(alias_schema_version: str, discovery_scope: dict[str, JsonValue], candidate_binding: SourceBindingWire | None, current_root_session_ids: tuple[str, ...])`
+    - `SourceResolvePayload(alias_schema_version: str, discovery_scope: dict[str, JsonValue], candidate: CandidateSourceBindingWire | None, current_root_session_ids: tuple[str, ...])`
     - `SourceRegisterPayload(alias_schema_version: str, discovery_scope: dict[str, JsonValue], current_root_session_ids: tuple[str, ...])`
     - `SourceAliasMigrationPayload(alias_schema_version: str, discovery_scope: dict[str, JsonValue], canonical_source_scope_id: str)`
     - `ReceiptListRootsPayload(canonical_source_scope_id: str, page_token: str | None, limit: int)`
@@ -137,7 +138,7 @@
 
 - [ ] **Step 1: Write shared protocol RED tests**
 
-Add tests asserting all exact enum values, `chronos.control.v1.<operation>` mapping, reserved principal set, operation→payload/result mapping, page limit validation, and rejection of unsupported protocol strings or extra top-level operation fields. Add exact round-trip tests for `SourceBindingWire`, `ReceiptWireRecord`, `ReceiptDivergence`, and every status enum; missing required receipt fields and unknown top-level receipt/divergence fields must fail validation.
+Add tests asserting all exact enum values, `chronos.control.v1.<operation>` mapping, reserved principal set, operation→payload/result mapping, page limit validation, and rejection of unsupported protocol strings or extra top-level operation fields. Add exact round-trip tests for `SourceBindingWire`, `CandidateSourceBindingWire`, `ReceiptWireRecord`, `ReceiptDivergence`, and every status enum; missing required receipt fields and unknown top-level receipt/divergence fields must fail validation. `source.resolve` must reject a binding supplied without its candidate canonical scope or a candidate scope supplied without its binding, because only the pair type is accepted.
 
 - [ ] **Step 2: Run RED**
 
@@ -303,8 +304,11 @@ git commit -m "feat: ingestion keyring authority を追加"
   - `DedupePlan(action: DeduplicationAction, existing_memory: Memory | None, similarity: float, assumption: DestructiveAssumption | None)`.
   - `TurnIngestRequest(canonical_source_scope_id: str, source_binding: SourceBinding, turn_key: str, root_session_id: str, user_message_id: str, source_cursor_created_at: int, evidence_contract_version: str, semantic_projection: dict[str, JsonValue], identity_evidence: dict[str, JsonValue])`.
   - `SourceMutationKind(StrEnum)`: `REGISTER_NEW_SOURCE_SCOPE`, `ATTACH_ALIAS`, `MIGRATE_ALIAS`, `BACKFILL_ALIAS_TOKEN`, `ISSUE_OR_REFRESH_BINDING`.
-  - `PreparedSourceMutation(kind: SourceMutationKind, keyring_manifest_generation: int, target_canonical_source_scope_id: str, alias_schema_version: str, alias_key_version_used: str | None, keyed_alias_token: str | None, binding_key_version_used: str | None, prepared_source_binding: SourceBinding | None)`. It contains only non-secret keyed artifacts plus pinned authority; raw key bytes and raw mutable routing evidence are not carried into COMMIT.
+  - `PreparedSourceMutation(kind: SourceMutationKind, keyring_manifest_generation: int, target_canonical_source_scope_id: str, target_alias_id: str | None, alias_schema_version: str, alias_key_version_used: str | None, keyed_alias_token: str | None, binding_key_version_used: str | None, prepared_source_binding: SourceBinding | None)`. It contains only non-secret keyed artifacts plus pinned authority; raw key bytes and raw mutable routing evidence are not carried into COMMIT. `BACKFILL_ALIAS_TOKEN` requires `target_alias_id`; the transaction may only add the new token to that exact existing alias identity.
   - `PreparedAliasLookup(alias_schema_version: str, key_version: str, keyed_token: str)` for read-only current/retained alias lookup before mutation.
+  - `AliasLookupStatus(StrEnum)`: `NOT_FOUND`, `UNIQUE`, `AMBIGUOUS`.
+  - `ResolvedAliasMatch(alias_id: str, canonical_source_scope_id: str, alias_schema_version: str, matched_key_version: str)`.
+  - `AliasLookupResult(status: AliasLookupStatus, match: ResolvedAliasMatch | None)`; `UNIQUE` requires exactly one match, while `NOT_FOUND/AMBIGUOUS` require `match is None`.
   - `PreparedTurn` fields required by the spec, including `keyring_manifest_generation`, `identity_active_version_at_prepare`, `identity_key_version_used`, prepared embeddings, turn/source identifiers, canonical hash inputs, desired mutation, and destructive assumptions.
   - `CommitResult(kind: TurnIngestResultKind, retry_reason: RetryReason | None, payload_hash: str | None)`.
   - `IngestionDedupePlanner(read_store: DedupeReadStore)`.
@@ -312,7 +316,7 @@ git commit -m "feat: ingestion keyring authority を追加"
 
 - [ ] **Step 1: Write RED planner tests**
 
-Reuse current similarity thresholds but assert a REPLACE plan leaves the existing memory unarchived and captures its exact `ingestion_revision`. Add an explicit regression proving existing `Deduplicator.deduplicate()` is not called. Add model tests proving `PreparedSourceMutation` requires a pinned manifest generation and the key version matching every present keyed artifact, and cannot serialize raw key material.
+Reuse current similarity thresholds but assert a REPLACE plan leaves the existing memory unarchived and captures its exact `ingestion_revision`. Add an explicit regression proving existing `Deduplicator.deduplicate()` is not called. Add model tests proving `PreparedSourceMutation` requires a pinned manifest generation and the key version matching every present keyed artifact, cannot serialize raw key material, and rejects `BACKFILL_ALIAS_TOKEN` without `target_alias_id`. Add `AliasLookupResult` invariants so ambiguous/not-found lookup cannot accidentally carry a chosen alias.
 
 - [ ] **Step 2: Run RED**
 
@@ -353,7 +357,7 @@ git commit -m "feat: side-effect-free durable ingestion planner を追加"
 - Produces:
   - `IngestionCommitStore.commit_turn(prepared: PreparedTurn) -> CommitResult`.
   - `IngestionRegistryStore.read_manifest() -> KeyringManifest | None`.
-  - `IngestionRegistryStore.lookup_source_alias(candidates: tuple[PreparedAliasLookup, ...]) -> SourceResolutionResult` is read-only and never creates/backfills tokens or bindings.
+  - `IngestionRegistryStore.lookup_source_alias(candidates: tuple[PreparedAliasLookup, ...]) -> AliasLookupResult` is read-only and never creates/backfills tokens or bindings. A unique lookup returns the stable `alias_id` plus canonical scope/schema/matched-key identity in `ResolvedAliasMatch`; ambiguity returns no selected match.
   - `IngestionRegistryStore.commit_source_mutation(prepared: PreparedSourceMutation) -> SourceResolutionResult` is the **only** source/alias/binding durable mutation entrypoint. It acquires the manifest fence first, requires `current_manifest.generation == prepared.keyring_manifest_generation`, requires every `*_key_version_used` is still authorized/active as applicable, then applies the source/alias/token/binding mutation atomically.
   - `KEYRING_GENERATION_CHANGED` from `commit_source_mutation` means zero source/alias/binding mutation and the returned `SourceResolutionResult.source_binding` is `None`; a prepared binding token is released to the caller only after the transaction commits successfully.
   - `IngestionRegistryStore.list_receipt_roots(scope_id: str, *, page_token: str | None, limit: int) -> ReceiptRootPage`.
@@ -361,6 +365,7 @@ git commit -m "feat: side-effect-free durable ingestion planner を追加"
   - `IngestionRegistryStore.lookup_receipts(scope_id: str, turn_keys: tuple[str, ...]) -> ReceiptLookupResult`.
   - `IngestionRegistryStore.validate_receipts(scope_id: str, root_session_id: str, evidence: tuple[ReceiptEvidence, ...]) -> ReceiptValidationResult`.
   - source registration, alias attachment/migration, active-key alias-token backfill, and binding issuance/refresh all enter the backend only as `PreparedSourceMutation`; no storage implementation receives the raw keyring or derives HMAC/MAC values inside the transaction.
+  - for `BACKFILL_ALIAS_TOKEN`, `commit_source_mutation` requires `target_alias_id` to identify an already-existing alias row and inserts the prepared active-key token under that **same alias_id**. It must not choose an alias by canonical scope alone or create a sibling alias implicitly.
   - `IngestionKeyringAdminStore.provision_manifest(candidate: KeyringManifest) -> KeyringAdminResult` with create-if-absent semantics.
   - `IngestionKeyringAdminStore.rotate_manifest(*, expected_generation: int, transition: KeyringTransition, candidate_manifest: KeyringManifest) -> KeyringAdminResult` whose backend transaction reacquires the manifest fence and re-reads current receipt/alias/binding retirement authority before update.
   - `IngestionAuthorityStore` protocol combines `IngestionCommitStore`, `IngestionRegistryStore`, `IngestionKeyringAdminStore`, and `async dispose() -> None`.
@@ -375,7 +380,8 @@ Cover:
   - injected failure after memory mutation leaves all three absent;
   - stale `ingestion_revision` returns `STALE_DEDUPE_PLAN` with zero mutation;
   - stale manifest generation returns `KEYRING_GENERATION_CHANGED` with zero mutation;
-  - source registration, alias migration, alias-token backfill, and binding refresh prepared under stale generation each return `KEYRING_GENERATION_CHANGED`, perform zero durable mutation, and release no binding token.
+  - source registration, alias migration, alias-token backfill, and binding refresh prepared under stale generation each return `KEYRING_GENERATION_CHANGED`, perform zero durable mutation, and release no binding token;
+  - one canonical scope with sibling aliases A and B where an old-key token resolves B: active-key backfill mutates token rows for B only, leaves A unchanged, and preserves B's stable `alias_id`.
 
 - [ ] **Step 2: Run RED**
 
@@ -425,7 +431,7 @@ git commit -m "feat: SQLite durable ingestion transaction boundary を追加"
 - Produces:
   - PostgreSQL implementation using one asyncpg connection/transaction and manifest-row serialization before key-dependent writes.
   - Supabase adapter calling `commit_ingested_turn_v1` for turn COMMIT and versioned server-side functions `commit_ingestion_source_mutation_v1` and `rotate_ingestion_keyring_manifest_v1` for key-dependent transactions.
-  - `commit_ingestion_source_mutation_v1` receives at minimum `expected_manifest_generation`, operation kind, target canonical scope, alias schema/version + non-secret keyed alias token when present, and binding key version + prepared binding token when present. It receives no raw key bytes or raw keyring JSON and returns the binding only after transactional generation/key-authority revalidation succeeds.
+  - `commit_ingestion_source_mutation_v1` receives at minimum `expected_manifest_generation`, operation kind, target canonical scope, exact `target_alias_id` when the operation targets an existing alias (mandatory for `BACKFILL_ALIAS_TOKEN`), alias schema/version + non-secret keyed alias token when present, and binding key version + prepared binding token when present. It receives no raw key bytes or raw keyring JSON and returns the binding only after transactional generation/key-authority revalidation succeeds.
   - Supabase durable mutation functions use invoker permissions with a fixed public schema search path; execution is granted only to the service-role backend identity, not anonymous/user roles.
   - identical `CommitResult` / retry reason semantics across backends.
   - external integration fixture contract:
@@ -562,8 +568,10 @@ git commit -m "feat: ingestion keyring admin CLI を追加"
   - server-authoritative HMAC identity derivation and final payload hash.
   - receipt-pinned canonical/evidence/key rebase.
   - `load_ready_key_authority() -> KeyringAuthority` starts every key-dependent PREPARE by calling `keyring_provider.load_snapshot()`, reading the authoritative manifest, verifying required fingerprints, and requiring local active versions to match manifest active versions. Any local/manifest mismatch returns the approved NOT READY code and performs zero source/receipt/turn mutation.
+  - `resolve_source` treats `SourceResolvePayload.candidate` as an indivisible pair and calls `verify_source_binding(request.candidate.canonical_source_scope_id, request.candidate.binding, fresh_keyring)`; the binding alone never selects or authenticates a scope.
   - source wire methods perform read-only alias/continuity lookup, derive non-secret keyed artifacts from that fresh READY snapshot, build one or more exact `PreparedSourceMutation` objects, and call `commit_source_mutation`; raw wire payloads are never passed directly to a mutation transaction.
-  - Graph-issued local source binding issue/verify/refresh uses `verify_source_binding(candidate_scope_id, ...)`.
+  - when a retained-key alias lookup returns `ResolvedAliasMatch(alias_id=A, ...)` and active-key token A is absent, the service derives the active-key token and prepares `BACKFILL_ALIAS_TOKEN` with `target_alias_id=A`; the stable alias identity from lookup is carried unchanged across PREPARE→COMMIT.
+  - Graph-issued local source binding issue/verify/refresh uses the exact candidate scope from `CandidateSourceBindingWire`.
   - after `KEYRING_GENERATION_CHANGED`, the service discards all prepared keyed artifacts and restarts the full PREPARE path, including a fresh keyring-file read and manifest verification.
   - `IDEMPOTENCY_REBASE_UNAVAILABLE`, `IDEMPOTENCY_CONFLICT`, `STALE_DEDUPE_PLAN`, and `KEYRING_GENERATION_CHANGED` exact behavior.
 
@@ -573,7 +581,7 @@ Cover domain-separated keyed identity tokens, volatile evidence not present in r
 
 - [ ] **Step 2: Write RED source/binding tests**
 
-Cover unknown/ambiguous continuity fail-closed, explicit new-source enrollment, alias migration continuity proof, global+directory isolation, scope-bound binding MAC candidate authentication without continuity authority, and stale generation zero mutation/token release. Add a service test proving local-active/manifest-active mismatch is NOT READY with zero mutation and that a fresh PREPARE after `KEYRING_GENERATION_CHANGED` reloads a newly atomically replaced keyring file before deriving new keyed artifacts.
+Cover unknown/ambiguous continuity fail-closed, explicit new-source enrollment, alias migration continuity proof, global+directory isolation, scope-bound binding MAC candidate authentication without continuity authority, and stale generation zero mutation/token release. Add candidate-pair tests: scope A + binding(A) authenticates the candidate; scope B + binding(A) yields `SOURCE_SCOPE_CONTINUITY_UNRESOLVED` with zero mutation; no unpaired candidate is accepted by the shared payload. Add sibling-alias backfill: one canonical scope has aliases A and B, retained-key lookup resolves B, and the prepared/committed active-key token targets B's exact `alias_id` while A remains unchanged. Add a service test proving local-active/manifest-active mismatch is NOT READY with zero mutation and that a fresh PREPARE after `KEYRING_GENERATION_CHANGED` reloads a newly atomically replaced keyring file before deriving new keyed artifacts.
 
 - [ ] **Step 3: Write RED turn service tests**
 
@@ -872,7 +880,7 @@ git commit -m "feat: OpenCode v1.18.34 turn canonicalization を追加"
   - local state under `~/.context-store/opencode-ingestion/<canonical-scope-id>/` owns exactly `source.json`, `<root-session-hash>.json`, and `<root-session-hash>.lock`.
   - `LocalSourceStateV1 { schema: "chronos.opencode.local-source.v1", canonical_source_scope_id, binding: SourceBindingWire }`.
   - `loadSourceState(scopeId)`, `writeSourceStateAtomic(state)`, and `quarantineInvalidSourceState(scopeId)` own `source.json`; successful enrollment/migration/binding refresh writes temp → fsync temp → rename → fsync directory.
-  - startup/source resolution loads `source.json` and sends its binding as `candidate_binding`; Graph remains the verifier/continuity authority.
+  - startup/source resolution loads `source.json` and sends `CandidateSourceBindingWire { canonical_source_scope_id: state.canonical_source_scope_id, binding: state.binding }` as `SourceResolvePayload.candidate`; the client never sends an unpaired binding or substitutes mutable routing evidence for the candidate scope ID. Graph remains the verifier/continuity authority.
   - a Graph response containing a refreshed active-key binding atomically replaces the retained old binding only after successful source resolution/commit.
   - invalid/tampered/unknown-key local binding is unusable, is quarantined/diagnosed, and resolves as `SOURCE_SCOPE_CONTINUITY_UNRESOLVED` without receipt/checkpoint/source mutation.
   - `RootStateV1` stores only canonical scope/root opaque ids, committed cursor/turn/hash, pending retry state, blocked/divergence codes, and for pending work the pinned `evidence_contract_version`; raw path/URI/command/identity evidence is forbidden.
@@ -886,7 +894,7 @@ Assert `global + directory A != global + directory B`, alias/query scope symmetr
 
 - [ ] **Step 2: Write RED state/lock tests**
 
-Assert atomic root/source state replacement, binding survives plugin restart, tampered binding fails closed, refreshed binding atomically replaces the old token, raw routing/path evidence is absent from `source.json`, corruption quarantine, lock same-root exclusion, hard-owner death/stale lease reclaim, and finite reacquisition.
+Assert atomic root/source state replacement, binding survives plugin restart, source resolution emits the exact stored scope ID + binding pair, tampered binding fails closed, refreshed binding atomically replaces the old token, raw routing/path evidence is absent from `source.json`, corruption quarantine, lock same-root exclusion, hard-owner death/stale lease reclaim, and finite reacquisition.
 
 - [ ] **Step 3: Run RED**
 
@@ -1369,9 +1377,11 @@ Task 18 cross-repo verification + Gate pin
 
 ```text
 PLAN-RG-001:
-  verify_source_binding(scope_id, binding, keyring)
-  PreparedSourceMutation pins manifest generation and non-secret keyed artifacts
-  store mutation boundary is commit_source_mutation(prepared)
+  CandidateSourceBindingWire carries canonical scope ID + binding as one wire authority
+  verify_source_binding(scope_id, binding, keyring) uses that exact candidate scope
+  ResolvedAliasMatch carries stable alias_id from read-only lookup
+  PreparedSourceMutation pins manifest generation/non-secret keyed artifacts and target_alias_id
+  BACKFILL_ALIAS_TOKEN commits only to the exact matched alias_id
   stale generation -> zero mutation / no binding token release
 
 PLAN-RG-002:

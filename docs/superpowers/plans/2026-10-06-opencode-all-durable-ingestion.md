@@ -182,6 +182,7 @@ git commit -m "feat: OpenCode control protocol contract を追加"
   - alias-token uniqueness `(alias_schema_version, key_version, keyed_token)`.
   - singleton manifest row identity, but migration creates schema/constraint only — no manifest value row.
   - `memories.ingestion_revision NOT NULL DEFAULT 1`.
+  - Supabase durable-ingestion tables enable RLS and add no anonymous/user write policy; durable mutation is reserved for the service-role/admin backend path.
   - ordinary update paths increment `ingestion_revision` for dedupe-relevant updates.
 
 - [ ] **Step 1: Add RED migration/model tests**
@@ -409,7 +410,8 @@ git commit -m "feat: SQLite durable ingestion transaction boundary を追加"
 - Consumes: Task 5 protocols.
 - Produces:
   - PostgreSQL implementation using one asyncpg connection/transaction and manifest-row serialization before key-dependent writes.
-  - Supabase adapter calling `commit_ingested_turn_v1` for turn COMMIT and versioned server-side functions for manifest/source key-dependent transactions.
+  - Supabase adapter calling `commit_ingested_turn_v1` for turn COMMIT and versioned server-side functions `register_ingestion_source_v1`, `migrate_ingestion_source_alias_v1`, and `rotate_ingestion_keyring_manifest_v1` for key-dependent transactions.
+  - Supabase durable mutation functions use invoker permissions with a fixed public schema search path; execution is granted only to the service-role backend identity, not anonymous/user roles.
   - identical `CommitResult` / retry reason semantics across backends.
   - external integration fixture contract:
     - PostgreSQL: `TEST_POSTGRES_DSN`.
@@ -418,7 +420,7 @@ git commit -m "feat: SQLite durable ingestion transaction boundary を追加"
 
 - [ ] **Step 1: Write RED backend tests**
 
-PostgreSQL mirrors Task 5 atomicity/fence schedules. SQL contract tests assert Supabase RPC contains receipt/CAS/memory/outbox/manifest-fence logic inside one PL/pgSQL transaction and does not rely on multiple PostgREST writes.
+PostgreSQL mirrors Task 5 atomicity/fence schedules. SQL contract tests assert Supabase RPC contains receipt/CAS/memory/outbox/manifest-fence logic inside one PL/pgSQL transaction, does not rely on multiple PostgREST writes, and is executable only by the service-role backend identity.
 
 - [ ] **Step 2: Run RED**
 

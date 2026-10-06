@@ -1040,7 +1040,7 @@ git commit -m "feat: OpenCode all-mode を durable reconciler へ切替"
 - ChronosGraph — Create: `tests/integration/test_opencode_durable_setup.py`
 
 **Interfaces:**
-- Consumes: Tasks 7, 11, 15.
+- Consumes: Tasks 7, 11, 15. The setup-auth integration test also requires `GATE_ROOT` pointing at the Task 11 ChronosGate worktree and uses that worktree's current-Graph editable `uv run --no-sync` environment.
 - Produces:
   - distinct documented `MCP_GATEWAY_API_KEY`, `MCP_GATEWAY_CONTROL_API_KEY`, `MCP_GATEWAY_OPERATOR_API_KEY`.
   - bootstrap owns three **managed** `MCP_GATEWAY_API_KEYS_JSON` principal entries while preserving unrelated valid existing entries:
@@ -1061,12 +1061,12 @@ git commit -m "feat: OpenCode all-mode を durable reconciler へ切替"
 
 - [ ] **Step 1: Write RED setup tests**
 
-Cover missing keyring/manifest, distinct credential requirement, unresolved source zero mutation, explicit new-source transition, local/npm plugin configuration preservation, smoke refusing to claim complete without real-turn receipt+readback, exact-ID-only cleanup, and `SMOKE_CLEANUP_INCOMPLETE` when exact deletion is unavailable. Add effective-registry tests that parse the generated `MCP_GATEWAY_API_KEYS_JSON` through the real Gate `ApiKeyAuthenticator` semantics and prove: legacy key authenticates as `default`, control key as `opencode-ingestion`, operator key as `chronos-setup`; all raw values are distinct; unrelated registry entries survive; malformed/duplicate registry input fails before write; `--rotate-keys` rotates all three managed entries together. Reuse Scenario Y routing assertions so control/operator keys are denied on regular MCP and the legacy key is denied on the control endpoint.
+Cover missing keyring/manifest, distinct credential requirement, unresolved source zero mutation, explicit new-source transition, local/npm plugin configuration preservation, smoke refusing to claim complete without real-turn receipt+readback, exact-ID-only cleanup, and `SMOKE_CLEANUP_INCOMPLETE` when exact deletion is unavailable. Add effective-registry tests that parse the generated `MCP_GATEWAY_API_KEYS_JSON` through the real Gate `ApiKeyAuthenticator` semantics and prove: legacy key authenticates as `default`, control key as `opencode-ingestion`, operator key as `chronos-setup`; all raw values are distinct; unrelated registry entries survive; malformed/duplicate registry input fails before write; `--rotate-keys` rotates all three managed entries together. The integration test invokes the Task 11 Gate environment through `uv --directory "$GATE_ROOT" run --no-sync`; missing `GATE_ROOT` is a test failure, not a skip. Reuse Scenario Y routing assertions so control/operator keys are denied on regular MCP and the legacy key is denied on the control endpoint.
 
 - [ ] **Step 2: Run RED**
 
 Run:
-`cd "$GRAPH_ROOT" && uv run pytest tests/unit/test_sync_agent_assets.py tests/integration/test_sync_agent_assets.py tests/integration/test_opencode_durable_setup.py -v`
+`cd "$GRAPH_ROOT" && GATE_ROOT="$GATE_ROOT" uv run pytest tests/unit/test_sync_agent_assets.py tests/integration/test_sync_agent_assets.py tests/integration/test_opencode_durable_setup.py -v`
 
 Expected: FAIL on new durable setup expectations.
 
@@ -1080,9 +1080,9 @@ Keep selective instructions intact; document exact control/operator/keyring prer
 
 - [ ] **Step 5: Run GREEN**
 
-Run the focused pytest command plus `bash -n scripts/bootstrap.sh`.
+Run the same focused pytest command with `GATE_ROOT` plus `bash -n scripts/bootstrap.sh`.
 
-Expected: PASS.
+Expected: PASS, including the real Gate `ApiKeyAuthenticator` principal mapping and Scenario Y path-separation assertions.
 
 - [ ] **Step 6: Commit**
 
@@ -1364,6 +1364,41 @@ Task 18 cross-repo verification + Gate pin
 - Spec §11 compatibility → Tasks 10, 15-18.
 - Spec §§12-14 acceptance/release gates → Tasks 5-7, 10-11, 17-18.
 - Scenarios Y/Z/AA/AB → Tasks 10-11 / 5-6 / 7 / 17, with Task 18 running the integrated gate.
+
+## Review Finding Resolution Map
+
+```text
+PLAN-RG-001:
+  verify_source_binding(scope_id, binding, keyring)
+  PreparedSourceMutation pins manifest generation and non-secret keyed artifacts
+  store mutation boundary is commit_source_mutation(prepared)
+  stale generation -> zero mutation / no binding token release
+
+PLAN-RG-002:
+  FileIngestionKeyringProvider reloads on every PREPARE
+  long-lived control process reload acceptance without restart
+  local/manifest active mismatch -> NOT READY / zero mutation
+
+PLAN-RG-003:
+  typed SourceBindingWire / ReceiptWireRecord / ReceiptDivergence
+  stable source/divergence/validation enums
+  Task 14 consumes exact shared fields, never generic dict authority
+
+PLAN-RG-004:
+  LocalSourceStateV1 owns source.json
+  atomic persist/restart/refresh/tamper-failure tests
+
+PLAN-RG-005:
+  Tasks 10/11/17 use sync -> editable Graph -> uv run --no-sync
+  Task 18 pins pyproject.toml + uv.lock, removes editable override with frozen sync,
+  then reruns Gate against the normal locked environment
+
+PLAN-RG-006:
+  bootstrap manages default/opencode-ingestion/chronos-setup registry entries
+  preserves unrelated entries
+  --rotate-keys rotates all managed Gate credentials together
+  real Gate ApiKeyAuthenticator/path-separation integration evidence
+```
 
 ## Plan Self-Review Checklist
 

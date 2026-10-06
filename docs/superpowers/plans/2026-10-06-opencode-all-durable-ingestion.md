@@ -105,10 +105,14 @@
   - `ControlOperation(StrEnum)` values: `source.resolve`, `source.register`, `source.authorize_alias_migration`, `receipt.list_roots`, `receipt.list`, `receipt.lookup`, `receipt.validate`, `turn.ingest`.
   - `TurnIngestResultKind(StrEnum)`: `COMMITTED`, `ALREADY_COMMITTED`, `RETRYABLE_FAILED`, `TERMINAL_FAILED`, `IDEMPOTENCY_CONFLICT`, `IDEMPOTENCY_REBASE_UNAVAILABLE`.
   - `RetryReason(StrEnum)`: `STALE_DEDUPE_PLAN`, `KEYRING_GENERATION_CHANGED`.
+  - `SourceResolutionStatus(StrEnum)`: `RESOLVED`, `REGISTERED`, `MIGRATED`, `UNRESOLVED`, `NOT_READY`.
+  - `SourceResolutionCode(StrEnum)`: `SOURCE_SCOPE_CONTINUITY_UNRESOLVED`, `SOURCE_ROUTING_SCOPE_MISMATCH`, `SOURCE_SCOPE_ALIAS_CONFLICT`, `SOURCE_SCOPE_LOOKUP_DEGRADED`, `INGESTION_KEYRING_NOT_READY`, `INGESTION_KEYRING_MISMATCH`, `INGESTION_KEYRING_MANIFEST_INCONSISTENT`, `KEYRING_GENERATION_CHANGED`.
+  - `DivergenceCode(StrEnum)`: `OPEN_CODE_HISTORY_DIVERGED`, `POST_TERMINAL_CONTINUATION`, `COMMITTED_TURN_REMOVED`, `COMMITTED_TURN_SEMANTICS_CHANGED`, `ROOT_SESSION_REMOVED`, `COMMITTED_PREFIX_MEMBERSHIP_CHANGED`.
   - recursive `JsonValue` wire alias; semantic projection / identity evidence remain JSON values, never arbitrary Python objects.
   - Pydantic `ControlRequest`, `ControlSuccess`, `ControlFailure` envelopes with fixed protocol/request-id fields.
+  - `SourceBindingWire(schema: str, issuer: Literal["chronos-graph"], key_version: str, token: str)`.
   - operation payload models:
-    - `SourceResolvePayload(alias_schema_version: str, discovery_scope: dict[str, JsonValue], candidate_binding: dict[str, JsonValue] | None, current_root_session_ids: tuple[str, ...])`
+    - `SourceResolvePayload(alias_schema_version: str, discovery_scope: dict[str, JsonValue], candidate_binding: SourceBindingWire | None, current_root_session_ids: tuple[str, ...])`
     - `SourceRegisterPayload(alias_schema_version: str, discovery_scope: dict[str, JsonValue], current_root_session_ids: tuple[str, ...])`
     - `SourceAliasMigrationPayload(alias_schema_version: str, discovery_scope: dict[str, JsonValue], canonical_source_scope_id: str)`
     - `ReceiptListRootsPayload(canonical_source_scope_id: str, page_token: str | None, limit: int)`
@@ -118,18 +122,22 @@
     - `ReceiptValidatePayload(canonical_source_scope_id: str, root_session_id: str, evidence: tuple[ReceiptEvidence, ...])`
     - `TurnIngestPayload(canonical_source_scope_id: str, source_binding: dict[str, JsonValue], turn_key: str, root_session_id: str, user_message_id: str, source_cursor_created_at: int, evidence_contract_version: str, semantic_projection: dict[str, JsonValue], identity_evidence: dict[str, JsonValue])`
   - wire result models:
-    - `SourceResolutionResult(status: str, canonical_source_scope_id: str | None, source_binding: dict[str, JsonValue] | None, retry_reason: str | None)`
-    - `ReceiptRootPage(items: tuple[str, ...], next_page_token: str | None)`
-    - `ReceiptPage(items: tuple[dict[str, JsonValue], ...], next_page_token: str | None)`
-    - `ReceiptLookupResult(items: tuple[dict[str, JsonValue], ...])`
-    - `ReceiptValidationResult(status: str, divergences: tuple[dict[str, JsonValue], ...])`
+    - `SourceResolutionResult(status: SourceResolutionStatus, code: SourceResolutionCode | None, canonical_source_scope_id: str | None, source_binding: SourceBindingWire | None)`.
+    - `ReceiptWireRecord(canonical_source_scope_id: str, turn_key: str, root_session_id: str, user_message_id: str, source_cursor_created_at: int, payload_hash: str, canonical_schema_version: str, evidence_contract_version: str, identity_key_version: str)`.
+    - `ReceiptRootRecord(canonical_source_scope_id: str, root_session_id: str)`.
+    - `ReceiptRootPage(items: tuple[ReceiptRootRecord, ...], next_page_token: str | None)`.
+    - `ReceiptPage(items: tuple[ReceiptWireRecord, ...], next_page_token: str | None)`.
+    - `ReceiptLookupResult(items: tuple[ReceiptWireRecord, ...])`.
+    - `ReceiptDivergence(code: DivergenceCode, canonical_source_scope_id: str, root_session_id: str, turn_key: str | None, receipt_payload_hash: str | None, current_payload_hash: str | None)`.
+    - `ReceiptValidationStatus(StrEnum)`: `MATCH`, `DIVERGED`, `UNAVAILABLE`.
+    - `ReceiptValidationResult(status: ReceiptValidationStatus, divergences: tuple[ReceiptDivergence, ...])`.
     - `TurnIngestWireResult(kind: TurnIngestResultKind, retry_reason: RetryReason | None, payload_hash: str | None)`.
   - `control_method(operation: ControlOperation) -> str`.
   - dispatcher/client tests must map every `ControlOperation` to exactly one payload model/result family; unknown fields remain rejected except inside the explicit JSON evidence/projection containers.
 
 - [ ] **Step 1: Write shared protocol RED tests**
 
-Add tests asserting all exact enum values, `chronos.control.v1.<operation>` mapping, reserved principal set, operation→payload/result mapping, page limit validation, and rejection of unsupported protocol strings or extra top-level operation fields.
+Add tests asserting all exact enum values, `chronos.control.v1.<operation>` mapping, reserved principal set, operation→payload/result mapping, page limit validation, and rejection of unsupported protocol strings or extra top-level operation fields. Add exact round-trip tests for `SourceBindingWire`, `ReceiptWireRecord`, `ReceiptDivergence`, and every status enum; missing required receipt fields and unknown top-level receipt/divergence fields must fail validation.
 
 - [ ] **Step 2: Run RED**
 
@@ -179,6 +187,7 @@ git commit -m "feat: OpenCode control protocol contract を追加"
   - `Memory.ingestion_revision: int = 1`.
   - tables `ingestion_source_scopes`, `ingestion_source_aliases`, `ingestion_source_alias_tokens`, `ingestion_receipts`, `ingestion_keyring_manifest`.
   - receipt uniqueness `(canonical_source_scope_id, turn_key)`.
+  - `ingestion_receipts` columns map one-for-one to Task 1 `ReceiptWireRecord`: `canonical_source_scope_id`, `turn_key`, `root_session_id`, `user_message_id`, `source_cursor_created_at`, `payload_hash`, `canonical_schema_version`, `evidence_contract_version`, `identity_key_version`.
   - alias-token uniqueness `(alias_schema_version, key_version, keyed_token)`.
   - singleton manifest row identity, but migration creates schema/constraint only — no manifest value row.
   - `memories.ingestion_revision NOT NULL DEFAULT 1`.
@@ -239,16 +248,18 @@ git commit -m "feat: durable ingestion schema と revision authority を追加"
   - `KeyringTransition(promotions: tuple[FamilyVersion, ...], retirements: tuple[FamilyVersion, ...])`.
   - `KeyringAdminResult(status: str, generation: int | None, readiness_code: str | None)` containing no raw secrets.
   - `load_ingestion_keyring(path: Path) -> IngestionKeyring`.
+  - `IngestionKeyringProvider(Protocol).load_snapshot() -> IngestionKeyring`.
+  - `FileIngestionKeyringProvider(path: Path)` whose every `load_snapshot()` re-opens and validates the atomically replaceable file; it does not cache a successful snapshot across PREPARE attempts.
   - `derive_key_fingerprint(family: str, version: str, raw_key: bytes) -> str` using the spec domain string.
   - `derive_identity_token(...)->str`.
-  - immutable `SourceBinding(schema: str, issuer: str, key_version: str, token: str)`.
+  - immutable `SourceBinding(schema: str, issuer: Literal["chronos-graph"], key_version: str, token: str)`.
   - `issue_source_binding(scope_id: str, keyring: IngestionKeyring) -> SourceBinding`.
-  - `verify_source_binding(binding: SourceBinding, keyring: IngestionKeyring) -> bool`.
+  - `verify_source_binding(scope_id: str, binding: SourceBinding, keyring: IngestionKeyring) -> bool`; verification reconstructs the MAC input from binding schema + issuer + the supplied candidate canonical scope.
   - readiness codes `INGESTION_KEYRING_NOT_READY`, `INGESTION_KEYRING_MISMATCH`, `INGESTION_KEYRING_MANIFEST_INCONSISTENT`.
 
 - [ ] **Step 1: Write RED keyring tests**
 
-Cover 0600 enforcement where POSIX supports it, malformed schema, missing active key, <256-bit material, deterministic domain-separated fingerprints, no raw secret in model repr/serialization, binding tamper failure, same-version/different-secret fingerprint mismatch.
+Cover 0600 enforcement where POSIX supports it, malformed schema, missing active key, <256-bit material, deterministic domain-separated fingerprints, no raw secret in model repr/serialization, binding tamper failure, same-version/different-secret fingerprint mismatch, provider reread after atomic file replacement, and scope-bound binding verification: binding issued for scope A verifies for A and fails for scope B.
 
 - [ ] **Step 2: Run RED**
 
@@ -291,6 +302,9 @@ git commit -m "feat: ingestion keyring authority を追加"
   - `DestructiveAssumption(memory_id: str, ingestion_revision: int)`.
   - `DedupePlan(action: DeduplicationAction, existing_memory: Memory | None, similarity: float, assumption: DestructiveAssumption | None)`.
   - `TurnIngestRequest(canonical_source_scope_id: str, source_binding: SourceBinding, turn_key: str, root_session_id: str, user_message_id: str, source_cursor_created_at: int, evidence_contract_version: str, semantic_projection: dict[str, JsonValue], identity_evidence: dict[str, JsonValue])`.
+  - `SourceMutationKind(StrEnum)`: `REGISTER_NEW_SOURCE_SCOPE`, `ATTACH_ALIAS`, `MIGRATE_ALIAS`, `BACKFILL_ALIAS_TOKEN`, `ISSUE_OR_REFRESH_BINDING`.
+  - `PreparedSourceMutation(kind: SourceMutationKind, keyring_manifest_generation: int, target_canonical_source_scope_id: str, alias_schema_version: str, alias_key_version_used: str | None, keyed_alias_token: str | None, binding_key_version_used: str | None, prepared_source_binding: SourceBinding | None)`. It contains only non-secret keyed artifacts plus pinned authority; raw key bytes and raw mutable routing evidence are not carried into COMMIT.
+  - `PreparedAliasLookup(alias_schema_version: str, key_version: str, keyed_token: str)` for read-only current/retained alias lookup before mutation.
   - `PreparedTurn` fields required by the spec, including `keyring_manifest_generation`, `identity_active_version_at_prepare`, `identity_key_version_used`, prepared embeddings, turn/source identifiers, canonical hash inputs, desired mutation, and destructive assumptions.
   - `CommitResult(kind: TurnIngestResultKind, retry_reason: RetryReason | None, payload_hash: str | None)`.
   - `IngestionDedupePlanner(read_store: DedupeReadStore)`.
@@ -298,7 +312,7 @@ git commit -m "feat: ingestion keyring authority を追加"
 
 - [ ] **Step 1: Write RED planner tests**
 
-Reuse current similarity thresholds but assert a REPLACE plan leaves the existing memory unarchived and captures its exact `ingestion_revision`. Add an explicit regression proving existing `Deduplicator.deduplicate()` is not called.
+Reuse current similarity thresholds but assert a REPLACE plan leaves the existing memory unarchived and captures its exact `ingestion_revision`. Add an explicit regression proving existing `Deduplicator.deduplicate()` is not called. Add model tests proving `PreparedSourceMutation` requires a pinned manifest generation and the key version matching every present keyed artifact, and cannot serialize raw key material.
 
 - [ ] **Step 2: Run RED**
 
@@ -339,14 +353,14 @@ git commit -m "feat: side-effect-free durable ingestion planner を追加"
 - Produces:
   - `IngestionCommitStore.commit_turn(prepared: PreparedTurn) -> CommitResult`.
   - `IngestionRegistryStore.read_manifest() -> KeyringManifest | None`.
-  - `IngestionRegistryStore.resolve_source(request: SourceResolvePayload) -> SourceResolutionResult`.
-  - `IngestionRegistryStore.register_source(request: SourceRegisterPayload) -> SourceResolutionResult`.
-  - `IngestionRegistryStore.authorize_alias_migration(request: SourceAliasMigrationPayload) -> SourceResolutionResult`.
+  - `IngestionRegistryStore.lookup_source_alias(candidates: tuple[PreparedAliasLookup, ...]) -> SourceResolutionResult` is read-only and never creates/backfills tokens or bindings.
+  - `IngestionRegistryStore.commit_source_mutation(prepared: PreparedSourceMutation) -> SourceResolutionResult` is the **only** source/alias/binding durable mutation entrypoint. It acquires the manifest fence first, requires `current_manifest.generation == prepared.keyring_manifest_generation`, requires every `*_key_version_used` is still authorized/active as applicable, then applies the source/alias/token/binding mutation atomically.
+  - `KEYRING_GENERATION_CHANGED` from `commit_source_mutation` means zero source/alias/binding mutation and the returned `SourceResolutionResult.source_binding` is `None`; a prepared binding token is released to the caller only after the transaction commits successfully.
   - `IngestionRegistryStore.list_receipt_roots(scope_id: str, *, page_token: str | None, limit: int) -> ReceiptRootPage`.
   - `IngestionRegistryStore.list_receipts(scope_id: str, root_session_id: str, *, page_token: str | None, limit: int) -> ReceiptPage`.
   - `IngestionRegistryStore.lookup_receipts(scope_id: str, turn_keys: tuple[str, ...]) -> ReceiptLookupResult`.
   - `IngestionRegistryStore.validate_receipts(scope_id: str, root_session_id: str, evidence: tuple[ReceiptEvidence, ...]) -> ReceiptValidationResult`.
-  - source register/alias/binding issuance implementations pin/revalidate manifest generation in the same backend authority; binding issuance never releases a stale token after a generation change.
+  - source registration, alias attachment/migration, active-key alias-token backfill, and binding issuance/refresh all enter the backend only as `PreparedSourceMutation`; no storage implementation receives the raw keyring or derives HMAC/MAC values inside the transaction.
   - `IngestionKeyringAdminStore.provision_manifest(candidate: KeyringManifest) -> KeyringAdminResult` with create-if-absent semantics.
   - `IngestionKeyringAdminStore.rotate_manifest(*, expected_generation: int, transition: KeyringTransition, candidate_manifest: KeyringManifest) -> KeyringAdminResult` whose backend transaction reacquires the manifest fence and re-reads current receipt/alias/binding retirement authority before update.
   - `IngestionAuthorityStore` protocol combines `IngestionCommitStore`, `IngestionRegistryStore`, `IngestionKeyringAdminStore`, and `async dispose() -> None`.
@@ -361,7 +375,7 @@ Cover:
   - injected failure after memory mutation leaves all three absent;
   - stale `ingestion_revision` returns `STALE_DEDUPE_PLAN` with zero mutation;
   - stale manifest generation returns `KEYRING_GENERATION_CHANGED` with zero mutation;
-  - source/alias mutation prepared under stale generation also performs zero mutation.
+  - source registration, alias migration, alias-token backfill, and binding refresh prepared under stale generation each return `KEYRING_GENERATION_CHANGED`, perform zero durable mutation, and release no binding token.
 
 - [ ] **Step 2: Run RED**
 
@@ -410,7 +424,8 @@ git commit -m "feat: SQLite durable ingestion transaction boundary を追加"
 - Consumes: Task 5 protocols.
 - Produces:
   - PostgreSQL implementation using one asyncpg connection/transaction and manifest-row serialization before key-dependent writes.
-  - Supabase adapter calling `commit_ingested_turn_v1` for turn COMMIT and versioned server-side functions `register_ingestion_source_v1`, `migrate_ingestion_source_alias_v1`, and `rotate_ingestion_keyring_manifest_v1` for key-dependent transactions.
+  - Supabase adapter calling `commit_ingested_turn_v1` for turn COMMIT and versioned server-side functions `commit_ingestion_source_mutation_v1` and `rotate_ingestion_keyring_manifest_v1` for key-dependent transactions.
+  - `commit_ingestion_source_mutation_v1` receives at minimum `expected_manifest_generation`, operation kind, target canonical scope, alias schema/version + non-secret keyed alias token when present, and binding key version + prepared binding token when present. It receives no raw key bytes or raw keyring JSON and returns the binding only after transactional generation/key-authority revalidation succeeds.
   - Supabase durable mutation functions use invoker permissions with a fixed public schema search path; execution is granted only to the service-role backend identity, not anonymous/user roles.
   - identical `CommitResult` / retry reason semantics across backends.
   - external integration fixture contract:
@@ -535,7 +550,7 @@ git commit -m "feat: ingestion keyring admin CLI を追加"
 **Interfaces:**
 - Consumes: Tasks 3-7, specifically Task 4 `DedupeReadStore` and Task 5 `IngestionAuthorityStore`.
 - Produces:
-  - `DurableIngestionService(*, read_store: DedupeReadStore, authority_store: IngestionAuthorityStore, embedding_provider: EmbeddingProvider, keyring: IngestionKeyring)`.
+  - `DurableIngestionService(*, read_store: DedupeReadStore, authority_store: IngestionAuthorityStore, embedding_provider: EmbeddingProvider, keyring_provider: IngestionKeyringProvider)`; no long-lived immutable keyring snapshot is stored.
   - `resolve_source(request: SourceResolvePayload) -> SourceResolutionResult`.
   - `register_source(request: SourceRegisterPayload) -> SourceResolutionResult`.
   - `authorize_alias_migration(request: SourceAliasMigrationPayload) -> SourceResolutionResult`.
@@ -546,7 +561,10 @@ git commit -m "feat: ingestion keyring admin CLI を追加"
   - `ingest_turn(request: TurnIngestRequest) -> CommitResult`.
   - server-authoritative HMAC identity derivation and final payload hash.
   - receipt-pinned canonical/evidence/key rebase.
-  - Graph-issued local source binding issue/verify/refresh.
+  - `load_ready_key_authority() -> KeyringAuthority` starts every key-dependent PREPARE by calling `keyring_provider.load_snapshot()`, reading the authoritative manifest, verifying required fingerprints, and requiring local active versions to match manifest active versions. Any local/manifest mismatch returns the approved NOT READY code and performs zero source/receipt/turn mutation.
+  - source wire methods perform read-only alias/continuity lookup, derive non-secret keyed artifacts from that fresh READY snapshot, build one or more exact `PreparedSourceMutation` objects, and call `commit_source_mutation`; raw wire payloads are never passed directly to a mutation transaction.
+  - Graph-issued local source binding issue/verify/refresh uses `verify_source_binding(candidate_scope_id, ...)`.
+  - after `KEYRING_GENERATION_CHANGED`, the service discards all prepared keyed artifacts and restarts the full PREPARE path, including a fresh keyring-file read and manifest verification.
   - `IDEMPOTENCY_REBASE_UNAVAILABLE`, `IDEMPOTENCY_CONFLICT`, `STALE_DEDUPE_PLAN`, and `KEYRING_GENERATION_CHANGED` exact behavior.
 
 - [ ] **Step 1: Write RED canonicalization tests**
@@ -555,7 +573,7 @@ Cover domain-separated keyed identity tokens, volatile evidence not present in r
 
 - [ ] **Step 2: Write RED source/binding tests**
 
-Cover unknown/ambiguous continuity fail-closed, explicit new-source enrollment, alias migration continuity proof, global+directory isolation, binding MAC candidate authentication without continuity authority, and stale generation zero mutation.
+Cover unknown/ambiguous continuity fail-closed, explicit new-source enrollment, alias migration continuity proof, global+directory isolation, scope-bound binding MAC candidate authentication without continuity authority, and stale generation zero mutation/token release. Add a service test proving local-active/manifest-active mismatch is NOT READY with zero mutation and that a fresh PREPARE after `KEYRING_GENERATION_CHANGED` reloads a newly atomically replaced keyring file before deriving new keyed artifacts.
 
 - [ ] **Step 3: Write RED turn service tests**
 
@@ -603,7 +621,7 @@ git commit -m "feat: durable ingestion authority service を追加"
 - Produces:
   - console script `context-store-control = "context_store.control.__main__:main"`.
   - `async def create_control_service(settings: Settings) -> DurableIngestionService` in `control/composition.py`.
-  - composition uses `_create_storage_adapter(settings)` as the `DedupeReadStore`, `create_ingestion_store(settings)` as the single `IngestionAuthorityStore`, `create_embedding_provider(settings)`, and `load_ingestion_keyring(Path(os.path.expanduser(settings.ingestion_keyring_path)))`.
+  - composition uses `_create_storage_adapter(settings)` as the `DedupeReadStore`, `create_ingestion_store(settings)` as the single `IngestionAuthorityStore`, `create_embedding_provider(settings)`, and one `FileIngestionKeyringProvider(Path(os.path.expanduser(settings.ingestion_keyring_path)))`. The provider, not a loaded snapshot, is injected into `DurableIngestionService`.
   - composition does **not** construct the full `Orchestrator`, cache adapters, dashboard, FastMCP server, lifecycle manager, or external Neo4j client.
   - private wire framing is newline-delimited UTF-8 JSON (NDJSON): exactly one JSON-RPC 2.0 request/response object per line; no Content-Length/MCP framing.
   - newline-framed JSON-RPC 2.0 stdio methods `chronos.control.v1.<operation>`.
@@ -612,7 +630,7 @@ git commit -m "feat: durable ingestion authority service を追加"
 
 - [ ] **Step 1: Write RED dispatcher/isolation tests**
 
-Assert all eight methods dispatch, unsupported method/version returns protocol error, malformed JSON is isolated, and `context_store.server.mcp` tool list does not contain any control method.
+Assert all eight methods dispatch, unsupported method/version returns protocol error, malformed JSON is isolated, and `context_store.server.mcp` tool list does not contain any control method. Add a long-lived-process acceptance: start one `context-store-control` process READY on v1, atomically replace the keyring file with staged v2/local-active-v2, promote the backend manifest G→G+1, assert an old prepared G request returns `KEYRING_GENERATION_CHANGED`, then without process restart assert a fresh request reloads the file, uses v2, and becomes READY. Also assert local-active != manifest-active keeps the same process NOT READY with zero mutation until reverified.
 
 - [ ] **Step 2: Run RED**
 
@@ -838,7 +856,12 @@ git commit -m "feat: OpenCode v1.18.34 turn canonicalization を追加"
 - Produces:
   - `ControlClient.call(operation, payload) -> result` using `MCP_GATEWAY_CONTROL_API_KEY`.
   - `DiscoveryScopeV1` builder as single source for alias evidence and `Session.list` query.
-  - local state under `~/.context-store/opencode-ingestion/<canonical-scope-id>/`.
+  - local state under `~/.context-store/opencode-ingestion/<canonical-scope-id>/` owns exactly `source.json`, `<root-session-hash>.json`, and `<root-session-hash>.lock`.
+  - `LocalSourceStateV1 { schema: "chronos.opencode.local-source.v1", canonical_source_scope_id, binding: SourceBindingWire }`.
+  - `loadSourceState(scopeId)`, `writeSourceStateAtomic(state)`, and `quarantineInvalidSourceState(scopeId)` own `source.json`; successful enrollment/migration/binding refresh writes temp → fsync temp → rename → fsync directory.
+  - startup/source resolution loads `source.json` and sends its binding as `candidate_binding`; Graph remains the verifier/continuity authority.
+  - a Graph response containing a refreshed active-key binding atomically replaces the retained old binding only after successful source resolution/commit.
+  - invalid/tampered/unknown-key local binding is unusable, is quarantined/diagnosed, and resolves as `SOURCE_SCOPE_CONTINUITY_UNRESOLVED` without receipt/checkpoint/source mutation.
   - `RootStateV1` stores only canonical scope/root opaque ids, committed cursor/turn/hash, pending retry state, blocked/divergence codes, and for pending work the pinned `evidence_contract_version`; raw path/URI/command/identity evidence is forbidden.
   - atomic temp+fsync+rename state replacement.
   - corrupt-state quarantine.
@@ -850,7 +873,7 @@ Assert `global + directory A != global + directory B`, alias/query scope symmetr
 
 - [ ] **Step 2: Write RED state/lock tests**
 
-Assert atomic state replace, no raw routing evidence in state, corruption quarantine, lock same-root exclusion, hard-owner death/stale lease reclaim, and finite reacquisition.
+Assert atomic root/source state replacement, binding survives plugin restart, tampered binding fails closed, refreshed binding atomically replaces the old token, raw routing/path evidence is absent from `source.json`, corruption quarantine, lock same-root exclusion, hard-owner death/stale lease reclaim, and finite reacquisition.
 
 - [ ] **Step 3: Run RED**
 
@@ -889,6 +912,7 @@ git commit -m "feat: OpenCode durable runtime state を追加"
   - activation + `session.status idle` + deprecated `session.idle` + 60s periodic sweep triggers.
   - exhaustive root discovery using widening limits 100→200→400… until unsaturated.
   - correctness targets per resolved scope are exactly: exhaustive current roots UNION locally known roots UNION exhaustively paged server receipt roots.
+  - recovery/divergence consumes Task 1 `ReceiptRootRecord`, `ReceiptWireRecord`, `ReceiptValidationResult`, and `ReceiptDivergence` only. It reads the fixed receipt fields `root_session_id`, `turn_key`, `user_message_id`, `source_cursor_created_at`, `payload_hash`, `canonical_schema_version`, `evidence_contract_version`, and `identity_key_version`; no plugin-local interpretation of generic result dictionaries is allowed.
   - every `receipt.list_roots` / `receipt.list` recovery/divergence loop follows `next_page_token` until null; first-page-only inventory is forbidden.
   - `resolveRootSessionId(client, sessionId) -> Promise<string>` follows persisted `parentID` links to the root; missing/cyclic ancestry fails closed and creates no reconciliation state.
   - root-only event mapping; child events resolve to/dirty the owning root but never create child state.
@@ -908,7 +932,7 @@ Assert contiguous barrier, INCOMPLETE blocks later turns, retryable failure does
 
 - [ ] **Step 3: Write RED recovery/divergence tests**
 
-Corrupt local state rebuilds from receipt inventory without skipping a gap; lost delete/update events are detected by periodic whole-prefix validation; root deletion remains discoverable via local/server root union.
+Corrupt local state rebuilds from typed `ReceiptWireRecord` inventory without skipping a gap; missing required wire fields are rejected before checkpoint logic; lost delete/update events are detected by periodic whole-prefix validation using typed `ReceiptDivergence.code`; root deletion remains discoverable via local/server root union.
 
 - [ ] **Step 4: Run RED**
 

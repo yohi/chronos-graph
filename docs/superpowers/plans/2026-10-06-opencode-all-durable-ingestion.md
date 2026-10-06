@@ -402,7 +402,7 @@ Run: `cd "$GRAPH_ROOT" && uv run pytest tests/integration/storage/test_ingestion
 Run the Supabase integration case whenever its fixture is available:
 `cd "$GRAPH_ROOT" && uv run pytest tests/integration/storage/test_ingestion_authority_supabase.py -v`
 
-Expected during Task development: implemented/configured backends PASS. Task 18 is the release gate and reruns PostgreSQL + Supabase with `CHRONOS_REQUIRE_EXTERNAL_BACKENDS=1`, where skips/missing fixture configuration are failures.
+Expected: PASS for every configured backend fixture. During ordinary Task development an intentionally unavailable external fixture may skip; Task 18 is the release gate and reruns PostgreSQL + Supabase with `CHRONOS_REQUIRE_EXTERNAL_BACKENDS=1`, where any skip or missing fixture configuration is a failure.
 
 - [ ] **Step 6: Commit**
 

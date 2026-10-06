@@ -32,6 +32,8 @@
 - Existing `selective` behavior and non-OpenCode Claude/Codex hook behavior remain regression-protected.
 - Do not run CodeRabbit actions; review output may be analyzed only when explicitly provided.
 - Do not begin production implementation until this plan passes its own Review Gate.
+- **Mandatory TDD order for every implementation Task:** write the named RED test → run the named RED command and observe the expected design-specific failure → implement the minimum GREEN behavior → run the named GREEN command → **REFACTOR only inside that Task's listed files without adding behavior** → rerun the same GREEN command → commit. Task 18 has its own dependency-pin RED/GREEN plus final integrated verification.
+- A Task must not commit while its focused GREEN command is failing or while a required backend/native acceptance case is skipped.
 
 ## File Structure
 
@@ -370,6 +372,10 @@ git commit -m "feat: SQLite durable ingestion transaction boundary を追加"
   - PostgreSQL implementation using one asyncpg connection/transaction and manifest-row serialization before key-dependent writes.
   - Supabase adapter calling `commit_ingested_turn_v1` for turn COMMIT and versioned server-side functions for manifest/source key-dependent transactions.
   - identical `CommitResult` / retry reason semantics across backends.
+  - external integration fixture contract:
+    - PostgreSQL: `TEST_POSTGRES_DSN`.
+    - Supabase: `TEST_SUPABASE_URL` + `TEST_SUPABASE_SERVICE_ROLE_KEY`.
+    - ordinary developer runs may skip an unavailable external backend, but when `CHRONOS_REQUIRE_EXTERNAL_BACKENDS=1`, missing fixture variables are a test failure, never a skip.
 
 - [ ] **Step 1: Write RED backend tests**
 
@@ -393,10 +399,10 @@ Create `commit_ingested_turn_v1` and the required source/manifest transactional 
 
 Run: `cd "$GRAPH_ROOT" && uv run pytest tests/integration/storage/test_ingestion_authority_postgres.py tests/unit/storage/test_supabase_durable_rpc.py -v`
 
-When an integration Supabase fixture is configured, also run:
+Run the Supabase integration case whenever its fixture is available:
 `cd "$GRAPH_ROOT" && uv run pytest tests/integration/storage/test_ingestion_authority_supabase.py -v`
 
-Expected: PASS; configured backend tests demonstrate the same ordering/rollback contract.
+Expected during Task development: implemented/configured backends PASS. Task 18 is the release gate and reruns PostgreSQL + Supabase with `CHRONOS_REQUIRE_EXTERNAL_BACKENDS=1`, where skips/missing fixture configuration are failures.
 
 - [ ] **Step 6: Commit**
 
@@ -556,7 +562,8 @@ git commit -m "feat: durable ingestion authority service を追加"
   - `async def create_control_service(settings: Settings) -> DurableIngestionService` in `control/composition.py`.
   - composition uses `_create_storage_adapter(settings)` as the read source, `create_ingestion_store(settings)`, `create_embedding_provider(settings)`, and `load_ingestion_keyring(Path(os.path.expanduser(settings.ingestion_keyring_path)))`.
   - composition does **not** construct the full `Orchestrator`, cache adapters, dashboard, FastMCP server, lifecycle manager, or external Neo4j client.
-  - newline/framed JSON-RPC 2.0 stdio methods `chronos.control.v1.<operation>`.
+  - private wire framing is newline-delimited UTF-8 JSON (NDJSON): exactly one JSON-RPC 2.0 request/response object per line; no Content-Length/MCP framing.
+  - newline-framed JSON-RPC 2.0 stdio methods `chronos.control.v1.<operation>`.
   - one dispatcher mapping exactly the Task 1 operation set to `DurableIngestionService`.
   - no registration as FastMCP tool/resource/prompt.
 
@@ -958,12 +965,13 @@ git commit -m "feat: OpenCode all-mode を durable reconciler へ切替"
   - when the staged keyring exists and the migrated manifest value row is absent, first-time setup invokes `context-store-admin ingestion-keyring provision`; when the file is absent/malformed, setup stops incomplete with staging instructions rather than generating keys.
   - existing manifests use `verify`; rotation remains an explicit operator `rotate` action and is not implicit bootstrap behavior.
   - explicit source `REGISTER_NEW_SOURCE_SCOPE`/alias migration via operator control only.
-  - OpenCode all-mode smoke creates a unique real turn, waits for receipt/checkpoint, performs read-side verification, and exact-ID cleanup or reports `SMOKE_CLEANUP_INCOMPLETE`.
+  - OpenCode all-mode smoke creates a unique real turn, waits for receipt/checkpoint, and performs read-side verification.
+  - cleanup may use only the exact memory IDs/receipt IDs captured from that probe. If the setup context has an existing exact-ID deletion capability (for example an authorized regular MCP `memory_delete` call), use it only for those IDs; otherwise report `SMOKE_CLEANUP_INCOMPLETE`. Search-by-marker/broad deletion is forbidden.
   - setup never substitutes direct `memory_save`/`session_flush`/`ingest_turn` calls.
 
 - [ ] **Step 1: Write RED setup tests**
 
-Cover missing keyring/manifest, distinct credential requirement, unresolved source zero mutation, explicit new-source transition, local/npm plugin configuration preservation, and smoke refusing to claim complete without real-turn receipt+readback.
+Cover missing keyring/manifest, distinct credential requirement, unresolved source zero mutation, explicit new-source transition, local/npm plugin configuration preservation, smoke refusing to claim complete without real-turn receipt+readback, exact-ID-only cleanup, and `SMOKE_CLEANUP_INCOMPLETE` when exact deletion is unavailable.
 
 - [ ] **Step 2: Run RED**
 
@@ -1010,13 +1018,15 @@ git commit -m "feat: durable OpenCode setup と smoke を統合"
   - exact command target `npx --yes opencode-ai@1.18.34`.
   - local OpenAI-compatible deterministic provider configured in generated `opencode.json` as provider id `chronos-fixture`, npm `@ai-sdk/openai-compatible`, model id `fixture-model`, local `baseURL=http://127.0.0.1:<fixture-port>/v1`, and non-secret fixture API key.
   - OpenCode model selection is exactly `chronos-fixture/fixture-model`.
+  - npm-style mode builds the current implementation with `npm pack --json`, installs that tarball into the temporary project with `npm install --ignore-scripts <tarball>`, and configures OpenCode with plugin identity `@yohi/opencode-plugin-chronos-turn-end`; no package publication is required for acceptance.
+  - repository-local mode loads the project-local `.opencode/plugins/chronos-turn-end.js`.
   - clean temp HOME/project/npm-path and repository-local plugin acceptance modes.
   - fixture scripts deterministic SUCCESS, provider-error FAILED, tool call, compaction pressure, and child/sub-agent behavior without external LLM credits.
   - ABORTED is produced by starting a deliberately long streaming fixture response and invoking OpenCode's session-abort path while generation is in flight; do not fake the persisted `MessageAbortedError` record.
 
 - [ ] **Step 1: Write native harness RED smoke**
 
-Generate the exact `chronos-fixture` provider/model configuration above, start the deterministic provider, Gate, Graph control process, and OpenCode v1.18.34 in a temporary environment; assert actual plugin load and a root persisted session.
+Generate the exact `chronos-fixture` provider/model configuration above. For npm-style mode run `npm pack --json` and install the produced tarball into the temporary project before configuring the package identity; for local mode use the repository-local plugin. Start the deterministic provider, Gate, Graph control process, and OpenCode v1.18.34; assert actual plugin load and a root persisted session.
 
 - [ ] **Step 2: Run RED**
 
@@ -1059,6 +1069,7 @@ git commit -m "test: OpenCode v1.18.34 native durable acceptance を追加"
 
 **Files:**
 - ChronosGate — Modify: `pyproject.toml`
+- ChronosGate — Create: `tests/test_graph_dependency_pin.py`
 - ChronosGraph — Verify: all files/tasks above
 - ChronosGate — Verify: all files/tasks above
 
@@ -1082,33 +1093,58 @@ Run: `cd "$GRAPH_ROOT" && git push origin HEAD`
 
 Expected: the exact `$GRAPH_IMPLEMENTATION_SHA` is reachable from the remote review branch; do not merge it.
 
-- [ ] **Step 3: Pin ChronosGate to that Graph SHA**
+- [ ] **Step 3: Add the Gate dependency-pin RED guard**
+
+Create `tests/test_graph_dependency_pin.py` to parse `pyproject.toml` with `tomllib`, extract the `context-store-mcp @ git+...` dependency SHA, read required env `EXPECTED_CHRONOS_GRAPH_SHA`, and assert exact equality.
+
+- [ ] **Step 4: Run RED before updating Gate**
+
+Run:
+`cd "$GATE_ROOT" && EXPECTED_CHRONOS_GRAPH_SHA="$GRAPH_IMPLEMENTATION_SHA" uv run pytest tests/test_graph_dependency_pin.py -v`
+
+Expected: FAIL because Gate still references its previous ChronosGraph SHA.
+
+- [ ] **Step 5: Pin ChronosGate to that Graph SHA**
 
 Replace the existing `context-store-mcp @ git+https://github.com/yohi/chronos-graph.git@...` SHA in `$GATE_ROOT/pyproject.toml` with `$GRAPH_IMPLEMENTATION_SHA`.
 
-- [ ] **Step 4: Run Scenario Y in Gate**
+- [ ] **Step 6: Run dependency-pin GREEN**
+
+Run:
+`cd "$GATE_ROOT" && EXPECTED_CHRONOS_GRAPH_SHA="$GRAPH_IMPLEMENTATION_SHA" uv run pytest tests/test_graph_dependency_pin.py -v`
+
+Expected: PASS.
+
+- [ ] **Step 7: Run Scenario Y in Gate**
 
 Run:
 `cd "$GATE_ROOT" && uv sync --extra dev && uv run pytest tests/test_session_bound_messages.py tests/test_control_client.py tests/test_opencode_control_endpoint.py -v`
 
 Expected: PASS, including legacy/control/operator credential separation and no control operation through normal MCP.
 
-- [ ] **Step 5: Run Scenario Z/AA Graph suites**
+- [ ] **Step 8: Run Scenario Z/AA Graph suites**
 
 Run:
 `cd "$GRAPH_ROOT" && uv run pytest tests/integration/storage/test_ingestion_authority_sqlite.py tests/integration/admin/test_ingestion_keyring_admin.py -v`
 
-Run configured PostgreSQL/Supabase equivalents in the repository integration environment.
+Then run the external-backend release gate:
+```bash
+cd "$GRAPH_ROOT"
+CHRONOS_REQUIRE_EXTERNAL_BACKENDS=1 \
+  uv run pytest \
+    tests/integration/storage/test_ingestion_authority_postgres.py \
+    tests/integration/storage/test_ingestion_authority_supabase.py -v
+```
 
-Expected: PASS with zero partial mutation on injected failures and both rotation orderings.
+Required environment is `TEST_POSTGRES_DSN`, `TEST_SUPABASE_URL`, and `TEST_SUPABASE_SERVICE_ROLE_KEY`. Expected: PASS with **zero skipped backend tests**, zero partial mutation on injected failures, and both manifest-fence orderings.
 
-- [ ] **Step 6: Run native Scenario AB and zero-legacy acceptance**
+- [ ] **Step 9: Run native Scenario AB and zero-legacy acceptance**
 
 Run: `cd "$GRAPH_ROOT" && uv run pytest tests/native/opencode/test_native_opencode_all.py -v`
 
 Expected: PASS; actual v1.18.34 npm/local loader paths both satisfy negative invariants.
 
-- [ ] **Step 7: Run full Graph verification**
+- [ ] **Step 10: Run full Graph verification**
 
 Run:
 ```bash
@@ -1124,7 +1160,7 @@ git diff --check
 
 Expected: all commands succeed.
 
-- [ ] **Step 8: Run full Gate verification**
+- [ ] **Step 11: Run full Gate verification**
 
 Run:
 ```bash
@@ -1138,15 +1174,17 @@ git diff --check
 
 Expected: all commands succeed.
 
-- [ ] **Step 9: Commit the Gate dependency pin**
+- [ ] **Step 12: REFACTOR boundary and commit the Gate dependency pin**
 
 ```bash
 cd "$GATE_ROOT"
-git add pyproject.toml
+# REFACTOR only dependency-pin test/helper naming if needed; do not change behavior.
+EXPECTED_CHRONOS_GRAPH_SHA="$GRAPH_IMPLEMENTATION_SHA" uv run pytest tests/test_graph_dependency_pin.py -v
+git add pyproject.toml tests/test_graph_dependency_pin.py
 git commit -m "chore: ChronosGraph durable control contract を固定"
 ```
 
-- [ ] **Step 10: Inspect both final diffs**
+- [ ] **Step 13: Inspect both final diffs**
 
 Run:
 `cd "$GRAPH_ROOT" && git status --short --branch && git diff --stat && git log --oneline -20`
@@ -1156,7 +1194,7 @@ Run:
 
 Expected: no uncommitted production changes; each commit maps to one reviewed Task; no secrets/key bytes are present.
 
-- [ ] **Step 11: Stop before production merge**
+- [ ] **Step 14: Stop before production merge**
 
 Do not merge or begin a deployment. Submit the completed implementation branches for the normal implementation/code Review Gate defined by the workflow.
 
@@ -1232,6 +1270,8 @@ Task 18 cross-repo verification + Gate pin
 - [x] Private Graph control composition and Gate→Graph environment allowlist are explicit.
 - [x] Admin CLI transition syntax, setup key staging rules, and native fixture provider configuration are explicit.
 - [x] RED commands and expected failure reasons precede implementation steps.
+- [x] Every implementation Task has an explicit global REFACTOR-before-commit boundary; Task 18 also has its own dependency-pin RED/GREEN.
+- [x] Required PostgreSQL/Supabase release acceptance cannot pass by skipping unavailable fixtures.
 - [x] Scenario Y/Z/AA/AB have executable owning Tasks.
 - [x] Review Focus conditions are each pinned by a named Task/test.
 - [x] Production implementation remains blocked until this plan passes its own Review Gate.

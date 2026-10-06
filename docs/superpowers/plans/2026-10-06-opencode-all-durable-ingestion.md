@@ -114,7 +114,8 @@
     - `ReceiptListRootsPayload(canonical_source_scope_id: str, page_token: str | None, limit: int)`
     - `ReceiptListPayload(canonical_source_scope_id: str, root_session_id: str, page_token: str | None, limit: int)`
     - `ReceiptLookupPayload(canonical_source_scope_id: str, turn_keys: tuple[str, ...])`
-    - `ReceiptValidatePayload(canonical_source_scope_id: str, root_session_id: str, evidence: tuple[dict[str, JsonValue], ...])`
+    - `ReceiptEvidence(turn_key: str, current_semantic_projection: dict[str, JsonValue] | None, current_identity_evidence: dict[str, JsonValue] | None)`
+    - `ReceiptValidatePayload(canonical_source_scope_id: str, root_session_id: str, evidence: tuple[ReceiptEvidence, ...])`
     - `TurnIngestPayload(canonical_source_scope_id: str, source_binding: dict[str, JsonValue], turn_key: str, root_session_id: str, user_message_id: str, source_cursor_created_at: int, evidence_contract_version: str, semantic_projection: dict[str, JsonValue], identity_evidence: dict[str, JsonValue])`
   - wire result models:
     - `SourceResolutionResult(status: str, canonical_source_scope_id: str | None, source_binding: dict[str, JsonValue] | None, retry_reason: str | None)`
@@ -239,6 +240,7 @@ git commit -m "feat: durable ingestion schema と revision authority を追加"
   - `load_ingestion_keyring(path: Path) -> IngestionKeyring`.
   - `derive_key_fingerprint(family: str, version: str, raw_key: bytes) -> str` using the spec domain string.
   - `derive_identity_token(...)->str`.
+  - immutable `SourceBinding(schema: str, issuer: str, key_version: str, token: str)`.
   - `issue_source_binding(scope_id: str, keyring: IngestionKeyring) -> SourceBinding`.
   - `verify_source_binding(binding: SourceBinding, keyring: IngestionKeyring) -> bool`.
   - readiness codes `INGESTION_KEYRING_NOT_READY`, `INGESTION_KEYRING_MISMATCH`, `INGESTION_KEYRING_MANIFEST_INCONSISTENT`.
@@ -282,7 +284,7 @@ git commit -m "feat: ingestion keyring authority を追加"
 - ChronosGraph — Create: `tests/unit/ingestion/test_durable_planner.py`
 
 **Interfaces:**
-- Consumes: Task 2 `Memory.ingestion_revision`; Task 3 `KeyringAuthority`.
+- Consumes: Task 1 `JsonValue`; Task 2 `Memory.ingestion_revision`; Task 3 `KeyringAuthority` and `SourceBinding`.
 - Produces:
   - `DedupeReadStore` protocol exposing only `vector_search(embedding: list[float], top_k: int, project: str | None) -> list[ScoredMemory]`; existing storage adapters satisfy it structurally.
   - `DestructiveAssumption(memory_id: str, ingestion_revision: int)`.
@@ -332,13 +334,13 @@ git commit -m "feat: side-effect-free durable ingestion planner を追加"
 - ChronosGraph — Create: `tests/integration/storage/test_ingestion_authority_sqlite.py`
 
 **Interfaces:**
-- Consumes: Tasks 2-4.
+- Consumes: Tasks 1-4.
 - Produces:
   - `IngestionCommitStore.commit_turn(prepared: PreparedTurn) -> CommitResult`.
   - `IngestionRegistryStore.read_manifest() -> KeyringManifest | None`.
-  - `IngestionRegistryStore.resolve_source(request: SourceResolveRequest) -> SourceResolutionResult`.
-  - `IngestionRegistryStore.register_source(request: SourceRegisterRequest) -> SourceResolutionResult`.
-  - `IngestionRegistryStore.authorize_alias_migration(request: SourceAliasMigrationRequest) -> SourceResolutionResult`.
+  - `IngestionRegistryStore.resolve_source(request: SourceResolvePayload) -> SourceResolutionResult`.
+  - `IngestionRegistryStore.register_source(request: SourceRegisterPayload) -> SourceResolutionResult`.
+  - `IngestionRegistryStore.authorize_alias_migration(request: SourceAliasMigrationPayload) -> SourceResolutionResult`.
   - `IngestionRegistryStore.list_receipt_roots(scope_id: str, *, page_token: str | None, limit: int) -> ReceiptRootPage`.
   - `IngestionRegistryStore.list_receipts(scope_id: str, root_session_id: str, *, page_token: str | None, limit: int) -> ReceiptPage`.
   - `IngestionRegistryStore.lookup_receipts(scope_id: str, turn_keys: tuple[str, ...]) -> ReceiptLookupResult`.
@@ -532,9 +534,9 @@ git commit -m "feat: ingestion keyring admin CLI を追加"
 - Consumes: Tasks 3-7, specifically Task 4 `DedupeReadStore` and Task 5 `IngestionAuthorityStore`.
 - Produces:
   - `DurableIngestionService(*, read_store: DedupeReadStore, authority_store: IngestionAuthorityStore, embedding_provider: EmbeddingProvider, keyring: IngestionKeyring)`.
-  - `resolve_source(request: SourceResolveRequest) -> SourceResolutionResult`.
-  - `register_source(request: SourceRegisterRequest) -> SourceResolutionResult`.
-  - `authorize_alias_migration(request: SourceAliasMigrationRequest) -> SourceResolutionResult`.
+  - `resolve_source(request: SourceResolvePayload) -> SourceResolutionResult`.
+  - `register_source(request: SourceRegisterPayload) -> SourceResolutionResult`.
+  - `authorize_alias_migration(request: SourceAliasMigrationPayload) -> SourceResolutionResult`.
   - `list_receipt_roots(scope_id: str, page_token: str | None, limit: int) -> ReceiptRootPage`.
   - `list_receipts(scope_id: str, root_session_id: str, page_token: str | None, limit: int) -> ReceiptPage`.
   - `lookup_receipts(scope_id: str, turn_keys: tuple[str, ...]) -> ReceiptLookupResult`.

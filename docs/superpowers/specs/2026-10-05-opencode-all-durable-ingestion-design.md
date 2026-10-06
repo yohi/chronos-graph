@@ -122,11 +122,25 @@ It may:
 - classify terminal outcome;
 - validate/canonicalize semantic content;
 - complete all external embedding/model work required by the prepared turn;
-- derive privacy-preserving identity tokens;
+- read the authoritative ingestion keyring manifest and pin its generation/identity authority;
+- derive privacy-preserving identity tokens only from keys authorized by that pinned manifest;
 - produce a dedupe/mutation proposal together with the embeddings and destructive-state assumptions required to revalidate that proposal at COMMIT;
 - derive a candidate canonical envelope and payload hash.
 
-`PreparedTurn` conceptually carries all embeddings required by COMMIT. COMMIT must never need to call an embedding/model provider to reconstruct dedupe state.
+`PreparedTurn` conceptually carries at least:
+
+```text
+prepared embeddings
+keyring_manifest_generation
+identity_active_version_at_prepare
+identity_key_version_used
+destructive dedupe assumptions
+candidate mutations / receipt inputs
+```
+
+For a new receipt, `identity_key_version_used` must equal the pinned manifest's active identity version. For receipt-pinned duplicate comparison it may be an older manifest-required version referenced by the existing receipt.
+
+COMMIT must never need to call an embedding/model provider to reconstruct dedupe state.
 
 It must not:
 
@@ -143,13 +157,32 @@ COMMIT is the authoritative durability boundary.
 
 Within the primary storage transaction it performs:
 
-1. authoritative receipt/idempotency revalidation;
-2. commit-time dedupe revalidation against current transactional state using only the prepared embeddings/data carried by `PreparedTurn`;
-3. optimistic validation of every destructive dedupe assumption, including the current identity/version/state of any memory planned for archive/replace;
-4. all primary memory mutations for the logical turn;
-5. durable graph intent/outbox writes when graph mode requires them;
-6. ingestion receipt creation/update as applicable;
-7. atomic transaction commit.
+1. acquire/read the authoritative `ingestion_keyring_manifest` serialization fence;
+2. require `current_manifest.generation == PreparedTurn.keyring_manifest_generation`;
+3. require `identity_key_version_used` is still authorized by the current manifest and, for a new receipt, is still the active identity version;
+4. authoritative receipt/idempotency revalidation;
+5. commit-time dedupe revalidation against current transactional state using only the prepared embeddings/data carried by `PreparedTurn`;
+6. optimistic validation of every destructive dedupe assumption, including the current identity/version/state of any memory planned for archive/replace;
+7. all primary memory mutations for the logical turn;
+8. durable graph intent/outbox writes when graph mode requires them;
+9. ingestion receipt creation/update as applicable;
+10. atomic transaction commit.
+
+The manifest fence is acquired before any turn mutation and remains held until COMMIT/ROLLBACK establishes transaction ordering against concurrent keyring promotion/retirement.
+
+If manifest generation or required key authority changed since PREPARE:
+
+```text
+KEYRING_GENERATION_CHANGED
+  -> rollback the entire turn transaction
+  -> memory mutations == 0
+  -> graph/outbox mutations == 0
+  -> receipt mutations == 0
+  -> RETRYABLE_FAILED(KEYRING_GENERATION_CHANGED)
+  -> fresh PREPARE against the new manifest generation
+```
+
+COMMIT must never silently reuse identity material prepared under an older manifest generation.
 
 External embedding/model/network calls are forbidden inside the COMMIT transaction.
 
@@ -183,6 +216,15 @@ IDEMPOTENCY_REBASE_UNAVAILABLE
 ```
 
 Only `COMMITTED` and `ALREADY_COMMITTED` permit local checkpoint advancement.
+
+`RETRYABLE_FAILED` has stable retry reasons including at least:
+
+```text
+STALE_DEDUPE_PLAN
+KEYRING_GENERATION_CHANGED
+```
+
+Both require a fresh PREPARE and leave checkpoint unchanged.
 
 `IDEMPOTENCY_CONFLICT` blocks that root and later eligible turns until operator resolution. It must never be used when the server merely lacks an old key/canonicalizer required to reproduce the comparison contract.
 
@@ -235,6 +277,8 @@ IngestionDedupePlanner
   -> read-only candidate search
   -> PreparedTurn {
        prepared embeddings,
+       keyring manifest generation,
+       identity active/key version authority,
        desired memory mutations,
        destructive target ids,
        destructive concurrency tokens,
@@ -248,14 +292,18 @@ IngestionCommitStore.commit_ingested_turn(PreparedTurn)
 The COMMIT transaction owns, in order:
 
 ```text
-1. authoritative receipt read/revalidation
-2. receipt-pinned rebase decision, if required
-3. destructive-target concurrency-token validation
-4. archive/replace/insert memory mutations
-5. durable graph-intent/outbox mutations
-6. receipt insert/update
-7. atomic commit
+1. acquire/read keyring manifest serialization fence
+2. validate pinned manifest generation + key authority
+3. authoritative receipt read/revalidation
+4. receipt-pinned rebase decision, if required
+5. destructive-target concurrency-token validation
+6. archive/replace/insert memory mutations
+7. durable graph-intent/outbox mutations
+8. receipt insert/update
+9. atomic commit
 ```
+
+The same manifest serialization fence is shared with keyring promotion/retirement and every other key-dependent durable mutation described in §1.10.
 
 If receipt-pinned recanonicalization is required, the current transaction performs no mutation and returns a rebase requirement to the orchestration layer. Recanonicalization occurs outside the transaction and a fresh COMMIT attempt follows.
 
@@ -296,22 +344,28 @@ OpenCode durable-all is supported on all three primary storage backends, with on
 SQLite:
   one aiosqlite connection
   BEGIN IMMEDIATE (or equivalent write transaction)
+  read/validate manifest generation inside that write transaction
   receipt + CAS + memory + outbox + receipt mutation
+  rotate/retire uses the same serialized write-transaction authority
   one COMMIT / ROLLBACK
 
 PostgreSQL:
   one asyncpg connection
   one asyncpg transaction
+  acquire the manifest row as the serialization fence before key-dependent mutation
   receipt/target locking as needed
   ingestion_revision CAS
   memory + outbox + receipt mutation
+  rotate/retire acquires the same manifest-row fence
   one COMMIT / ROLLBACK
 
 Supabase:
   one versioned server-side PostgreSQL RPC/function
   (commit_ingested_turn_v1)
+  validates/locks the manifest fence inside the function transaction
   performs receipt + CAS + memory + outbox + receipt mutation
-  in one database transaction
+  rotate/retire and other key-dependent writes use server-side transactional
+  functions with the same manifest-fence ordering semantics
 ```
 
 Multiple PostgREST mutations are never accepted as an atomic Supabase COMMIT implementation.
@@ -319,6 +373,47 @@ Multiple PostgREST mutations are never accepted as an atomic Supabase COMMIT imp
 When external graph projection is enabled, COMMIT persists a primary-store graph intent/outbox record inside the same transaction. External Neo4j I/O occurs only after primary COMMIT; a configuration that cannot provide durable primary graph intent is unsupported for OpenCode durable-all and must fail fast.
 
 The canonical source-scope registry, source aliases/tokens, and ingestion receipts are part of the same primary durable storage family and are migrated through the repository's normal backend migration mechanism.
+
+## 1.10 Keyring-manifest serialization fence
+
+The singleton `ingestion_keyring_manifest` row is the **common serialization authority for every key-dependent durable mutation** in one receipt namespace.
+
+Covered mutations include:
+
+```text
+turn COMMIT / new ingestion receipt creation
+source registration
+source alias attachment/migration
+source-alias active-key token creation/backfill
+Graph-issued local binding issuance/refresh that authorizes source.json replacement
+any future durable mutation that creates state under an identity/source-alias/source-binding key version
+```
+
+Read-only receipt/source inspection that creates no key-dependent durable/local state does not require the fence.
+
+Each key-dependent operation has a side-effect-free preparation/read phase that pins:
+
+```text
+keyring_manifest_generation
+relevant active key version(s)
+relevant key version(s) actually used
+```
+
+Before its first durable mutation or before releasing a newly issued binding token for local durable replacement, the authoritative primary-store transaction must acquire/read the manifest fence and revalidate the pinned generation/key authority.
+
+If the generation changed:
+
+```text
+KEYRING_GENERATION_CHANGED
+  -> full transaction rollback / no durable mutation
+  -> no binding token is released for local replacement
+  -> retryable domain outcome
+  -> rebuild operation from current manifest
+```
+
+For `turn.ingest` this is `RETRYABLE_FAILED(KEYRING_GENERATION_CHANGED)`. Source/alias/binding control operations return the same stable `KEYRING_GENERATION_CHANGED` retryable reason in their structured domain result.
+
+This fence establishes one total ordering between key-dependent durable writes and keyring manifest changes. Process-level readiness checks alone are never retirement authority.
 
 ---
 
@@ -705,20 +800,30 @@ and knows the non-secret target active/required version set
 
 The rotation request identifies only non-secret family/version transitions; raw key material remains in the local file.
 
-`context-store-admin ingestion-keyring rotate` performs:
+`context-store-admin ingestion-keyring rotate` performs the authoritative retirement/promotion decision inside one primary-store transaction:
 
 ```text
-1. read authoritative manifest generation G
-2. read/validate local staged keyring
-3. derive proposed non-secret fingerprints
-4. validate receipt identity-key retention
-5. validate source-alias retirement coverage
-6. validate source-binding retirement policy
-7. construct proposed generation G+1 manifest
-8. CAS update manifest WHERE generation = G
-9. re-read and verify committed manifest
-10. report success only after verification
+outside mutation transaction:
+  1. read/validate local staged keyring
+  2. derive proposed non-secret fingerprints
+  3. prepare expected generation G and proposed family/version transition
+
+inside one primary-store transaction:
+  4. acquire/read the manifest serialization fence
+  5. require manifest generation == expected G
+  6. re-read authoritative receipt identity-key references
+  7. re-read authoritative source-alias token/coverage state
+  8. validate source-binding retirement policy/state
+  9. validate promotion/retirement against those current references
+ 10. update manifest to generation G+1
+ 11. commit
+
+after commit:
+ 12. re-read and verify committed manifest
+ 13. report success only after verification
 ```
+
+Retirement validation and manifest update are therefore indivisible with respect to concurrent key-dependent durable mutations.
 
 A stale expected generation fails without overwriting the manifest.
 
@@ -743,7 +848,58 @@ D. instances reload/verify
 
 This design prefers bounded fail-closed unavailability over accepting divergent key authority.
 
-Retirement is performed through the same `rotate` operation by proposing a manifest that drops a retained version. It is rejected unless the family-specific retirement rules and durable-reference coverage checks already permit removal.
+Active-key promotion and old-key retirement are **separate manifest generations**:
+
+```text
+promotion G -> G+1:
+  new version becomes active
+  previous active version remains required/retained
+
+retirement G+1 -> G+2 or later:
+  candidate version is already inactive
+  no fresh mutation may choose it as an active key
+  retirement transaction revalidates all authoritative retention references
+  then, and only then, may remove it from required_versions
+```
+
+Directly replacing an active key and dropping that previous active version in one manifest transition is forbidden.
+
+Retirement is performed through the same `rotate` operation by proposing a manifest that drops an already-inactive retained version. It is rejected unless the family-specific retirement rules and durable-reference coverage checks already permit removal.
+
+#### Rotation-versus-mutation ordering guarantee
+
+All supported backends must implement the same semantic ordering:
+
+```text
+key-dependent mutation wins manifest fence first:
+  -> validates generation G
+  -> creates durable reference/state under key K
+  -> commits and releases fence
+  -> rotate/retire acquires fence afterward
+  -> re-reads newly committed reference/state
+  -> cannot retire K when that reference requires it
+
+rotate/retire wins manifest fence first:
+  -> validates references
+  -> commits manifest G+1
+  -> releases fence
+  -> stale prepared mutation acquires fence afterward
+  -> sees generation mismatch
+  -> zero mutation
+  -> KEYRING_GENERATION_CHANGED
+  -> fresh preparation under G+1
+```
+
+No successful execution may leave:
+
+```text
+receipt.identity_key_version
+  NOT IN manifest.identity.required_versions
+```
+
+Likewise, no successful alias-token/source mutation may depend on an alias key no longer represented by the manifest, and no newly issued binding token may be released under a binding-key authority invalidated by an earlier manifest generation.
+
+For binding-key rotation, promotion first makes the successor active while retaining the previous key. New binding issuance then uses only the successor. Final old-key retirement occurs only in a later manifest generation after the explicit fleet refresh/retirement policy permits invalidating remaining old local bindings.
 
 #### Audit / output boundary
 
@@ -1355,6 +1511,8 @@ receipt:
 ```
 
 Source registration and explicit alias migration use their own atomic primary-store transactions. They never rewrite historical receipts.
+
+Every source/alias mutation that creates or backfills keyed alias state, and every Graph-issued binding issuance/refresh that can replace local `source.json`, participates in the §1.10 manifest-generation fence. A stale prepared source/binding operation returns retryable `KEYRING_GENERATION_CHANGED` with zero mutation/replacement.
 
 ## 5.9 Authenticated local source binding
 
@@ -2445,6 +2603,87 @@ retirement proposal while receipt/alias/binding retention still requires key:
   -> manifest unchanged
 ```
 
+### Rotation versus in-flight durable mutation
+
+Use deterministic concurrency barriers around the real backend transaction fence.
+
+Baseline:
+
+```text
+manifest generation = G
+identity active = v1
+PreparedTurn T pins G / v1
+```
+
+Case A — turn COMMIT wins first:
+
+```text
+T acquires manifest fence
+T validates G / v1
+T commits receipt(identity_key_version=v1)
+T releases fence
+
+retirement transaction acquires fence
+re-reads authoritative receipt references
+sees v1 reference
+retirement of v1 -> rejected
+manifest still requires v1
+```
+
+Case B — rotate wins first:
+
+```text
+rotate acquires manifest fence
+rotate commits generation G+1
+rotate releases fence
+
+old T acquires fence
+current generation != G
+-> RETRYABLE_FAILED(KEYRING_GENERATION_CHANGED)
+-> memory mutation == 0
+-> graph/outbox mutation == 0
+-> receipt mutation == 0
+-> checkpoint advance == 0
+-> fresh PREPARE
+```
+
+Machine-check after both schedules:
+
+```text
+for every ingestion receipt:
+  receipt.identity_key_version
+    IN manifest.identity.required_versions
+```
+
+### Alias / binding concurrency
+
+Run equivalent barriers for key-dependent source state:
+
+```text
+source-alias token creation/backfill prepared under G
+vs alias-key promotion/retirement
+
+binding issuance/refresh prepared under G
+vs binding-key promotion/retirement
+```
+
+Required outcomes follow the same ordering:
+
+```text
+mutation/issuance wins first:
+  rotate observes/obeys the committed/reference or retention state
+
+rotate wins first:
+  stale operation -> KEYRING_GENERATION_CHANGED
+  alias/source mutation == 0
+  stale binding token is not released for source.json replacement
+  operation retries under the new generation
+```
+
+Binding retirement additionally proves the two-generation rule: successor promotion retains the previous key; final retirement is a later generation after fleet refresh policy.
+
+Run these concurrency cases for SQLite, PostgreSQL, and Supabase integration backends using their backend-specific transaction implementation.
+
 ### Identity historical-key behavior
 
 ```text
@@ -2550,6 +2789,8 @@ crypto/binding:
   multi-instance manifest fingerprint consistency green
   missing/malformed/mismatched keyring fails readiness with zero mutation
   retained-key rebase/rotation green
+  rotation-vs-turn/source/alias/binding serialization race green
+  successful receipts always reference manifest-required identity keys
   invalid binding fails closed
 
 post-terminal lineage:
@@ -2612,6 +2853,12 @@ Acceptance evidence should be machine-checkable and must itself avoid raw sensit
 46. Keyring/manifest provision, verify, rotation, and retirement are owned exclusively by the Graph-local `context-store-admin` administration surface; no Gate HTTP, `chronos.control.v1`, or MCP operation may administer them.
 47. Raw ingestion key material is generated/distributed/staged by the operator or secret manager and is consumed locally by ChronosGraph only; ChronosGraph does not provide a fleet secret-distribution transport.
 48. Setup automation may invoke the Graph-local admin CLI but may not bypass it with direct manifest/database mutation or transport raw key material through ChronosGate.
+49. The singleton keyring manifest row is the common transaction serialization fence for every key-dependent durable mutation and every keyring promotion/retirement.
+50. Prepared key-dependent mutations pin manifest generation and key authority; a changed generation yields zero mutation and the stable retryable reason `KEYRING_GENERATION_CHANGED`.
+51. Retirement validation and manifest update occur in one primary-store transaction under the same fence used by turn/source/alias/binding mutations.
+52. Active-key promotion always retains the previous active key; retirement is a separate later manifest generation after the candidate key is inactive and retention rules permit removal.
+53. The serialization ordering is deterministic: mutation-first makes retirement observe the new reference/state; rotate-first makes the stale mutation rollback/retry.
+54. No successful state may contain a receipt whose `identity_key_version` is absent from `manifest.identity.required_versions`; equivalent manifest-authority guarantees apply to keyed alias state and newly issued binding tokens.
 
 ## Implementation-order constraint
 

@@ -105,12 +105,30 @@
   - `ControlOperation(StrEnum)` values: `source.resolve`, `source.register`, `source.authorize_alias_migration`, `receipt.list_roots`, `receipt.list`, `receipt.lookup`, `receipt.validate`, `turn.ingest`.
   - `TurnIngestResultKind(StrEnum)`: `COMMITTED`, `ALREADY_COMMITTED`, `RETRYABLE_FAILED`, `TERMINAL_FAILED`, `IDEMPOTENCY_CONFLICT`, `IDEMPOTENCY_REBASE_UNAVAILABLE`.
   - `RetryReason(StrEnum)`: `STALE_DEDUPE_PLAN`, `KEYRING_GENERATION_CHANGED`.
+  - recursive `JsonValue` wire alias; semantic projection / identity evidence remain JSON values, never arbitrary Python objects.
   - Pydantic `ControlRequest`, `ControlSuccess`, `ControlFailure` envelopes with fixed protocol/request-id fields.
+  - operation payload models:
+    - `SourceResolvePayload(alias_schema_version: str, discovery_scope: dict[str, JsonValue], candidate_binding: dict[str, JsonValue] | None, current_root_session_ids: tuple[str, ...])`
+    - `SourceRegisterPayload(alias_schema_version: str, discovery_scope: dict[str, JsonValue], current_root_session_ids: tuple[str, ...])`
+    - `SourceAliasMigrationPayload(alias_schema_version: str, discovery_scope: dict[str, JsonValue], canonical_source_scope_id: str)`
+    - `ReceiptListRootsPayload(canonical_source_scope_id: str, page_token: str | None, limit: int)`
+    - `ReceiptListPayload(canonical_source_scope_id: str, root_session_id: str, page_token: str | None, limit: int)`
+    - `ReceiptLookupPayload(canonical_source_scope_id: str, turn_keys: tuple[str, ...])`
+    - `ReceiptValidatePayload(canonical_source_scope_id: str, root_session_id: str, evidence: tuple[dict[str, JsonValue], ...])`
+    - `TurnIngestPayload(canonical_source_scope_id: str, source_binding: dict[str, JsonValue], turn_key: str, root_session_id: str, user_message_id: str, source_cursor_created_at: int, evidence_contract_version: str, semantic_projection: dict[str, JsonValue], identity_evidence: dict[str, JsonValue])`
+  - wire result models:
+    - `SourceResolutionResult(status: str, canonical_source_scope_id: str | None, source_binding: dict[str, JsonValue] | None, retry_reason: str | None)`
+    - `ReceiptRootPage(items: tuple[str, ...], next_page_token: str | None)`
+    - `ReceiptPage(items: tuple[dict[str, JsonValue], ...], next_page_token: str | None)`
+    - `ReceiptLookupResult(items: tuple[dict[str, JsonValue], ...])`
+    - `ReceiptValidationResult(status: str, divergences: tuple[dict[str, JsonValue], ...])`
+    - `TurnIngestWireResult(kind: TurnIngestResultKind, retry_reason: RetryReason | None, payload_hash: str | None)`.
   - `control_method(operation: ControlOperation) -> str`.
+  - dispatcher/client tests must map every `ControlOperation` to exactly one payload model/result family; unknown fields remain rejected except inside the explicit JSON evidence/projection containers.
 
 - [ ] **Step 1: Write shared protocol RED tests**
 
-Add tests asserting all exact enum values, `chronos.control.v1.<operation>` mapping, reserved principal set, and rejection of unsupported protocol strings.
+Add tests asserting all exact enum values, `chronos.control.v1.<operation>` mapping, reserved principal set, operation→payload/result mapping, page limit validation, and rejection of unsupported protocol strings or extra top-level operation fields.
 
 - [ ] **Step 2: Run RED**
 
@@ -269,6 +287,7 @@ git commit -m "feat: ingestion keyring authority を追加"
   - `DedupeReadStore` protocol exposing only `vector_search(embedding: list[float], top_k: int, project: str | None) -> list[ScoredMemory]`; existing storage adapters satisfy it structurally.
   - `DestructiveAssumption(memory_id: str, ingestion_revision: int)`.
   - `DedupePlan(action: DeduplicationAction, existing_memory: Memory | None, similarity: float, assumption: DestructiveAssumption | None)`.
+  - `TurnIngestRequest(canonical_source_scope_id: str, source_binding: SourceBinding, turn_key: str, root_session_id: str, user_message_id: str, source_cursor_created_at: int, evidence_contract_version: str, semantic_projection: dict[str, JsonValue], identity_evidence: dict[str, JsonValue])`.
   - `PreparedTurn` fields required by the spec, including `keyring_manifest_generation`, `identity_active_version_at_prepare`, `identity_key_version_used`, prepared embeddings, turn/source identifiers, canonical hash inputs, desired mutation, and destructive assumptions.
   - `CommitResult(kind: TurnIngestResultKind, retry_reason: RetryReason | None, payload_hash: str | None)`.
   - `IngestionDedupePlanner(read_store: DedupeReadStore)`.
@@ -316,7 +335,15 @@ git commit -m "feat: side-effect-free durable ingestion planner を追加"
 - Consumes: Tasks 2-4.
 - Produces:
   - `IngestionCommitStore.commit_turn(prepared: PreparedTurn) -> CommitResult`.
-  - `IngestionRegistryStore` methods for manifest read, receipt lookup/list/root inventory, source resolve/register/alias migration, binding-state reads, and key-dependent source/binding generation checks.
+  - `IngestionRegistryStore.read_manifest() -> KeyringManifest | None`.
+  - `IngestionRegistryStore.resolve_source(request: SourceResolveRequest) -> SourceResolutionResult`.
+  - `IngestionRegistryStore.register_source(request: SourceRegisterRequest) -> SourceResolutionResult`.
+  - `IngestionRegistryStore.authorize_alias_migration(request: SourceAliasMigrationRequest) -> SourceResolutionResult`.
+  - `IngestionRegistryStore.list_receipt_roots(scope_id: str, *, page_token: str | None, limit: int) -> ReceiptRootPage`.
+  - `IngestionRegistryStore.list_receipts(scope_id: str, root_session_id: str, *, page_token: str | None, limit: int) -> ReceiptPage`.
+  - `IngestionRegistryStore.lookup_receipts(scope_id: str, turn_keys: tuple[str, ...]) -> ReceiptLookupResult`.
+  - `IngestionRegistryStore.validate_receipts(scope_id: str, root_session_id: str, evidence: tuple[ReceiptEvidence, ...]) -> ReceiptValidationResult`.
+  - source register/alias/binding issuance implementations pin/revalidate manifest generation in the same backend authority; binding issuance never releases a stale token after a generation change.
   - `IngestionKeyringAdminStore.provision_manifest(candidate: KeyringManifest) -> KeyringAdminResult` with create-if-absent semantics.
   - `IngestionKeyringAdminStore.rotate_manifest(*, expected_generation: int, transition: KeyringTransition, candidate_manifest: KeyringManifest) -> KeyringAdminResult` whose backend transaction reacquires the manifest fence and re-reads current receipt/alias/binding retirement authority before update.
   - `IngestionAuthorityStore` protocol combines `IngestionCommitStore`, `IngestionRegistryStore`, `IngestionKeyringAdminStore`, and `async dispose() -> None`.
@@ -439,9 +466,9 @@ git commit -m "feat: PostgreSQL と Supabase durable commit を追加"
   - console script `context-store-admin = "context_store.admin.__main__:main"`.
   - commands `ingestion-keyring provision|verify|rotate`.
   - consumes Task 3 `FamilyVersion`, `KeyringTransition`, and `KeyringAdminResult`; does not redefine them.
-  - `provision(settings: Settings, store: IngestionRegistryStore) -> KeyringAdminResult`.
-  - `verify(...) -> KeyringAdminResult` read-only.
-  - `rotate(..., expected_generation: int, transition: KeyringTransition) -> KeyringAdminResult`.
+  - `provision(settings: Settings, store: IngestionAuthorityStore) -> KeyringAdminResult`.
+  - `verify(settings: Settings, store: IngestionAuthorityStore) -> KeyringAdminResult` read-only.
+  - `rotate(settings: Settings, store: IngestionAuthorityStore, *, expected_generation: int, transition: KeyringTransition) -> KeyringAdminResult`.
   - exact CLI:
     - `context-store-admin ingestion-keyring provision`
     - `context-store-admin ingestion-keyring verify`
@@ -505,9 +532,13 @@ git commit -m "feat: ingestion keyring admin CLI を追加"
 - Consumes: Tasks 3-7, specifically Task 4 `DedupeReadStore` and Task 5 `IngestionAuthorityStore`.
 - Produces:
   - `DurableIngestionService(*, read_store: DedupeReadStore, authority_store: IngestionAuthorityStore, embedding_provider: EmbeddingProvider, keyring: IngestionKeyring)`.
-  - `DurableIngestionService.resolve_source(...)`.
-  - `register_source(...)`, `authorize_alias_migration(...)`.
-  - receipt `list_roots/list/lookup/validate`.
+  - `resolve_source(request: SourceResolveRequest) -> SourceResolutionResult`.
+  - `register_source(request: SourceRegisterRequest) -> SourceResolutionResult`.
+  - `authorize_alias_migration(request: SourceAliasMigrationRequest) -> SourceResolutionResult`.
+  - `list_receipt_roots(scope_id: str, page_token: str | None, limit: int) -> ReceiptRootPage`.
+  - `list_receipts(scope_id: str, root_session_id: str, page_token: str | None, limit: int) -> ReceiptPage`.
+  - `lookup_receipts(scope_id: str, turn_keys: tuple[str, ...]) -> ReceiptLookupResult`.
+  - `validate_receipts(scope_id: str, root_session_id: str, evidence: tuple[ReceiptEvidence, ...]) -> ReceiptValidationResult`.
   - `ingest_turn(request: TurnIngestRequest) -> CommitResult`.
   - server-authoritative HMAC identity derivation and final payload hash.
   - receipt-pinned canonical/evidence/key rebase.
@@ -804,6 +835,7 @@ git commit -m "feat: OpenCode v1.18.34 turn canonicalization を追加"
   - `ControlClient.call(operation, payload) -> result` using `MCP_GATEWAY_CONTROL_API_KEY`.
   - `DiscoveryScopeV1` builder as single source for alias evidence and `Session.list` query.
   - local state under `~/.context-store/opencode-ingestion/<canonical-scope-id>/`.
+  - `RootStateV1` stores only canonical scope/root opaque ids, committed cursor/turn/hash, pending retry state, blocked/divergence codes, and for pending work the pinned `evidence_contract_version`; raw path/URI/command/identity evidence is forbidden.
   - atomic temp+fsync+rename state replacement.
   - corrupt-state quarantine.
   - per-root inter-process lease lock with owner token, PID, expiry, 30s heartbeat, 120s lease; dead/stale owner reclaim; file existence alone is not authority.
@@ -852,6 +884,8 @@ git commit -m "feat: OpenCode durable runtime state を追加"
 - Produces:
   - activation + `session.status idle` + deprecated `session.idle` + 60s periodic sweep triggers.
   - exhaustive root discovery using widening limits 100→200→400… until unsaturated.
+  - correctness targets per resolved scope are exactly: exhaustive current roots UNION locally known roots UNION exhaustively paged server receipt roots.
+  - every `receipt.list_roots` / `receipt.list` recovery/divergence loop follows `next_page_token` until null; first-page-only inventory is forbidden.
   - `resolveRootSessionId(client, sessionId) -> Promise<string>` follows persisted `parentID` links to the root; missing/cyclic ancestry fails closed and creates no reconciliation state.
   - root-only event mapping; child events resolve to/dirty the owning root but never create child state.
   - full persisted root snapshot reconstruction followed by one eligible turn at a time.

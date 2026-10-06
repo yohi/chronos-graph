@@ -214,6 +214,10 @@ git commit -m "feat: durable ingestion schema と revision authority を追加"
 - Produces:
   - `Settings.ingestion_keyring_path: str = "~/.context-store/ingestion-keyring.json"` via `CHRONOS_INGESTION_KEYRING_PATH`.
   - immutable `IngestionKeyring`, `KeyFamilyState`, `KeyringManifest`, `KeyringAuthority` models.
+  - `KeyFamily(StrEnum)` with `identity`, `source_alias`, `source_binding`.
+  - `FamilyVersion(family: KeyFamily, version: str)`.
+  - `KeyringTransition(promotions: tuple[FamilyVersion, ...], retirements: tuple[FamilyVersion, ...])`.
+  - `KeyringAdminResult(status: str, generation: int | None, readiness_code: str | None)` containing no raw secrets.
   - `load_ingestion_keyring(path: Path) -> IngestionKeyring`.
   - `derive_key_fingerprint(family: str, version: str, raw_key: bytes) -> str` using the spec domain string.
   - `derive_identity_token(...)->str`.
@@ -434,10 +438,9 @@ git commit -m "feat: PostgreSQL と Supabase durable commit を追加"
 - Produces:
   - console script `context-store-admin = "context_store.admin.__main__:main"`.
   - commands `ingestion-keyring provision|verify|rotate`.
+  - consumes Task 3 `FamilyVersion`, `KeyringTransition`, and `KeyringAdminResult`; does not redefine them.
   - `provision(settings: Settings, store: IngestionRegistryStore) -> KeyringAdminResult`.
   - `verify(...) -> KeyringAdminResult` read-only.
-  - `FamilyVersion(family: Literal["identity", "source_alias", "source_binding"], version: str)`.
-  - `KeyringTransition(promotions: tuple[FamilyVersion, ...], retirements: tuple[FamilyVersion, ...])`.
   - `rotate(..., expected_generation: int, transition: KeyringTransition) -> KeyringAdminResult`.
   - exact CLI:
     - `context-store-admin ingestion-keyring provision`
@@ -499,8 +502,7 @@ git commit -m "feat: ingestion keyring admin CLI を追加"
 - ChronosGraph — Create: `tests/integration/ingestion/test_durable_ingestion_service.py`
 
 **Interfaces:**
-- Consumes: Tasks 3-7.
-- Consumes additionally: Task 4 `DedupeReadStore`; Task 5 `IngestionAuthorityStore`.
+- Consumes: Tasks 3-7, specifically Task 4 `DedupeReadStore` and Task 5 `IngestionAuthorityStore`.
 - Produces:
   - `DurableIngestionService(*, read_store: DedupeReadStore, authority_store: IngestionAuthorityStore, embedding_provider: EmbeddingProvider, keyring: IngestionKeyring)`.
   - `DurableIngestionService.resolve_source(...)`.

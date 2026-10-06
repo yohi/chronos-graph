@@ -577,51 +577,186 @@ automatic key/manifest replacement = forbidden
 
 Read-only health/diagnostic reporting may remain available, but key-dependent source/receipt resolution must fail closed.
 
-### Explicit provisioning and rotation
+### Administrative surface, explicit provisioning, and rotation
 
-Runtime startup never auto-generates a missing keyring and never initializes/replaces the backend manifest.
+Keyring/manifest administration is owned exclusively by a **Graph-local administrative CLI** installed by the ChronosGraph package:
 
-Fresh installation requires an explicit setup/operator provisioning operation:
+```text
+context-store-admin ingestion-keyring provision
+context-store-admin ingestion-keyring verify
+context-store-admin ingestion-keyring rotate
+```
+
+The exact internal module/file placement is an implementation-planning detail, but this CLI/process boundary is normative.
+
+The keyring administration surface is **not exposed through**:
+
+```text
+POST /internal/v1/opencode/control
+chronos.control.v1 private stdio RPC
+normal MCP tools/resources/prompts
+ChronosGate
+```
+
+Accordingly, no keyring/manifest administration operation is added to the `opencode-ingestion` or `chronos-setup` Bearer capability matrices.
+
+#### Administrative authentication / execution boundary
+
+The admin CLI is a local operator process. Its authority comes from:
+
+```text
+local OS/process identity
++
+permission to read CHRONOS_INGESTION_KEYRING_PATH
++
+the configured ChronosGraph primary-backend administrative credentials
+```
+
+It does not accept a ChronosGate Bearer credential and does not call ChronosGate.
+
+Raw key material is never accepted as a command-line argument, environment variable value other than the **path** to the keyring file, HTTP/RPC payload, stdin JSON field, or database field. The CLI reads raw keys only from the local Graph-owned keyring file.
+
+#### Secret generation/distribution ownership
+
+Raw secret generation and distribution are operator/secret-manager responsibilities, not ChronosGate responsibilities.
+
+For a single-instance installation, the operator may generate a valid keyring with an approved cryptographic secret-management mechanism and atomically install it at `CHRONOS_INGESTION_KEYRING_PATH`.
+
+For multiple control instances sharing one receipt namespace:
+
+```text
+operator / secret manager:
+  generate identical key material
+  securely distribute the same staged keyring material
+  to every intended ChronosGraph control instance
+  using atomic file replacement / secret-manager mount semantics
+
+ChronosGraph admin CLI:
+  validates the local staged file
+  derives non-secret fingerprints
+  verifies/commits backend manifest authority
+  never transports raw key material between instances
+```
+
+ChronosGraph and ChronosGate do not provide a fleet secret-distribution protocol in this design.
+
+#### `provision`
+
+Fresh installation requires a real local admin invocation.
+
+Precondition:
 
 ```text
 migration:
-  create manifest schema/constraints/singleton identity only
-  manifest value row remains absent
+  manifest schema/constraints/singleton identity exist
+  manifest value row absent
 
-explicit provisioning:
-  1. generate/write Graph-owned local keyring atomically
-  2. derive non-secret manifest
-  3. INSERT singleton ingestion_keyring_manifest with create-if-absent semantics
-  4. if INSERT loses because a row already exists:
-       read existing row
-       require exact compatible manifest identity/fingerprints
-       never overwrite it implicitly
-  5. verify local keyring against the committed manifest
-  6. only then durable-all becomes READY
+operator:
+  valid keyring already staged atomically at CHRONOS_INGESTION_KEYRING_PATH
 ```
 
-The initial manifest INSERT and all later manifest-generation changes are operator/setup-owned control-plane mutations. Normal runtime code never creates the row, never fills a migration-created placeholder, and never replaces an existing manifest.
-
-Rotation is explicit and operator-driven:
+`context-store-admin ingestion-keyring provision` performs:
 
 ```text
-PREPARE:
-  distribute/stage new local inactive key material to every intended control instance
-
-COMMIT ROTATION:
-  atomically update backend manifest generation
-  add/promote the new version/fingerprint
-  retain every old version still required by receipt/alias/binding rules
-
-INSTANCE READINESS:
-  reload local keyring
-  compare to new authoritative manifest
-  instance lacking/mismatching required material becomes NOT READY before mutation
+1. open/validate the local staged keyring
+2. validate file ownership/permissions where enforceable
+3. validate all families/versions/key lengths/schema
+4. derive the non-secret manifest
+5. INSERT singleton ingestion_keyring_manifest with create-if-absent semantics
+6. if INSERT loses because a row already exists:
+     read the authoritative row
+     require compatible identity/fingerprints
+     never overwrite it implicitly
+7. verify the local keyring against the committed manifest
+8. return READY/verified only after exact verification
 ```
 
-Retirement updates the manifest only after the family-specific retirement rules below are satisfied. A locally retained key omitted from the manifest is inactive historical/staging material and is not selected for new operations.
+The CLI does not generate replacement keys as a side effect of `provision`.
 
-The manifest generation is monotonic; stale manifest updates use compare-and-swap on the expected generation so concurrent operator rotations cannot overwrite one another.
+#### `verify`
+
+`context-store-admin ingestion-keyring verify` is read-only.
+
+It performs the exact durable-all readiness validation defined in this section:
+
+```text
+local keyring validity
+manifest existence/schema/generation
+required-version fingerprint equality
+receipt/alias durable-reference coverage
+active-version consistency
+```
+
+It never mutates local secrets, source state, receipts, aliases, or the manifest.
+
+#### `rotate`
+
+Rotation is a Graph-local admin mutation and is generation-CAS protected.
+
+Precondition:
+
+```text
+operator / secret manager has already staged the proposed key material
+on every intended control instance
+
+the local admin host has the proposed local keyring material
+and knows the non-secret target active/required version set
+```
+
+The rotation request identifies only non-secret family/version transitions; raw key material remains in the local file.
+
+`context-store-admin ingestion-keyring rotate` performs:
+
+```text
+1. read authoritative manifest generation G
+2. read/validate local staged keyring
+3. derive proposed non-secret fingerprints
+4. validate receipt identity-key retention
+5. validate source-alias retirement coverage
+6. validate source-binding retirement policy
+7. construct proposed generation G+1 manifest
+8. CAS update manifest WHERE generation = G
+9. re-read and verify committed manifest
+10. report success only after verification
+```
+
+A stale expected generation fails without overwriting the manifest.
+
+For an active-key change, the fleet transition is deliberately fail-closed:
+
+```text
+A. distribute new key as inactive staging material everywhere
+   -> current instances remain READY
+
+B. operator updates intended instance-local keyring active metadata
+   to the proposed active version
+   -> instances whose local active != current manifest active become NOT READY
+   -> mutation disabled during the transition window
+
+C. designated Graph admin host executes rotate
+   -> generation-CAS promotes the new manifest active version
+
+D. instances reload/verify
+   -> matching instances become READY
+   -> any unstaged/mismatched instance remains NOT READY
+```
+
+This design prefers bounded fail-closed unavailability over accepting divergent key authority.
+
+Retirement is performed through the same `rotate` operation by proposing a manifest that drops a retained version. It is rejected unless the family-specific retirement rules and durable-reference coverage checks already permit removal.
+
+#### Audit / output boundary
+
+Admin operations may report:
+
+```text
+manifest generation
+family/version identifiers
+non-secret fingerprints or bounded fingerprint prefixes
+readiness/error codes
+```
+
+They must never print/log raw key bytes, full local keyring contents, source binding tokens, or other sensitive identity evidence.
 
 ### Whole-keyring failure semantics
 
@@ -635,7 +770,7 @@ control mutations = disabled
 status = INGESTION_KEYRING_NOT_READY
 ```
 
-If the primary manifest **value row** is absent after schema migrations, normal runtime remains NOT READY. Only explicit setup/operator provisioning may create that initial row.
+If the primary manifest **value row** is absent after schema migrations, normal runtime remains NOT READY. Only the Graph-local `context-store-admin ingestion-keyring provision` operation may create that initial row.
 
 ### Identity key lifecycle
 
@@ -1481,6 +1616,8 @@ receipt.validate
 turn.ingest
 ```
 
+Keyring/manifest provisioning, verification, rotation, or retirement operations are intentionally absent from this protocol. They are Graph-local admin CLI operations only.
+
 Raw sensitive identity evidence may occur only inside the authenticated request payload needed by the corresponding operation and follows the existing ephemeral/redaction contract.
 
 ## 8.5 ChronosGate authentication and authorization
@@ -1625,7 +1762,9 @@ chronos-setup:
   receipt.validate
 ```
 
-Safe automatic alias migration proven by §5.6 is part of `source.resolve`; manual authorization remains setup-only.
+Safe automatic alias migration proven by §5.6 is part of `source.resolve`; manual source-alias authorization remains setup-only.
+
+The `chronos-setup` Bearer principal administers source enrollment/alias migration only. It has no keyring-secret or keyring-manifest administration capability.
 
 Control capability is never inferred from `memory.ingest`, `developer_access`, or any allowed MCP tool. Legacy MCP intent authorization is never inferred from control capability.
 
@@ -1659,6 +1798,8 @@ chronos.control.v1.receipt.lookup
 chronos.control.v1.receipt.validate
 chronos.control.v1.turn.ingest
 ```
+
+No `chronos.control.v1.keyring.*` or manifest-administration method exists in this design.
 
 These methods are implemented by a dedicated ChronosGraph control server/dispatcher and are **not registered as FastMCP tools/resources/prompts**. Consequently they cannot appear in `tools/list` and cannot be reached through regular external `tools/call`.
 
@@ -1720,6 +1861,8 @@ chronos-gate:
 chronos-graph:
   context-store-control --stdio server
   chronos.control.v1 dispatcher
+  context-store-admin ingestion-keyring {provision,verify,rotate}
+  local keyring validation / manifest administration
   canonicalization / PREPARE / COMMIT orchestration
   IngestionCommitStore
   source-scope/alias/receipt registry
@@ -1832,7 +1975,17 @@ Unknown source continuity must be resolved explicitly by either:
 
 Background reconciliation may not guess.
 
-Before source enrollment or smoke ingestion, setup must explicitly provision/verify the Graph ingestion keyring and authoritative backend keyring manifest described in §2.5. Normal runtime is never allowed to bootstrap replacement cryptographic state implicitly.
+Before source enrollment or smoke ingestion, an operator must execute the Graph-local administration flow in §2.5:
+
+```text
+operator/secret manager stages CHRONOS_INGESTION_KEYRING_PATH
+context-store-admin ingestion-keyring provision   # first install only
+context-store-admin ingestion-keyring verify
+```
+
+Rotation/retirement likewise uses only `context-store-admin ingestion-keyring rotate`. Setup automation may invoke this local Graph CLI on the Graph host, but it must not reimplement direct filesystem/database mutation and must not tunnel raw key material through ChronosGate.
+
+Normal runtime is never allowed to bootstrap replacement cryptographic state implicitly.
 
 Credential provisioning must also preserve §8.5 separation:
 
@@ -2188,14 +2341,16 @@ Also verify an `ingestion_revision` mismatch produces `RETRYABLE_FAILED(STALE_DE
 
 ## AA. Keyring provisioning, cross-instance consistency, rotation, and local binding
 
+Acceptance must invoke the real Graph-local `context-store-admin` administration surface. Direct database inserts/updates or fixture-written manifest rows do not satisfy this scenario.
+
 Exercise at least two ChronosGraph control instances against the same primary receipt namespace.
 
 ### Provisioning / whole-keyring failure
 
 ```text
 missing CHRONOS_INGESTION_KEYRING_PATH:
-  INGESTION_KEYRING_NOT_READY
-  durable-all NOT READY
+  context-store-admin ingestion-keyring verify -> NOT READY/error
+  normal durable-all runtime -> INGESTION_KEYRING_NOT_READY
   automatic key generation == 0
   source/receipt/turn mutation == 0
 
@@ -2210,14 +2365,29 @@ manifest absent in normal runtime:
   durable-all NOT READY
   automatic manifest creation == 0
 
-explicit setup provisioning:
-  creates local keyring
-  INSERTs initial manifest row with create-if-absent
-  readiness becomes healthy only after verification
+operator stages a valid local keyring
+real admin command:
+  context-store-admin ingestion-keyring provision
+    -> INSERT initial manifest row create-if-absent
+    -> verify committed manifest
+    -> readiness becomes healthy only after verification
 
-second provisioning attempt:
-  does not overwrite existing manifest
-  verifies existing manifest or fails closed
+second provision:
+  existing manifest overwrite == 0
+  exact compatible manifest -> verify success
+  incompatible manifest -> fail closed
+```
+
+### Secret-boundary assertion
+
+Instrument Gate/control transports while admin provisioning/rotation runs:
+
+```text
+/internal/v1/opencode/control keyring operations == 0
+chronos.control.v1 keyring operations == 0
+normal MCP keyring operations == 0
+raw key bytes observed by ChronosGate == 0
+raw key bytes persisted in backend manifest == 0
 ```
 
 ### Cross-instance mismatch
@@ -2234,7 +2404,9 @@ instance A and B:
 Expected:
 
 ```text
-derived fingerprint mismatch detected mechanically
+context-store-admin ingestion-keyring verify
+  -> derived fingerprint mismatch detected mechanically
+
 mismatched instance -> INGESTION_KEYRING_MISMATCH
 mismatched instance durable-all NOT READY
 turn.ingest mutation == 0
@@ -2242,24 +2414,44 @@ source alias mutation == 0
 receipt mutation == 0
 ```
 
-### Rotation / retirement
+### Rotation / retirement through real admin command
 
 ```text
-stage new inactive key on A and B
+operator/secret manager stages new inactive key material on A and B
   -> current readiness remains valid
 
-operator CAS-updates manifest generation:
-  add/promote new key fingerprint
-  retain old required version
+operator updates intended local active metadata
+  -> local-active / manifest-active mismatch makes those instances NOT READY
+  -> mutation disabled during transition
+
+designated admin host:
+  context-store-admin ingestion-keyring rotate
+    -> reads generation G
+    -> validates durable retention
+    -> derives proposed non-secret fingerprints
+    -> CAS updates to G+1
+    -> verifies committed manifest
 
 A and B reload:
-  -> both verify same manifest generation/fingerprints
+  -> correctly staged instances READY
+  -> mismatched/unstaged instances remain NOT READY
 
+stale concurrent rotate using old generation G:
+  -> CAS rejected
+  -> manifest not overwritten
+
+retirement proposal while receipt/alias/binding retention still requires key:
+  -> rotate rejected
+  -> manifest unchanged
+```
+
+### Identity historical-key behavior
+
+```text
 identity old key:
   old receipt remains comparable while manifest-required
 
-missing referenced identity key:
-  manifest still requires that version
+manifest-required identity key absent locally:
   -> instance NOT READY
   -> source/receipt/turn mutation == 0
 
@@ -2272,23 +2464,20 @@ manifest incorrectly omits a receipt-referenced identity version:
   -> INGESTION_KEYRING_MANIFEST_INCONSISTENT
   -> durable-all NOT READY
   -> automatic manifest repair == 0
+```
 
+### Source alias / binding
+
+```text
 source-alias key rotation:
   old alias token resolves
   active-key token added to same alias_id
   canonical scope unchanged
 
-stale concurrent manifest update:
-  generation CAS fails
-  manifest is not overwritten
-```
-
-### Binding token
-
-```text
-valid token authenticates candidate S only
-tampered/unknown-key token fails closed
-full token/key material absent from logs
+binding token:
+  valid token authenticates candidate S only
+  tampered/unknown-key token fails closed
+  full token/key material absent from logs
 ```
 
 ## AB. Post-terminal same-anchor continuation
@@ -2355,6 +2544,8 @@ storage:
   ingestion_revision stale-plan CAS green
 
 crypto/binding:
+  real context-store-admin provision/verify/rotate acceptance green
+  no keyring administration through Gate/control/MCP transports
   explicit keyring/manifest provisioning green
   multi-instance manifest fingerprint consistency green
   missing/malformed/mismatched keyring fails readiness with zero mutation
@@ -2418,6 +2609,9 @@ Acceptance evidence should be machine-checkable and must itself avoid raw sensit
 43. The authoritative manifest must cover every identity key version still referenced by receipts and every alias key version still required by alias-retirement rules; missing durable-reference coverage is a fail-closed manifest inconsistency.
 44. Runtime never auto-generates/replaces a missing or malformed ingestion keyring or missing manifest; initial provisioning and rotation are explicit operator actions.
 45. Keyring manifest updates are generation-CAS protected, and local inactive staging keys may not become active authority until represented by the committed manifest.
+46. Keyring/manifest provision, verify, rotation, and retirement are owned exclusively by the Graph-local `context-store-admin` administration surface; no Gate HTTP, `chronos.control.v1`, or MCP operation may administer them.
+47. Raw ingestion key material is generated/distributed/staged by the operator or secret manager and is consumed locally by ChronosGraph only; ChronosGraph does not provide a fleet secret-distribution transport.
+48. Setup automation may invoke the Graph-local admin CLI but may not bypass it with direct manifest/database mutation or transport raw key material through ChronosGate.
 
 ## Implementation-order constraint
 

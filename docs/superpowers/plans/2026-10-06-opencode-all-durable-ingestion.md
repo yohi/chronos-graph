@@ -262,10 +262,12 @@ git commit -m "feat: ingestion keyring authority を追加"
 **Interfaces:**
 - Consumes: Task 2 `Memory.ingestion_revision`; Task 3 `KeyringAuthority`.
 - Produces:
+  - `DedupeReadStore` protocol exposing only `vector_search(embedding: list[float], top_k: int, project: str | None) -> list[ScoredMemory]`; existing storage adapters satisfy it structurally.
   - `DestructiveAssumption(memory_id: str, ingestion_revision: int)`.
   - `DedupePlan(action: DeduplicationAction, existing_memory: Memory | None, similarity: float, assumption: DestructiveAssumption | None)`.
   - `PreparedTurn` fields required by the spec, including `keyring_manifest_generation`, `identity_active_version_at_prepare`, `identity_key_version_used`, prepared embeddings, turn/source identifiers, canonical hash inputs, desired mutation, and destructive assumptions.
   - `CommitResult(kind: TurnIngestResultKind, retry_reason: RetryReason | None, payload_hash: str | None)`.
+  - `IngestionDedupePlanner(read_store: DedupeReadStore)`.
   - `IngestionDedupePlanner.plan(new_memory: Memory) -> DedupePlan` with **no mutation**.
 
 - [ ] **Step 1: Write RED planner tests**
@@ -280,7 +282,7 @@ Expected: FAIL because durable models/planner do not exist.
 
 - [ ] **Step 3: Implement models and pure planner**
 
-Use `StorageAdapter.vector_search()` only for candidate discovery. Do not modify the legacy `Deduplicator`; selective mode continues to use it.
+Depend only on `DedupeReadStore.vector_search()` for candidate discovery. A normal StorageAdapter may be injected structurally, but the durable planner receives no mutation methods. Do not modify the legacy `Deduplicator`; selective mode continues to use it.
 
 - [ ] **Step 4: Run GREEN**
 
@@ -310,7 +312,11 @@ git commit -m "feat: side-effect-free durable ingestion planner を追加"
 - Consumes: Tasks 2-4.
 - Produces:
   - `IngestionCommitStore.commit_turn(prepared: PreparedTurn) -> CommitResult`.
-  - `IngestionRegistryStore` methods for manifest read/create/CAS, receipt lookup/list/root inventory, source resolve/register/alias migration, and binding-state reads.
+  - `IngestionRegistryStore` methods for manifest read, receipt lookup/list/root inventory, source resolve/register/alias migration, binding-state reads, and key-dependent source/binding generation checks.
+  - `IngestionKeyringAdminStore.provision_manifest(candidate: KeyringManifest) -> KeyringAdminResult` with create-if-absent semantics.
+  - `IngestionKeyringAdminStore.rotate_manifest(*, expected_generation: int, transition: KeyringTransition, candidate_manifest: KeyringManifest) -> KeyringAdminResult` whose backend transaction reacquires the manifest fence and re-reads current receipt/alias/binding retirement authority before update.
+  - `IngestionAuthorityStore` protocol combines `IngestionCommitStore`, `IngestionRegistryStore`, `IngestionKeyringAdminStore`, and `async dispose() -> None`.
+  - `async def create_ingestion_store(settings: Settings) -> IngestionAuthorityStore`.
   - SQLite transaction fence: one `BEGIN IMMEDIATE` transaction reads manifest generation first, validates key authority/CAS assumptions, mutates memory/outbox/receipt, then commits.
   - source/alias key-dependent writes use the same manifest row/generation fence.
 
@@ -494,9 +500,9 @@ git commit -m "feat: ingestion keyring admin CLI を追加"
 
 **Interfaces:**
 - Consumes: Tasks 3-7.
+- Consumes additionally: Task 4 `DedupeReadStore`; Task 5 `IngestionAuthorityStore`.
 - Produces:
-  - `DedupeReadStore` protocol exposing only `vector_search(embedding: list[float], top_k: int, project: str | None) -> list[ScoredMemory]`; a normal `StorageAdapter` satisfies it but the planner receives only this read interface.
-  - `DurableIngestionService(*, read_store: DedupeReadStore, authority_store: IngestionCommitStore, registry_store: IngestionRegistryStore, embedding_provider: EmbeddingProvider, keyring: IngestionKeyring)`.
+  - `DurableIngestionService(*, read_store: DedupeReadStore, authority_store: IngestionAuthorityStore, embedding_provider: EmbeddingProvider, keyring: IngestionKeyring)`.
   - `DurableIngestionService.resolve_source(...)`.
   - `register_source(...)`, `authorize_alias_migration(...)`.
   - receipt `list_roots/list/lookup/validate`.
@@ -560,7 +566,7 @@ git commit -m "feat: durable ingestion authority service を追加"
 - Produces:
   - console script `context-store-control = "context_store.control.__main__:main"`.
   - `async def create_control_service(settings: Settings) -> DurableIngestionService` in `control/composition.py`.
-  - composition uses `_create_storage_adapter(settings)` as the read source, `create_ingestion_store(settings)`, `create_embedding_provider(settings)`, and `load_ingestion_keyring(Path(os.path.expanduser(settings.ingestion_keyring_path)))`.
+  - composition uses `_create_storage_adapter(settings)` as the `DedupeReadStore`, `create_ingestion_store(settings)` as the single `IngestionAuthorityStore`, `create_embedding_provider(settings)`, and `load_ingestion_keyring(Path(os.path.expanduser(settings.ingestion_keyring_path)))`.
   - composition does **not** construct the full `Orchestrator`, cache adapters, dashboard, FastMCP server, lifecycle manager, or external Neo4j client.
   - private wire framing is newline-delimited UTF-8 JSON (NDJSON): exactly one JSON-RPC 2.0 request/response object per line; no Content-Length/MCP framing.
   - newline-framed JSON-RPC 2.0 stdio methods `chronos.control.v1.<operation>`.

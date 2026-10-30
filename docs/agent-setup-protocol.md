@@ -184,7 +184,14 @@ same backend, embedding, graph, cache, method, and immutable `--uv-from`
 arguments, or provide those values through the client's environment.
 `generate_config.py` reads the URL and credentials from `.env`.
 
-If `opencode` is selected in `all` mode, confirm before running that the user's `~/.npmrc` already has the `@yohi` GitHub Packages registry mapping and a credential source with read access. The agent must not create, update, or save `.npmrc` or tokens.
+If `opencode` is selected in `all` mode, confirm before running that the
+user's `~/.npmrc` already has the `@yohi` GitHub Packages registry mapping and
+a credential source with read access. The agent must not create, update, or save
+`.npmrc` or tokens. OpenCode V2 auto-ingestion also requires
+`CHRONOS_OPENCODE_SERVER_URL` in the OpenCode process environment. An optional
+`CHRONOS_OPENCODE_AUTHORIZATION` is passed as an HTTP Authorization header and
+must come from the user's trusted environment or secret manager, never from
+`opencode.json` or chat. The plugin targets OpenCode `2.1.4`, not V1.
 
 #### Example command
 
@@ -210,9 +217,12 @@ If `opencode` is selected in `all` mode, confirm before running that the user's 
 For a local checkout, use `--mcp-method uv` so the generated MCP configuration
 uses the checkout's uv environment. For `all` mode with Claude Code or Codex,
 register the generated `scripts/chronos-turn-hook.sh` (or `.cmd` on Windows)
-as the client's turn-end/Stop hook. OpenCode uses the plugin configuration
+as the client's turn-end/Stop hook. OpenCode uses the V2 plugin registration
 managed by the synchronization step and still requires the documented
-GitHub Packages credential prerequisite.
+GitHub Packages credential prerequisite. For `all` mode, set the server URL
+and, when required, the Authorization value in the OpenCode process environment
+before launch. Registration alone does not enable ingestion without connection
+settings.
 
 ---
 

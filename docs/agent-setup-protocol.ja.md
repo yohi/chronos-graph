@@ -178,7 +178,14 @@ Supabase設定を有効化するだけで、このURLを書き込みません。
 入力後、同じbackend、embedding、graph、cache、method、および不変の `--uv-from` 引数で
 `scripts/generate_config.py` を実行して `mcp_config.json` を生成するか、クライアントの
 環境変数からそれらの値を渡してください。`generate_config.py` は `.env` からURLと認証情報を読み取ります。
-OpenCodeを`all`モードで選択する場合は、実行前にGitHub Packagesの `@yohi` registry mappingと読み取り権限を持つcredential sourceがユーザー管理の `~/.npmrc` にあることを確認してください。Agentは`.npmrc`やtokenを作成・更新・保存してはなりません。
+OpenCodeを`all`モードで選択する場合は、実行前にGitHub Packagesの
+`@yohi` registry mappingと読み取り権限を持つcredential sourceがユーザー管理の
+`~/.npmrc`にあることを確認してください。Agentは`.npmrc`やtokenを作成・更新・保存しては
+なりません。V2の自動保存には、OpenCodeプロセスの環境変数
+`CHRONOS_OPENCODE_SERVER_URL`が必要です。サーバーが求める場合は
+`CHRONOS_OPENCODE_AUTHORIZATION`も、信頼できる環境またはsecret managerから設定してください。
+この値を`opencode.json`やチャットへ記録してはいけません。プラグインはOpenCode `2.1.4`を
+対象とし、V1には対応しません。
 
 #### コマンド生成例：
 
@@ -205,7 +212,9 @@ OpenCodeを`all`モードで選択する場合は、実行前にGitHub Packages�
 checkoutのuv環境を使うようにします。`all` モードで Claude Code または Codex
 を選択した場合は、生成された `scripts/chronos-turn-hook.sh`（Windowsでは
 `.cmd`）をターン終了またはStop hookとして登録します。OpenCodeでは同期処理が
-管理するplugin設定を使用し、GitHub Packagesのcredential前提も満たす必要があります。
+管理するV2 plugin設定を使用し、GitHub Packagesのcredential前提も満たす必要があります。
+`all`モードでは起動前に、プロセス環境へサーバーURLと、必要な場合はAuthorization値を
+設定してください。登録だけでは接続設定がないと自動保存されません。
 
 ---
 

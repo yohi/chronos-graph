@@ -20,6 +20,7 @@ from .preflight_errors import PreflightCollisionError
 from .preflight_files import snapshot
 
 OPENCODE_PLUGIN: Final = "@yohi/opencode-plugin-chronos-turn-end"
+OPENCODE_PLUGIN_V2: Final = f"{OPENCODE_PLUGIN}@2.0.0-alpha.1"
 _POSIX_MARKER: Final = b"# chronosgraph-managed: turn-hook-wrapper format=1"
 _WINDOWS_MARKER: Final = b"rem chronosgraph-managed: turn-hook-wrapper format=1"
 _METADATA_URL: Final = "https://npm.pkg.github.com/@yohi%2fopencode-plugin-chronos-turn-end"
@@ -42,12 +43,44 @@ def updated_plugin_config(original: bytes | None, path: Path) -> bytes:
         raise HookConfigCollision(path, "opencode-json") from error
     if not isinstance(config, dict):
         raise HookConfigCollision(path, "opencode-config-root")
-    plugin = config.get("plugin", [])
-    if not isinstance(plugin, list) or not all(isinstance(entry, str) for entry in plugin):
-        raise HookConfigCollision(path, "opencode-plugin-list")
-    if OPENCODE_PLUGIN not in plugin:
-        plugin = [*plugin, OPENCODE_PLUGIN]
-    config["plugin"] = plugin
+    legacy_plugins = config.get("plugin", [])
+    if isinstance(legacy_plugins, list) and any(
+        isinstance(entry, str)
+        and (entry == OPENCODE_PLUGIN or entry.startswith(f"{OPENCODE_PLUGIN}@"))
+        for entry in legacy_plugins
+    ):
+        raise HookConfigCollision(path, "opencode-plugin-legacy")
+    plugins = config.get("plugins", [])
+    if not isinstance(plugins, list) or not all(
+        isinstance(entry, (str, dict)) for entry in plugins
+    ):
+        raise HookConfigCollision(path, "opencode-plugins-list")
+    existing = [
+        entry
+        for entry in plugins
+        if (
+            isinstance(entry, str)
+            and (entry == OPENCODE_PLUGIN or entry.startswith(f"{OPENCODE_PLUGIN}@"))
+        )
+        or (
+            isinstance(entry, dict)
+            and isinstance(entry.get("package"), str)
+            and (
+                entry["package"] == OPENCODE_PLUGIN
+                or entry["package"].startswith(f"{OPENCODE_PLUGIN}@")
+            )
+        )
+    ]
+    valid = any(
+        entry == OPENCODE_PLUGIN_V2
+        or (isinstance(entry, dict) and entry.get("package") == OPENCODE_PLUGIN_V2)
+        for entry in existing
+    )
+    if existing and not valid:
+        raise HookConfigCollision(path, "opencode-plugin-version")
+    if not existing:
+        plugins = [*plugins, OPENCODE_PLUGIN_V2]
+    config["plugins"] = plugins
     return (json.dumps(config, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
 
 

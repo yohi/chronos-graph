@@ -862,7 +862,7 @@ def test_all_mode_registers_opencode_plugin_without_replacing_other_config(
     registry_before = registry.read_bytes()
     config = home / ".config" / "opencode" / "opencode.json"
     config.parent.mkdir(parents=True)
-    config.write_text('{"theme":"dark","plugin":["other-plugin"]}', encoding="utf-8")
+    config.write_text('{"theme":"dark","plugins":["other-plugin"]}', encoding="utf-8")
     plan = prepared_plan_for(AgentId.OPENCODE, home, IngestionMode.ALL)
 
     apply_sync(plan, SystemFileOperations())
@@ -873,8 +873,33 @@ def test_all_mode_registers_opencode_plugin_without_replacing_other_config(
 
     registered = json.loads(config.read_text(encoding="utf-8"))
     assert registered["theme"] == "dark"
-    assert registered["plugin"] == ["other-plugin", "@yohi/opencode-plugin-chronos-turn-end"]
+    assert registered["plugins"] == [
+        "other-plugin",
+        "@yohi/opencode-plugin-chronos-turn-end@2.0.0-alpha.1",
+    ]
     assert registry.read_bytes() == registry_before
+
+
+def test_opencode_registration_preserves_native_options_and_rejects_old_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import agent_assets.hooks as hooks
+
+    path = tmp_path / "opencode.json"
+    original = json.dumps(
+        {"plugins": [{"package": "other", "options": {"enabled": True}}]}
+    ).encode()
+    updated = json.loads(hooks.updated_plugin_config(original, path))
+    assert updated["plugins"] == [
+        {"package": "other", "options": {"enabled": True}},
+        "@yohi/opencode-plugin-chronos-turn-end@2.0.0-alpha.1",
+    ]
+    old_version = json.dumps({"plugins": ["@yohi/opencode-plugin-chronos-turn-end@1.0.0"]}).encode()
+    with pytest.raises(hooks.HookConfigCollision, match="opencode-plugin-version"):
+        hooks.updated_plugin_config(old_version, path)
+    legacy_plugin = json.dumps({"plugin": ["@yohi/opencode-plugin-chronos-turn-end"]}).encode()
+    with pytest.raises(hooks.HookConfigCollision, match="opencode-plugin-legacy"):
+        hooks.updated_plugin_config(legacy_plugin, path)
 
 
 def test_all_mode_creates_wrapper_and_selective_mode_does_not(tmp_path: Path) -> None:

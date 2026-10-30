@@ -57,6 +57,17 @@ jobs:
         env:
           OPENAI_API_KEY: sk-dummy-key-for-ci-validation
 
+      - name: Set up Node.js for OpenCode V2 plugin
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 26
+
+      - name: Install OpenCode plugin dependencies
+        run: npm ci
+
+      - name: Verify OpenCode V2 plugin
+        run: npm run typecheck && npm test && npm pack --dry-run
+
       - name: Install Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:

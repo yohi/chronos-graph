@@ -284,6 +284,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "raw=生テキスト, claude-code/codex/cursor/antigravity=JSON payload を解釈。"
         ),
     )
+    parser.add_argument("--strict-delivery", action="store_true")
+    parser.add_argument("--project", default=None)
     return parser
 
 
@@ -322,14 +324,18 @@ async def _post_tools_call(
     session_id: str,
     payload: str,
     headers: dict[str, str],
+    project: str | None = None,
 ) -> None:
+    arguments = {"content": payload}
+    if project:
+        arguments["project"] = project
     body = {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
         "params": {
             "name": "memory_save",
-            "arguments": {"content": payload},
+            "arguments": arguments,
         },
     }
     post_resp = await client.post(
@@ -345,9 +351,18 @@ async def _post_tools_call(
             int(os.environ.get("MCP_HOOK_MAX_LOG_BYTES", DEFAULT_MAX_LOG_BYTES)),
         )
         post_resp.raise_for_status()
-    elif post_resp.status_code >= 400:
+    elif post_resp.status_code < 200 or post_resp.status_code >= 300:
         logging.warning("Gateway returned HTTP %d", post_resp.status_code)
-        post_resp.raise_for_status()
+        raise RuntimeError("gateway did not accept memory_save")
+    if post_resp.content:
+        response_body = post_resp.json()
+        if isinstance(response_body, dict) and (
+            "error" in response_body
+            or isinstance(response_body.get("result"), dict)
+            and response_body["result"].get("isError") is True
+        ):
+            logging.warning("Gateway reported memory_save tool failure")
+            raise RuntimeError("memory_save tool call failed")
 
 
 async def _send(
@@ -357,7 +372,8 @@ async def _send(
     payload: str,
     total_timeout: float,
     sse_timeout: float,
-) -> None:
+    project: str | None = None,
+) -> bool:
     """SSE handshake 後に ``tools/call memory_save`` を送信する。"""
     headers = {
         "authorization": f"Bearer {api_key}",
@@ -371,22 +387,25 @@ async def _send(
             )
         except TimeoutError:
             logging.info("SSE handshake timed out after %.2fs", sse_timeout)
-            return
+            return False
 
         if session_id is None:
             logging.warning("SSE handshake did not yield a session_id")
-            return
+            return False
 
-        await _post_tools_call(client, gateway_url, session_id, payload, headers)
+        await _post_tools_call(client, gateway_url, session_id, payload, headers, project)
+        return True
 
 
-async def _main_async(payload: str) -> bool:
+async def _main_async(
+    payload: str, *, strict_delivery: bool = False, project: str | None = None
+) -> bool:
     if not _is_all_ingestion_mode(os.environ):
         logging.info(
             "%s is not 'all'; skipping turn-end ingestion",
             CHRONOS_INGESTION_MODE_ENV,
         )
-        return True
+        return not strict_delivery
 
     gateway_url = os.environ.get("MCP_GATEWAY_URL", DEFAULT_GATEWAY_URL)
     api_key = os.environ.get("MCP_GATEWAY_API_KEY")
@@ -413,22 +432,35 @@ async def _main_async(payload: str) -> bool:
 
     if not api_key:
         logging.error("MCP_GATEWAY_API_KEY is not set; aborting hook")
-        return True
+        return not strict_delivery
 
     try:
-        await asyncio.wait_for(
-            _send(gateway_url, api_key, intent, payload, total_timeout, sse_timeout),
+        submitted = await asyncio.wait_for(
+            _send(gateway_url, api_key, intent, payload, total_timeout, sse_timeout, project),
             timeout=total_timeout,
         )
-        return True
+        return submitted or not strict_delivery
     except TimeoutError as exc:
-        logging.error("turn hook timed out (total budget exhausted): %s", exc)
+        message = (
+            "turn hook timed out (total budget exhausted)"
+            if strict_delivery
+            else f"turn hook timed out: {exc}"
+        )
+        logging.error(message)
         return False
     except httpx.HTTPError as exc:
-        logging.error("turn hook failed (HTTP error): %s", exc)
+        message = (
+            "turn hook failed (HTTP error)"
+            if strict_delivery
+            else f"turn hook failed (HTTP error): {exc}"
+        )
+        logging.error(message)
         return False
     except Exception as exc:  # noqa: BLE001 - intentional broad catch
-        logging.error("turn hook failed (unexpected): %s", exc, exc_info=True)
+        if strict_delivery:
+            logging.error("turn hook failed (unexpected)")
+        else:
+            logging.error("turn hook failed (unexpected): %s", exc, exc_info=True)
         return False
 
 
@@ -479,7 +511,9 @@ def main() -> int:
         return 0
 
     try:
-        success = asyncio.run(_main_async(payload))
+        success = asyncio.run(
+            _main_async(payload, strict_delivery=args.strict_delivery, project=args.project)
+        )
         if not success:
             return 1
     except Exception as exc:  # noqa: BLE001 - intentional broad catch

@@ -34,6 +34,11 @@ useful knowledge.
 > - Project names passed to `memory_save` / `memory_search` are normalized
 >   automatically (trim, lowercase, basename). A value of `.` is replaced by the
 >   current git repository root name. No filesystem access is performed.
+>
+> - The OpenCode V2 plugin alpha is version `2.0.0-alpha.1` and targets
+>   OpenCode `2.1.4`. OpenCode `all` mode requires an explicit API URL; see the
+>   [configuration reference](docs/configuration.md) and
+>   [migration guide](docs/migration.md).
 
 ---
 

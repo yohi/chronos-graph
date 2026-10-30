@@ -216,11 +216,24 @@ SQLite の `busy_timeout=5000` は強力ですが、トランザクション内�
 
 記憶の保存運用として、エージェントの自主性に任せる「Selective モード」と、ターンごとに全ログを自動保存する「All モード」を切り替える機能を備える。
 - **Selective モード**（デフォルト）: 従来通り、エージェントが自律的に `memory_save` ツールを呼び出す。
-- **All モード**: クライアント側のフック（`scripts/agent_turn_hook.py` や OpenCode の `chronos-turn-end` プラグイン）からバックグラウンドで `tools/call memory_save` を直接叩き、ターン終了時にログを保存する。ツール実行前の安全評価は ChronosGate 側の責務として分離する。
+- **All モード**: クライアント側のフック
+  （`scripts/agent_turn_hook.py`）やOpenCode V2プラグインから
+  `tools/call memory_save` を送り、ターン終了時にログを保存する。
+  OpenCodeプラグインalphaは2.0.0-alpha.1で、OpenCode `2.1.4`の公開Promise APIを対象とし、
+  V1互換は提供しない。`@opencode/plugin` と `@opencode/client` は各
+  `2.1.4`に固定する。全履歴のページング取得には
+  `CHRONOS_OPENCODE_SERVER_URL`が必須で、Authorization headerは任意の
+  `CHRONOS_OPENCODE_AUTHORIZATION`からのみ渡す。チェックアウトは
+  `CHRONOS_REPO_PATH`またはセッションのディレクトリから解決する。
+  プラグインは終了イベントの永続idle messageを基準に、同一セッションの送信を
+  直列化し、成功した送信のidle IDをOpenCode plugin storageに記録する。
+  HTTP受理は保存要求の受理であり、メモリDBへの永続化を保証しない。
+  チェックポイント更新前にプロセスが終了した場合、再送の可能性がある。
+  ツール実行前の安全評価はChronosGate側の責務として分離する。
 
 **アーキテクチャ上の主要な設計:**
 1. **設定のSSOT (Single Source of Truth) 化と伝播**: `CHRONOS_INGESTION_MODE` の型・デフォルト値・変数名は、クロスパッケージ参照を防ぐため独立した `src/chronos_shared/ingestion_mode.py` に集約する。ChronosGate を併用する場合は、Gateway 側からサブプロセスである context_store にこの環境変数を確実に継承させる。
-2. **フックの切り詰めとフェイルソフト設計**: `agent_turn_hook.py` は送信前にログを **末尾保持 (最新情報優先)** で切り詰める（UTF-8 境界での不完全なシーケンスは破棄）。SSE ハンドシェイクと POST リクエスト全体に対して2段階の厳密なタイムアウトを適用し、いかなる通信障害時もエラーを握りつぶして `exit 0` で終了することで、メインプロセス（エージェント）をクラッシュさせない。
+2. **フックの切り詰めとフェイルソフト設計**: `agent_turn_hook.py` は送信前にログを **末尾保持 (最新情報優先)** で切り詰める（UTF-8 境界での不完全なシーケンスは破棄）。SSE ハンドシェイクと POST リクエスト全体に対して2段階の厳密なタイムアウトを適用する。既存hookは従来どおり失敗時も`exit 0`だが、OpenCode V2は`--strict-delivery`により未送信を非ゼロで返し、チェックポイント更新を抑止する。
 3. **ノイズ抑制 (Classifier 連携)**: `All` モードにおける低品質コンテンツの流入に対しては、既存の `Classifier` によるフォールバックペナルティ（`FALLBACK_PENALTY=0.5`）が適用され、検索結果のノイズ化を防ぐ。
 
 **アーキテクチャ図 (トポロジ):**
@@ -229,7 +242,7 @@ SQLite の `busy_timeout=5000` は強力ですが、トランザクション内�
 ┌──────────────────────────────────────────────────────────────────┐
 │  AI Agent (Claude Code / Codex / Cursor / Antigravity / OpenCode) │
 │   ┌─────────────────────────────────────────────────────┐         │
-│   │ ターン実行 → 終了時に Stop / session.idle 等が発火     │         │
+│   │ ターン実行 → 終了時に Stop / V2 execution event が発火  │         │
 │   └────────────────────┬────────────────────────────────┘         │
 │                        │ stdin: 会話ログ or hook payload (JSON)    │
 └────────────────────────┼─────────────────────────────────────────┘
@@ -2012,7 +2025,13 @@ all: In all mode, do not call `memory_save` or `session_flush`; turn-end ingesti
 2. **legacy prompt 検出**: 安定 heading + versioned byte 長 + SHA-256 の fingerprint をメモリ内で照合し、prompt 本文は出力しない。
    - `selective`: Save / Recall とも手動削除を促す warning のみで継続。
    - `all`: legacy Save は preflight collision として全 write・hook setup 前に拒否（Recall は warning のみ）。legacy Save が残る `selective` → `all` 切替は必ず拒否され、手動削除後の再実行でのみ進行する。
-3. **OpenCode `all` hook config**: `opencode.jsonc` / `oh-my-opencode.jsonc` が存在する場合は collision（strict JSON writer は書き換えない）。`opencode.json` 未存在なら plugin のみの minimal JSON を作成、存在すれば `plugin` 配列へ `@yohi/opencode-plugin-chronos-turn-end` を一度だけ追加し、他 key を保持する。
+3. **OpenCode `all` plugin config**:
+   `opencode.jsonc` / `oh-my-opencode.jsonc` が存在する場合はcollision
+   （strict JSON writerは書き換えない）。`opencode.json`が未存在なら
+   `plugins`のみのminimal JSONを作成する。存在する場合は`plugins`配列へ
+   `@yohi/opencode-plugin-chronos-turn-end@2.0.0-alpha.1`を一度だけ追加し、他keyと
+   他pluginのoptionsを保持する。V1の同名登録や異なるversionはcollisionとして
+   拒否する。
 
 1 対象でも失敗した場合（marker 重複・SSOT 破損・collision 等）は全対象を無変更のまま終了する。
 
@@ -2027,7 +2046,14 @@ all: In all mode, do not call `memory_save` or `session_flush`; turn-end ingesti
 
 適用順序: journal 生成（private temp directory）→ preflight 状態の再検証（TOCTOU 対策）→ Skills / instructions の適用 → hook artifacts（wrapper / `opencode.json`）→ post-write verification → commit。
 
-- **wrapper**: canonical set が `claudecode` または `codex` を含む `all` モードでのみ `scripts/chronos-turn-hook.sh`（Windows は `.cmd`）を作成。2 行目に管理 marker（`# chronosgraph-managed: turn-hook-wrapper format=1` / Windows は `rem ...`）を要求し、marker 無き同名 wrapper は hook collision。interpreter は local `.venv` → `uv` → `python` の順で `scripts/agent_turn_hook.py` を呼ぶ。`scripts/agent_turn_hook.py` 自体は変更しない。
+- **OpenCode plugin**: canonical setが`opencode`を含む`all`モードではV2
+  pluginを`plugins`配列に登録する。プラグインはall-modeの自動保存に限り、
+  終了後に`uv run --project <checkout> python scripts/agent_turn_hook.py
+  --strict-delivery --project <session-project>`を起動する。
+  `CHRONOS_OPENCODE_SERVER_URL`と任意の`CHRONOS_OPENCODE_AUTHORIZATION`は
+  OpenCodeプロセスの環境から渡す。設定生成はglobal configを変更するため、
+  setup protocolの承認境界に従う。
+- **wrapper**: canonical setが`claudecode`または`codex`を含む`all`モードでのみ`scripts/chronos-turn-hook.sh`（Windowsは`.cmd`）を作成する。既存の実行・rollback契約を保つ。
 - **Skill**: 対象 parent 内の staging に既存 target を snapshot どおり複製し、`SKILL.md` と `.chronosgraph-managed` のみ SSOT から置換してから atomic swap。
 - **instructions**: 同一 directory の temporary file へ permission 保持で書き atomic replace。未存在なら作成する。
 - journal 生成後の全例外は rollback を 1 回実行してから `ApplyError` として報告。`build_bundle` / preflight 失敗は journal 生成前に発生するため rollback しない。
@@ -2083,8 +2109,14 @@ python scripts/sync_agent_assets.py sync \
 ### 19.13 テスト
 
 - Unit: `tests/unit/test_agent_asset_sources.py`（SSOT 構造・frontmatter・sentinel）、`tests/unit/test_sync_agent_assets.py`（parser・digest・marker・所有・symlink・legacy・transaction・diagnostics）、`tests/unit/test_bootstrap_agent_assets.py`（CLI 契約・委譲・dry-run・完了メッセージ抑止）、`tests/unit/test_bootstrap_messages.py`（旧案内削除の regression）
-- Integration: `tests/integration/test_sync_agent_assets.py`（temporary HOME での e2e・rollback・symlink 分類）、`tests/integration/test_opencode_turn_end_plugin.cjs`（`session.idle` → `scripts/agent_turn_hook.py` の plugin 契約）
-- 必須 regression matrix: SSOT の missing / malformed template・Skill layout・sentinel・render token、3 Agent の clean install、同一 SSOT の no-op re-sync、marker 外 instructions と他 Skills の保持、SSOT 更新時の所有範囲だけの更新、mode switch、multi-Agent preflight failure 時の部分更新なし、I/O / post-write verification / hook setup / rollback failure、in-root / shared / root-external / broken / cyclic / parent symlink、legacy Save / Recall の mode guard、dry-run 前後の filesystem snapshot、OpenCode plugin の `session.idle` dispatch を検証する。3 Agent × 2 ingestion mode の clean install・再同期・mode switch・hook artifact は一時 HOME で manual QA も行う。
+- Integration: `tests/integration/test_sync_agent_assets.py`
+  （temporary HOMEでのe2e・rollback・symlink分類）、
+  `tests/integration/test_opencode_*.cjs`（V2 transcript、history、runtime、
+  configuration、entrypoint契約）
+- 必須regression matrix:既存の配布・transaction条件に加え、OpenCode V2の
+  終了event、idle marker、複数ページ履歴、同一session内の連続turnと重複通知、
+  session移動、取消し、strict delivery、native `plugins`再同期を検証する。
+  OpenCode `2.1.4`実ホスト確認がない場合、V2互換完了とは報告しない。
 - fixtures: `tests/fixtures/agent_assets/legacy-save-v1.md` / `legacy-recall-v1.md`（legacy fingerprint 検出の pinned 入力）
 
 ### 19.14 要求トレーサビリティとリスク対応

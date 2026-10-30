@@ -35,6 +35,10 @@ ChronosGraph は、AIエージェント（Claude Code / Gemini CLI / Cursor 等�
 > - `memory_save` / `memory_search` などで渡す `project` は自動的に正規化されます
 >   （前後空白除去、小文字化、basename）。`.` のみ指定された場合は、
 >   現在の git リポジトリルート名に置き換わります。正規化時に filesystem へはアクセスしません。
+>
+> - OpenCode V2プラグインのalpha版は`2.0.0-alpha.1`で、OpenCode `2.1.4`を対象とします。
+>   OpenCodeの`all`モードではAPI URLの明示設定が必要です。
+>   [設定リファレンス](docs/configuration.md)と[移行ガイド](docs/migration.md)を参照してください。
 
 ---
 

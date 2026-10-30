@@ -2,6 +2,31 @@
 
 This document describes how to migrate between ChronosGraph versions.
 
+## OpenCode V1 to V2 plugin
+
+The current V2 branch publishes `@yohi/opencode-plugin-chronos-turn-end` as
+alpha version `2.0.0-alpha.1`, targeting OpenCode `2.1.4`. Keep V1 users on the existing V1
+branch/release; the V2 package does not provide a V1 compatibility adapter.
+OpenCode registration is the native `plugins` array, not the V1 `plugin` key.
+
+In `all` mode, set `CHRONOS_OPENCODE_SERVER_URL` in the OpenCode process
+environment so the plugin can verify session identity and retrieve the full,
+paginated transcript from the public OpenCode API. HTTPS is required except
+for loopback HTTP during local development. If the API requires authentication,
+set the complete `CHRONOS_OPENCODE_AUTHORIZATION` header value through a trusted
+environment or secret manager. Do not store it in OpenCode JSON configuration.
+Set `CHRONOS_REPO_PATH` when the ChronosGraph checkout differs from the
+conversation's project directory. Selective mode does not require a connection
+to the OpenCode API.
+
+The plugin submits a completed transcript using the existing Python turn hook.
+Its strict-delivery option prevents an unsuccessful submission from advancing
+the plugin's duplicate-suppression checkpoint. A successful HTTP response only
+confirms that the gateway accepted the request; it does not prove the memory was
+durably persisted. A process crash between gateway acceptance and checkpoint
+write can cause a duplicate submission. Verify retrieval separately when
+validating a deployment.
+
 ---
 
 ## Embedding Dimension Change (1024 → 768)

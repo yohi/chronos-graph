@@ -1,6 +1,7 @@
 {
   "name": "@yohi/opencode-plugin-chronos-turn-end",
-  "version": "1.0.0",
+  "version": "2.0.0-alpha.1",
+  "type": "module",
   "private": false,
   "repository": {
     "type": "git",
@@ -9,6 +10,7 @@
   "main": "./.opencode/plugins/chronos-turn-end.js",
   "files": [
     ".opencode/plugins/chronos-turn-end.js",
+    "plugin/",
     "README.md",
     "LICENSE"
   ],
@@ -19,7 +21,17 @@
     "node": ">=26.0.0"
   },
   "scripts": {
-    "build": "echo 'No build step required'"
+    "build": "echo 'No build step required'",
+    "test": "node --test tests/integration/test_opencode_*.cjs",
+    "typecheck": "tsc --allowJs --checkJs --noEmit --strict --module NodeNext --moduleResolution NodeNext --target ES2024 --types node .opencode/plugins/chronos-turn-end.js plugin/*.js"
   },
-  "dependencies": {}
+  "dependencies": {
+    "@opencode/client": "2.1.4",
+    "@opencode/plugin": "2.1.4"
+  },
+  "devDependencies": {
+    "@types/json-schema": "7.0.15",
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2"
+  }
 }

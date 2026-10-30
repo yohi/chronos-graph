@@ -4,7 +4,6 @@ import re
 from pathlib import Path
 from typing import ClassVar
 
-import pytest
 from pydantic import BaseModel, ConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -14,8 +13,11 @@ class PackageJson(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore", frozen=True)
 
     name: str
+    version: str
+    type: str
     main: str
     files: list[str]
+    dependencies: dict[str, str]
 
 
 def test_package_exports_only_turn_end_opencode_plugin() -> None:
@@ -24,12 +26,16 @@ def test_package_exports_only_turn_end_opencode_plugin() -> None:
     )
 
     assert package_json.name == "@yohi/opencode-plugin-chronos-turn-end"
+    assert package_json.version == "2.0.0-alpha.1"
+    assert package_json.type == "module"
     assert package_json.main == "./.opencode/plugins/chronos-turn-end.js"
     assert package_json.files == [
         ".opencode/plugins/chronos-turn-end.js",
+        "plugin/",
         "README.md",
         "LICENSE",
     ]
+    assert package_json.dependencies == {"@opencode/client": "2.1.4", "@opencode/plugin": "2.1.4"}
 
 
 def test_legacy_security_evaluator_entrypoints_are_absent() -> None:
@@ -63,19 +69,6 @@ def test_no_runtime_references_to_legacy_security_evaluator() -> None:
     assert matches == []
 
 
-def test_turn_end_plugin_ingestion_mode_constants_match_chronos_shared() -> None:
-    chronos_shared_ingestion_mode = pytest.importorskip(
-        "chronos_shared.ingestion_mode",
-        reason="chronos_shared is not installed; skipping SSOT consistency check",
-    )
-    CHRONOS_INGESTION_MODE_ENV = chronos_shared_ingestion_mode.CHRONOS_INGESTION_MODE_ENV
-    DEFAULT_INGESTION_MODE = chronos_shared_ingestion_mode.DEFAULT_INGESTION_MODE
-
-    plugin_text = (REPO_ROOT / ".opencode" / "plugins" / "chronos-turn-end.js").read_text(
-        encoding="utf-8"
-    )
-    assert "CHRONOS_SHARED_SSOT_GUARD" in plugin_text
-    env_pattern = rf"\bINGESTION_MODE_ENV\s*=\s*'{CHRONOS_INGESTION_MODE_ENV}'"
-    default_pattern = rf"\bDEFAULT_INGESTION_MODE\s*=\s*'{DEFAULT_INGESTION_MODE}'"
-    assert re.search(env_pattern, plugin_text) is not None
-    assert re.search(default_pattern, plugin_text) is not None
+def test_plugin_uses_shared_ingestion_environment_contract() -> None:
+    plugin_text = (REPO_ROOT / "plugin" / "options.js").read_text(encoding="utf-8")
+    assert re.search(r"CHRONOS_INGESTION_MODE\s*\?\?\s*'selective'", plugin_text) is not None

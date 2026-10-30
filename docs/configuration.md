@@ -147,6 +147,21 @@ warning log.
 | `BATCH_CANCEL_TIMEOUT` | `5.0` | No | Batch cancellation timeout. |
 | `SESSION_FLUSH_MAX_LOG_LENGTH` | `200000` | No | Maximum conversation log length for turn-end flush. |
 
+OpenCode V2 in `all` mode also uses these process environment variables:
+
+- `CHRONOS_OPENCODE_SERVER_URL` (required): API base URL for session validation
+  and full paginated history. Use HTTPS except for loopback HTTP.
+- `CHRONOS_OPENCODE_AUTHORIZATION` (optional): complete HTTP Authorization
+  header value. Provide it only through a trusted environment or secret manager.
+- `CHRONOS_REPO_PATH` (optional): ChronosGraph checkout containing
+  `scripts/agent_turn_hook.py`; defaults to the session directory.
+
+The plugin reads its ingestion mode and gateway hook settings from that
+checkout's `.env` when present. Explicit OpenCode process environment values
+take precedence. Only the hook's required settings are inherited from `.env`;
+the OpenCode server URL and Authorization value are not passed to the Python
+child process.
+
 ## 12. Dashboard (API Server)
 
 | Variable | Default | Required | Description |
@@ -170,8 +185,10 @@ warning log.
 ## 14. Context Store Hook (`agent_turn_hook.py`)
 
 Used in `CHRONOS_INGESTION_MODE=all` to forward turn-end conversation logs to
-a compatible gateway. The hook is fail-soft: it always exits `0` so the host
-agent process is never blocked.
+a compatible gateway. Other agent hooks retain fail-soft behavior. OpenCode
+passes `--strict-delivery`, which returns nonzero when a save was not submitted
+so the plugin does not advance its duplicate-suppression checkpoint. HTTP
+acceptance does not prove durable memory storage.
 
 | Variable | Default | Required | Description |
 | --- | --- | --- | --- |

@@ -104,5 +104,8 @@ until the applicable items have evidence.
 
 - Requested alpha: `@yohi/opencode-plugin-chronos-turn-end@2.0.0-alpha.1`.
 - GitHub Packages dist-tag: `alpha`.
-- Status: pending publication; update this section with the published package
-  version, dist-tag, and registry verification after the release command succeeds.
+- Status: published and verified with `npm view` and `npm dist-tag ls`.
+- Published tarball integrity: `sha512-FvAb729J+f7KJ[...]AJouOatTaK1qQ==`.
+- Commit: `9b22b93` on `feat/opencode-v2`; branch pushed to `origin`.
+- The dist-tag `latest` was not changed. The ChronosGraph Python package remains
+  at `3.2.1`; no Python package or GitHub Release tag was created.

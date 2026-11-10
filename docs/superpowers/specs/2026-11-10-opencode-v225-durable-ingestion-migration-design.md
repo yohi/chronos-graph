@@ -28,29 +28,81 @@ V2 uses `import { Plugin } from "@opencode/plugin"` and a stable-ID `Plugin.defi
 
 Potential `session.execution.started` / `.succeeded` / `.failed` / `.interrupted`, `session.status` and `session.idle` events may wake reconciliation but cannot themselves declare an exactly-once successful logical turn. `ctx.session.wait({sessionID})` can synchronize a known session where supported, not reconstruct historical outcomes.
 
-## 3. Authoritative discovery, source scope and root identity
+## 3. Public client boundary, cursor discovery and source scope (F-002)
 
-Read the complete public V2 session list with **cursor pagination** and stable query filters/order. Read every message page for each candidate root, with verified ascending ordering, scope, cursor progress and unique IDs. Do **not** carry over V1's N=100, N*=2 widening algorithm. Invalid, lost, repeated or truncated cursor pages must yield `DISCOVERY_INCOMPLETE` and prevent `caught_up`.
+**Chosen proposed adapter boundary:** `ctx.event.subscribe({ signal })` supplies location-scoped live wake-up hints; it is not a durable history reader. A single dedicated **`@opencode/client@2.2.5`** adapter shall fetch historical public records from an **already-running and operator-configured** OpenCode v2.2.5 Host. `ctx.session` is an in-process Plugin API with different lifecycle/scope, not an interchangeable external client nor a promise of exhaustive persisted records. Release-pinned SDK method spelling and runtime availability remain `NOT_PROVEN` until V2-A. If required historical operations are absent, fail closed as `PUBLIC_API_UNAVAILABLE` and escalate any new transport/storage architecture for Owner approval.
 
-Use tagged V2 session `parentID` to recognize a root; a child session never receives independent receipt/checkpoint/pending ownership. Context from a child may be projected only within its verified owning root. Re-query at the end of the drain to reject a mid-read scope move or new eligible history. The versioned discovery descriptor must be identical to the descriptor used by canonical source-alias derivation. Project IDs/global IDs or path similarity alone do not identify lifetime source continuity; mismatch is `SOURCE_ROUTING_SCOPE_MISMATCH`.
+| Pinned v2.2.5 public operation | Inputs/initial query | Return and cursor contract |
+|---|---|---|
+| `Session.list` | `order:"asc"`, root `parentID:null`, `directory` **or** `project/subpath`, `limit`, then opaque `cursor` | `{data: Session.Info[],cursor:{previous?,next?}}`; cursor retains original filters, so do not override them while paging |
+| `Session.get` | `sessionID` | `{data: Session.Info}`; verify current parentID, location, project and source scope |
+| `Message.list` | `sessionID`; first page `order:"asc",limit`; next pages `cursor,limit` only | `{data: Session.Message.Info[],cursor:{previous?,next?}}`; Message handler rejects `cursor` together with `order` |
+| `Pending.list` | `sessionID` | `{data: SessionInbox.Info[]}`, pending admission only and **not** proof of delivery |
+| `Session.log` (experimental public durable stream) | `sessionID`, exclusive numeric `after?`, optional `follow?` | Durable Session Events plus `log.synced` replay watermark; completeness after restart is **NOT_PROVEN** until tested |
 
-If public plugin-domain reads are insufficient, use a scoped, authenticated `@opencode/client@2.2.5` API, with explicit transport, authorization and restart behavior. External Node service discovery/start APIs are **not** permission to spawn nested servers in plugin initialization. Private OpenCode internals and credential-file reads are forbidden.
+Source contracts: [Session handlers](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/server/src/handlers/session.ts), [Message handler](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/server/src/handlers/message.ts), [Session filters/cursor](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/schema/src/session.ts), [Core session interface](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/core/src/session.ts). These are **tagged source assertions**, not results of installed-host tests.
 
-## 4. Inbox, provenance and logical owner
+**Page termination is not simply `cursor.next==null`**: the pinned implementation may return `next` on the final nonempty page. Read with positive finite `limit` until an empty/short page, validating no duplicate IDs, order regression, cursor repetition, truncation or unexpected scope change. An absent/nonadvancing cursor on a saturated page, malformed page, missing earlier record, invalid cursor or a moving snapshot is `DISCOVERY_INCOMPLETE`, not `caught_up`. Repeat the stable-scope and log-watermark check after drain. All message types, including User, Assistant, Compaction and Idle, are required; do not filter to only User messages.
 
-Inbox enqueue/admission is **not** a user-message receipt. A canonical anchor requires a persisted **delivered** input whose provenance is authenticated from pinned public records. Account for `queue`, `steer`, `resume:false`, cancellation, retry of one message ID, and pending-but-undelivered messages. Such admissions cannot create a phantom anchor or double receipt.
+**Host/auth ownership:** Operator-owned setup provides and pins the exact base URL, supported Host authentication and expected instance/location; the adapter sends credentials only to that Host, verifies session-to-location and canonical source binding, and redacts secrets from logs. A 401/403 is `OPENCODE_HISTORY_UNAUTHORIZED`; unreachable/unsupported durable log is `DURABLE_EVIDENCE_UNAVAILABLE`; location/project mismatch is `SOURCE_ROUTING_SCOPE_MISMATCH`. No auto-discovery to a different Host, insecure no-auth fallback, private API, direct Credential File read, or Nested Server at Plugin initialization. If the public Client cannot support required transport/auth, stop at Owner architecture checkpoint.
 
-Classify each relevant message as `USER_AUTHORED`, `USER_DERIVED`, `INTERNAL_CONTROL` or `UNRESOLVED_PROVENANCE`. `role=user` alone and text similarity are insufficient. File-only and structured prompts remain eligible when genuinely user-authored or user-derived and when their persisted identity can be verified; generated shell/subagent/compaction/continuation frames are not independent new user intent.
+`parentID` identifies a root; children never own receipts/checkpoints. `DiscoveryScopeV225` is the same authority for exact Session.list filters and canonical source-alias derivation, including directory context where project IDs are shared. `Session.get`, full cursor pages, and source binding are rechecked before advancing any root. Existing V1 Receipt and Source Identity are preserved.
 
-An execution may contain **multiple delivered anchors**. Define version-specific, deterministic ownership from delivered anchor to execution, assistant, tool and descendant sessions. When multiple anchors, steer, resume, child work or compaction make attribution ambiguous, return `TURN_OWNERSHIP_AMBIGUOUS` and stop only that root's ingestion without advancing its checkpoint. Never assume one execution equals one user turn.
+## 4. Durable Evidence Contract — inbox, ownership and proof status (F-001)
 
-## 5. Terminal outcome and immutable history
+The **pinned source** defines `session.inbox.enqueued/delivered/cancelled/delivery.changed`, `session.execution.started/succeeded/failed/interrupted` and `session.step.*` as **durable bus events**. `session.text.delta` and `session.reasoning.delta` are **ephemeral**. Persisted `Session.Message` includes `type:"user"`, `type:"assistant"` and `type:"idle"` with `outcome`. Pending inbox state is persisted but **admission is not delivery**. The tagged `Session.log` promises replay after an exclusive `after` cursor followed by `log.synced`; its sequence may exceed the last emitted event because aggregate sequence space is shared. Do not require adjacent event sequence numbers.
 
-Only a **complete, quiescent, persisted lineage snapshot** may establish a terminal turn. Derive `SUCCESS`, `FAILED` and `ABORTED` from pinned persisted evidence, not from a single transient lifecycle event. In particular, `execution.interrupted` does not unconditionally mean user abort. Indeterminate state is `INCOMPLETE` / `TERMINAL_EVIDENCE_UNAVAILABLE` with no canonical hash, receipt or checkpoint advance.
+**Durable in source ≠ proven retrievable:** Retention, restart recovery, complete replay through `log.synced`, message/log consistency, and the user-anchor-to-execution mapping require real 2.2.5 Host evidence. A transient Plugin event is never durable proof by itself. If the historical public API omits necessary records, do not read private OpenCode storage to compensate.
 
-`SUCCESS` persists user intent plus confirmed final assistant output and sanitized bounded execution context. `FAILED` and `ABORTED` persist **user intent only**. An acknowledged failed/aborted turn closes that anchor permanently. Subsequent generation under the same anchor is `POST_TERMINAL_CONTINUATION` / `COMMITTED_TURN_SEMANTICS_CHANGED` divergence, not receipt overwrite or second success. A distinct newly delivered eligible user anchor is required for another normal receipt.
+### 4.1 Shared proposed Chronos DTOs (not official OpenCode SDK types)
 
-Current-history deletion, revert, compaction or semantic alteration is reported by `receipt.validate` and divergence states, **not** by deleting previously committed Chronos memory.
+```ts
+type EvidenceStatus = "PROVEN" | "NOT_PROVEN" | "CONTRADICTED"
+type TerminalOutcomeV225 = "SUCCESS" | "FAILED" | "ABORTED"
+type RootEvidenceDecisionV225 = {
+  rootSessionID: string
+  anchorMessageID: string | null
+  evidenceStatus: EvidenceStatus
+  outcome: TerminalOutcomeV225 | null
+  reasonCode: string | null
+}
+type NativeSnapshotV225 = {
+  rootSessionID: string
+  session: SessionInfoV225
+  messages: readonly SessionMessageV225[]
+  pending: readonly PendingInfoV225[]
+  durableEvents: readonly DurableSessionEventV225[]
+  replaySyncedWatermark: number | null
+}
+```
+
+`SessionInfoV225` / `SessionMessageV225` / `PendingInfoV225` / `DurableSessionEventV225` are adapter mappings of tagged public records; their exact SDK representations are V2-A evidence deliverables. `outcome` is `null` unless `evidenceStatus==="PROVEN"`. `NOT_PROVEN` means insufficient/untested evidence, `CONTRADICTED` means observed conflict; neither is an observed FAILED/ABORTED terminal turn.
+
+### 4.2 Required per-anchor proof
+
+| Claim | Required **persisted** evidence | Unproven disposition |
+|---|---|---|
+| Delivered Anchor | Durable `session.inbox.delivered` linked by same `inboxID / Message ID` to visible persisted `type:"user"` under the same Root/Source; distinguish enqueued/cancelled; prove `USER_AUTHORED` or `USER_DERIVED` | `NOT_PROVEN / DELIVERY_NOT_PROVEN` |
+| Execution Owner | Complete ordered delivered/step/execution events and User/Assistant/Idle history; unique attribution of confirmed assistant/tools to the specific delivered anchor | `NOT_PROVEN / TURN_OWNERSHIP_AMBIGUOUS` |
+| SUCCESS | Durable `execution.succeeded` plus settled `idle.outcome:"succeeded"` and complete/attributable final Assistant/tool lineage | `NOT_PROVEN / TERMINAL_EVIDENCE_UNAVAILABLE` |
+| FAILED | Durable `execution.failed` with error plus corresponding `idle.outcome:"failed"`, attributable anchor; retain only user intent | `NOT_PROVEN / TERMINAL_EVIDENCE_UNAVAILABLE` |
+| ABORTED | Durable `execution.interrupted` with `reason:"user"` plus corresponding `idle.outcome:"interrupted"`; no ambiguous resume/replacement; retain only user intent | `NOT_PROVEN / TERMINAL_EVIDENCE_UNAVAILABLE` |
+
+The tagged `Idle` message and terminal execution event cover a **busy period**, which can include *multiple* steered prompts; they do **not** individually certify terminality for each Anchor. If multi-anchor `queue/steer`, continuation, child work or compaction prevents deterministic partition, mark **`NOT_PROVEN`** and request Owner architecture decision if proof cannot be recovered via public records. Never turn one execution SUCCESS into several invented successful receipts. Conflicting durable event IDs, missing expected User Message, log/snapshot mismatch or incompatible terminal outcomes are `CONTRADICTED / EVIDENCE_CONTRADICTED`.
+
+### 4.3 Provenance, root-only fail-closed and checkpoint
+
+Classify `USER_AUTHORED` / `USER_DERIVED` / `INTERNAL_CONTROL` / `UNRESOLVED_PROVENANCE` from public persisted evidence. Text similarity or `type:"user"` alone is insufficient. File-only and structured input can qualify when ownership and persisted resource identity are established. Enqueue/pending/cancelled input without delivered User Message produces **no receipt**; `resume:false` is not proof of delivery.
+
+For **any** `NOT_PROVEN` or `CONTRADICTED`: emit `RootEvidenceDecisionV225` with `outcome:null`, **do not invoke Graph PREPARE/COMMIT / `turn.ingest`**, do not advance or overwrite this Root's checkpoint, do not report `caught_up`; retain existing V1/V2 receipt and source binding and redact diagnostics. Do not skip the blocked contiguous prefix. Unrelated Roots may proceed. If this cannot be implemented through the public evidence contract, **STOP at Human Owner checkpoint** rather than silently change architecture.
+
+## 5. Proven terminal outcome and immutable history
+
+Only `PROVEN` per-anchor evidence as specified in `4.2 authorizes `SUCCESS`, `FAILED` or `ABORTED`. `session.execution.interrupted` has reasons including `user`, `shutdown`, `superseded` and `inactivity`; only a complete, non-resumed user interruption with matching persisted idle outcome can prove ABORTED. `shutdown` may preserve an in-flight claim. A quiescent snapshot, a single `idle` record, or an isolated execution success event is never proof for each member of a multi-anchor busy period.
+
+`INCOMPLETE` denotes a nonterminal state; lack of data is `NOT_PROVEN`, not a failed execution. `TERMINAL_EVIDENCE_UNAVAILABLE` or `EVIDENCE_CONTRADICTED` blocks the Root with zero Graph mutation and unchanged checkpoint. Actual execution failure is distinct from evidence failure.
+
+`PROVEN SUCCESS` persists canonical user intention and **attributable confirmed** assistant content plus bounded/sanitized tool context; `PROVEN FAILED` / `PROVEN ABORTED` persist **user intention only**. Graph transactional COMMIT alone establishes an immutable receipt. Later generation under the same already-committed anchor yields `POST_TERMINAL_CONTINUATION` / `COMMITTED_TURN_SEMANTICS_CHANGED` divergence, never overwrite, duplicate receipt or retroactive deletion. New durable progress requires a distinct eligible delivered anchor. Mutated or deleted OpenCode history is reported through `receipt.validate`/divergence, preserving existing V1 receipts and canonical source identity.
 
 ## 6. Receipt key, schema, source identity and hash fence
 
@@ -68,11 +120,29 @@ Do **not** re-label the V1 overflow replay algorithm as V2. Classify new V2 comp
 
 Experimental idle/Goal Mode, background compaction, artifacts, schedules, TUI/GUI, images, persistent PTY, client-hosted MCP and LSP replacement are **not automatically in scope**. Inventory as used/not used/disabled/out of scope and test only relevant behaviors; do not invent an extra migration gate. Do not allow automatic agent-loop or review/fix/review recurrence without explicit Owner approval.
 
-## 8. Policies, packaging, credentials
+## 8. V1→V2 plugin configuration, packaging and security (F-003)
 
-Use V2's native `.opencode/plugins/` and npm package entries, both invoking the same runtime. A local `plugins[].package` path is a **directory**, not a source file. Test the installed `npm pack` tarball, not only direct module imports. Do not introduce Effect/TUI peer packages absent a used feature.
+### 8.1 Current ownership and V2 normalization
 
-Native `policies` (`plugin.use`, `mcp.use`, `skill.use`, `integration.use`) are not the interactive tool `permissions` (`allow/ask/deny`). In v2.2.3+ a bare/wildcard `integration.use` policy does **not** automatically cover MCP/skill/plugin actions: verify effective deny **before protected effects**. V2 defaults `external_directory` to allow; if V1 required outside-project approval, explicitly configure and test ordered `ask`. Protect Graph/Gate credentials, and preserve distinct regular-MCP, ingestion and operator capabilities.
+Current `scripts/agent_assets/hooks.py` only plans an OpenCode config in **all** mode. Its `updated_plugin_config` adds `@yohi/opencode-plugin-chronos-turn-end` to legacy `plugin[]` under `~/.config/opencode/opencode.json`. It rejects `opencode.jsonc` and `oh-my-opencode.jsonc` preflight collisions. V2 native format is `plugins[]` (string or `{package,options?}`); the pinned `ConfigNormalize` composes effective `plugins` as `[...legacyPlugins,...nativePlugins]`. A legacy+native Chronos entry is therefore **not assumed deduplicated**. Project/global/local auto-loaded plugins must also be counted.
+
+### 8.2 Explicit installer-owned migration matrix
+
+| Effective preflight state | Proposed all-mode change |
+|---|---|
+| Legacy `plugin` only | Migrate **only the exact installer-owned Chronos record** to native `plugins`. Leave unrelated legacy entries and ordering intact; ownership uncertain -> `CHRONOS_PLUGIN_CONFIG_COLLISION` |
+| Native `plugins` only | Reuse one valid managed Chronos registration (idempotent `UNCHANGED`), or add exactly one managed entry |
+| Both arrays | Normalize first. If duplicate Chronos is provably installer-owned and identical, remove only owned duplicate; any user-owned or semantically different Chronos entry -> fail before write |
+| Local auto-discovery + npm, or project + global Chronos | Select exactly one explicit runtime/load source. Do not delete unowned local/project files; ambiguous effective config -> preflight fail |
+| selective/other Agents | No V2 all-mode registration, no migration of their config, preserved Claude Code/Codex hook paths and unrelated agent/provider/MCP settings |
+
+Setup owns **effective registry inventory**, provenance of managed entries, preflight collision detection, atomic write/rollback against stale snapshots and idempotent repeated setup. It must not rewrite unowned JSONC, provider, agent or plugin settings. When only a documented owned migration is possible, preserve unrelated config values and ordering. A required legacy outside-project `ask` permission must be tested because V2 defaults `external_directory` to allow.
+
+### 8.3 Two-load and lifecycle fence
+
+Native `Plugin.define({ id, setup })` uses a stable ID. Packaged `@yohi/opencode-plugin-chronos-turn-end` and local `.opencode/plugins/` entrypoint share one runtime, **not** concurrent activation. A local `plugins[].package` points to a **directory**, not one JS file. Validate package `main`/`files`, real npm tarball, local loader and reload. Detect duplicate effective Host/location/Chronos activation **before** event subscription, timers, lock acquisition or Graph calls; emit `DUPLICATE_CHRONOS_ACTIVATION` and make no side effects. Server Graph receipts still enforce cross-process exactly-once.
+
+V2 `policies` (`plugin.use` / `mcp.use` / `skill.use` / `integration.use`) are separate from interactive `permissions`. Bare `integration.use:"*"` does not cover dedicated plugin/MCP/skill denies. Preserve the Gate ingestion, operator and normal MCP credential separation. No Credential File reads, private OpenCode API, or Plugin-init Nested Server.
 
 ## 9. Reconciler and durable state
 
@@ -103,8 +173,15 @@ Install real OpenCode CLI **2.2.5** and `@opencode/plugin@2.2.5`, plus `@opencod
 
 Use `PASS`, `FAIL`, `BLOCKED`, `NOT RUN` and evidence-backed `N/A` distinctly. Safety-critical unverified public API/authorization gates fail closed for affected operations; unrelated documentation is not held hostage to an endless review loop.
 
-## 11. Owner checkpoint and stopping condition
+## 11. Owner decisions, document status and stop
 
-Pending decisions: (1) V2-only versus explicitly verified dual V1/V2; (2) one canonical V2 receipt-key formula and resolution of original design/plan mismatch; (3) whether a public V2 historical terminal/provenance read proves sufficient for safe implementation. These are not silently approved by this draft's Git commit.
+| Undecided authority | Recommended **proposal**, not approval | Alternative |
+|---|---|---|
+| V2-only support | New V2 native adapter; leave V1 receipts and accepted history intact | Dual V1+V2 with independent adapters and host tests |
+| Canonical V2 `turn_key` | Stable root User Message ID within separately verified Source Scope; resolve historical Spec `1.5 vs Plan Task 12 mismatch before implementation | Lineage-inclusive key only after proving stable identity under resume/compaction |
+| Historical durable evidence | Complete replayable public `Session.log` plus Message/Pending/Session snapshot with verified multi-anchor ownership | If unavailable, keep affected Roots fail-closed and request approved architecture change, not a private-store shim |
 
-**STOP:** Documentation-only draft recorded. No production implementation, test execution, new PR, merge, release, external deployment, or independent review is authorized by the commit itself.
+**Evidence still NOT PROVEN:** installed host replay after restart, coverage/retention, SDK method mapping, multi-anchor attribution, exact outcome proof and full negative regression. Source/type inspection is not a host PASS.
+
+**IMPLEMENTATION_HOLD / STOP:** These corrections document F-001–F-003 only. Human Owner must separately approve outstanding choices, source/host verification and implementation. No source code, tests, deploy, merge, new PR, automatic review loop or follow-on task is authorized by this document-only commit. Historical PR #385 Design/Plan remain unchanged.
+

@@ -7,7 +7,7 @@
 **Tech stack:** OpenCode CLI 2.2.5, @opencode/plugin@2.2.5, @opencode/client@2.2.5 (proposed authoritative public history adapter), JavaScript/Node, Python/pytest, SQLite, PostgreSQL/Supabase, ChronosGraph and ChronosGate.  
 **Spec:** [OpenCode v2.2.5 migration design](../specs/2026-11-10-opencode-v225-durable-ingestion-migration-design.md).  
 **Historical plan:** [PR #385 V1 implementation plan](2026-10-06-opencode-all-durable-ingestion.md).  
-**Status:** Documentation-only; do not run or commit production steps before authorization.
+**Status:** DOCUMENT_READY_WITH_BLOCKERS / IMPLEMENTATION_BLOCKED; V2-only Owner-approved (2026-11-11 JST). Default CLI historical `session.created` event readback FAIL (observed). E01–E06, restart proof and Implementation tests NOT RUN. Documentation-only; no production or Host modification authorized.
 
 ## Global constraints
 
@@ -17,8 +17,18 @@
 - Original Tasks **12–18** are mapped below to V2-A through V2-G. The old V1-native fixtures, SDK imports, widening pagination and completion classification cannot be treated as new V2 evidence.
 - All OpenCode packages, installed binary and actual public artifacts must be release-pinned at **2.2.5**. A code/type review never substitutes for actual host execution.
 - Maintain source-binding scope, immutable receipts, version-pinned hash comparison, all-mode zero-legacy-side-channel, selective/Claude/Codex compatibility and non-skippable database acceptance.
-- V2-only is **recommended, not Owner-approved**. A dual-mode branch needs separate explicitly approved adapter/tests. The disputed `turn_key` formula remains a design checkpoint.
+- **V2-only was approved by the Human Owner on 2026-11-11 JST.** No dual-runtime adapter in this scope; preserve V1 historical receipts and Source Identity. The `turn_key` formula and supported Host policy remain distinct Owner decisions.
 - Do not add unused optional experimental features, expand to an autonomous review loop, modify the existing PR or merge/release as part of this plan.
+
+### F-001 capability blocker — observed prior to E01–E06
+
+**User-supplied isolated PoC, 2026-11-11 JST (not independently rerun here):** Authenticated default `opencode serve` v2.2.5 returned a Root Session (`parentID:null`), zero Message and Pending entries, and **only `log.synced(seq:0)`** on two public historical log reads. `session.created` was absent. This is an **observed failure of initial event-body readback**, **not** evidence that E01–E06 or restart tests failed; those remain `NOT RUN`.
+
+**Pinned upstream source:** `Bus.configured` uses `persist = options?.persist ?? false`; `EventTable` writes are conditional on persistence while sequence reservation proceeds. `Server.routes` passes `options.events?.persist`; the standard CLI `server-process.ts` launcher omits `events` and `serve` exposes no persist flag. Thus a successful public `Session.log` HTTP/SSE response with `log.synced` does **not** prove durable event bodies exist. See [Bus](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/core/src/bus.ts), [Server routes](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/server/src/routes.ts), [CLI launcher](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/cli/src/server-process.ts).
+
+**Consequences for Design `4.2:** The default CLI Host currently cannot satisfy the required historical `session.inbox.delivered` and `session.execution.*` evidence contract. The historical proof adapter must emit `RootEvidenceDecisionV225` with `evidenceStatus:"NOT_PROVEN"`, `outcome:null`, `reasonCode:"DURABLE_EVIDENCE_UNAVAILABLE"` and, only where host capability is independently established, diagnostic `EVENT_LOG_PERSISTENCE_DISABLED`. Missing event rows alone are **not `CONTRADICTED`**. No Graph `turn.ingest` / PREPARE/COMMIT, Checkpoint mutation or `caught_up`. Nonaffected Root handling remains separately governed by evidence sufficiency.
+
+**Owner architecture decision required (not adopted by this update):** (A) Keep ordinary unmodified `opencode serve` as a mandatory support target; require separately proven **public persisted** historical evidence beyond this unavailable Event Log, or remain BLOCKED. (B) Explicitly authorize and support a separate Host with persistence enabled, then validate its effective setting, restart replay and all per-Anchor cases. `ServerOptions.events.persist:true` is an internal API facility, **not** a ready CLI flag or authority to build/deploy a custom Host. Evidence for B cannot certify A. No private-store fallback, synthetic past events, new independent review or automatic test/implementation.
 
 ## Task mapping and file ownership
 
@@ -58,6 +68,10 @@ RED expected: newly added expected evidence assertions fail where V2 adapter/fix
 **Consumes:** upstream tag v2.2.5 and migration reference ``6–10, 16–17, 20, 29–30.  
 **Produces:** verified `NativeSnapshotV225`, `DeliveredAnchorV225`, `ExecutionEvidenceV225` fixtures, all required API response fields, pagination and terminal evidence cases.
 
+- [ ] **Already observed: INITIAL_EVENT_REPLAY FAIL (default CLI):** The `session.created` body is absent from public `Session.log` although `log.synced(seq:0)` is returned. This is **not** an E01–E06 run and does not establish missing Delivery/Terminal events in a completed execution.
+- [ ] **BLOCKED prerequisite, subject to separate Owner authorization:** Confirm the supported Host mode and effective event persistence; obtain a newly created `session.created` through public `Session.log` **before and after Host restart** (not merely `log.synced`), then obtain `session.inbox.delivered` and `session.execution.*` for genuine eligible input. Only after this source is demonstrably complete may the existing V2-A per-anchor evidence proof proceed.
+- [ ] If prerequisite fails, classify affected Root `NOT_PROVEN / DURABLE_EVIDENCE_UNAVAILABLE`; do **not** run broad native acceptance as a substitute, mutate Graph/Gate, inspect private OpenCode DB, start a nested Host or implement an unapproved alternative.
+
 - [ ] Record `opencode --version`, resolved `@opencode/plugin`, conditional client version and package integrity; fail if not pinned 2.2.5.
 - [ ] Execute real deterministic local-provider root+child sessions; capture sanitized persisted success, provider failure, real interruption, queue, steer, undelivered/cancelled inbox, compaction, resumed same-anchor and restart records.
 - [ ] Confirm the public API for session root, location, pagination, inbox delivery, execution ownership and durable terminal outcome. Verify actual cursors, event envelopes and lifecycle timing, not names alone.
@@ -92,6 +106,8 @@ RED expected: newly added expected evidence assertions fail where V2 adapter/fix
 | `Pending.list` | `sessionID` -> `{data:SessionInbox.Info[]}`; pending alone is never proof of delivery |
 | `Session.log` | `sessionID,after?,follow?` -> public durable events and `log.synced`; restart replay completeness must be established |
 
+**Historical-event Host capability is a prerequisite to exhaustive discovery:** With the ordinary CLI `persist:false` default, a well-formed Message cursor and `log.synced` marker are **insufficient** to construct a complete `NativeSnapshotV225`. V2-C must distinguish `PUBLIC_API_AVAILABLE` from `HISTORICAL_EVENT_ROWS_AVAILABLE` and return `DURABLE_EVIDENCE_UNAVAILABLE` for the documented CLI condition. An event-persisting Host remains an Owner support/architecture decision; do not assume changing `opencode serve` flags can enable it.
+
 **Pagination stop:** `cursor.next` may exist on final nonempty page. Read until short/empty page with fixed page limit, monotonic unique IDs, no repeated cursor/missing earlier rows, and final scope/log watermark recheck. Invalid cursor/saturated page without progress/malformed or moving snapshot -> `DISCOVERY_INCOMPLETE`; Host 401/403 -> `OPENCODE_HISTORY_UNAUTHORIZED`; unavailable durable log -> `DURABLE_EVIDENCE_UNAVAILABLE`; location/source mismatch -> `SOURCE_ROUTING_SCOPE_MISMATCH`. Each error preserves checkpoint/Graph memory. The public HTTP schema and installed SDK method bindings must be recorded separately; no invented method signatures.
 
 **Future RED/GREEN:** add named discovery/auth/cursor assertions under `tests/integration/opencode/` and run `node --test tests/integration/opencode/test_reconciler.cjs tests/integration/opencode/test_recovery.cjs` plus the focused new test file. RED: missing/incorrect pagination, auth and source-scope checks are detected. GREEN: all complete-history/negative cases PASS; NOT RUN now.
@@ -107,6 +123,8 @@ RED expected: newly added expected evidence assertions fail where V2 adapter/fix
 ### Task V2-D: Event-hint reconciler, terminal gate and recovery (former Task 14)
 
 **F-001 root-only Graph gate:** The reconciler consumes `NativeSnapshotV225` (V2-C) and `RootEvidenceDecisionV225` (V2-B). It may call `turn.ingest` only when `evidenceStatus==="PROVEN"`, `outcome` is one of `SUCCESS/FAILED/ABORTED`, current source binding matches, full history/log scope has been rechecked and the contiguous prior prefix is acknowledged.
+
+**Default CLI root evidence stop (observed, not implemented):** Empty event payload history alongside `log.synced(seq:0)` after an authenticated new Root's creation is **not proof** of delivery/terminal outcome. On the affected Host `evidenceStatus=NOT_PROVEN`, `outcome=null`, `reasonCode=DURABLE_EVIDENCE_UNAVAILABLE`; do not call Graph PREPARE/COMMIT/`turn.ingest` or advance Checkpoint. Projected User/Idle state, if present later, cannot silently replace required historical Delivery and Execution evidence.
 
 **RED assertions:** for undelivered input, missing log after restart, unknown provenance/owner, multi-anchor execution ambiguity, incomplete cursor, stale Host/location, contradictory Idle/execution outcome, `NOT_PROVEN` or `CONTRADICTED` => **zero PREPARE/COMMIT, zero `turn.ingest`, checkpoint unchanged, no `caught_up`**. No earlier gap may be skipped; unrelated Roots can continue. For `PROVEN FAILED/ABORTED` transmit only confirmed User intent; for `PROVEN SUCCESS` include only attributable settled assistant/tool context. Test lost ACK -> receipt inventory -> `ALREADY_COMMITTED` without duplicate Graph mutation, same-anchor post-terminal divergence, unchanged V1 Receipt/Source Identity.
 
@@ -167,6 +185,9 @@ npm pack --dry-run --json
 
 **Files:** `tests/native/opencode/fixture_provider.py`, `harness.py`, `test_native_opencode_all.py`, `README.md`.
 
+- [ ] **Stop before native V2-01–V2-14 on default CLI:** First establish a supported Host mode and demonstrate real `session.created` durable payload replay after restart, then Delivered/Terminal records. `log.synced` alone cannot satisfy acceptance. Initial default CLI readback is **FAIL (observed)**; E01–E06 and broader native tests are **NOT RUN**. No default-CLI PASS can be inferred from a dedicated Host's eventual PASS.
+- [ ] For a separately Owner-approved event-persisting Host, record its actual startup profile, effective storage setting and authenticated public replay independently; do not change source, Host or deployment in this document task.
+
 - [ ] Install exact version with clean temporary HOME/project, record effective config, package versions/integrity and environment scope. No nondeterministic external LLM provider required.
 - [ ] Run design cases V2-01 to V2-14 applicable to the implementation: success, provider error, real abort; inbox queue/steer/cancel; multi-anchor; child; compaction; event loss; restart; lost ACK; corrupt state; scope/binding/alias; same-anchor divergence.
 - [ ] Exercise both **actual installed npm package** and repository-local plugin path; prove zero V1 side-channel and unchanged selective/non-OpenCode flow.
@@ -183,4 +204,4 @@ npm pack --dry-run --json
 
 ## Traceability and completion
 
-V2-A/B cover design ``3–7; V2-C/D cover ``2–5, 9; V2-E covers ``2, 3, 8; V2-F/G cover `10 and historical ``1–2, 5–14. No host tests are reported as executed at the time this plan is committed. The new feature branch is only a place to record the migration design and plan; it does not replace the previously approved V1 files.
+V2-A/B cover design ``3–7; V2-C/D cover ``2–5, 9; V2-E covers ``2, 3, 8; V2-F/G cover `10 and historical ``1–2, 5–14. The user-run isolated *initial Session readback* observed missing `session.created` with `log.synced(seq:0)`; **E01–E06, restart and implementation acceptance were NOT RUN**. Normal CLI Historical Evidence is currently insufficient under the `4.2 contract; Host mode and canonical turn_key await Owner decisions. The new feature branch is only a place to record the migration design and plan; it does not replace the previously approved V1 files.
